@@ -95,6 +95,9 @@ func TestResumeAfterKill(t *testing.T) {
 	p1env["CRASH_AFTER_MARKER"] = "1"
 
 	p1, p1done := startAgentd(t, bin, p1env)
+	// p1 is expected to self-crash, but defer a kill so an early Fatalf
+	// (e.g. waitHealthy/postSession failing on infra issues) never orphans it.
+	defer func() { _ = p1.Process.Kill() }()
 	waitHealthy(t)
 
 	sessionID := postSession(t, db, "go")
