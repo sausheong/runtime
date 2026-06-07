@@ -63,6 +63,19 @@ func TestStore_IncrementTurnAndStatus(t *testing.T) {
 	}
 }
 
+func TestStore_SetTurnCount(t *testing.T) {
+	s := NewMemStore()
+	ctx := context.Background()
+	id, _ := s.CreateSession(ctx, "a")
+	if err := s.SetTurnCount(ctx, id, 5); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := s.GetSession(ctx, id)
+	if got.TurnCount != 5 {
+		t.Fatalf("turn_count = %d, want 5", got.TurnCount)
+	}
+}
+
 func TestStore_ListSessionsByAgent(t *testing.T) {
 	s := NewMemStore()
 	ctx := context.Background()

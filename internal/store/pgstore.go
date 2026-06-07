@@ -62,6 +62,12 @@ func (p *pgStore) IncrementTurn(ctx context.Context, id string) error {
 	return err
 }
 
+func (p *pgStore) SetTurnCount(ctx context.Context, id string, n int) error {
+	_, err := p.db.ExecContext(ctx,
+		`UPDATE sessions SET turn_count = $2, last_active_at = now() WHERE id=$1`, id, n)
+	return err
+}
+
 func (p *pgStore) GetSession(ctx context.Context, id string) (SessionRow, error) {
 	var s SessionRow
 	err := p.db.QueryRowContext(ctx,
