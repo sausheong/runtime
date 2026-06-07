@@ -32,8 +32,8 @@ func TestStreamReplaysBufferedTerminal(t *testing.T) {
 	m := newTestManager()
 	ctx := context.Background()
 	id, _ := m.st.CreateSession(ctx, "a", "")
-	_ = m.st.AppendEvent(ctx, id, "text", []byte(`{"type":"text","text":"a"}`))
-	_ = m.st.AppendEvent(ctx, id, "done", []byte(`{"type":"done"}`))
+	_, _ = m.st.AppendEvent(ctx, id, "text", []byte(`{"type":"text","text":"a"}`))
+	_, _ = m.st.AppendEvent(ctx, id, "done", []byte(`{"type":"done"}`))
 
 	srv := httptest.NewServer(m.newMux())
 	defer srv.Close()
@@ -46,5 +46,10 @@ func TestStreamReplaysBufferedTerminal(t *testing.T) {
 	s := string(body)
 	if !strings.Contains(s, `"text":"a"`) || !strings.Contains(s, `"type":"done"`) {
 		t.Fatalf("stream body missing replayed events: %q", s)
+	}
+	// Replayed events must carry an SSE id: line (the store-assigned seq) so
+	// clients get Last-Event-ID dedupe/resume semantics (I1 wire-level seq).
+	if !strings.Contains(s, "id: ") {
+		t.Fatalf("stream body missing id: line on replay: %q", s)
 	}
 }

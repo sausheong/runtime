@@ -12,6 +12,9 @@ type WireEvent struct {
 	Type string `json:"type"` // text | tool_result | done | error
 	Text string `json:"text,omitempty"`
 	Err  string `json:"error,omitempty"`
+	// Seq is the store-assigned sequence number. Carried in memory for SSE
+	// id: emission and client dedupe/resume; excluded from the JSON payload.
+	Seq int64 `json:"-"`
 }
 
 // turnInput is the JSON-serializable input to the durable session workflow.

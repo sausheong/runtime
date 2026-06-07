@@ -57,6 +57,7 @@ func (m *Manager) newMux() *http.ServeMux {
 			for _, e := range buffered {
 				var ev WireEvent
 				if json.Unmarshal(e.Payload, &ev) == nil {
+					ev.Seq = e.Seq
 					_ = writeSSE(w, ev)
 				}
 			}

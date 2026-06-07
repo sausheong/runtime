@@ -35,7 +35,7 @@ func TestStore_EventLogAppendAndReplay(t *testing.T) {
 	id, _ := s.CreateSession(ctx, "agent1", "wf-1")
 
 	for i, typ := range []string{"text_delta", "text_delta", "done"} {
-		if err := s.AppendEvent(ctx, id, typ, []byte(`{"i":`+itoa(i)+`}`)); err != nil {
+		if _, err := s.AppendEvent(ctx, id, typ, []byte(`{"i":`+itoa(i)+`}`)); err != nil {
 			t.Fatalf("AppendEvent: %v", err)
 		}
 	}

@@ -3,6 +3,7 @@ package agentruntime
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"sync"
 	"time"
@@ -43,7 +44,11 @@ func (m *Manager) buildRuntime(sess *session.Session) (*hrt.Runtime, error) {
 // log for later re-attach/replay. Keyed by sessionID (== workflow id).
 func (m *Manager) publish(sessionID string, ev WireEvent) {
 	payload, _ := json.Marshal(ev)
-	_ = m.st.AppendEvent(context.Background(), sessionID, ev.Type, payload)
+	seq, err := m.st.AppendEvent(context.Background(), sessionID, ev.Type, payload)
+	if err != nil {
+		slog.Warn("append event failed", "session", sessionID, "type", ev.Type, "err", err)
+	}
+	ev.Seq = seq
 
 	m.mu.Lock()
 	subs := append([]chan WireEvent(nil), m.subscribers[sessionID]...)
@@ -79,19 +84,29 @@ func (m *Manager) subscribe(sessionID string) (<-chan WireEvent, func()) {
 // this workflow and replays completed turns from their checkpoints.
 func (m *Manager) sessionWorkflow(ctx dbos.DBOSContext, in turnInput) (string, error) {
 	wfID, _ := dbos.GetWorkflowID(ctx)
-	sess := session.NewSession(m.agentID, wfID)
-	rt, err := m.buildRuntime(sess)
-	if err != nil {
-		m.publish(wfID, WireEvent{Type: "error", Err: err.Error()})
-		return "error", err
-	}
+
+	// canonical is the authoritative session, rebuilt turn-by-turn from each
+	// turn step's checkpointed entries. It is mutated ONLY by applyEntries
+	// below — never by RunTurn — so live execution and replay produce
+	// identical state (RunTurn does not run on replay).
+	canonical := session.NewSession(m.agentID, wfID)
 
 	userMsg := in.UserMsg
 	for {
+		prior := canonical.Entries() // snapshot of history for this turn
+
 		out, stepErr := dbos.RunAsStep(ctx, func(stepCtx context.Context) (turnOutput, error) {
-			// Headless: emit=nil. Live events are published by the workflow
-			// body below from the returned entries — deterministic on replay.
-			tr, terr := rt.RunTurn(stepCtx, userMsg, nil, nil)
+			// Throwaway per-turn session seeded with prior history. RunTurn
+			// mutates THIS, not canonical, so canonical is never double-written.
+			turnSess := session.NewSession(m.agentID, wfID)
+			for _, e := range prior {
+				turnSess.Append(e)
+			}
+			rt, err := m.buildRuntime(turnSess)
+			if err != nil {
+				return turnOutput{}, err
+			}
+			tr, terr := rt.RunTurn(stepCtx, userMsg, nil, nil) // headless (emit=nil)
 			if terr != nil {
 				return turnOutput{}, terr
 			}
@@ -102,7 +117,7 @@ func (m *Manager) sessionWorkflow(ctx dbos.DBOSContext, in turnInput) (string, e
 			return "error", stepErr
 		}
 
-		applyEntries(sess, out.Entries)
+		applyEntries(canonical, out.Entries) // SOLE mutator of canonical
 		for _, ev := range publishableEvents(out.Entries) {
 			m.publish(wfID, ev)
 		}
@@ -163,9 +178,21 @@ func Serve(ctx context.Context, cfg Config) error {
 	defer dbos.Shutdown(dctx, 10*time.Second)
 
 	srv := &http.Server{Addr: cfg.ListenAddr, Handler: m.newMux()}
-	go func() { <-ctx.Done(); _ = srv.Shutdown(context.Background()) }()
-	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-		return err
+	serveErr := make(chan error, 1)
+	go func() { serveErr <- srv.ListenAndServe() }()
+
+	select {
+	case <-ctx.Done():
+		// Drain HTTP first (stop accepting + finish in-flight handlers),
+		// THEN let the deferred dbos.Shutdown and st.Close run.
+		shutCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		_ = srv.Shutdown(shutCtx)
+		return nil
+	case err := <-serveErr:
+		if err != nil && err != http.ErrServerClosed {
+			return err
+		}
+		return nil
 	}
-	return nil
 }

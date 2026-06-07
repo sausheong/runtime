@@ -47,7 +47,7 @@ func (m *memStore) SetSessionStatus(_ context.Context, id, status string) error 
 	return nil
 }
 
-func (m *memStore) AppendEvent(_ context.Context, sessionID, typ string, payload []byte) error {
+func (m *memStore) AppendEvent(_ context.Context, sessionID, typ string, payload []byte) (int64, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	evs := m.events[sessionID]
@@ -55,7 +55,7 @@ func (m *memStore) AppendEvent(_ context.Context, sessionID, typ string, payload
 	cp := make([]byte, len(payload))
 	copy(cp, payload)
 	m.events[sessionID] = append(evs, Event{Seq: next, Type: typ, Payload: cp})
-	return nil
+	return next, nil
 }
 
 func (m *memStore) EventsSince(_ context.Context, sessionID string, afterSeq int64) ([]Event, error) {

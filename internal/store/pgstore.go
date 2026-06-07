@@ -54,23 +54,26 @@ func (p *pgStore) SetSessionStatus(ctx context.Context, id, status string) error
 	return err
 }
 
-func (p *pgStore) AppendEvent(ctx context.Context, sessionID, typ string, payload []byte) error {
+func (p *pgStore) AppendEvent(ctx context.Context, sessionID, typ string, payload []byte) (int64, error) {
 	tx, err := p.db.BeginTx(ctx, nil)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	defer tx.Rollback()
 	var next int64
 	if err := tx.QueryRowContext(ctx,
 		`SELECT COALESCE(MAX(seq),0)+1 FROM session_events WHERE session_id=$1`, sessionID).Scan(&next); err != nil {
-		return err
+		return 0, err
 	}
 	if _, err := tx.ExecContext(ctx,
 		`INSERT INTO session_events (session_id, seq, type, payload) VALUES ($1,$2,$3,$4)`,
 		sessionID, next, typ, payload); err != nil {
-		return err
+		return 0, err
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return next, nil
 }
 
 func (p *pgStore) EventsSince(ctx context.Context, sessionID string, afterSeq int64) ([]Event, error) {
