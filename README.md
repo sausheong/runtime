@@ -144,6 +144,15 @@ Deliberately deferred to later sub-projects / milestones:
 
 - **Single static agent.** No multi-agent registry, deploy/rollback, or
   subprocess pools yet (Milestone 2).
+- **Session status & metadata are minimal.** `GET /sessions/{id}` reports the
+  stored row, but the durable loop does not yet drive `status` transitions
+  (created→running→done) or increment `turn_count`, and the `workflow_id`
+  column is left empty (the session id *is* the workflow id by construction).
+  Operator-facing status/observability lands with Milestone 2.
+- **Durable loop is turn-capped, not gracefully wound down.** The loop is
+  bounded by the agent's `MaxTurns` (default 25) so a runaway agent can't spin
+  the workflow forever; hitting the cap emits an `error` event. Richer
+  budgeting/backpressure is later work.
 - **Token auth, RBAC, multi-tenancy** (Milestone 3 / Identity sub-project).
 - **Browser & code-interpreter sandboxes**, a **tool/MCP gateway**, **managed
   memory**, and a **tracing/observability** dashboard — each its own

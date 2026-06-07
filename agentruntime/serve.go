@@ -91,8 +91,22 @@ func (m *Manager) sessionWorkflow(ctx dbos.DBOSContext, in turnInput) (string, e
 	// identical state (RunTurn does not run on replay).
 	canonical := session.NewSession(m.agentID, wfID)
 
+	// maxTurns bounds the durable loop so a misbehaving agent that never
+	// stops emitting tool calls cannot spin the workflow forever (each
+	// iteration checkpoints a step). Deterministic: derived from config and
+	// the loop counter, so it behaves identically on replay. 0 ⇒ 25 (matches
+	// harness's RunTurn/Run default).
+	maxTurns := m.cfg.Spec.MaxTurns
+	if maxTurns <= 0 {
+		maxTurns = 25
+	}
+
 	userMsg := in.UserMsg
-	for {
+	for turn := 0; ; turn++ {
+		if turn >= maxTurns {
+			m.publish(wfID, WireEvent{Type: "error", Err: "agent exceeded maximum turns"})
+			return "error", nil
+		}
 		prior := canonical.Entries() // snapshot of history for this turn
 
 		out, stepErr := dbos.RunAsStep(ctx, func(stepCtx context.Context) (turnOutput, error) {
@@ -122,7 +136,15 @@ func (m *Manager) sessionWorkflow(ctx dbos.DBOSContext, in turnInput) (string, e
 			m.publish(wfID, ev)
 		}
 		if out.Done {
-			m.publish(wfID, WireEvent{Type: "done"})
+			// RunTurn returns Done=true for "completed", "aborted", and
+			// "error" terminal reasons. Only "completed" is a clean finish;
+			// surface the others as an error event so clients aren't told a
+			// turn that aborted/errored succeeded.
+			if out.Reason == "completed" {
+				m.publish(wfID, WireEvent{Type: "done"})
+			} else {
+				m.publish(wfID, WireEvent{Type: "error", Err: "turn ended: " + out.Reason})
+			}
 			return out.Reason, nil
 		}
 		userMsg = ""
