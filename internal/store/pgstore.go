@@ -23,10 +23,44 @@ func NewPGStore(ctx context.Context, dsn string) (Store, error) {
 	if err := db.PingContext(ctx); err != nil {
 		return nil, fmt.Errorf("ping postgres: %w", err)
 	}
-	if _, err := db.ExecContext(ctx, schemaSQL); err != nil {
-		return nil, fmt.Errorf("apply schema: %w", err)
+	if err := ApplyDDLLocked(ctx, db, schemaSQL); err != nil {
+		return nil, err
 	}
 	return &pgStore{db: db}, nil
+}
+
+// schemaLockKey is the shared advisory-lock key all runtime processes use to
+// serialize DDL. Arbitrary constant ("runtime" packed into an int8).
+const schemaLockKey = 0x72756e74696d65
+
+// ApplyDDLLocked runs the given DDL while holding a transaction-scoped Postgres
+// advisory lock, so concurrently-starting processes apply DDL one at a time.
+//
+// `CREATE TABLE IF NOT EXISTS` is NOT atomic against a concurrent creator in
+// Postgres — two processes racing can raise a duplicate pg_class/pg_type error
+// (SQLSTATE 23505/42P07). A transaction-scoped lock (pg_advisory_xact_lock)
+// binds to the single connection the tx holds (database/sql pools connections,
+// so a session-scoped lock could unlock on a different connection) and
+// auto-releases on commit/rollback. All callers share schemaLockKey, so the
+// store schema and any caller-owned tables (e.g. agentd's marker table)
+// serialize against each other on cold start.
+func ApplyDDLLocked(ctx context.Context, db *sql.DB, ddl string) error {
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin ddl tx: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock($1)`, schemaLockKey); err != nil {
+		_ = tx.Rollback()
+		return fmt.Errorf("acquire schema lock: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, ddl); err != nil {
+		_ = tx.Rollback()
+		return fmt.Errorf("apply ddl: %w", err)
+	}
+	if err := tx.Commit(); err != nil { // releases the advisory lock
+		return fmt.Errorf("commit ddl tx: %w", err)
+	}
+	return nil
 }
 
 func (p *pgStore) CreateSession(ctx context.Context, agentID string) (string, error) {
