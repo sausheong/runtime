@@ -1,0 +1,10 @@
+# Example agent registry for runtimed. Override path via RUNTIME_CONFIG.
+agents:
+  - id: support
+    name: Support Agent
+    model: test/scripted
+    listen_addr: 127.0.0.1:8101
+  - id: research
+    name: Research Agent
+    model: test/scripted
+    listen_addr: 127.0.0.1:8102
