@@ -21,7 +21,6 @@ type Store interface {
 	GetSession(ctx context.Context, id string) (SessionRow, error)
 	ListSessions(ctx context.Context, agentID string) ([]SessionRow, error)
 	SetSessionStatus(ctx context.Context, id, status string) error
-	IncrementTurn(ctx context.Context, id string) error
 	SetTurnCount(ctx context.Context, id string, n int) error
 	AppendEvent(ctx context.Context, sessionID, typ string, payload []byte) (int64, error)
 	EventsSince(ctx context.Context, sessionID string, afterSeq int64) ([]Event, error)

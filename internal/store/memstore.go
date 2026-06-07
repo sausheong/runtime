@@ -38,17 +38,6 @@ func (m *memStore) ListSessions(_ context.Context, agentID string) ([]SessionRow
 	return out, nil
 }
 
-func (m *memStore) IncrementTurn(_ context.Context, id string) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	s, ok := m.sessions[id]
-	if !ok {
-		return fmt.Errorf("session %q not found", id)
-	}
-	s.TurnCount++
-	return nil
-}
-
 func (m *memStore) SetTurnCount(_ context.Context, id string, n int) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()

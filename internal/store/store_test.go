@@ -45,21 +45,19 @@ func TestStore_CreateSessionPopulatesWorkflowID(t *testing.T) {
 	}
 }
 
-func TestStore_IncrementTurnAndStatus(t *testing.T) {
+func TestStore_SetSessionStatus(t *testing.T) {
 	s := NewMemStore()
 	ctx := context.Background()
 	id, _ := s.CreateSession(ctx, "a")
 	if err := s.SetSessionStatus(ctx, id, "running"); err != nil {
 		t.Fatal(err)
 	}
-	for i := 0; i < 3; i++ {
-		if err := s.IncrementTurn(ctx, id); err != nil {
-			t.Fatal(err)
-		}
+	if err := s.SetSessionStatus(ctx, id, "completed"); err != nil {
+		t.Fatal(err)
 	}
 	got, _ := s.GetSession(ctx, id)
-	if got.Status != "running" || got.TurnCount != 3 {
-		t.Fatalf("got status=%q turn=%d, want running/3", got.Status, got.TurnCount)
+	if got.Status != "completed" {
+		t.Fatalf("got status=%q, want completed", got.Status)
 	}
 }
 

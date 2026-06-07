@@ -20,6 +20,10 @@ func NewAPI(reg *Registry) *http.ServeMux {
 		_ = json.NewEncoder(w).Encode(reg.List())
 	})
 
+	// Subtree pattern: matches /agents/{id}/sessions, /agents/{id}/healthz, etc.
+	// A bare /agents/{id} (no trailing slash) gets a stdlib 301 redirect to the
+	// trailing-slash form — harmless, since every agent-contract endpoint lives
+	// at a subpath, never at the bare prefix.
 	mux.HandleFunc("/agents/{id}/", func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
 		ap, ok := reg.Get(id)
