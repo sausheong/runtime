@@ -9,7 +9,7 @@ func TestStore_SessionLifecycle(t *testing.T) {
 	s := NewMemStore()
 	ctx := context.Background()
 
-	id, err := s.CreateSession(ctx, "agent1", "wf-123")
+	id, err := s.CreateSession(ctx, "agent1")
 	if err != nil {
 		t.Fatalf("CreateSession: %v", err)
 	}
@@ -21,7 +21,7 @@ func TestStore_SessionLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetSession: %v", err)
 	}
-	if got.WorkflowID != "wf-123" || got.AgentID != "agent1" {
+	if got.WorkflowID != id || got.AgentID != "agent1" {
 		t.Fatalf("session mismatch: %+v", got)
 	}
 	if got.Status != "created" {
@@ -29,10 +29,63 @@ func TestStore_SessionLifecycle(t *testing.T) {
 	}
 }
 
+func TestStore_CreateSessionPopulatesWorkflowID(t *testing.T) {
+	s := NewMemStore()
+	ctx := context.Background()
+	id, err := s.CreateSession(ctx, "agentA")
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	got, _ := s.GetSession(ctx, id)
+	if got.WorkflowID != id {
+		t.Fatalf("workflow_id = %q, want = session id %q", got.WorkflowID, id)
+	}
+	if got.AgentID != "agentA" || got.Status != "created" {
+		t.Fatalf("unexpected row: %+v", got)
+	}
+}
+
+func TestStore_IncrementTurnAndStatus(t *testing.T) {
+	s := NewMemStore()
+	ctx := context.Background()
+	id, _ := s.CreateSession(ctx, "a")
+	if err := s.SetSessionStatus(ctx, id, "running"); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 3; i++ {
+		if err := s.IncrementTurn(ctx, id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, _ := s.GetSession(ctx, id)
+	if got.Status != "running" || got.TurnCount != 3 {
+		t.Fatalf("got status=%q turn=%d, want running/3", got.Status, got.TurnCount)
+	}
+}
+
+func TestStore_ListSessionsByAgent(t *testing.T) {
+	s := NewMemStore()
+	ctx := context.Background()
+	a1, _ := s.CreateSession(ctx, "agentA")
+	_, _ = s.CreateSession(ctx, "agentB")
+	a2, _ := s.CreateSession(ctx, "agentA")
+	rows, err := s.ListSessions(ctx, "agentA")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("ListSessions(agentA) = %d rows, want 2", len(rows))
+	}
+	ids := map[string]bool{rows[0].ID: true, rows[1].ID: true}
+	if !ids[a1] || !ids[a2] {
+		t.Fatalf("missing expected ids; got %+v", rows)
+	}
+}
+
 func TestStore_EventLogAppendAndReplay(t *testing.T) {
 	s := NewMemStore()
 	ctx := context.Background()
-	id, _ := s.CreateSession(ctx, "agent1", "wf-1")
+	id, _ := s.CreateSession(ctx, "agent1")
 
 	for i, typ := range []string{"text_delta", "text_delta", "done"} {
 		if _, err := s.AppendEvent(ctx, id, typ, []byte(`{"i":`+itoa(i)+`}`)); err != nil {

@@ -31,7 +31,7 @@ func TestHealthzAndMeta(t *testing.T) {
 func TestStreamReplaysBufferedTerminal(t *testing.T) {
 	m := newTestManager()
 	ctx := context.Background()
-	id, _ := m.st.CreateSession(ctx, "a", "")
+	id, _ := m.st.CreateSession(ctx, "a")
 	_, _ = m.st.AppendEvent(ctx, id, "text", []byte(`{"type":"text","text":"a"}`))
 	_, _ = m.st.AppendEvent(ctx, id, "done", []byte(`{"type":"done"}`))
 

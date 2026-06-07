@@ -29,12 +29,37 @@ func NewPGStore(ctx context.Context, dsn string) (Store, error) {
 	return &pgStore{db: db}, nil
 }
 
-func (p *pgStore) CreateSession(ctx context.Context, agentID, workflowID string) (string, error) {
+func (p *pgStore) CreateSession(ctx context.Context, agentID string) (string, error) {
 	id := "ses-" + uuid.NewString()
 	_, err := p.db.ExecContext(ctx,
-		`INSERT INTO sessions (id, agent_id, workflow_id, status) VALUES ($1,$2,$3,'created')`,
-		id, agentID, workflowID)
+		`INSERT INTO sessions (id, agent_id, workflow_id, status) VALUES ($1,$2,$1,'created')`,
+		id, agentID)
 	return id, err
+}
+
+func (p *pgStore) ListSessions(ctx context.Context, agentID string) ([]SessionRow, error) {
+	rows, err := p.db.QueryContext(ctx,
+		`SELECT id, agent_id, workflow_id, status, turn_count FROM sessions WHERE agent_id=$1 ORDER BY created_at DESC`,
+		agentID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []SessionRow
+	for rows.Next() {
+		var s SessionRow
+		if err := rows.Scan(&s.ID, &s.AgentID, &s.WorkflowID, &s.Status, &s.TurnCount); err != nil {
+			return nil, err
+		}
+		out = append(out, s)
+	}
+	return out, rows.Err()
+}
+
+func (p *pgStore) IncrementTurn(ctx context.Context, id string) error {
+	_, err := p.db.ExecContext(ctx,
+		`UPDATE sessions SET turn_count = turn_count + 1, last_active_at = now() WHERE id=$1`, id)
+	return err
 }
 
 func (p *pgStore) GetSession(ctx context.Context, id string) (SessionRow, error) {

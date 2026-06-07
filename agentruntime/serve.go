@@ -154,7 +154,7 @@ func (m *Manager) sessionWorkflow(ctx dbos.DBOSContext, in turnInput) (string, e
 // startSession creates a store session row and launches the durable workflow
 // with the session id as the stable DBOS workflow id.
 func (m *Manager) startSession(ctx context.Context, userMsg string) (string, error) {
-	sessionID, err := m.st.CreateSession(ctx, m.agentID, "")
+	sessionID, err := m.st.CreateSession(ctx, m.agentID)
 	if err != nil {
 		return "", err
 	}
