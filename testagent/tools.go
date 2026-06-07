@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"os"
+	"time"
 
 	"github.com/sausheong/harness/tool"
 )
@@ -45,6 +46,10 @@ func (m MarkerTool) Execute(ctx context.Context, _ json.RawMessage) (tool.ToolRe
 
 	if os.Getenv("CRASH_AFTER_MARKER") == "1" {
 		// Crash after the committed side effect, before the turn checkpoints.
+		// Sleep briefly so the POST /sessions HTTP response (carrying the
+		// session id) flushes to the client before this process dies — the
+		// workflow runs concurrently with the response write.
+		time.Sleep(300 * time.Millisecond) // let the POST /sessions response flush before we die
 		os.Exit(1)
 	}
 
