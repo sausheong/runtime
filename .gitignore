@@ -1,0 +1,4 @@
+.superpowers/
+*.log
+/bin/
+/tmp/
