@@ -11,11 +11,12 @@ type AgentInfo struct {
 }
 
 // Registry holds the agents the control plane hosts, built from config.
-// Read-only after construction in M2 (config-driven).
+// Read-only after construction except for the optional secret broker.
 type Registry struct {
 	order  []string
 	agents map[string]AgentProcess
 	infos  map[string]AgentInfo
+	broker SecretBroker // optional; injected into each AgentProcess on Get.
 }
 
 // NewRegistry builds a Registry from parsed config. binPath is the agentd
@@ -33,6 +34,13 @@ func NewRegistry(cfg *config.Config, binPath, dsn string) *Registry {
 	return r
 }
 
+// SetBroker installs the secret broker injected into every AgentProcess returned
+// by Get. It is NOT safe to call concurrently with Get: SetBroker must complete
+// (happen-before) the HTTP server and the supervisor goroutines start. In
+// practice it is called once during startup, before either begins. nil ⇒ no
+// brokering.
+func (r *Registry) SetBroker(b SecretBroker) { r.broker = b }
+
 // AgentTenants returns agentID→tenantID for all registered agents.
 func (r *Registry) AgentTenants() map[string]string {
 	m := make(map[string]string, len(r.order))
@@ -42,9 +50,17 @@ func (r *Registry) AgentTenants() map[string]string {
 	return m
 }
 
-// Get returns the AgentProcess for id.
+// Get returns the AgentProcess for id, with the registry's secret broker
+// attached so its SpawnFunc brokers secrets.
 func (r *Registry) Get(id string) (AgentProcess, bool) {
 	ap, ok := r.agents[id]
+	if ok {
+		// ap is a copy (agents is a value-typed map): mutate the copy so the
+		// broker rides along on what callers get, never the stored entry. If
+		// this map ever becomes map[string]*AgentProcess, this would mutate the
+		// shared entry and must be revisited.
+		ap.broker = r.broker
+	}
 	return ap, ok
 }
 
