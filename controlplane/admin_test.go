@@ -149,3 +149,52 @@ func TestAdmin_CreateTenantSuperuserOnly(t *testing.T) {
 		t.Fatal("tenant beta not created")
 	}
 }
+
+func TestAdmin_MissingPrincipalIs401(t *testing.T) {
+	mux := adminMux(newFakeAdminStore())
+	rec := httptest.NewRecorder()
+	// No principal in context.
+	mux.ServeHTTP(rec, httptest.NewRequest("GET", "/admin/users", nil))
+	if rec.Code != 401 {
+		t.Fatalf("no principal: code=%d want 401", rec.Code)
+	}
+}
+
+func TestAdmin_BadRoleIs400(t *testing.T) {
+	s := newFakeAdminStore()
+	s.CreateTenant(context.Background(), "alpha", "A")
+	mux := adminMux(s)
+	r := withPrincipal(httptest.NewRequest("POST", "/admin/users", strings.NewReader(`{"subject":"x","role":"superuser"}`)),
+		identity.Principal{TenantID: "alpha", Role: identity.RoleAdmin})
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, r)
+	if rec.Code != 400 {
+		t.Fatalf("bad role: code=%d want 400", rec.Code)
+	}
+}
+
+func TestAdmin_RevokeKeyTenantScoped(t *testing.T) {
+	s := newFakeAdminStore()
+	s.CreateTenant(context.Background(), "alpha", "A")
+	mux := adminMux(s)
+	// Create a key in alpha.
+	cr := withPrincipal(httptest.NewRequest("POST", "/admin/keys", strings.NewReader(`{"role":"viewer","label":"k"}`)),
+		identity.Principal{TenantID: "alpha", Role: identity.RoleAdmin})
+	crrec := httptest.NewRecorder()
+	mux.ServeHTTP(crrec, cr)
+	var resp struct {
+		ID string `json:"id"`
+	}
+	json.Unmarshal(crrec.Body.Bytes(), &resp)
+	// A beta admin DELETE on alpha's key must be a no-op (fake RevokeKey checks tenant).
+	dr := withPrincipal(httptest.NewRequest("DELETE", "/admin/keys/"+resp.ID, nil),
+		identity.Principal{TenantID: "beta", Role: identity.RoleAdmin})
+	drrec := httptest.NewRecorder()
+	mux.ServeHTTP(drrec, dr)
+	if drrec.Code != 204 {
+		t.Fatalf("delete returns 204 regardless: code=%d", drrec.Code)
+	}
+	if s.keys[resp.ID].Revoked {
+		t.Fatal("beta admin must NOT revoke alpha's key (tenant-scoped)")
+	}
+}

@@ -3,6 +3,9 @@ package controlplane
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"io"
+	"log/slog"
 	"net/http"
 
 	"github.com/sausheong/runtime/internal/identity"
@@ -12,7 +15,6 @@ import (
 // cmd/runtimed can pass the store (or nil, in open mode) into buildRoot.
 type AdminStore interface {
 	CreateTenant(ctx context.Context, id, name string) error
-	TenantExists(ctx context.Context, id string) (bool, error)
 	UpsertUser(ctx context.Context, tenantID, subject string, role identity.Role) error
 	DeleteUser(ctx context.Context, tenantID, subject string) error
 	ListUsers(ctx context.Context, tenantID string) ([]identity.UserRow, error)
@@ -43,7 +45,7 @@ func RegisterAdmin(mux *http.ServeMux, s AdminStore) {
 			return
 		}
 		if err := s.CreateTenant(r.Context(), body.ID, body.Name); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			serverError(w, "create tenant", err)
 			return
 		}
 		writeJSON(w, http.StatusCreated, map[string]string{"id": body.ID})
@@ -64,7 +66,7 @@ func RegisterAdmin(mux *http.ServeMux, s AdminStore) {
 			return
 		}
 		if err := s.UpsertUser(r.Context(), p.TenantID, body.Subject, role); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			serverError(w, "upsert user", err)
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]string{"subject": body.Subject})
@@ -77,7 +79,7 @@ func RegisterAdmin(mux *http.ServeMux, s AdminStore) {
 		}
 		rows, err := s.ListUsers(r.Context(), p.TenantID)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			serverError(w, "list users", err)
 			return
 		}
 		writeJSON(w, http.StatusOK, rows)
@@ -89,7 +91,7 @@ func RegisterAdmin(mux *http.ServeMux, s AdminStore) {
 			return
 		}
 		if err := s.DeleteUser(r.Context(), p.TenantID, r.PathValue("subject")); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			serverError(w, "delete user", err)
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
@@ -111,11 +113,11 @@ func RegisterAdmin(mux *http.ServeMux, s AdminStore) {
 		}
 		mk, err := identity.MintServiceKey()
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			serverError(w, "mint key", err)
 			return
 		}
 		if err := s.InsertServiceKey(r.Context(), mk.ID, p.TenantID, mk.Hash, role, body.Label); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			serverError(w, "insert key", err)
 			return
 		}
 		writeJSON(w, http.StatusCreated, map[string]string{"id": mk.ID, "plaintext": mk.Plaintext})
@@ -127,7 +129,7 @@ func RegisterAdmin(mux *http.ServeMux, s AdminStore) {
 			return
 		}
 		if err := s.RevokeKey(r.Context(), p.TenantID, r.PathValue("id")); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			serverError(w, "revoke key", err)
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
@@ -140,7 +142,7 @@ func RegisterAdmin(mux *http.ServeMux, s AdminStore) {
 		}
 		rows, err := s.ListKeys(r.Context(), p.TenantID)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			serverError(w, "list keys", err)
 			return
 		}
 		writeJSON(w, http.StatusOK, rows)
@@ -162,11 +164,18 @@ func requireAdmin(w http.ResponseWriter, r *http.Request) (identity.Principal, b
 }
 
 func decode(w http.ResponseWriter, r *http.Request, v any) bool {
-	if err := json.NewDecoder(r.Body).Decode(v); err != nil && err.Error() != "EOF" {
+	if err := json.NewDecoder(r.Body).Decode(v); err != nil && !errors.Is(err, io.EOF) {
 		http.Error(w, "bad request body", http.StatusBadRequest)
 		return false
 	}
 	return true
+}
+
+// serverError logs the real error and returns a generic 500 (so DB/driver
+// internals never reach the client).
+func serverError(w http.ResponseWriter, op string, err error) {
+	slog.Error("admin: "+op+" failed", "err", err)
+	http.Error(w, "internal error", http.StatusInternalServerError)
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {
