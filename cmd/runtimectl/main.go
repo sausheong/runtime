@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strings"
 
 	"github.com/sausheong/runtime/conformance"
 )
@@ -39,13 +40,15 @@ func main() {
 		stream(base, resolveAgent(base, agent), rest[0])
 	case "conformance":
 		runConformance(base, resolveAgent(base, agent))
+	case "admin":
+		runAdmin(base, os.Args[2:])
 	default:
 		usage()
 	}
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: runtimectl <agents|invoke|sessions|logs|conformance> [--agent <id>] [args]")
+	fmt.Fprintln(os.Stderr, "usage: runtimectl <agents|invoke|sessions|logs|conformance|admin> [--agent <id>] [args]")
 	os.Exit(2)
 }
 
@@ -195,4 +198,125 @@ func envOr(k, d string) string {
 		return v
 	}
 	return d
+}
+
+// runAdmin dispatches `runtimectl admin <tenant|user|key> ...`.
+func runAdmin(base string, args []string) {
+	if len(args) < 2 {
+		adminUsage()
+	}
+	switch args[0] + " " + args[1] {
+	case "tenant create":
+		// admin tenant create <id> [--name <name>]
+		if len(args) < 3 {
+			adminUsage()
+		}
+		id := args[2]
+		name := flagValue(args[3:], "--name", id)
+		mustAdminPost(base, "/admin/tenants", map[string]string{"id": id, "name": name})
+		fmt.Printf("tenant %s created\n", id)
+	case "user add":
+		// admin user add <subject> --role <r>  (tenant = caller's, server-side)
+		if len(args) < 3 {
+			adminUsage()
+		}
+		subject := args[2]
+		role := flagValue(args[3:], "--role", "viewer")
+		mustAdminPost(base, "/admin/users", map[string]string{"subject": subject, "role": role})
+		fmt.Printf("user %s added (role=%s)\n", subject, role)
+	case "user ls":
+		fmt.Print(string(mustAdminGet(base, "/admin/users")))
+	case "key create":
+		// admin key create --role <r> [--label <l>]
+		role := flagValue(args[2:], "--role", "viewer")
+		label := flagValue(args[2:], "--label", "")
+		out := mustAdminPost(base, "/admin/keys", map[string]string{"role": role, "label": label})
+		var resp struct{ ID, Plaintext string }
+		_ = json.Unmarshal(out, &resp)
+		fmt.Printf("%s\n(store this now — shown once)\n", resp.Plaintext)
+	case "key ls":
+		fmt.Print(string(mustAdminGet(base, "/admin/keys")))
+	case "key revoke":
+		// admin key revoke <id>
+		if len(args) < 3 {
+			adminUsage()
+		}
+		id := args[2]
+		mustAdminDelete(base, "/admin/keys/"+id)
+		fmt.Printf("key %s revoked\n", id)
+	default:
+		adminUsage()
+	}
+}
+
+func adminUsage() {
+	fmt.Fprintln(os.Stderr, "usage: runtimectl admin <tenant create <id> [--name n]|user add <subject> --role r|user ls|key create --role r [--label l]|key ls|key revoke <id>>")
+	os.Exit(2)
+}
+
+// flagValue returns the value following name in args, or def.
+func flagValue(args []string, name, def string) string {
+	for i := 0; i < len(args)-1; i++ {
+		if args[i] == name {
+			return args[i+1]
+		}
+	}
+	return def
+}
+
+func adminPost(base, path string, body map[string]string) ([]byte, error) {
+	buf, _ := json.Marshal(body)
+	req, _ := http.NewRequest("POST", base+path, bytes.NewReader(buf))
+	req.Header.Set("Content-Type", "application/json")
+	addAuth(req)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	out, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode >= 300 {
+		return out, fmt.Errorf("admin %s: %s: %s", path, resp.Status, strings.TrimSpace(string(out)))
+	}
+	return out, nil
+}
+
+func mustAdminPost(base, path string, body map[string]string) []byte {
+	out, err := adminPost(base, path, body)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	return out
+}
+
+func mustAdminGet(base, path string) []byte {
+	resp, err := authdGet(base + path)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	defer resp.Body.Close()
+	out, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode >= 300 {
+		fmt.Fprintf(os.Stderr, "admin %s: %s: %s\n", path, resp.Status, strings.TrimSpace(string(out)))
+		os.Exit(1)
+	}
+	return out
+}
+
+func mustAdminDelete(base, path string) {
+	req, _ := http.NewRequest("DELETE", base+path, nil)
+	addAuth(req)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		out, _ := io.ReadAll(resp.Body)
+		fmt.Fprintf(os.Stderr, "admin %s: %s: %s\n", path, resp.Status, strings.TrimSpace(string(out)))
+		os.Exit(1)
+	}
 }
