@@ -62,20 +62,15 @@ func baseNumber(s string) string {
 }
 
 // resolveWithMemory resolves an additive, first consulting the learned-alias
-// memory, then the index, then the optional hint.
-func (t *tools) resolveWithMemory(additive, hint string) *additive {
+// memory, then the index. The hint path is handled by the caller (checkAdditive)
+// because a hint hit also triggers alias learning.
+func (t *tools) resolveWithMemory(additive string) *additive {
 	if num := t.mem.learnedAlias(norm(additive)); num != "" {
 		if e := t.idx.resolve(num, ""); e != nil {
 			return e
 		}
 	}
-	if e := t.idx.resolve(additive, ""); e != nil {
-		return e
-	}
-	if hint != "" {
-		return t.idx.resolve(hint, "")
-	}
-	return nil
+	return t.idx.resolve(additive, "")
 }
 
 // checkAdditive returns the check_sfa_additive tool. Not concurrency-safe: it
@@ -103,7 +98,7 @@ func (t *tools) checkAdditive() tool.Tool {
 			}
 			raw := strings.TrimSpace(args.Additive)
 			hint := strings.TrimSpace(args.ENumberHint)
-			entry := t.resolveWithMemory(raw, "")
+			entry := t.resolveWithMemory(raw)
 			if entry == nil && hint != "" {
 				entry = t.idx.resolve(hint, "")
 				if entry != nil { // learn: this label name -> this number, persisted to disk
@@ -171,7 +166,8 @@ func (t *tools) checkHCS() tool.Tool {
 			out, err := t.queryHCS(ctx, args.ProductName)
 			if err != nil {
 				// Never break the agent turn: report the failure as output.
-				return tool.ToolResult{Output: "HCS check failed (network error): " + err.Error()}, nil
+				// (Reaches here on a transport error or a 200-with-bad-JSON.)
+				return tool.ToolResult{Output: "HCS check failed: " + err.Error()}, nil
 			}
 			return tool.ToolResult{Output: out}, nil
 		},
