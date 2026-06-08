@@ -33,7 +33,7 @@ func mustSub(f fs.FS, dir string) fs.FS {
 // (paste-token fallback shown).
 type OIDCConfig struct {
 	AuthCodeURL func(state string) string                                             // builds the IdP authorize URL
-	Exchange    func(ctx context.Context, code string) (rawIDToken string, err error) // code -> validated ID token
+	Exchange    func(ctx context.Context, code string) (rawIDToken string, err error) // code -> raw ID token (validated downstream by the request Authenticator)
 	Enabled     bool
 }
 
@@ -47,6 +47,11 @@ func Handler(reg *controlplane.Registry, oidc OIDCConfig) http.Handler {
 
 	mux.HandleFunc("GET /ui/login", func(w http.ResponseWriter, r *http.Request) {
 		if oidc.Enabled && oidc.AuthCodeURL != nil {
+			// M1 limitation: the OAuth `state` is a fixed placeholder and is not
+			// validated in the callback, so this flow does not yet protect against
+			// login-CSRF. Acceptable for a read-only console behind edge auth; a
+			// later milestone should generate a random state (+ nonce) and verify
+			// it in /ui/callback.
 			http.Redirect(w, r, oidc.AuthCodeURL("state"), http.StatusSeeOther)
 			return
 		}

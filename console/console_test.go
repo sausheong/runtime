@@ -2,6 +2,7 @@ package console
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -99,5 +100,32 @@ func TestConsole_CallbackSetsCookie(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("callback did not set runtime_token cookie to the id token")
+	}
+}
+
+func TestConsole_CallbackExchangeErrorIs401(t *testing.T) {
+	h := Handler(testReg(t), OIDCConfig{
+		Enabled:  true,
+		Exchange: func(_ context.Context, code string) (string, error) { return "", errors.New("boom") },
+	})
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest("GET", "/ui/callback?code=abc", nil))
+	if rec.Code != 401 {
+		t.Fatalf("exchange error: code=%d want 401", rec.Code)
+	}
+	for _, c := range rec.Result().Cookies() {
+		if c.Name == "runtime_token" {
+			t.Fatal("must not set cookie on failed exchange")
+		}
+	}
+}
+
+func TestConsole_CallbackNoExchangeIs400(t *testing.T) {
+	// OIDCConfig with no Exchange func (e.g. discovery failed) → 400, no cookie.
+	h := Handler(testReg(t), OIDCConfig{Enabled: true})
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest("GET", "/ui/callback?code=abc", nil))
+	if rec.Code != 400 {
+		t.Fatalf("no exchange configured: code=%d want 400", rec.Code)
 	}
 }
