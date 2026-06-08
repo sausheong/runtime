@@ -49,12 +49,27 @@ func TestIdentityE2E_TwoTenants(t *testing.T) {
 	az := identity.NewAuthorizer(map[string]string{"a1": "alpha", "b1": "beta"})
 
 	// alpha operator key + alpha viewer key.
-	opKey, _ := identity.MintServiceKey()
+	opKey, err := identity.MintServiceKey()
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := st.InsertServiceKey(ctx, opKey.ID, "alpha", opKey.Hash, identity.RoleOperator, "op"); err != nil {
 		t.Fatal(err)
 	}
-	viewKey, _ := identity.MintServiceKey()
+	viewKey, err := identity.MintServiceKey()
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := st.InsertServiceKey(ctx, viewKey.ID, "alpha", viewKey.Hash, identity.RoleViewer, "view"); err != nil {
+		t.Fatal(err)
+	}
+
+	// beta operator key (for two-tenant symmetry checks).
+	betaOpKey, err := identity.MintServiceKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.InsertServiceKey(ctx, betaOpKey.ID, "beta", betaOpKey.Hash, identity.RoleOperator, "betaop"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -100,6 +115,17 @@ func TestIdentityE2E_TwoTenants(t *testing.T) {
 	// no credential = 401.
 	if c := do("GET", "/agents/a1/sessions", ""); c != 401 {
 		t.Errorf("no cred: %d want 401", c)
+	}
+	// beta operator: can read AND invoke its OWN agent b1 (two-tenant symmetry).
+	if c := do("GET", "/agents/b1/sessions", betaOpKey.Plaintext); c != 200 {
+		t.Errorf("beta op read b1: %d want 200", c)
+	}
+	if c := do("POST", "/agents/b1/sessions", betaOpKey.Plaintext); c != 200 {
+		t.Errorf("beta op invoke b1: %d want 200", c)
+	}
+	// beta operator: 404 on alpha's a1 (cross-tenant hidden, mirror direction).
+	if c := do("GET", "/agents/a1/sessions", betaOpKey.Plaintext); c != 404 {
+		t.Errorf("beta op read a1: %d want 404", c)
 	}
 	// revoked key = 401.
 	if err := st.RevokeKey(ctx, "alpha", opKey.ID); err != nil {
