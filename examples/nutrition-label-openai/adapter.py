@@ -34,6 +34,8 @@ class NutritionAdapter:
         images: Sequence[Image],
         history: Sequence[ContractEvent],
     ) -> AsyncIterator[ContractEvent]:
+        # `history` is unused: conversation memory is owned by the SQLiteSession
+        # below (keyed on session_id), not replayed from the contract event log.
         # Build the SDK input: text, or a content-list with the image data URL
         # (same shape as main.py's investigate()).
         if images:
