@@ -10,11 +10,13 @@ import (
 
 // AgentConfig is one agent entry in runtime.yaml.
 type AgentConfig struct {
-	ID         string `yaml:"id"`
-	Name       string `yaml:"name"`
-	Model      string `yaml:"model"`
-	ListenAddr string `yaml:"listen_addr"`
-	Kind       string `yaml:"kind"` // optional; "" ⇒ testagent. Resolved by agentd's kind registry.
+	ID         string   `yaml:"id"`
+	Name       string   `yaml:"name"`
+	Model      string   `yaml:"model"`
+	ListenAddr string   `yaml:"listen_addr"`
+	Kind       string   `yaml:"kind"`    // optional; "" ⇒ testagent. Resolved by agentd's kind registry.
+	Command    []string `yaml:"command"` // optional; when set, the supervisor execs this instead of the agentd binary (polyglot/foreign agents). argv form.
+	WorkDir    string   `yaml:"workdir"` // optional working directory for Command (e.g. a Python shim project root).
 }
 
 // TokenConfig is one control-plane API token. Label is for log attribution.
