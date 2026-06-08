@@ -3,7 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -15,6 +15,8 @@ import (
 )
 
 func main() {
+	setupLogging()
+
 	dsn := envOr("RUNTIME_PG_DSN", "postgres://runtime:runtime@localhost:5432/runtime?sslmode=disable")
 	ctlAddr := envOr("RUNTIME_CTL_ADDR", ":8080")
 	agentBin := envOr("RUNTIME_AGENTD_BIN", "./agentd")
@@ -22,39 +24,62 @@ func main() {
 
 	cfg, err := config.Load(cfgPath)
 	if err != nil {
-		log.Fatalf("config: %v", err)
+		slog.Error("config load failed", "err", err)
+		os.Exit(1)
 	}
 	reg := controlplane.NewRegistry(cfg, agentBin, dsn)
+	tokens := cfg.TokenMap()
+	if len(tokens) == 0 {
+		slog.Warn("no API tokens configured — control plane is running OPEN (unauthenticated)")
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	// Start agents sequentially with a readiness gate: spawn one, wait for its
-	// /healthz, then spawn the next. DBOS's first-run schema initialization is
-	// not safe to execute from multiple agent processes concurrently (they
-	// stall racing to create the `dbos` schema), so we stagger cold starts.
-	// Once an agent is up its schema exists, so the next agent initializes
-	// against an existing schema and comes up fast.
+	// Start agents sequentially with a readiness gate (M2: DBOS first-run
+	// schema init is not safe to run concurrently).
 	for _, info := range reg.List() {
 		ap, _ := reg.Get(info.ID)
 		sup := &controlplane.Supervisor{Spawn: ap.SpawnFunc(), Backoff: time.Second}
 		go sup.Run(ctx)
-		log.Printf("supervising agent %q at %s", ap.AgentID, ap.Addr)
+		slog.Info("supervising agent", "agent", ap.AgentID, "addr", ap.Addr)
 		if err := waitAgentHealthy(ctx, ap.Addr, 30*time.Second); err != nil {
-			log.Printf("warning: agent %q not healthy yet (%v); continuing", ap.AgentID, err)
+			slog.Warn("agent not healthy yet; continuing", "agent", ap.AgentID, "err", err)
 		}
 	}
 
-	srv := &http.Server{Addr: ctlAddr, Handler: controlplane.NewAPI(reg)}
-	go func() { <-ctx.Done(); _ = srv.Shutdown(context.Background()) }()
-	log.Printf("control plane on %s hosting %d agents", ctlAddr, len(reg.List()))
-	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-		log.Fatal(err)
+	mux := controlplane.NewAPI(reg)
+	// NOTE (Task 5): console routes are mounted here (composed with mux) before wrapping.
+	handler := controlplane.AuthMiddleware(mux, tokens)
+
+	srv := &http.Server{Addr: ctlAddr, Handler: handler}
+	serveErr := make(chan error, 1)
+	go func() { serveErr <- srv.ListenAndServe() }()
+	slog.Info("control plane listening", "addr", ctlAddr, "agents", len(reg.List()), "auth", len(tokens) > 0)
+
+	select {
+	case <-ctx.Done():
+		shutCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		_ = srv.Shutdown(shutCtx)
+	case err := <-serveErr:
+		if err != nil && err != http.ErrServerClosed {
+			slog.Error("server error", "err", err)
+			os.Exit(1)
+		}
 	}
 }
 
-// waitAgentHealthy polls an agent's /healthz until it returns 200, the timeout
-// elapses, or ctx is cancelled.
+func setupLogging() {
+	var h slog.Handler
+	if os.Getenv("RUNTIME_LOG_FORMAT") == "json" {
+		h = slog.NewJSONHandler(os.Stderr, nil)
+	} else {
+		h = slog.NewTextHandler(os.Stderr, nil)
+	}
+	slog.SetDefault(slog.New(h))
+}
+
 func waitAgentHealthy(ctx context.Context, addr string, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	url := "http://" + addr + "/healthz"
