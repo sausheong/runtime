@@ -15,6 +15,7 @@ import (
 // cmd/runtimed can pass the store (or nil, in open mode) into buildRoot.
 type AdminStore interface {
 	CreateTenant(ctx context.Context, id, name string) error
+	TenantExists(ctx context.Context, id string) (bool, error)
 	UpsertUser(ctx context.Context, tenantID, subject string, role identity.Role) error
 	DeleteUser(ctx context.Context, tenantID, subject string) error
 	ListUsers(ctx context.Context, tenantID string) ([]identity.UserRow, error)
@@ -56,7 +57,7 @@ func RegisterAdmin(mux *http.ServeMux, s AdminStore) {
 		if !ok {
 			return
 		}
-		var body struct{ Subject, Role string }
+		var body struct{ Subject, Role, Tenant string }
 		if !decode(w, r, &body) {
 			return
 		}
@@ -65,7 +66,11 @@ func RegisterAdmin(mux *http.ServeMux, s AdminStore) {
 			http.Error(w, "subject and valid role required", http.StatusBadRequest)
 			return
 		}
-		if err := s.UpsertUser(r.Context(), p.TenantID, body.Subject, role); err != nil {
+		tenant, ok := effectiveTenant(w, r, s, p, body.Tenant)
+		if !ok {
+			return
+		}
+		if err := s.UpsertUser(r.Context(), tenant, body.Subject, role); err != nil {
 			serverError(w, "upsert user", err)
 			return
 		}
@@ -102,7 +107,7 @@ func RegisterAdmin(mux *http.ServeMux, s AdminStore) {
 		if !ok {
 			return
 		}
-		var body struct{ Label, Role string }
+		var body struct{ Label, Role, Tenant string }
 		if !decode(w, r, &body) {
 			return
 		}
@@ -116,7 +121,11 @@ func RegisterAdmin(mux *http.ServeMux, s AdminStore) {
 			serverError(w, "mint key", err)
 			return
 		}
-		if err := s.InsertServiceKey(r.Context(), mk.ID, p.TenantID, mk.Hash, role, body.Label); err != nil {
+		tenant, ok := effectiveTenant(w, r, s, p, body.Tenant)
+		if !ok {
+			return
+		}
+		if err := s.InsertServiceKey(r.Context(), mk.ID, tenant, mk.Hash, role, body.Label); err != nil {
 			serverError(w, "insert key", err)
 			return
 		}
@@ -147,6 +156,31 @@ func RegisterAdmin(mux *http.ServeMux, s AdminStore) {
 		}
 		writeJSON(w, http.StatusOK, rows)
 	})
+}
+
+// effectiveTenant returns the tenant a write should target. Non-superusers are
+// always pinned to their own tenant (bodyTenant is ignored). A superuser
+// (TenantID == "", e.g. the bootstrap/legacy key) MAY target any existing
+// tenant via bodyTenant; it must supply one, and it must exist. Returns ok=false
+// after writing an error response.
+func effectiveTenant(w http.ResponseWriter, r *http.Request, s AdminStore, p identity.Principal, bodyTenant string) (string, bool) {
+	if !p.Superuser {
+		return p.TenantID, true
+	}
+	if bodyTenant == "" {
+		http.Error(w, "superuser must specify a tenant", http.StatusBadRequest)
+		return "", false
+	}
+	exists, err := s.TenantExists(r.Context(), bodyTenant)
+	if err != nil {
+		serverError(w, "tenant exists check", err)
+		return "", false
+	}
+	if !exists {
+		http.Error(w, "unknown tenant", http.StatusBadRequest)
+		return "", false
+	}
+	return bodyTenant, true
 }
 
 // requireAdmin extracts the Principal and enforces the admin role.

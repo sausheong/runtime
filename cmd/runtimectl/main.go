@@ -222,7 +222,8 @@ func runAdmin(base string, args []string) {
 		}
 		subject := args[2]
 		role := flagValue(args[3:], "--role", "viewer")
-		mustAdminPost(base, "/admin/users", map[string]string{"subject": subject, "role": role})
+		tenant := flagValue(args[3:], "--tenant", "")
+		mustAdminPost(base, "/admin/users", map[string]string{"subject": subject, "role": role, "tenant": tenant})
 		fmt.Printf("user %s added (role=%s)\n", subject, role)
 	case "user ls":
 		fmt.Print(string(mustAdminGet(base, "/admin/users")))
@@ -230,7 +231,8 @@ func runAdmin(base string, args []string) {
 		// admin key create --role <r> [--label <l>]
 		role := flagValue(args[2:], "--role", "viewer")
 		label := flagValue(args[2:], "--label", "")
-		out := mustAdminPost(base, "/admin/keys", map[string]string{"role": role, "label": label})
+		tenant := flagValue(args[2:], "--tenant", "")
+		out := mustAdminPost(base, "/admin/keys", map[string]string{"role": role, "label": label, "tenant": tenant})
 		var resp struct{ ID, Plaintext string }
 		if err := json.Unmarshal(out, &resp); err != nil || resp.Plaintext == "" {
 			fmt.Fprintf(os.Stderr, "key created but plaintext missing from response: %s\n", out)
@@ -253,7 +255,7 @@ func runAdmin(base string, args []string) {
 }
 
 func adminUsage() {
-	fmt.Fprintln(os.Stderr, "usage: runtimectl admin <tenant create <id> [--name n]|user add <subject> --role r|user ls|key create --role r [--label l]|key ls|key revoke <id>>")
+	fmt.Fprintln(os.Stderr, "usage: runtimectl admin <tenant create <id> [--name n]|user add <subject> --role r [--tenant t]|user ls|key create --role r [--label l] [--tenant t]|key ls|key revoke <id>>")
 	os.Exit(2)
 }
 
