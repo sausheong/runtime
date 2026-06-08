@@ -1,7 +1,9 @@
 # Runtime — Roadmap & Backlog
 
 **Checkpoint date:** 2026-06-08
-**Current state:** Runtime spine complete (Milestones 1–3 merged to `master`).
+**Current state:** Runtime spine complete (Milestones 1–3 merged to `master`);
+polyglot agent hosting (C1) first milestone complete — Level-1 OpenAI Agents SDK
+shim merged to `master`, hosting a full foreign agent end-to-end (see §C1).
 **Goal:** an on-prem, open-source equivalent of AWS Bedrock AgentCore.
 
 This file is the parking lot for everything *not yet built*. Each item below is a
@@ -85,6 +87,22 @@ exposing the platform broadly.
 
 ### C1. Polyglot agent hosting (foreign SDK agents via the contract)
 
+**Status (2026-06-08):** First milestone COMPLETE and merged to `master` — the
+Level-1 Python contract shim hosts the OpenAI Agents SDK, and the generalized
+spawn path (the prerequisite) is in. A real, non-trivial foreign agent (the SG
+Nutrition Investigator: 4 tools, SFA additives data, typed `NutritionVerdict`
+rendered to prose, cross-run memory) runs as a first-class runtime agent, proven
+live (`runtimectl conformance` PASSED + a real vision verdict streamed
+end-to-end through the control-plane proxy; Level-1 durability + learned-alias
+memory confirmed). The reusable contract layer lives at `contrib/shims/python/`
+as the standalone, path-installable `runtime_contract` package; the worked agent
++ its ~30-line adapter live at `examples/nutrition-label-openai/` (`agent.py`,
+`adapter.py`, `serve.py`, Makefile, `runtime.nutrition-openai.yaml`). Spec:
+`docs/superpowers/specs/2026-06-08-nutrition-openai-on-runtime-design.md`; plan:
+`docs/superpowers/plans/2026-06-08-nutrition-openai-on-runtime.md`. **Remaining
+C1 work:** Level 2 (in-flight crash resume), a second framework/adapter to prove
+reuse, and a TS shim — all below.
+
 Host agents written in **any language / framework** (OpenAI Agents SDK, Claude
 Agent SDK, PydanticAI, CrewAI, LangGraph/LangChain, Google ADK, …), not just
 harness-native Go subprocesses. The agent HTTP/SSE contract was deliberately
@@ -109,7 +127,10 @@ covers the JS frameworks.
 - **Level 1 — conversation resume** (restart the process, the chat continues).
   Cheap: a persistent per-session message store (e.g. the SDK's own Session /
   SQLite/Postgres) keyed by the runtime `session_id`. The contract shim just uses
-  a persistent store instead of in-memory. **This is the near-term target.**
+  a persistent store instead of in-memory. **DONE** for the OpenAI shim — the
+  `runtime_contract` SQLite store persists sessions + an append-only event log
+  (replayable via `?since=N`), and the adapter keys an `SQLiteSession` on the
+  runtime `session_id` for conversation memory across restarts.
 - **Level 2 — in-flight crash resume** (a run that died mid-execution completes
   without losing work). Requires wrapping the foreign run in a durable engine —
   either DBOS-Python *inside* the shim, or a Go "external-kind" `agentd` that
@@ -124,16 +145,18 @@ covers the JS frameworks.
     PydanticAI agent and a runtime session could align on one Postgres rather than
     nest. Worth its own spec when Level 2 is taken up.
 
-**Platform prerequisite (blocks all of the above):** the **generalized spawn
-path**. Today `controlplane.AgentProcess.SpawnFunc` only launches the `agentd`
-binary; the supervisor must be able to launch an arbitrary command (e.g.
-`python contract_server.py`). Needs a `command:`/`exec:` field on the config
-agent entry, threaded through `registry` → `AgentProcess` → `SpawnFunc`. Small,
-localized change; do it as part of the first polyglot milestone.
+**Platform prerequisite — DONE.** The **generalized spawn path** is in:
+`AgentConfig` has optional `command:`/`workdir:` fields, threaded
+`config` → `registry` → `AgentProcess` → `SpawnFunc`, so the supervisor execs an
+arbitrary argv (e.g. `uv run python serve.py`) with the same `RUNTIME_*` env it
+gives `agentd`, instead of only launching the `agentd` binary.
 
-**First milestone (in progress):** Level-1 contract shim for the OpenAI Agents
-SDK, proven against `../agents_sdk/openai-demo`, + the generalized spawn path.
-Spec: `docs/superpowers/specs/` (dated when started).
+**First milestone — DONE (merged to `master`, 2026-06-08):** Level-1 contract
+shim for the OpenAI Agents SDK + the generalized spawn path, proven end-to-end by
+hosting the full `examples/nutrition-label-openai` agent (see Status note at the
+top of this section). **Next up in C1:** Level 2 (in-flight crash resume); a
+second framework adapter (e.g. PydanticAI or CrewAI) to prove the
+"one-file-per-framework" reuse claim; and the TS shim for the JS frameworks.
 
 ### C2. Containers / Kubernetes
 
