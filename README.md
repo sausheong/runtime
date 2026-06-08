@@ -458,7 +458,7 @@ your binary.
 
 ## Deploying an example agent (SG Nutrition Investigator)
 
-The repo ships a real, non-trivial example agent under `examples/nutrition`: the
+The repo ships a real, non-trivial example agent under `examples/nutrition-label-go`: the
 **SG Nutrition Investigator**, ported from an OpenAI Agents SDK demo into a
 harness-native Go agent. Given a Singapore food/drink nutrition label — pasted as
 **text** or supplied as a **photo** (vision via image input) — it investigates the
@@ -586,8 +586,8 @@ The nutrition example is selected by `kind: nutrition`. To add your own kind:
 
 1. Implement a `Builder` — a `func(Deps) (agentruntime.Config, error)` — that
    assembles your agent's `agentruntime.Config` (its `AgentSpec`, LLM provider,
-   and tool registry). See `examples/nutrition` (`BuildConfig` in
-   `examples/nutrition/agent.go`) for a complete reference implementation.
+   and tool registry). See `examples/nutrition-label-go` (`BuildConfig` in
+   `examples/nutrition-label-go/agent.go`) for a complete reference implementation.
 2. Register it in the `builders` map in `internal/agentkind/registry.go` under a
    new kind string (e.g. `"mykind"`).
 3. Set `kind: mykind` on an agent in your config. The empty/absent kind (and
