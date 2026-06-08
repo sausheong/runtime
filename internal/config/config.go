@@ -48,7 +48,9 @@ func Load(path string) (*Config, error) {
 	return &c, nil
 }
 
-// Validate checks required fields and uniqueness.
+// Validate checks required fields and uniqueness, and applies defaults for
+// empty optional fields (an absent tenant becomes "default"). It mutates
+// c.Agents in place, so callers see the defaulted values after Load.
 func (c *Config) Validate() error {
 	if len(c.Agents) == 0 {
 		return fmt.Errorf("config: at least one agent is required")
