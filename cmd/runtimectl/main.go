@@ -249,13 +249,31 @@ func runAdmin(base string, args []string) {
 		id := args[2]
 		mustAdminDelete(base, "/admin/keys/"+id)
 		fmt.Printf("key %s revoked\n", id)
+	case "secret set":
+		// admin secret set <name> <value> [--tenant t]
+		if len(args) < 4 {
+			adminUsage()
+		}
+		name, value := args[2], args[3]
+		tenant := flagValue(args[4:], "--tenant", "")
+		mustAdminPost(base, "/admin/secrets", map[string]string{"name": name, "value": value, "tenant": tenant})
+		fmt.Printf("secret %s set\n", name)
+	case "secret ls":
+		fmt.Print(string(mustAdminGet(base, "/admin/secrets")))
+	case "secret rm":
+		// admin secret rm <name>
+		if len(args) < 3 {
+			adminUsage()
+		}
+		mustAdminDelete(base, "/admin/secrets/"+args[2])
+		fmt.Printf("secret %s removed\n", args[2])
 	default:
 		adminUsage()
 	}
 }
 
 func adminUsage() {
-	fmt.Fprintln(os.Stderr, "usage: runtimectl admin <tenant create <id> [--name n]|user add <subject> --role r [--tenant t]|user ls|key create --role r [--label l] [--tenant t]|key ls|key revoke <id>>")
+	fmt.Fprintln(os.Stderr, "usage: runtimectl admin <tenant create <id> [--name n]|user add <subject> --role r [--tenant t]|user ls|key create --role r [--label l] [--tenant t]|key ls|key revoke <id>|secret set <name> <value> [--tenant t]|secret ls|secret rm <name>>")
 	os.Exit(2)
 }
 

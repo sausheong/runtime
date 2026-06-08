@@ -263,6 +263,54 @@ export RUNTIME_TOKEN=svk-7f3a….<secret>
 runtimectl agents          # lists only alpha's agents
 ```
 
+### Per-tenant secrets (provider credentials)
+
+Each tenant can store its own provider credentials (e.g. `OPENAI_API_KEY`),
+encrypted at rest and injected as environment variables into that tenant's agent
+subprocesses at spawn time — agents read `os.Getenv` unchanged, so **no agent
+code changes** are needed. This lets each tenant bring its own keys instead of
+sharing the operator's.
+
+Enable the feature by setting a 32-byte master key (base64):
+
+```bash
+export RUNTIME_SECRETS_KEY="$(head -c32 /dev/urandom | base64)"
+```
+
+When `RUNTIME_SECRETS_KEY` is unset the feature is disabled and agents inherit
+the operator's environment (the prior behavior). A set-but-malformed key is a
+fatal startup error.
+
+Managing secrets requires **identity to be configured** (OIDC, a service key, or
+`RUNTIME_ADMIN_BOOTSTRAP`): the `/admin/secrets` API is part of the admin surface,
+which is not mounted in open mode. With a master key set but identity open,
+runtimed logs a warning and brokering into spawns still works, but no secret can
+be created. A tenant admin manages its own tenant's secrets; a superuser can
+`set` a secret for a target tenant via `--tenant`, but `ls`/`rm` are scoped to
+the caller's own tenant (cross-tenant `ls`/`rm` is tracked in `ROADMAP.md` §B3).
+
+Manage secrets with `runtimectl` (admin role, scoped to your tenant):
+
+```bash
+runtimectl admin secret set OPENAI_API_KEY sk-xxxxxxxx   # set/overwrite
+runtimectl admin secret ls                               # names + timestamps (never values)
+runtimectl admin secret rm OPENAI_API_KEY                # delete
+```
+
+Secrets are **write-only**: the API never returns a stored value (`ls` shows
+names and timestamps only). Values are encrypted with AES-256-GCM under the
+operator master key. A secret change takes effect on the agent's **next
+restart** (resolution happens at spawn). Tenant secrets shadow an inherited
+operator var of the same name; a tenant with no secret falls back to the
+operator env.
+
+> **Security:** the master key lives in runtimed's environment (operator-managed,
+> like the Postgres DSN). Losing it makes existing ciphertext unrecoverable —
+> there is no key rotation in this milestone. The `set` value travels as JSON, so
+> terminate TLS upstream; it also lands in shell history, so prefer a
+> leading-space invocation (`HISTCONTROL=ignorespace`) for real keys. A
+> `--value-stdin` flag is a candidate follow-up.
+
 ### Open mode & backward compatibility
 
 - **No identity configured** (no OIDC issuer, no service keys, no users, no
@@ -275,8 +323,9 @@ runtimectl agents          # lists only alpha's agents
 
 > Service-key secrets and OIDC tokens travel as bearer credentials — terminate
 > TLS upstream. Service-key verification is constant-time (bcrypt) and hashed at
-> rest. Console session CSRF hardening (`state`/`nonce`) and secrets brokering
-> are tracked for later Identity milestones (see `ROADMAP.md` §B3).
+> rest. Per-tenant secrets brokering is implemented (see above). Console session
+> CSRF hardening (`state`/`nonce`) and secrets key rotation are tracked for later
+> Identity milestones (see `ROADMAP.md` §B3).
 
 ---
 
@@ -298,6 +347,9 @@ runtimectl agents          # lists only alpha's agents
 | `runtimectl admin key create [--tenant <t>] --role <r> [--label <l>]` | Mint a service key; the secret is printed once. |
 | `runtimectl admin key ls` | List the tenant's service keys (never the secret). |
 | `runtimectl admin key revoke <id>` | Revoke a service key (instant). |
+| `runtimectl admin secret set <name> <value> [--tenant <t>]` | Set/overwrite a tenant secret (write-only; injected into the tenant's agents). |
+| `runtimectl admin secret ls` | List the tenant's secret names + timestamps (never the values). |
+| `runtimectl admin secret rm <name>` | Delete a tenant secret. |
 
 `--agent` may be omitted when exactly one agent is registered (it's auto-selected);
 it's required when there are several. The `admin` commands require an `admin`
@@ -810,6 +862,7 @@ unaffected.
 | `RUNTIME_OIDC_CLIENT_SECRET` | runtimed | (unset) | OIDC client secret for the console code exchange. |
 | `RUNTIME_OIDC_REDIRECT_URL` | runtimed | `http://localhost:8080/ui/callback` | OIDC redirect URL registered with the issuer. |
 | `RUNTIME_ADMIN_BOOTSTRAP` | runtimed | (unset) | One-time break-glass superuser service key (read from env, never stored). |
+| `RUNTIME_SECRETS_KEY` | runtimed | (unset) | base64 of 32 bytes; enables per-tenant secrets brokering. Unset ⇒ disabled (agents inherit operator env); malformed ⇒ fatal. |
 | `RUNTIME_SHIM_DB` | (python shim) | `./shim.db` | SQLite path for the polyglot shim's Level-1 store (not used by runtimed). |
 
 `runtimed` injects `RUNTIME_LISTEN_ADDR` and `RUNTIME_AGENT_ID` into each agent
@@ -852,6 +905,11 @@ Integration tests cover the platform's headline guarantees, including:
   a tenant's key reaches its own agent (read + invoke), gets `404` on the other
   tenant's agent, a viewer is `403` on invoke, no credential is `401`, and a
   revoked key is `401`.
+- **`TestSecretsE2E_PerTenantInjection`** — proves the whole secrets chain: a
+  real Cipher+Broker over Postgres, three tenants (two with their own
+  `OPENAI_API_KEY`, one with none), spawned via the `command:` path. Asserts each
+  tenant's agent process sees its own secret value, no cross-tenant leak, and the
+  no-secret tenant falls back to the inherited operator env.
 
 ---
 
@@ -875,12 +933,13 @@ milestone (multi-tenant access control, below).
 **Deliberately not yet implemented** (each is planned, scoped to a later
 milestone or sub-project):
 
-- **Identity — first milestone DONE** (see [Authentication & multi-tenancy](#authentication--multi-tenancy)):
-  multi-tenant access control with OIDC human login, bcrypt-hashed service keys
-  (constant-time verify), and per-agent admin/operator/viewer roles. **Still to
-  come:** secrets brokering (per-tenant provider keys → agents), fine-grained/
-  custom RBAC, cross-tenant users + self-service, an admin console UI, optional
-  local password accounts, and console CSRF (`state`/`nonce`) hardening.
+- **Identity — first two milestones DONE** (see [Authentication & multi-tenancy](#authentication--multi-tenancy)):
+  M1 multi-tenant access control with OIDC human login, bcrypt-hashed service keys
+  (constant-time verify), and per-agent admin/operator/viewer roles; M2 per-tenant
+  **secrets brokering** (AES-256-GCM at rest, injected into the tenant's agents at
+  spawn). **Still to come:** secrets key rotation, fine-grained/custom RBAC,
+  cross-tenant users + self-service, an admin console UI, optional local password
+  accounts, and console CSRF (`state`/`nonce`) hardening.
 - **Observability dashboards** — M3 has structured `slog` logs; metrics,
   tracing, and dashboards are the Observability sub-project.
 - **Write actions from the console** — the console is read-only; deploy/stop/

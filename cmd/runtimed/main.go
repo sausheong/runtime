@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"database/sql"
+	"encoding/base64"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -69,6 +70,21 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Secret broker (Identity M2): built whenever RUNTIME_SECRETS_KEY is set,
+	// independent of whether identity enforcement is on. Injected into the
+	// registry so each agent's SpawnFunc brokers its tenant's secrets.
+	secretBroker := buildSecretBroker(idStore)
+	if secretBroker != nil {
+		reg.SetBroker(secretBroker)
+	}
+	// secretAdmin is a true-nil interface when brokering is disabled, so
+	// RegisterSecretAdmin's `sa == nil` 503 guard works (avoids the typed-nil
+	// interface trap).
+	var secretAdmin controlplane.SecretAdmin
+	if secretBroker != nil {
+		secretAdmin = secretBroker
+	}
+
 	configured, err := idStore.AnyConfigured(ctx)
 	if err != nil {
 		slog.Error("identity configured-check failed", "err", err)
@@ -78,7 +94,13 @@ func main() {
 
 	if !identityOn {
 		slog.Warn("no identity configured — control plane is running OPEN (unauthenticated)")
-		handler = accessLog(buildRoot(reg, nil, console.OIDCConfig{})) // no /admin in open mode
+		if secretBroker != nil {
+			// The broker still injects secrets into spawns, but /admin/secrets is
+			// only mounted with an admin store (identity on). So a key is set yet
+			// no secret can be created — warn rather than silently mislead.
+			slog.Warn("RUNTIME_SECRETS_KEY is set but identity is open/unconfigured — /admin/secrets is unavailable and no secrets can be set; configure identity (OIDC, a service key, or RUNTIME_ADMIN_BOOTSTRAP) to manage secrets")
+		}
+		handler = accessLog(buildRoot(reg, nil, console.OIDCConfig{}, secretAdmin)) // no /admin in open mode
 	} else {
 		oidcVerifier, verr := identity.NewOIDCVerifier(ctx, oidcIssuer, oidcClientID)
 		if verr != nil {
@@ -116,7 +138,7 @@ func main() {
 		}
 		authr := identity.NewAuthenticator(idStore, oidcVerifier, bootstrapKey, legacyTokens)
 		azr := identity.NewAuthorizer(reg.AgentTenants())
-		root := buildRoot(reg, idStore, consoleOIDC) // mounts /admin since the store is non-nil
+		root := buildRoot(reg, idStore, consoleOIDC, secretAdmin) // mounts /admin since the store is non-nil
 		handler = controlplane.IdentityMiddleware(accessLog(root), authr, azr)
 		slog.Info("identity enabled", "oidc", oidcIssuer != "", "bootstrap", bootstrapKey != "", "legacy_tokens", len(legacyTokens))
 	}
@@ -187,12 +209,13 @@ func accessLog(next http.Handler) http.Handler {
 }
 
 // buildRoot assembles the root mux: console at /ui, control-plane API at /, and
-// (when adminS is non-nil) the admin API at /admin. Admin handlers self-enforce
-// the admin role; mounting is gated here so open mode has no /admin surface.
-func buildRoot(reg *controlplane.Registry, adminS controlplane.AdminStore, consoleOIDC console.OIDCConfig) http.Handler {
+// (when adminS is non-nil) the admin API at /admin. The secret admin is mounted
+// alongside the admin API; a nil secretBroker makes /admin/secrets return 503.
+func buildRoot(reg *controlplane.Registry, adminS controlplane.AdminStore, consoleOIDC console.OIDCConfig, secretBroker controlplane.SecretAdmin) http.Handler {
 	apiMux := controlplane.NewAPI(reg)
 	if adminS != nil {
 		controlplane.RegisterAdmin(apiMux, adminS)
+		controlplane.RegisterSecretAdmin(apiMux, adminS, secretBroker)
 	}
 	consoleH := console.Handler(reg, consoleOIDC)
 	root := http.NewServeMux()
@@ -242,4 +265,28 @@ func envOr(k, d string) string {
 		return v
 	}
 	return d
+}
+
+// buildSecretBroker constructs a secret broker from RUNTIME_SECRETS_KEY (base64
+// of 32 bytes) over the identity store. Returns nil when the key is unset
+// (feature disabled, backward-compatible). A set-but-malformed key is an
+// operator error and is fatal.
+func buildSecretBroker(idStore *identity.Store) *identity.Broker {
+	raw := os.Getenv("RUNTIME_SECRETS_KEY")
+	if raw == "" {
+		slog.Info("secrets brokering disabled: RUNTIME_SECRETS_KEY not set")
+		return nil
+	}
+	key, err := base64.StdEncoding.DecodeString(raw)
+	if err != nil {
+		slog.Error("RUNTIME_SECRETS_KEY is not valid base64", "err", err)
+		os.Exit(1)
+	}
+	cipher, err := identity.NewCipher(key)
+	if err != nil {
+		slog.Error("RUNTIME_SECRETS_KEY invalid", "err", err)
+		os.Exit(1)
+	}
+	slog.Info("secrets brokering enabled")
+	return identity.NewBroker(idStore, cipher)
 }

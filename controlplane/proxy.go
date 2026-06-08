@@ -9,23 +9,60 @@ import (
 	"os/exec"
 )
 
-// AgentProcess describes the single hardcoded M1 agent subprocess.
+// SecretBroker resolves a tenant's secrets to name->plaintext at spawn time.
+// *identity.Broker implements it. A nil broker means no brokering (back-compat).
+type SecretBroker interface {
+	SecretsFor(ctx context.Context, tenant string) (map[string]string, error)
+}
+
+// AgentProcess describes a supervised agent subprocess.
 type AgentProcess struct {
 	AgentID string
 	Addr    string // host:port the subprocess listens on, e.g. "127.0.0.1:8081"
 	BinPath string // path to the agentd binary
 	PGDSN   string
-	Kind    string   // optional agent kind; "" ⇒ testagent. Passed to agentd via RUNTIME_AGENT_KIND.
+	Kind    string   // optional agent kind; "" ⇒ testagent. Passed via RUNTIME_AGENT_KIND.
 	Command []string // when non-empty, exec this instead of BinPath (foreign-process agents)
 	WorkDir string   // optional working directory for Command
 	Tenant  string   // tenant that owns this agent (from runtime.yaml; "default" if unset)
+
+	broker SecretBroker // optional; injected by the Registry. nil ⇒ no secret brokering.
+}
+
+// buildEnv assembles the child environment: the inherited operator env, then the
+// RUNTIME_* control vars, then (if a broker is set) the tenant's decrypted
+// secrets LAST so they shadow any inherited var of the same name. A broker error
+// fails closed — the caller must not start the process.
+func (a AgentProcess) buildEnv(ctx context.Context) ([]string, error) {
+	env := append(os.Environ(),
+		"RUNTIME_PG_DSN="+a.PGDSN,
+		"RUNTIME_LISTEN_ADDR="+a.Addr,
+		"RUNTIME_AGENT_ID="+a.AgentID,
+		"RUNTIME_AGENT_KIND="+a.Kind,
+	)
+	if a.broker != nil {
+		secrets, err := a.broker.SecretsFor(ctx, a.Tenant)
+		if err != nil {
+			return nil, err
+		}
+		for name, val := range secrets {
+			env = append(env, name+"="+val)
+		}
+	}
+	return env, nil
 }
 
 // SpawnFunc returns a Supervisor-compatible spawn closure that launches agentd
-// (or, when Command is set, an arbitrary command) with the right env and reports
-// its exit on the returned channel.
+// (or, when Command is set, an arbitrary command) with the brokered env and
+// reports its exit on the returned channel.
 func (a AgentProcess) SpawnFunc() func(ctx context.Context) <-chan error {
 	return func(ctx context.Context) <-chan error {
+		ch := make(chan error, 1)
+		env, err := a.buildEnv(ctx)
+		if err != nil {
+			ch <- err
+			return ch
+		}
 		var cmd *exec.Cmd
 		if len(a.Command) > 0 {
 			cmd = exec.CommandContext(ctx, a.Command[0], a.Command[1:]...)
@@ -35,15 +72,9 @@ func (a AgentProcess) SpawnFunc() func(ctx context.Context) <-chan error {
 		} else {
 			cmd = exec.CommandContext(ctx, a.BinPath)
 		}
-		cmd.Env = append(os.Environ(),
-			"RUNTIME_PG_DSN="+a.PGDSN,
-			"RUNTIME_LISTEN_ADDR="+a.Addr,
-			"RUNTIME_AGENT_ID="+a.AgentID,
-			"RUNTIME_AGENT_KIND="+a.Kind,
-		)
+		cmd.Env = env
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
-		ch := make(chan error, 1)
 		if err := cmd.Start(); err != nil {
 			ch <- err
 			return ch

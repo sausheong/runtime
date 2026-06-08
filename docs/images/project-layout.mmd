@@ -16,7 +16,7 @@ flowchart LR
     internal["internal/"]
     cfg["config/<br/><i>runtime.yaml loader + validation</i>"]
     store["store/<br/><i>control-plane store:<br/>pg + in-memory</i>"]
-    ident["identity/<br/><i>multi-tenant authn/authz:<br/>Principal, Authorizer,<br/>Authenticator, OIDC, store</i>"]
+    ident["identity/<br/><i>multi-tenant authn/authz +<br/>secrets brokering:<br/>Principal, Authorizer, Authenticator,<br/>OIDC, Cipher, Broker, store</i>"]
 
     testagent["testagent/<br/><i>deterministic provider + marker tool</i>"]
     test["test/<br/><i>//go:build integration e2e tests</i>"]

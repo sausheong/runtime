@@ -1,6 +1,7 @@
 package controlplane
 
 import (
+	"context"
 	"testing"
 
 	"github.com/sausheong/runtime/internal/config"
@@ -21,5 +22,35 @@ func TestRegistry_FromConfig(t *testing.T) {
 	}
 	if _, ok := reg.Get("nope"); ok {
 		t.Fatal("Get(nope) should be !ok")
+	}
+}
+
+func TestRegistry_GetInjectsBroker(t *testing.T) {
+	cfg := &config.Config{Agents: []config.AgentConfig{
+		{ID: "a1", ListenAddr: "127.0.0.1:9001", Tenant: "alpha"},
+	}}
+	reg := NewRegistry(cfg, "./agentd", "dsn")
+
+	// Before SetBroker: the AgentProcess has no broker.
+	ap, ok := reg.Get("a1")
+	if !ok {
+		t.Fatal("agent a1 missing")
+	}
+	if ap.broker != nil {
+		t.Fatal("broker should be nil before SetBroker")
+	}
+
+	br := fakeBroker{secrets: map[string]map[string]string{"alpha": {"K": "v"}}}
+	reg.SetBroker(br)
+	ap2, _ := reg.Get("a1")
+	if ap2.broker == nil {
+		t.Fatal("Get must inject the registry broker into the AgentProcess")
+	}
+	env, err := ap2.buildEnv(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if lastIndexWithPrefix(env, "K=v") < 0 {
+		t.Fatalf("brokered secret not in env: %v", env)
 	}
 }

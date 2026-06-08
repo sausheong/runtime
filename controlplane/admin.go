@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"regexp"
 
 	"github.com/sausheong/runtime/internal/identity"
 )
@@ -155,6 +156,84 @@ func RegisterAdmin(mux *http.ServeMux, s AdminStore) {
 			return
 		}
 		writeJSON(w, http.StatusOK, rows)
+	})
+}
+
+// SecretAdmin is the write surface for tenant secrets, implemented by
+// *identity.Broker (it seals before persisting). A nil SecretAdmin means the
+// feature is disabled (no master key) and handlers return 503.
+type SecretAdmin interface {
+	SetSecret(ctx context.Context, tenant, name, plaintext string) error
+	ListSecretNames(ctx context.Context, tenant string) ([]identity.SecretMeta, error)
+	DeleteSecret(ctx context.Context, tenant, name string) error
+}
+
+// envNameRe restricts secret names to valid env-var identifiers so an injected
+// var can't smuggle '=' or newlines into the child environment.
+var envNameRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
+// RegisterSecretAdmin mounts /admin/secrets on mux. store is reused only for
+// effectiveTenant's tenant validation. When sa is nil the handlers return 503.
+func RegisterSecretAdmin(mux *http.ServeMux, store AdminStore, sa SecretAdmin) {
+	mux.HandleFunc("POST /admin/secrets", func(w http.ResponseWriter, r *http.Request) {
+		p, ok := requireAdmin(w, r)
+		if !ok {
+			return
+		}
+		if sa == nil {
+			http.Error(w, "secrets not configured", http.StatusServiceUnavailable)
+			return
+		}
+		var body struct{ Name, Value, Tenant string }
+		if !decode(w, r, &body) {
+			return
+		}
+		if body.Value == "" || !envNameRe.MatchString(body.Name) {
+			http.Error(w, "valid name (env identifier) and non-empty value required", http.StatusBadRequest)
+			return
+		}
+		tenant, ok := effectiveTenant(w, r, store, p, body.Tenant)
+		if !ok {
+			return
+		}
+		if err := sa.SetSecret(r.Context(), tenant, body.Name, body.Value); err != nil {
+			serverError(w, "set secret", err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"name": body.Name})
+	})
+
+	mux.HandleFunc("GET /admin/secrets", func(w http.ResponseWriter, r *http.Request) {
+		p, ok := requireAdmin(w, r)
+		if !ok {
+			return
+		}
+		if sa == nil {
+			http.Error(w, "secrets not configured", http.StatusServiceUnavailable)
+			return
+		}
+		metas, err := sa.ListSecretNames(r.Context(), p.TenantID)
+		if err != nil {
+			serverError(w, "list secrets", err)
+			return
+		}
+		writeJSON(w, http.StatusOK, metas)
+	})
+
+	mux.HandleFunc("DELETE /admin/secrets/{name}", func(w http.ResponseWriter, r *http.Request) {
+		p, ok := requireAdmin(w, r)
+		if !ok {
+			return
+		}
+		if sa == nil {
+			http.Error(w, "secrets not configured", http.StatusServiceUnavailable)
+			return
+		}
+		if err := sa.DeleteSecret(r.Context(), p.TenantID, r.PathValue("name")); err != nil {
+			serverError(w, "delete secret", err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
 	})
 }
 

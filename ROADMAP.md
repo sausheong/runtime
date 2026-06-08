@@ -1,11 +1,13 @@
 # Runtime — Roadmap & Backlog
 
-**Checkpoint date:** 2026-06-09
+**Checkpoint date:** 2026-06-09 (Identity M2)
 **Current state:** Runtime spine complete (Milestones 1–3 merged to `master`);
 polyglot agent hosting (C1) first milestone complete — Level-1 OpenAI Agents SDK
 shim merged to `master`, hosting a full foreign agent end-to-end (see §C1);
-Identity (B3) first milestone complete — multi-tenant, edge-enforced access
-control (OIDC + service keys + per-agent RBAC) merged to `master` (see §B3).
+Identity (B3) first two milestones complete — M1 multi-tenant, edge-enforced
+access control (OIDC + service keys + per-agent RBAC), and M2 per-tenant secrets
+brokering (AES-256-GCM provider credentials injected into agents at spawn), both
+merged to `master` (see §B3).
 **Goal:** an on-prem, open-source equivalent of AWS Bedrock AgentCore.
 
 This file is the parking lot for everything *not yet built*. Each item below is a
@@ -88,12 +90,27 @@ exposing the platform broadly.
    Backward-compatible: absent tenant → `default`, no identity configured → open
    mode, legacy `tokens:` still work (deprecated → default-tenant superusers).
    Absorbs A7 (hashing-at-rest + constant-time compare). Spec/plan:
-   `docs/superpowers/{specs,plans}/2026-06-08-identity-m1*`. **Remaining Identity
-   work:** secrets brokering (per-tenant provider keys → agents), fine-grained/
-   custom RBAC beyond the 3 roles, cross-tenant users + user self-service, an
-   admin console UI, and optional local password accounts (the `Authenticator`
-   interface already admits new methods). Level-2 console CSRF (`state`/`nonce`)
-   is a known M1 limitation. (Absorbs A7 — done.)
+   `docs/superpowers/{specs,plans}/2026-06-08-identity-m1*`.
+
+   **Second milestone DONE (merged to `master`, 2026-06-09):** per-tenant secrets
+   brokering. Tenants store provider credentials (generic named env vars)
+   encrypted at rest with AES-256-GCM under an operator master key
+   (`RUNTIME_SECRETS_KEY`); a `Broker` in `internal/identity` (Cipher + store)
+   decrypts them at spawn time and the registry injects them into the tenant's
+   agent subprocesses' environment (tenant secrets shadow the inherited operator
+   env; fail-closed on a decrypt error). Write-only `/admin/secrets` API +
+   `runtimectl admin secret set/ls/rm`. Disabled and fully backward-compatible
+   when no master key is set; agents stay unmodified. Spec/plan:
+   `docs/superpowers/{specs,plans}/2026-06-09-identity-m2-secrets-brokering*`.
+
+   **Remaining Identity work:** secrets **key rotation** (re-encrypt all rows on a
+   master-key change; per-tenant keys; optional AAD binding of tenant/name into
+   the AEAD to defeat DB-level row swaps), fine-grained/custom RBAC beyond the 3
+   roles, cross-tenant users + user self-service, an admin console UI (incl.
+   superuser GET/DELETE secrets across a target tenant — POST already supports
+   it), and optional local password accounts (the `Authenticator` interface
+   already admits new methods). Console CSRF (`state`/`nonce`) is a known M1
+   limitation. (Absorbs A7 — done.)
 4. **Sandboxes** — isolated **browser tool** + **code interpreter** for agents.
    Integrate gVisor/Firecracker for isolation; chromedp for browser. The
    conformance suite (M3) already validates the agent contract that sandboxed
