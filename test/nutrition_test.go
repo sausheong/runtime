@@ -46,13 +46,13 @@ func (scripted) ChatStream(ctx context.Context, req llm.ChatRequest) (<-chan llm
 	}()
 	return ch, nil
 }
-func (scripted) Models() []llm.ModelInfo { return []llm.ModelInfo{{ID: "scripted"}} }
+func (scripted) Models() []llm.ModelInfo                                               { return []llm.ModelInfo{{ID: "scripted"}} }
 func (scripted) NormalizeToolSchema(t []llm.ToolDef) ([]llm.ToolDef, []llm.Diagnostic) { return t, nil }
 
 // recallTool is a tiny stand-in matching the tool the scripted provider calls.
 type recallTool struct{}
 
-func (recallTool) Name() string       { return "recall_product" }
+func (recallTool) Name() string        { return "recall_product" }
 func (recallTool) Description() string { return "recall" }
 func (recallTool) Parameters() json.RawMessage {
 	return json.RawMessage(`{"type":"object","properties":{"product_name":{"type":"string"}}}`)
