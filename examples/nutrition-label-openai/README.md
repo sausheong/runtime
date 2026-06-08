@@ -43,3 +43,28 @@ This is system-level learning — the model's weights never change, but the agen
 ## Observed behaviour
 
 Reads both sample labels accurately (e.g. Marigold HL: 4.5 g sugar / 0.3 g sat fat per 100ml → Nutri-Grade B), runs the additive loop once per identified additive, and returns a clean typed verdict every time.
+
+## Run under `runtimed` (hosted on the platform)
+
+The same agent can run as a first-class Runtime agent, hosted by the control
+plane through the Python contract shim (`../../contrib/shims/python`, the
+reusable `runtime_contract` library). `runtimed` execs `uv run python serve.py`
+here as a supervised subprocess speaking the HTTP/SSE agent contract; the typed
+`NutritionVerdict` is rendered to the same prose block the CLI prints and
+streamed as a `text` event.
+
+```bash
+cp .env.example .env          # fill in your LiteLLM proxy key
+make run                      # builds binaries, uv sync, runs the control plane
+# in a second shell:
+make conformance              # contract acceptance gate (same suite as Go agents)
+make demo-image IMAGE=milo.jpeg   # base64 the photo → POST → stream the verdict
+make demo-text                # investigate a pasted label
+make sessions                 # list this agent's sessions
+```
+
+Requires Postgres for the control plane (`make -C ../.. pg-up`, or Postgres.app).
+Durability is Level 1 (sessions/events persist in `shim.db`, replayable via
+`?since=N`; conversation memory via `SQLiteSession`); plus the agent's own
+`agent_memory.json` learned aliases + product verdicts. Level 2 (in-flight crash
+resume) is out of scope — see the repo `ROADMAP.md` §C1.
