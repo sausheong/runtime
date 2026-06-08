@@ -1,0 +1,9 @@
+# Single-agent registry for the SG Nutrition Investigator example.
+# Run with: RUNTIME_CONFIG=runtime.nutrition.yaml ./runtimed
+# Requires env: OPENAI_API_KEY, OPENAI_BASE_URL, OPENAI_MODEL, RUNTIME_PG_DSN.
+agents:
+  - id: nutrition
+    name: SG Nutrition Investigator
+    model: openai/gpt-5.4
+    kind: nutrition
+    listen_addr: 127.0.0.1:8201

@@ -2,3 +2,11 @@
 *.log
 /bin/
 /tmp/
+# Generated at runtime by the nutrition example agent (RUNTIME_NUTRITION_DATA_DIR)
+nutrition_memory.json
+# Built example binaries
+/agentd
+/runtimed
+/runtimectl
+# Local LLM credentials for examples (never commit real keys; .env.example is the template)
+.env

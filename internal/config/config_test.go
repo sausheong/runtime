@@ -39,6 +39,19 @@ agents:
 	}
 }
 
+func TestLoadKind(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "c.yaml")
+	os.WriteFile(p, []byte("agents:\n  - {id: n, name: N, model: openai/gpt, kind: nutrition, listen_addr: 127.0.0.1:8201}\n"), 0o644)
+	c, err := Load(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Agents[0].Kind != "nutrition" {
+		t.Errorf("kind not parsed: %q", c.Agents[0].Kind)
+	}
+}
+
 func TestLoad_DuplicateID(t *testing.T) {
 	p := writeTmp(t, `
 agents:

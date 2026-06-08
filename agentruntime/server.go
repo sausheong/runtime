@@ -20,13 +20,15 @@ func (m *Manager) newMux() *http.ServeMux {
 	})
 	mux.HandleFunc("POST /sessions", func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
-			Message string `json:"message"`
+			Message   string `json:"message"`
+			ImageB64  string `json:"image_b64"`
+			ImageMime string `json:"image_mime"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		id, err := m.startSession(r.Context(), body.Message)
+		id, err := m.startSession(r.Context(), body.Message, body.ImageB64, body.ImageMime)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return

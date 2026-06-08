@@ -23,7 +23,7 @@ func NewRegistry(cfg *config.Config, binPath, dsn string) *Registry {
 	r := &Registry{agents: map[string]AgentProcess{}, infos: map[string]AgentInfo{}}
 	for _, a := range cfg.Agents {
 		r.order = append(r.order, a.ID)
-		r.agents[a.ID] = AgentProcess{AgentID: a.ID, Addr: a.ListenAddr, BinPath: binPath, PGDSN: dsn}
+		r.agents[a.ID] = AgentProcess{AgentID: a.ID, Addr: a.ListenAddr, BinPath: binPath, PGDSN: dsn, Kind: a.Kind}
 		r.infos[a.ID] = AgentInfo{ID: a.ID, Name: a.Name, Model: a.Model}
 	}
 	return r

@@ -19,7 +19,9 @@ type WireEvent struct {
 
 // turnInput is the JSON-serializable input to the durable session workflow.
 type turnInput struct {
-	UserMsg string `json:"user_msg"` // non-empty only on the first turn
+	UserMsg   string `json:"user_msg"`             // non-empty only on the first turn
+	ImageB64  string `json:"image_b64,omitempty"`  // optional base64 image, first turn only
+	ImageMime string `json:"image_mime,omitempty"` // defaults to image/jpeg when ImageB64 set
 }
 
 // turnOutput is the checkpointed return value of a single turn step. On replay
