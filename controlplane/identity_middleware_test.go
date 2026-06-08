@@ -122,3 +122,25 @@ func TestAgentIDFromPath(t *testing.T) {
 		t.Errorf("bare /agents should yield empty id, got %q", id)
 	}
 }
+
+func TestIdentityMW_TraversalCannotBypassExemption(t *testing.T) {
+	// A ".."-laden path that prefix-matches /ui/static must NOT be treated as
+	// exempt: it cleans to an agent path and must be authenticated.
+	mw := IdentityMiddleware(okPrincipalHandler(), stubAuthndr{err: identity.ErrUnauthenticated}, testAZ())
+	rec := httptest.NewRecorder()
+	mw.ServeHTTP(rec, httptest.NewRequest("GET", "/ui/static/../../agents/a1/sessions", nil))
+	// cleanPath = /agents/a1/sessions ; not /ui ; unauthenticated → 401 (not 200, not redirect).
+	if rec.Code != 401 {
+		t.Fatalf("traversal bypass: code=%d want 401", rec.Code)
+	}
+}
+
+func TestActionForRequest_NonGetIsInvoke(t *testing.T) {
+	// Defense-in-depth: an unknown mutating verb must be invoke, not read.
+	if actionForRequest("DELETE", "/agents/a1/sessions/s1") != identity.ActionInvoke {
+		t.Fatal("DELETE must classify as invoke")
+	}
+	if actionForRequest("HEAD", "/agents/a1/sessions") != identity.ActionRead {
+		t.Fatal("HEAD must classify as read")
+	}
+}

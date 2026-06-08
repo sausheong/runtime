@@ -27,6 +27,8 @@ func NewAPI(reg *Registry) *http.ServeMux {
 		}
 		p, hasP := PrincipalFromContext(r.Context())
 		infos := reg.List()
+		// Results are collected concurrently; order is not significant (no
+		// consumer relies on registry order).
 		var out []agentStatus
 		var mu sync.Mutex
 		var wg sync.WaitGroup

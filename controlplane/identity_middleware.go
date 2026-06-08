@@ -2,7 +2,9 @@ package controlplane
 
 import (
 	"context"
+	"errors"
 	"net/http"
+	"path"
 	"strings"
 
 	"github.com/sausheong/runtime/internal/identity"
@@ -21,18 +23,22 @@ type authenticator interface {
 // unknown agent). For /ui paths, an auth failure redirects to /ui/login.
 func IdentityMiddleware(next http.Handler, a authenticator, az *identity.Authorizer) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if isExempt(r.URL.Path) {
+		// Decide exemption and authorization on the cleaned path so an attacker
+		// cannot slip past an exempt prefix with ".." segments (the middleware
+		// runs before the mux, so r.URL.Path is not yet normalized).
+		cleanPath := path.Clean(r.URL.Path)
+		if isExempt(cleanPath) {
 			next.ServeHTTP(w, r)
 			return
 		}
 		p, err := a.Authenticate(r.Context(), r)
 		if err != nil {
-			if strings.HasPrefix(r.URL.Path, "/ui") {
+			if strings.HasPrefix(cleanPath, "/ui") {
 				http.Redirect(w, r, "/ui/login", http.StatusSeeOther)
 				return
 			}
-			switch err {
-			case identity.ErrNotProvisioned:
+			switch {
+			case errors.Is(err, identity.ErrNotProvisioned):
 				http.Error(w, "forbidden", http.StatusForbidden)
 			default:
 				http.Error(w, "unauthorized", http.StatusUnauthorized)
@@ -40,10 +46,8 @@ func IdentityMiddleware(next http.Handler, a authenticator, az *identity.Authori
 			return
 		}
 
-		// Authorize agent-scoped requests (the /agents/{id}/... subtree). Other
-		// paths (/agents list, /admin/*, /ui) are authorized by their handlers.
-		if id := agentIDFromPath(r.URL.Path); id != "" {
-			if azErr := az.Authorize(p, id, actionForRequest(r.Method, r.URL.Path)); azErr != nil {
+		if id := agentIDFromPath(cleanPath); id != "" {
+			if azErr := az.Authorize(p, id, actionForRequest(r.Method, cleanPath)); azErr != nil {
 				writeAuthzError(w, azErr)
 				return
 			}
@@ -61,10 +65,10 @@ func isExempt(path string) bool {
 // writeAuthzError maps Authorizer errors to HTTP codes (404 hides cross-tenant
 // existence; 403 is an in-tenant permission denial).
 func writeAuthzError(w http.ResponseWriter, err error) {
-	switch err {
-	case identity.ErrNotFound:
+	switch {
+	case errors.Is(err, identity.ErrNotFound):
 		http.Error(w, "not found", http.StatusNotFound)
-	case identity.ErrForbidden:
+	case errors.Is(err, identity.ErrForbidden):
 		http.Error(w, "forbidden", http.StatusForbidden)
 	default:
 		http.Error(w, "forbidden", http.StatusForbidden)
@@ -87,10 +91,13 @@ func agentIDFromPath(path string) string {
 	return rest
 }
 
-// actionForRequest derives the coarse Action from method+path.
+// actionForRequest derives the coarse Action from method+path. GET/HEAD are
+// reads; every other method (incl. POST /sessions and any future mutating verb)
+// is treated as invoke, so a new write endpoint can never silently fall through
+// to read-level (viewer) access.
 func actionForRequest(method, path string) identity.Action {
-	if method == http.MethodPost && strings.HasSuffix(path, "/sessions") {
-		return identity.ActionInvoke
+	if method == http.MethodGet || method == http.MethodHead {
+		return identity.ActionRead
 	}
-	return identity.ActionRead
+	return identity.ActionInvoke
 }
