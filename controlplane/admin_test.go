@@ -260,3 +260,135 @@ func TestAdmin_RevokeKeyTenantScoped(t *testing.T) {
 		t.Fatal("beta admin must NOT revoke alpha's key (tenant-scoped)")
 	}
 }
+
+// fakeSecretAdmin implements SecretAdmin in-memory.
+type fakeSecretAdmin struct {
+	set   map[string]map[string]string // tenant -> name -> plaintext
+	names map[string][]identity.SecretMeta
+}
+
+func newFakeSecretAdmin() *fakeSecretAdmin {
+	return &fakeSecretAdmin{set: map[string]map[string]string{}, names: map[string][]identity.SecretMeta{}}
+}
+func (f *fakeSecretAdmin) SetSecret(_ context.Context, tenant, name, plaintext string) error {
+	if f.set[tenant] == nil {
+		f.set[tenant] = map[string]string{}
+	}
+	f.set[tenant][name] = plaintext
+	f.names[tenant] = append(f.names[tenant], identity.SecretMeta{Name: name})
+	return nil
+}
+func (f *fakeSecretAdmin) ListSecretNames(_ context.Context, tenant string) ([]identity.SecretMeta, error) {
+	return f.names[tenant], nil
+}
+func (f *fakeSecretAdmin) DeleteSecret(_ context.Context, tenant, name string) error {
+	delete(f.set[tenant], name)
+	return nil
+}
+
+// adminMuxWithSecrets wires both the store and the secret admin.
+func adminMuxWithSecrets(s AdminStore, sa SecretAdmin) http.Handler {
+	mux := http.NewServeMux()
+	RegisterAdmin(mux, s)
+	RegisterSecretAdmin(mux, s, sa)
+	return mux
+}
+
+func TestSecretAdmin_SetAndListNoValueLeak(t *testing.T) {
+	s := newFakeAdminStore()
+	s.CreateTenant(context.Background(), "alpha", "A")
+	sa := newFakeSecretAdmin()
+	mux := adminMuxWithSecrets(s, sa)
+
+	body := `{"name":"OPENAI_API_KEY","value":"sk-secret"}`
+	r := withPrincipal(httptest.NewRequest("POST", "/admin/secrets", strings.NewReader(body)),
+		identity.Principal{TenantID: "alpha", Role: identity.RoleAdmin})
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, r)
+	if rec.Code != 200 && rec.Code != 201 {
+		t.Fatalf("set secret: code=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if sa.set["alpha"]["OPENAI_API_KEY"] != "sk-secret" {
+		t.Fatalf("secret not stored: %+v", sa.set)
+	}
+
+	lr := withPrincipal(httptest.NewRequest("GET", "/admin/secrets", nil),
+		identity.Principal{TenantID: "alpha", Role: identity.RoleAdmin})
+	lrec := httptest.NewRecorder()
+	mux.ServeHTTP(lrec, lr)
+	if lrec.Code != 200 {
+		t.Fatalf("list: code=%d", lrec.Code)
+	}
+	if strings.Contains(lrec.Body.String(), "sk-secret") {
+		t.Fatalf("LIST LEAKED THE VALUE: %s", lrec.Body.String())
+	}
+	if !strings.Contains(lrec.Body.String(), "OPENAI_API_KEY") {
+		t.Fatalf("list missing name: %s", lrec.Body.String())
+	}
+}
+
+func TestSecretAdmin_NonAdminForbidden(t *testing.T) {
+	mux := adminMuxWithSecrets(newFakeAdminStore(), newFakeSecretAdmin())
+	r := withPrincipal(httptest.NewRequest("POST", "/admin/secrets", strings.NewReader(`{"name":"K","value":"v"}`)),
+		identity.Principal{TenantID: "alpha", Role: identity.RoleOperator})
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, r)
+	if rec.Code != 403 {
+		t.Fatalf("operator set secret: code=%d want 403", rec.Code)
+	}
+}
+
+func TestSecretAdmin_DisabledIs503(t *testing.T) {
+	s := newFakeAdminStore()
+	s.CreateTenant(context.Background(), "alpha", "A")
+	mux := http.NewServeMux()
+	RegisterAdmin(mux, s)
+	RegisterSecretAdmin(mux, s, nil) // nil broker ⇒ feature disabled
+	r := withPrincipal(httptest.NewRequest("POST", "/admin/secrets", strings.NewReader(`{"name":"K","value":"v"}`)),
+		identity.Principal{TenantID: "alpha", Role: identity.RoleAdmin})
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, r)
+	if rec.Code != 503 {
+		t.Fatalf("no broker: code=%d want 503", rec.Code)
+	}
+}
+
+func TestSecretAdmin_BadNameOrValue400(t *testing.T) {
+	s := newFakeAdminStore()
+	s.CreateTenant(context.Background(), "alpha", "A")
+	mux := adminMuxWithSecrets(s, newFakeSecretAdmin())
+	cases := []string{
+		`{"name":"","value":"v"}`,
+		`{"name":"OPENAI","value":""}`,
+		`{"name":"bad name","value":"v"}`,
+		`{"name":"1BAD","value":"v"}`,
+		`{"name":"A=B","value":"v"}`,
+	}
+	for _, body := range cases {
+		r := withPrincipal(httptest.NewRequest("POST", "/admin/secrets", strings.NewReader(body)),
+			identity.Principal{TenantID: "alpha", Role: identity.RoleAdmin})
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, r)
+		if rec.Code != 400 {
+			t.Fatalf("body %s: code=%d want 400", body, rec.Code)
+		}
+	}
+}
+
+func TestSecretAdmin_Delete(t *testing.T) {
+	s := newFakeAdminStore()
+	s.CreateTenant(context.Background(), "alpha", "A")
+	sa := newFakeSecretAdmin()
+	mux := adminMuxWithSecrets(s, sa)
+	sa.SetSecret(context.Background(), "alpha", "K", "v")
+	r := withPrincipal(httptest.NewRequest("DELETE", "/admin/secrets/K", nil),
+		identity.Principal{TenantID: "alpha", Role: identity.RoleAdmin})
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, r)
+	if rec.Code != 204 {
+		t.Fatalf("delete: code=%d want 204", rec.Code)
+	}
+	if _, ok := sa.set["alpha"]["K"]; ok {
+		t.Fatal("secret not deleted")
+	}
+}
