@@ -104,3 +104,72 @@ func TestStore_AnyConfigured(t *testing.T) {
 		t.Fatal("after a tenant, should report configured")
 	}
 }
+
+func TestStore_UpsertUserRehomes(t *testing.T) {
+	ctx := context.Background()
+	s, db := freshStore(t)
+	defer db.Close()
+	_ = s.CreateTenant(ctx, "alpha", "A")
+	_ = s.CreateTenant(ctx, "beta", "B")
+	if err := s.UpsertUser(ctx, "alpha", "alice@corp", RoleViewer); err != nil {
+		t.Fatal(err)
+	}
+	// Re-home the same subject to a new tenant + role (the point of upsert).
+	if err := s.UpsertUser(ctx, "beta", "alice@corp", RoleAdmin); err != nil {
+		t.Fatal(err)
+	}
+	u, err := s.UserBySubject(ctx, "alice@corp")
+	if err != nil || u.TenantID != "beta" || u.Role != RoleAdmin {
+		t.Fatalf("after re-home: u=%+v err=%v want beta/admin", u, err)
+	}
+}
+
+func TestStore_RevokeKeyCrossTenantNoOp(t *testing.T) {
+	ctx := context.Background()
+	s, db := freshStore(t)
+	defer db.Close()
+	_ = s.CreateTenant(ctx, "alpha", "A")
+	_ = s.CreateTenant(ctx, "beta", "B")
+	mk, _ := MintServiceKey()
+	if err := s.InsertServiceKey(ctx, mk.ID, "alpha", mk.Hash, RoleOperator, "k"); err != nil {
+		t.Fatal(err)
+	}
+	// Revoking under the WRONG tenant must NOT revoke the key.
+	if err := s.RevokeKey(ctx, "beta", mk.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.ActiveKeyByID(ctx, mk.ID); err != nil {
+		t.Fatalf("key wrongly revoked by cross-tenant call: %v", err)
+	}
+	// Correct tenant revokes it.
+	if err := s.RevokeKey(ctx, "alpha", mk.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.ActiveKeyByID(ctx, mk.ID); err != ErrNoKey {
+		t.Fatalf("key should be revoked now: err=%v want ErrNoKey", err)
+	}
+}
+
+func TestStore_ListKeysOmitsHashAndShowsRevoked(t *testing.T) {
+	ctx := context.Background()
+	s, db := freshStore(t)
+	defer db.Close()
+	_ = s.CreateTenant(ctx, "alpha", "A")
+	mk, _ := MintServiceKey()
+	_ = s.InsertServiceKey(ctx, mk.ID, "alpha", mk.Hash, RoleViewer, "ci")
+	keys, err := s.ListKeys(ctx, "alpha")
+	if err != nil || len(keys) != 1 {
+		t.Fatalf("ListKeys = %+v, %v", keys, err)
+	}
+	k := keys[0]
+	if k.ID != mk.ID || k.Role != RoleViewer || k.Label != "ci" || k.Revoked {
+		t.Fatalf("unexpected key row: %+v", k)
+	}
+	// KeyRow has no hash field by design — this is a compile-time guarantee that
+	// listings never carry the secret. Revoke and confirm the flag flips.
+	_ = s.RevokeKey(ctx, "alpha", mk.ID)
+	keys, _ = s.ListKeys(ctx, "alpha")
+	if len(keys) != 1 || !keys[0].Revoked {
+		t.Fatalf("after revoke, Revoked flag should be true: %+v", keys)
+	}
+}

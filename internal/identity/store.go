@@ -104,7 +104,7 @@ func (s *Store) UserBySubject(ctx context.Context, subject string) (UserRow, err
 	err := s.db.QueryRowContext(ctx,
 		`SELECT tenant_id, subject, role FROM identity_users WHERE subject=$1`, subject).
 		Scan(&u.TenantID, &u.Subject, &role)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return UserRow{}, ErrNoUser
 	}
 	if err != nil {
@@ -157,7 +157,7 @@ func (s *Store) ActiveKeyByID(ctx context.Context, id string) (activeKey, error)
 	err := s.db.QueryRowContext(ctx,
 		`SELECT tenant_id, key_hash, role FROM service_keys WHERE id=$1 AND revoked_at IS NULL`, id).
 		Scan(&k.TenantID, &k.Hash, &role)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return activeKey{}, ErrNoKey
 	}
 	if err != nil {
