@@ -21,7 +21,10 @@ class ContractEvent:
         return d
 
     def to_json(self) -> str:
-        return json.dumps(self.to_dict())
+        # Compact separators (no spaces) to match the Go agentruntime.WireEvent
+        # wire format exactly — the conformance suite substring-matches
+        # `"type":"done"`, and clients may do likewise.
+        return json.dumps(self.to_dict(), separators=(",", ":"))
 
 
 @dataclass

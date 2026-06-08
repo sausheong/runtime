@@ -31,11 +31,11 @@ def test_session_stream_to_done(tmp_path):
     sid = c.post("/sessions", json={"message": "world"}).json()["session_id"]
     assert sid
     body = c.get(f"/sessions/{sid}/stream?since=0").text
-    # json.dumps default separators emit a space after the colon, so match the
-    # actual wire format the app produces (e.g. '"type": "text"').
-    assert '"type": "text"' in body and "hello world" in body
-    assert '"type": "tool_result"' in body
-    assert '"type": "done"' in body
+    # Compact JSON (no space after colon) — must match the Go WireEvent wire
+    # format, which the conformance suite substring-matches as `"type":"done"`.
+    assert '"type":"text"' in body and "hello world" in body
+    assert '"type":"tool_result"' in body
+    assert '"type":"done"' in body
     assert "id: 1" in body
     row = c.get(f"/sessions/{sid}").json()
     assert row["status"] == "completed"
@@ -49,7 +49,7 @@ def test_replay_since(tmp_path):
     full = c.get(f"/sessions/{sid}/stream?since=0").text
     tail = c.get(f"/sessions/{sid}/stream?since=1").text
     assert "hello x" not in tail
-    assert '"type": "done"' in tail
+    assert '"type":"done"' in tail
 
 
 def test_image_decoded(tmp_path):
