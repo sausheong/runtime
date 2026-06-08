@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
+	"os"
 	"sync"
 	"time"
 
@@ -205,11 +207,25 @@ func (m *Manager) startSession(ctx context.Context, userMsg, imageB64, imageMime
 
 // Serve validates config, opens the store, launches DBOS (running recovery for
 // any pending workflows), then serves the agent contract until ctx is cancelled.
+//
+// Operator-injected parameters come from the environment the control plane sets
+// on the subprocess, not from Config: RUNTIME_PG_DSN (the DBOS system database +
+// control-plane store DSN) and RUNTIME_LISTEN_ADDR (the HTTP bind address). This
+// keeps Config a pure agent-author surface — a builder never handles them.
 func Serve(ctx context.Context, cfg Config) error {
 	if err := cfg.Validate(); err != nil {
 		return err
 	}
-	st, err := store.NewPGStore(ctx, cfg.PostgresDSN)
+	pgDSN := os.Getenv("RUNTIME_PG_DSN")
+	if pgDSN == "" {
+		return errors.New("agentruntime: RUNTIME_PG_DSN is not set")
+	}
+	listenAddr := os.Getenv("RUNTIME_LISTEN_ADDR")
+	if listenAddr == "" {
+		return errors.New("agentruntime: RUNTIME_LISTEN_ADDR is not set")
+	}
+
+	st, err := store.NewPGStore(ctx, pgDSN)
 	if err != nil {
 		return err
 	}
@@ -217,7 +233,7 @@ func Serve(ctx context.Context, cfg Config) error {
 
 	dctx, err := dbos.NewDBOSContext(ctx, dbos.Config{
 		AppName:     cfg.Spec.ID,
-		DatabaseURL: cfg.PostgresDSN,
+		DatabaseURL: pgDSN,
 	})
 	if err != nil {
 		return err
@@ -238,7 +254,7 @@ func Serve(ctx context.Context, cfg Config) error {
 	}
 	defer dbos.Shutdown(dctx, 10*time.Second)
 
-	srv := &http.Server{Addr: cfg.ListenAddr, Handler: m.newMux()}
+	srv := &http.Server{Addr: listenAddr, Handler: m.newMux()}
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- srv.ListenAndServe() }()
 

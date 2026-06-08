@@ -28,8 +28,10 @@ func mustEnv(key string) string {
 }
 
 func main() {
+	// RUNTIME_PG_DSN is opened here for the marker table; agentruntime.Serve
+	// reads it (and RUNTIME_LISTEN_ADDR) from the environment itself, so they
+	// are not threaded through the builder.
 	dsn := mustEnv("RUNTIME_PG_DSN")
-	addr := mustEnv("RUNTIME_LISTEN_ADDR")
 	agentID := mustEnv("RUNTIME_AGENT_ID")
 	kind := os.Getenv("RUNTIME_AGENT_KIND") // "" ⇒ testagent
 
@@ -51,7 +53,7 @@ func main() {
 	if !ok {
 		log.Fatalf("agentd: unknown agent kind %q", kind)
 	}
-	cfg, err := build(agentkind.Deps{AgentID: agentID, ListenAddr: addr, PostgresDSN: dsn, DB: db})
+	cfg, err := build(agentkind.Deps{AgentID: agentID, DB: db})
 	if err != nil {
 		log.Fatalf("agentd: build agent kind %q: %v", kind, err)
 	}

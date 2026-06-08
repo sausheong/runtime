@@ -81,12 +81,15 @@ func TestNutritionAgentImageSession(t *testing.T) {
 
 	addr := "127.0.0.1:8211"
 	cfg := agentruntime.Config{
-		Spec:        hrt.AgentSpec{ID: "nutrition", Name: "Nutrition", Model: "openai/scripted", MaxTurns: 5},
-		Provider:    scripted{},
-		Tools:       reg,
-		ListenAddr:  addr,
-		PostgresDSN: dsn,
+		Spec:     hrt.AgentSpec{ID: "nutrition", Name: "Nutrition", Model: "openai/scripted", MaxTurns: 5},
+		Provider: scripted{},
+		Tools:    reg,
 	}
+
+	// Serve reads these operator parameters from the environment (as the control
+	// plane injects them on the agentd subprocess), not from Config.
+	t.Setenv("RUNTIME_PG_DSN", dsn)
+	t.Setenv("RUNTIME_LISTEN_ADDR", addr)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

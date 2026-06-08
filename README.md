@@ -374,9 +374,7 @@ import (
 )
 
 func main() {
-    dsn  := os.Getenv("RUNTIME_PG_DSN")      // injected by runtimed
-    addr := os.Getenv("RUNTIME_LISTEN_ADDR") // injected by runtimed
-    id   := os.Getenv("RUNTIME_AGENT_ID")    // injected by runtimed
+    id := os.Getenv("RUNTIME_AGENT_ID") // injected by runtimed
 
     reg := tool.NewRegistry()
     reg.Register(&file.ReadFileTool{WorkDir: "/work"})
@@ -393,10 +391,8 @@ func main() {
             SystemPrompt: "You are a helpful coding assistant.",
             MaxTurns:     25,
         },
-        Provider:    anthropic.NewAnthropicProvider(os.Getenv("ANTHROPIC_API_KEY"), ""),
-        Tools:       reg,
-        ListenAddr:  addr,
-        PostgresDSN: dsn,
+        Provider: anthropic.NewAnthropicProvider(os.Getenv("ANTHROPIC_API_KEY"), ""),
+        Tools:    reg,
     })
     if err != nil {
         panic(err)
@@ -404,21 +400,28 @@ func main() {
 }
 ```
 
-`agentruntime.Serve` does the rest: binds the HTTP/SSE contract, initializes
-DBOS, runs the harness loop one durable step per turn, tracks session status,
-persists the event log, and recovers in-flight workflows on restart. Point
-`runtime.yaml`'s `model`/`name` at your agent and set `RUNTIME_AGENTD_BIN` to
-your binary.
+`Config` is purely about the agent — its identity, model, behavior, and tools.
+The operator parameters (where Postgres lives, which address to bind) are *not*
+in `Config`: `Serve` reads `RUNTIME_PG_DSN` and `RUNTIME_LISTEN_ADDR` from the
+environment `runtimed` injects, so an agent author never handles them.
 
-**`Config` fields:**
+`agentruntime.Serve` does the rest: reads those two operator env vars, binds the
+HTTP/SSE contract, initializes DBOS, runs the harness loop one durable step per
+turn, tracks session status, persists the event log, and recovers in-flight
+workflows on restart. Point `runtime.yaml`'s `model`/`name` at your agent and set
+`RUNTIME_AGENTD_BIN` to your binary.
+
+**`Config` fields** (the entire agent-author surface):
 
 | Field | Type | Purpose |
 |---|---|---|
 | `Spec` | `harness/runtime.AgentSpec` | Agent identity, model (`provider/model`), system prompt, `MaxTurns`, etc. |
 | `Provider` | `harness/llm.LLMProvider` | The resolved LLM client for the model. harness ships Anthropic, OpenAI/Ollama, Gemini, Qwen. |
 | `Tools` | `*harness/tool.Registry` | The agent's tools. |
-| `ListenAddr` | `string` | HTTP bind address (injected by `runtimed`). |
-| `PostgresDSN` | `string` | DBOS system DB + control-plane store DSN (injected by `runtimed`). |
+
+`Serve` additionally reads two operator-injected environment variables (set by
+`runtimed`, not by the agent author): `RUNTIME_PG_DSN` (DBOS system DB +
+control-plane store) and `RUNTIME_LISTEN_ADDR` (HTTP bind address).
 
 ---
 

@@ -20,7 +20,7 @@ func TestLiveOneTurn(t *testing.T) {
 	if os.Getenv("OPENAI_API_KEY") == "" {
 		t.Skip("OPENAI_API_KEY not set; skipping live smoke")
 	}
-	cfg, err := BuildConfig(Deps{AgentID: "nutrition", ListenAddr: "127.0.0.1:0", PostgresDSN: "unused"})
+	cfg, err := BuildConfig(Deps{AgentID: "nutrition"})
 	if err != nil {
 		t.Fatal(err)
 	}

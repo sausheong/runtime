@@ -12,11 +12,11 @@ import (
 	"github.com/sausheong/runtime/agentruntime"
 )
 
-// Deps is what the agentd runner hands the builder.
+// Deps is what the agentd runner hands the builder. It carries only what the
+// builder needs to describe the agent; operator parameters (listen address,
+// Postgres DSN) are read from the environment by agentruntime.Serve, not here.
 type Deps struct {
-	AgentID     string
-	ListenAddr  string
-	PostgresDSN string
+	AgentID string
 }
 
 // BuildConfig assembles the agentruntime.Config for the SG Nutrition
@@ -60,9 +60,7 @@ func BuildConfig(d Deps) (agentruntime.Config, error) {
 			SystemPrompt: investigatorPrompt,
 			MaxTurns:     12,
 		},
-		Provider:    provider,
-		Tools:       reg,
-		ListenAddr:  d.ListenAddr,
-		PostgresDSN: d.PostgresDSN,
+		Provider: provider,
+		Tools:    reg,
 	}, nil
 }

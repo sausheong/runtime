@@ -12,10 +12,9 @@ func TestConfig_Validate(t *testing.T) {
 		cfg     Config
 		wantErr bool
 	}{
-		{"missing spec id", Config{ListenAddr: ":0", PostgresDSN: "x"}, true},
-		{"missing dsn", Config{Spec: hrt.AgentSpec{ID: "a", Model: "m"}, ListenAddr: ":0"}, true},
-		{"missing listen addr", Config{Spec: hrt.AgentSpec{ID: "a", Model: "m"}, PostgresDSN: "x"}, true},
-		{"ok", Config{Spec: hrt.AgentSpec{ID: "a", Model: "m"}, ListenAddr: ":0", PostgresDSN: "x"}, false},
+		{"missing spec id", Config{Spec: hrt.AgentSpec{Model: "m"}}, true},
+		{"missing model", Config{Spec: hrt.AgentSpec{ID: "a"}}, true},
+		{"ok", Config{Spec: hrt.AgentSpec{ID: "a", Model: "m"}}, false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
