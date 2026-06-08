@@ -37,7 +37,7 @@ func (b *Broker) SecretsFor(ctx context.Context, tenant string) (map[string]stri
 	}
 	out := make(map[string]string, len(enc))
 	for _, e := range enc {
-		pt, err := b.cipher.Open(e.ValueEnc)
+		pt, err := b.cipher.Open(e.ValueEnc, nil)
 		if err != nil {
 			return nil, fmt.Errorf("identity: decrypt secret %q for tenant %q: %w", e.Name, tenant, err)
 		}
@@ -48,7 +48,7 @@ func (b *Broker) SecretsFor(ctx context.Context, tenant string) (map[string]stri
 
 // SetSecret seals the plaintext and persists it (UPSERT).
 func (b *Broker) SetSecret(ctx context.Context, tenant, name, plaintext string) error {
-	enc, err := b.cipher.Seal([]byte(plaintext))
+	enc, err := b.cipher.Seal([]byte(plaintext), nil)
 	if err != nil {
 		return fmt.Errorf("identity: seal secret %q for tenant %q: %w", name, tenant, err)
 	}

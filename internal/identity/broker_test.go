@@ -76,7 +76,7 @@ func TestBroker_SecretsForFailsClosedOnBadCiphertext(t *testing.T) {
 	ctx := context.Background()
 
 	// One validly-sealed secret...
-	good, err := b.cipher.Seal([]byte("sk-good"))
+	good, err := b.cipher.Seal([]byte("sk-good"), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
