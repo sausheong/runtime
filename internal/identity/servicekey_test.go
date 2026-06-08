@@ -45,4 +45,7 @@ func TestVerifyKey(t *testing.T) {
 	if VerifyKey(mk.Hash, secret+"x") {
 		t.Error("VerifyKey must reject a wrong secret")
 	}
+	if VerifyKey("not-a-bcrypt-hash", secret) {
+		t.Error("VerifyKey must reject a malformed/tampered hash")
+	}
 }
