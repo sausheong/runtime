@@ -12,11 +12,17 @@ func TestResolveAdditive(t *testing.T) {
 		wantFound   bool
 		wantInName  string
 	}{
-		{"by e-number", "E621", true, "621"},
-		{"by e-number lowercase no prefix", "621", true, "621"},
-		{"by name", "Monosodium L- glutamate", true, "621"},
-		{"by colloquial msg", "MSG", true, "621"},
-		{"by colloquial vitamin c", "vitamin c", true, "ascorbic"},
+		// wantInName asserts WHICH entry resolved (a substring of the formatted
+		// output), so a bug that resolved to the wrong permitted additive is caught.
+		{"by e-number", "E621", true, "Monosodium"},
+		{"by e-number lowercase no prefix", "621", true, "Monosodium"},
+		{"by name", "Monosodium L- glutamate", true, "E621"},
+		{"by colloquial msg", "MSG", true, "E621"},
+		// "vitamin c" matches the table's own "Vitamin C" row via the alias index
+		// BEFORE the colloquial→ascorbic fallback — matching the Python order.
+		{"by name vitamin c", "vitamin c", true, "Vitamin C"},
+		// colloquial fallback: "baking soda" has no table row, only the map entry.
+		{"by colloquial baking soda", "baking soda", true, "Sodium hydrogen carbonate"},
 		{"miss", "unobtainium", false, "Not found"},
 	}
 	for _, c := range cases {
@@ -27,6 +33,9 @@ func TestResolveAdditive(t *testing.T) {
 			}
 			if !c.wantFound && !containsFold(out, "not found") {
 				t.Errorf("resolve(%q): want not-found, got %q", c.query, out)
+			}
+			if c.wantInName != "" && !containsFold(out, c.wantInName) {
+				t.Errorf("resolve(%q): want %q in output, got %q", c.query, c.wantInName, out)
 			}
 		})
 	}
