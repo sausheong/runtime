@@ -11,61 +11,129 @@ import (
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: runtimectl <invoke|logs|deploy> [args]")
-		os.Exit(2)
+		usage()
 	}
 	base := envOr("RUNTIME_CTL_URL", "http://localhost:8080")
-	switch os.Args[1] {
+	cmd := os.Args[1]
+	agent, rest := popAgentFlag(os.Args[2:])
+
+	switch cmd {
+	case "agents":
+		listAgents(base)
 	case "invoke":
-		invoke(base, os.Args[2:])
+		msg := "hello"
+		if len(rest) > 0 {
+			msg = rest[0]
+		}
+		invoke(base, resolveAgent(base, agent), msg)
+	case "sessions":
+		listSessions(base, resolveAgent(base, agent))
 	case "logs":
-		logs(base, os.Args[2:])
-	case "deploy":
-		fmt.Println("deploy: M1 uses a single statically-configured agent 'default' (configured via runtimed env). Multi-agent deploy lands in M2.")
+		if len(rest) < 1 {
+			fmt.Fprintln(os.Stderr, "usage: runtimectl logs --agent <id> <session-id>")
+			os.Exit(2)
+		}
+		stream(base, resolveAgent(base, agent), rest[0])
 	default:
-		fmt.Fprintf(os.Stderr, "unknown command %q\n", os.Args[1])
-		os.Exit(2)
+		usage()
 	}
 }
 
-func invoke(base string, args []string) {
-	msg := "hello"
-	if len(args) > 0 {
-		msg = args[0]
+func usage() {
+	fmt.Fprintln(os.Stderr, "usage: runtimectl <agents|invoke|sessions|logs> [--agent <id>] [args]")
+	os.Exit(2)
+}
+
+// popAgentFlag extracts "--agent <id>" from args, returning the id and the rest.
+func popAgentFlag(args []string) (string, []string) {
+	var agent string
+	var rest []string
+	for i := 0; i < len(args); i++ {
+		if args[i] == "--agent" && i+1 < len(args) {
+			agent = args[i+1]
+			i++
+			continue
+		}
+		rest = append(rest, args[i])
 	}
+	return agent, rest
+}
+
+// resolveAgent returns the explicit --agent, or the sole agent if exactly one
+// is registered, else errors.
+func resolveAgent(base, agent string) string {
+	if agent != "" {
+		return agent
+	}
+	infos := fetchAgents(base)
+	if len(infos) == 1 {
+		return infos[0].ID
+	}
+	fmt.Fprintf(os.Stderr, "error: --agent required (%d agents registered)\n", len(infos))
+	os.Exit(2)
+	return ""
+}
+
+type agentInfo struct {
+	ID    string `json:"id"`
+	Name  string `json:"name"`
+	Model string `json:"model"`
+}
+
+func fetchAgents(base string) []agentInfo {
+	resp, err := http.Get(base + "/agents")
+	check(err)
+	defer resp.Body.Close()
+	var infos []agentInfo
+	_ = json.NewDecoder(resp.Body).Decode(&infos)
+	return infos
+}
+
+func listAgents(base string) {
+	for _, a := range fetchAgents(base) {
+		fmt.Printf("%s\t%s\t%s\n", a.ID, a.Name, a.Model)
+	}
+}
+
+func invoke(base, agent, msg string) {
 	body, _ := json.Marshal(map[string]string{"message": msg})
-	resp, err := http.Post(base+"/sessions", "application/json", bytes.NewReader(body))
+	resp, err := http.Post(base+"/agents/"+agent+"/sessions", "application/json", bytes.NewReader(body))
 	check(err)
 	var out struct {
 		SessionID string `json:"session_id"`
 	}
-	dec := json.NewDecoder(resp.Body)
-	_ = dec.Decode(&out)
+	_ = json.NewDecoder(resp.Body).Decode(&out)
 	resp.Body.Close()
 	if out.SessionID == "" {
-		fmt.Fprintln(os.Stderr, "error: no session id returned by control plane")
+		fmt.Fprintln(os.Stderr, "error: no session id returned")
 		os.Exit(1)
 	}
 	fmt.Println("session:", out.SessionID)
-	stream(base, out.SessionID)
+	stream(base, agent, out.SessionID)
 }
 
-func logs(base string, args []string) {
-	if len(args) < 1 {
-		fmt.Fprintln(os.Stderr, "usage: runtimectl logs <session-id>")
-		os.Exit(2)
+func listSessions(base, agent string) {
+	resp, err := http.Get(base + "/agents/" + agent + "/sessions")
+	check(err)
+	defer resp.Body.Close()
+	var rows []struct {
+		ID        string `json:"id"`
+		Status    string `json:"status"`
+		TurnCount int    `json:"turn_count"`
 	}
-	stream(base, args[0])
+	_ = json.NewDecoder(resp.Body).Decode(&rows)
+	for _, s := range rows {
+		fmt.Printf("%s\t%s\tturns=%d\n", s.ID, s.Status, s.TurnCount)
+	}
 }
 
-func stream(base, id string) {
-	resp, err := http.Get(base + "/sessions/" + id + "/stream?since=0")
+func stream(base, agent, id string) {
+	resp, err := http.Get(base + "/agents/" + agent + "/sessions/" + id + "/stream?since=0")
 	check(err)
 	defer resp.Body.Close()
 	sc := bufio.NewScanner(resp.Body)
 	for sc.Scan() {
-		line := sc.Text()
-		if line != "" {
+		if line := sc.Text(); line != "" {
 			fmt.Println(line)
 		}
 	}

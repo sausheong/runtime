@@ -17,13 +17,36 @@ func NewMemStore() Store {
 	return &memStore{sessions: map[string]*SessionRow{}, events: map[string][]Event{}}
 }
 
-func (m *memStore) CreateSession(_ context.Context, agentID, workflowID string) (string, error) {
+func (m *memStore) CreateSession(_ context.Context, agentID string) (string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.seq++
 	id := fmt.Sprintf("ses-%d", m.seq)
-	m.sessions[id] = &SessionRow{ID: id, AgentID: agentID, WorkflowID: workflowID, Status: "created"}
+	m.sessions[id] = &SessionRow{ID: id, AgentID: agentID, WorkflowID: id, Status: "created"}
 	return id, nil
+}
+
+func (m *memStore) ListSessions(_ context.Context, agentID string) ([]SessionRow, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var out []SessionRow
+	for _, s := range m.sessions {
+		if s.AgentID == agentID {
+			out = append(out, *s)
+		}
+	}
+	return out, nil
+}
+
+func (m *memStore) SetTurnCount(_ context.Context, id string, n int) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	s, ok := m.sessions[id]
+	if !ok {
+		return fmt.Errorf("session %q not found", id)
+	}
+	s.TurnCount = n
+	return nil
 }
 
 func (m *memStore) GetSession(_ context.Context, id string) (SessionRow, error) {

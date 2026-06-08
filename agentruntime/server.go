@@ -33,6 +33,23 @@ func (m *Manager) newMux() *http.ServeMux {
 		}
 		_ = json.NewEncoder(w).Encode(map[string]string{"session_id": id})
 	})
+	mux.HandleFunc("GET /sessions", func(w http.ResponseWriter, r *http.Request) {
+		rows, err := m.st.ListSessions(r.Context(), m.agentID)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		type sessOut struct {
+			ID        string `json:"id"`
+			Status    string `json:"status"`
+			TurnCount int    `json:"turn_count"`
+		}
+		out := make([]sessOut, 0, len(rows))
+		for _, s := range rows {
+			out = append(out, sessOut{ID: s.ID, Status: s.Status, TurnCount: s.TurnCount})
+		}
+		_ = json.NewEncoder(w).Encode(out)
+	})
 	mux.HandleFunc("GET /sessions/{id}/stream", func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
 		flusher, ok := w.(http.Flusher)

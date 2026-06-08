@@ -28,10 +28,31 @@ func TestHealthzAndMeta(t *testing.T) {
 	}
 }
 
+func TestListSessionsEndpoint(t *testing.T) {
+	m := newTestManager()
+	ctx := context.Background()
+	id1, _ := m.st.CreateSession(ctx, "a")
+	_ = m.st.SetSessionStatus(ctx, id1, "completed")
+	_ = m.st.SetTurnCount(ctx, id1, 2)
+	_, _ = m.st.CreateSession(ctx, "a")
+
+	srv := httptest.NewServer(m.newMux())
+	defer srv.Close()
+	resp, err := http.Get(srv.URL + "/sessions")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if !strings.Contains(string(body), id1) || !strings.Contains(string(body), `"status":"completed"`) || !strings.Contains(string(body), `"turn_count":2`) {
+		t.Fatalf("/sessions body = %q", body)
+	}
+}
+
 func TestStreamReplaysBufferedTerminal(t *testing.T) {
 	m := newTestManager()
 	ctx := context.Background()
-	id, _ := m.st.CreateSession(ctx, "a", "")
+	id, _ := m.st.CreateSession(ctx, "a")
 	_, _ = m.st.AppendEvent(ctx, id, "text", []byte(`{"type":"text","text":"a"}`))
 	_, _ = m.st.AppendEvent(ctx, id, "done", []byte(`{"type":"done"}`))
 

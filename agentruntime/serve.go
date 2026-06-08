@@ -91,6 +91,13 @@ func (m *Manager) sessionWorkflow(ctx dbos.DBOSContext, in turnInput) (string, e
 	// identical state (RunTurn does not run on replay).
 	canonical := session.NewSession(m.agentID, wfID)
 
+	// Status/turn writes below run in the deterministic workflow body, so they
+	// re-run on replay. Safe: SetSessionStatus is last-write-wins and
+	// SetTurnCount sets the deterministic loop index (not an increment), so
+	// both converge to identical values on recovery. Best-effort (operational
+	// metadata, not the durability backbone) — errors are logged, not fatal.
+	_ = m.st.SetSessionStatus(context.Background(), wfID, "running")
+
 	// maxTurns bounds the durable loop so a misbehaving agent that never
 	// stops emitting tool calls cannot spin the workflow forever (each
 	// iteration checkpoints a step). Deterministic: derived from config and
@@ -104,6 +111,7 @@ func (m *Manager) sessionWorkflow(ctx dbos.DBOSContext, in turnInput) (string, e
 	userMsg := in.UserMsg
 	for turn := 0; ; turn++ {
 		if turn >= maxTurns {
+			_ = m.st.SetSessionStatus(context.Background(), wfID, "error")
 			m.publish(wfID, WireEvent{Type: "error", Err: "agent exceeded maximum turns"})
 			return "error", nil
 		}
@@ -127,11 +135,13 @@ func (m *Manager) sessionWorkflow(ctx dbos.DBOSContext, in turnInput) (string, e
 			return turnOutput{Done: tr.Done, Reason: tr.StopReason, Entries: tr.Entries}, nil
 		})
 		if stepErr != nil {
+			_ = m.st.SetSessionStatus(context.Background(), wfID, "error")
 			m.publish(wfID, WireEvent{Type: "error", Err: stepErr.Error()})
 			return "error", stepErr
 		}
 
 		applyEntries(canonical, out.Entries) // SOLE mutator of canonical
+		_ = m.st.SetTurnCount(context.Background(), wfID, turn+1)
 		for _, ev := range publishableEvents(out.Entries) {
 			m.publish(wfID, ev)
 		}
@@ -141,8 +151,10 @@ func (m *Manager) sessionWorkflow(ctx dbos.DBOSContext, in turnInput) (string, e
 			// surface the others as an error event so clients aren't told a
 			// turn that aborted/errored succeeded.
 			if out.Reason == "completed" {
+				_ = m.st.SetSessionStatus(context.Background(), wfID, "completed")
 				m.publish(wfID, WireEvent{Type: "done"})
 			} else {
+				_ = m.st.SetSessionStatus(context.Background(), wfID, "error")
 				m.publish(wfID, WireEvent{Type: "error", Err: "turn ended: " + out.Reason})
 			}
 			return out.Reason, nil
@@ -154,7 +166,7 @@ func (m *Manager) sessionWorkflow(ctx dbos.DBOSContext, in turnInput) (string, e
 // startSession creates a store session row and launches the durable workflow
 // with the session id as the stable DBOS workflow id.
 func (m *Manager) startSession(ctx context.Context, userMsg string) (string, error) {
-	sessionID, err := m.st.CreateSession(ctx, m.agentID, "")
+	sessionID, err := m.st.CreateSession(ctx, m.agentID)
 	if err != nil {
 		return "", err
 	}

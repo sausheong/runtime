@@ -18,6 +18,7 @@ import (
 	hrt "github.com/sausheong/harness/runtime"
 
 	"github.com/sausheong/runtime/agentruntime"
+	"github.com/sausheong/runtime/internal/store"
 	"github.com/sausheong/runtime/testagent"
 )
 
@@ -40,7 +41,11 @@ func main() {
 	}
 	defer db.Close()
 
-	if _, err := db.Exec(
+	// Create the marker table under the shared DDL advisory lock so multiple
+	// agentd processes starting concurrently (spawned by runtimed) don't race
+	// on CREATE TABLE — which is not atomic against a concurrent creator in
+	// Postgres.
+	if err := store.ApplyDDLLocked(context.Background(), db,
 		`CREATE TABLE IF NOT EXISTS markers (id BIGSERIAL PRIMARY KEY, ran_at TIMESTAMPTZ)`,
 	); err != nil {
 		log.Fatalf("agentd: create markers table: %v", err)
