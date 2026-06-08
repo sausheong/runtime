@@ -17,6 +17,7 @@ type AgentConfig struct {
 	Kind       string   `yaml:"kind"`    // optional; "" ⇒ testagent. Resolved by agentd's kind registry.
 	Command    []string `yaml:"command"` // optional; when set, the supervisor execs this instead of the agentd binary (polyglot/foreign agents). argv form.
 	WorkDir    string   `yaml:"workdir"` // optional working directory for Command (e.g. a Python shim project root).
+	Tenant     string   `yaml:"tenant"`  // optional; "" ⇒ "default" tenant. Owns this agent for access control.
 }
 
 // TokenConfig is one control-plane API token. Label is for log attribution.
@@ -54,9 +55,13 @@ func (c *Config) Validate() error {
 	}
 	ids := map[string]bool{}
 	addrs := map[string]bool{}
-	for i, a := range c.Agents {
+	for i := range c.Agents {
+		a := &c.Agents[i]
 		if a.ID == "" || a.Name == "" || a.Model == "" || a.ListenAddr == "" {
 			return fmt.Errorf("config: agent[%d] requires id, name, model, listen_addr", i)
+		}
+		if a.Tenant == "" {
+			a.Tenant = "default"
 		}
 		if ids[a.ID] {
 			return fmt.Errorf("config: duplicate agent id %q", a.ID)
@@ -88,6 +93,20 @@ func (c *Config) TokenMap() map[string]string {
 			continue // never authenticate an empty token (Validate also rejects these)
 		}
 		m[tk.Token] = tk.Label
+	}
+	return m
+}
+
+// AgentTenants returns agentID→tenantID for all agents (tenant defaulted to
+// "default" by Validate). Used to build the identity Authorizer.
+func (c *Config) AgentTenants() map[string]string {
+	m := make(map[string]string, len(c.Agents))
+	for _, a := range c.Agents {
+		t := a.Tenant
+		if t == "" {
+			t = "default"
+		}
+		m[a.ID] = t
 	}
 	return m
 }

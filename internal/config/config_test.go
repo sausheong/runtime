@@ -173,3 +173,35 @@ tokens:
 		t.Fatal("expected error for empty token")
 	}
 }
+
+func TestLoad_TenantField(t *testing.T) {
+	p := writeTmp(t, `
+agents:
+  - {id: a, name: A, model: m, listen_addr: 127.0.0.1:8101, tenant: alpha}
+  - {id: b, name: B, model: m, listen_addr: 127.0.0.1:8102}
+`)
+	cfg, err := Load(p)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Agents[0].Tenant != "alpha" {
+		t.Errorf("agent a tenant = %q, want alpha", cfg.Agents[0].Tenant)
+	}
+	// Absent tenant defaults to "default".
+	if cfg.Agents[1].Tenant != "default" {
+		t.Errorf("agent b tenant = %q, want default", cfg.Agents[1].Tenant)
+	}
+}
+
+func TestAgentTenants(t *testing.T) {
+	p := writeTmp(t, `
+agents:
+  - {id: a, name: A, model: m, listen_addr: 127.0.0.1:8101, tenant: alpha}
+  - {id: b, name: B, model: m, listen_addr: 127.0.0.1:8102, tenant: beta}
+`)
+	cfg, _ := Load(p)
+	m := cfg.AgentTenants()
+	if m["a"] != "alpha" || m["b"] != "beta" {
+		t.Fatalf("AgentTenants = %+v", m)
+	}
+}
