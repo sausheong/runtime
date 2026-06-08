@@ -22,6 +22,7 @@ func freshStore(t *testing.T) (*Store, *sql.DB) {
 		t.Skipf("postgres not reachable at %s: %v", dsn, err)
 	}
 	for _, q := range []string{
+		`DROP TABLE IF EXISTS secrets CASCADE`,
 		`DROP TABLE IF EXISTS service_keys CASCADE`,
 		`DROP TABLE IF EXISTS identity_users CASCADE`,
 		`DROP TABLE IF EXISTS tenants CASCADE`,

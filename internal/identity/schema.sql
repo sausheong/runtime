@@ -22,3 +22,11 @@ CREATE TABLE IF NOT EXISTS service_keys (
 -- A subject must be globally unique in M1 (one tenant per identity), so OIDC
 -- login can resolve subject -> (tenant, role) without ambiguity.
 CREATE UNIQUE INDEX IF NOT EXISTS identity_users_subject_uq ON identity_users (subject);
+CREATE TABLE IF NOT EXISTS secrets (
+    tenant_id  TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    name       TEXT NOT NULL,
+    value_enc  BYTEA NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (tenant_id, name)
+);
