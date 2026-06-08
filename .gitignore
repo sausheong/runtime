@@ -10,10 +10,12 @@ nutrition_memory.json
 /runtimectl
 # Local LLM credentials for examples (never commit real keys; .env.example is the template)
 .env
-# Python shim artifacts
-contrib/shims/python/shim.db
-contrib/shims/python/.venv/
-contrib/shims/python/**/__pycache__/
-contrib/shims/python/.pytest_cache/
+# Python artifacts (shims + examples)
+.venv/
+**/__pycache__/
+.pytest_cache/
+*.db
 *.db-wal
 *.db-shm
+# Generated at runtime by the OpenAI Agents SDK example
+agent_memory.json
