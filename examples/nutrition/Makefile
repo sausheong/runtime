@@ -105,7 +105,7 @@ demo-image: ## Investigate a label PHOTO (IMAGE=path); posts base64 + streams th
 		| sed -E 's/.*"session_id":"([^"]+)".*/\1/'); \
 	test -n "$$SID" || { echo "error: no session id returned (is the control plane running? make run)"; exit 1; }; \
 	echo "session: $$SID"; \
-	curl -N "$(BASE_URL)/agents/$(AGENT)/sessions/$$SID/stream?since=0"
+	curl -sN "$(BASE_URL)/agents/$(AGENT)/sessions/$$SID/stream?since=0"
 
 .PHONY: sessions
 sessions: ## List this agent's sessions
