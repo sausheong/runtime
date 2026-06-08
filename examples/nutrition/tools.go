@@ -196,6 +196,14 @@ func (t *tools) queryHCS(ctx context.Context, productName string) (string, error
 	}
 	defer resp.Body.Close()
 
+	// Mirror the Python _safe_json: any non-200 response degrades to an empty
+	// result (no records) rather than a parse error, so it reports "NOT FOUND"
+	// instead of a network failure.
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Sprintf("NOT FOUND in HCS database. '%s' does not appear to carry "+
+			"the Healthier Choice Symbol (absence is not necessarily a concern).", productName), nil
+	}
+
 	var parsed struct {
 		Result struct {
 			Records []struct {

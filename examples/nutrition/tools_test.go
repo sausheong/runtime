@@ -60,17 +60,23 @@ func TestRecallProductTool(t *testing.T) {
 }
 
 // fakeDoer is a stub httpDoer: it returns a canned body, or an error if set.
+// A zero status defaults to 200.
 type fakeDoer struct {
-	body string
-	err  error
+	body   string
+	status int
+	err    error
 }
 
 func (f fakeDoer) Do(*http.Request) (*http.Response, error) {
 	if f.err != nil {
 		return nil, f.err
 	}
+	status := f.status
+	if status == 0 {
+		status = http.StatusOK
+	}
 	return &http.Response{
-		StatusCode: http.StatusOK,
+		StatusCode: status,
 		Body:       io.NopCloser(strings.NewReader(f.body)),
 		Header:     make(http.Header),
 	}, nil
@@ -99,5 +105,20 @@ func TestCheckHCSStubbed(t *testing.T) {
 	}
 	if !strings.Contains(res2.Output, "HCS check failed") {
 		t.Errorf("want graceful HCS failure, got %q", res2.Output)
+	}
+
+	// Non-200 path: mirrors Python's _safe_json returning {} for any non-200
+	// response. A 502 with a non-JSON body must degrade to NOT FOUND, never a
+	// parse/network failure.
+	gw := newTools(idx, mem, fakeDoer{status: 502, body: "<html>bad gateway</html>"})
+	res3, err3 := gw.checkHCS().Execute(context.Background(), in)
+	if err3 != nil {
+		t.Fatalf("Execute must not return an error on non-200, got %v", err3)
+	}
+	if !strings.Contains(res3.Output, "NOT FOUND") {
+		t.Errorf("want NOT FOUND on non-200, got %q", res3.Output)
+	}
+	if strings.Contains(res3.Output, "HCS check failed") {
+		t.Errorf("non-200 must not report a check failure, got %q", res3.Output)
 	}
 }
