@@ -1,9 +1,11 @@
 # Runtime — Roadmap & Backlog
 
-**Checkpoint date:** 2026-06-08
+**Checkpoint date:** 2026-06-09
 **Current state:** Runtime spine complete (Milestones 1–3 merged to `master`);
 polyglot agent hosting (C1) first milestone complete — Level-1 OpenAI Agents SDK
-shim merged to `master`, hosting a full foreign agent end-to-end (see §C1).
+shim merged to `master`, hosting a full foreign agent end-to-end (see §C1);
+Identity (B3) first milestone complete — multi-tenant, edge-enforced access
+control (OIDC + service keys + per-agent RBAC) merged to `master` (see §B3).
 **Goal:** an on-prem, open-source equivalent of AWS Bedrock AgentCore.
 
 This file is the parking lot for everything *not yet built*. Each item below is a
@@ -74,7 +76,24 @@ exposing the platform broadly.
    Compose image, unused so far).
 3. **Identity** — proper auth done right: agent identity, secrets brokering,
    OAuth, RBAC, per-user/multi-tenant. Supersedes M3's simple bearer tokens.
-   Likely the next priority before broad exposure. (Absorbs A7.)
+   **First milestone DONE (merged to `master`, 2026-06-09):** multi-tenant,
+   edge-enforced access control. External OIDC for human login + platform-issued
+   service keys (`svk-…`, bcrypt-hashed, constant-time verify) for machines;
+   roles admin/operator/viewer scoped per agent; tenant-filtered `/agents` and
+   console; cross-tenant requests return 404 (existence hidden). New
+   `internal/identity` package (Principal/Authorizer/Authenticator/Store) behind
+   an identity middleware at the control-plane edge — **agents stay unmodified**.
+   Hybrid admin: agent→tenant in `runtime.yaml`, tenants/users/keys in Postgres
+   via a `runtimectl admin` API; `RUNTIME_ADMIN_BOOTSTRAP` break-glass superuser.
+   Backward-compatible: absent tenant → `default`, no identity configured → open
+   mode, legacy `tokens:` still work (deprecated → default-tenant superusers).
+   Absorbs A7 (hashing-at-rest + constant-time compare). Spec/plan:
+   `docs/superpowers/{specs,plans}/2026-06-08-identity-m1*`. **Remaining Identity
+   work:** secrets brokering (per-tenant provider keys → agents), fine-grained/
+   custom RBAC beyond the 3 roles, cross-tenant users + user self-service, an
+   admin console UI, and optional local password accounts (the `Authenticator`
+   interface already admits new methods). Level-2 console CSRF (`state`/`nonce`)
+   is a known M1 limitation. (Absorbs A7 — done.)
 4. **Sandboxes** — isolated **browser tool** + **code interpreter** for agents.
    Integrate gVisor/Firecracker for isolation; chromedp for browser. The
    conformance suite (M3) already validates the agent contract that sandboxed

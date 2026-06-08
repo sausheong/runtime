@@ -21,7 +21,7 @@ no lost work, no duplicated committed tool calls.
 - [Concepts](#concepts)
 - [Quick start](#quick-start)
 - [Configuring agents (`runtime.yaml`)](#configuring-agents-runtimeyaml)
-- [Authentication](#authentication)
+- [Authentication & multi-tenancy](#authentication--multi-tenancy)
 - [The CLI (`runtimectl`)](#the-cli-runtimectl)
 - [Web console](#web-console)
 - [HTTP API reference](#http-api-reference)
@@ -189,40 +189,94 @@ To add or remove an agent, edit `runtime.yaml` and restart `runtimed`.
 
 ---
 
-## Authentication
+## Authentication & multi-tenancy
 
-The control plane supports optional bearer-token auth. Add a `tokens:` section
-to `runtime.yaml`:
+The control plane enforces **multi-tenant, role-based access control** at the
+edge. Every agent belongs to a **tenant**; callers authenticate as a **principal**
+(a human via OIDC, or a machine via a platform-issued **service key**) that is
+scoped to one tenant with a **role**. All checks happen in `runtimed` — agents
+themselves stay loopback-trusting and unmodified.
+
+### Tenants and roles
+
+Tag each agent with a `tenant:` in `runtime.yaml` (absent ⇒ the reserved
+`default` tenant):
 
 ```yaml
 agents:
-  - {id: support, name: Support Agent, model: test/scripted, listen_addr: 127.0.0.1:8101}
-tokens:
-  - token: "s3cr3t-ci"
-    label: "ci"          # label is for log attribution
-  - token: "s3cr3t-ops"
-    label: "ops"
+  - {id: support, name: Support Agent, model: openai/gpt-5.4, listen_addr: 127.0.0.1:8101, tenant: alpha}
+  - {id: research, name: Research Agent, model: openai/gpt-5.4, listen_addr: 127.0.0.1:8102, tenant: beta}
 ```
 
-- **When `tokens:` is present**, every control-plane request must carry a valid
-  token, sent EITHER as `Authorization: Bearer <token>` OR as a `runtime_token`
-  cookie (the console uses the cookie; `EventSource` can't set headers).
-  `GET /healthz` is always exempt (for liveness probes), as are the console
-  login page and its static assets.
-- **When `tokens:` is absent/empty**, auth is **disabled** (open mode) and
-  `runtimed` logs a startup warning. This keeps local development friction-free.
-- The CLI sends `Authorization: Bearer $RUNTIME_TOKEN` automatically when that
-  env var is set.
+Three fixed roles, scoped per tenant:
+
+| Role | Can do |
+|---|---|
+| `viewer` | list/get/stream sessions and agents (read) |
+| `operator` | viewer **+** invoke (`POST /sessions`) |
+| `admin` | operator **+** manage its tenant's users and service keys |
+
+A request for an agent in **another tenant** returns `404` (existence is hidden,
+not `403`). Insufficient role within your tenant returns `403`; a missing/invalid
+credential returns `401`. `GET /agents` and the console are tenant-filtered.
+
+### Human login (OIDC)
+
+Point the control plane at an OIDC issuer; humans log into the console via the
+authorization-code flow and the validated ID token rides in the `runtime_token`
+cookie (re-verified against the issuer's JWKS on every request):
 
 ```bash
-export RUNTIME_TOKEN=s3cr3t-ops
-runtimectl agents          # now authenticated
+export RUNTIME_OIDC_ISSUER=https://issuer.example.com
+export RUNTIME_OIDC_CLIENT_ID=runtime-console
+export RUNTIME_OIDC_CLIENT_SECRET=...                 # for the console code exchange
+export RUNTIME_OIDC_REDIRECT_URL=http://localhost:8080/ui/callback   # default
 ```
 
-> Token comparison is a plain lookup (not constant-time) and tokens travel in
-> the clear — terminate TLS upstream and treat tokens as bearer secrets.
-> Per-user identity, RBAC, and rotation belong to the future Identity
-> sub-project.
+A validly-authenticated subject must still be **provisioned** as a user (below)
+to gain any access — authentication proves *who*, the platform decides *what*.
+
+### Machine access (service keys) and tenant administration
+
+Tenants, users, and service keys live in Postgres and are managed at runtime via
+the `runtimectl admin` API (admin-only; scoped to the caller's tenant):
+
+```bash
+# Bootstrap: a one-time superuser key (read from env, never stored) creates the
+# first tenant + admin, then is removed from config.
+export RUNTIME_ADMIN_BOOTSTRAP=once-only-superuser-secret
+export RUNTIME_TOKEN=$RUNTIME_ADMIN_BOOTSTRAP
+
+runtimectl admin tenant create alpha --name "Team Alpha"
+runtimectl admin user add alice@corp --tenant alpha --role operator   # subject = OIDC sub/email
+runtimectl admin key create --tenant alpha --role operator --label ci
+#   → svk-7f3a….<secret>   (shown once — store it now)
+runtimectl admin key revoke svk-7f3a…
+```
+
+Service keys are sent as `Authorization: Bearer svk-<id>.<secret>` (or the
+`runtime_token` cookie). Only a bcrypt hash is stored; revocation is instant.
+The CLI sends `Authorization: Bearer $RUNTIME_TOKEN` automatically.
+
+```bash
+export RUNTIME_TOKEN=svk-7f3a….<secret>
+runtimectl agents          # lists only alpha's agents
+```
+
+### Open mode & backward compatibility
+
+- **No identity configured** (no OIDC issuer, no service keys, no users, no
+  legacy `tokens:`) ⇒ **open mode**: every request passes, with a startup
+  warning. Keeps local development friction-free. `GET /healthz` is always
+  exempt, as are the console login page and static assets.
+- **Legacy `tokens:`** from M3 still work (deprecated): each maps to a
+  `default`-tenant superuser so existing deployments keep running after upgrade.
+  Prefer service keys; `tokens:` will be removed in a later milestone.
+
+> Service-key secrets and OIDC tokens travel as bearer credentials — terminate
+> TLS upstream. Service-key verification is constant-time (bcrypt) and hashed at
+> rest. Console session CSRF hardening (`state`/`nonce`) and secrets brokering
+> are tracked for later Identity milestones (see `ROADMAP.md` §B3).
 
 ---
 
@@ -238,9 +292,16 @@ runtimectl agents          # now authenticated
 | `runtimectl sessions [--agent <id>]` | List an agent's sessions (`id  status  turns=N`). |
 | `runtimectl logs [--agent <id>] <session-id>` | Replay/stream a session's events from the start. |
 | `runtimectl conformance [--agent <id>]` | Run the contract conformance suite against an agent; exits non-zero on failure. |
+| `runtimectl admin tenant create <id> [--name <n>]` | Create a tenant (superuser). |
+| `runtimectl admin user add <subject> [--tenant <t>] --role <r>` | Provision an OIDC subject as a user (`--tenant` only for a superuser). |
+| `runtimectl admin user ls` | List users in the caller's tenant. |
+| `runtimectl admin key create [--tenant <t>] --role <r> [--label <l>]` | Mint a service key; the secret is printed once. |
+| `runtimectl admin key ls` | List the tenant's service keys (never the secret). |
+| `runtimectl admin key revoke <id>` | Revoke a service key (instant). |
 
 `--agent` may be omitted when exactly one agent is registered (it's auto-selected);
-it's required when there are several.
+it's required when there are several. The `admin` commands require an `admin`
+principal (send it via `RUNTIME_TOKEN`).
 
 ---
 
@@ -249,16 +310,19 @@ it's required when there are several.
 `runtimed` serves a read-only operator console at **`/ui`** (same port as the
 API). Open `http://localhost:8080/ui` in a browser.
 
-- **`/ui`** — fleet overview: every registered agent.
-- **`/ui/agents/{id}`** — that agent's sessions (id, status, turn count).
+- **`/ui`** — fleet overview, **filtered to the caller's tenant** (a superuser
+  or open mode sees all).
+- **`/ui/agents/{id}`** — that agent's sessions (id, status, turn count); `404`
+  for an agent in another tenant.
 - **`/ui/agents/{id}/sessions/{sid}`** — live session view, streaming events via
   `EventSource`.
 
-When auth is enabled, the console redirects to **`/ui/login`**; enter a token
-once and it's stored in the `runtime_token` cookie. The console is strictly
-read-only — it observes agents and sessions but cannot deploy, stop, or invoke.
-It's server-rendered Go templates with a tiny vanilla-JS/SSE layer — no build
-step, embedded in the binary.
+When auth is enabled, the console redirects to **`/ui/login`**: with OIDC
+configured it bounces to the identity provider and stores the validated token in
+the `runtime_token` cookie; otherwise it falls back to a paste-token form. The
+console is strictly read-only — it observes agents and sessions but cannot
+deploy, stop, or invoke. Server-rendered Go templates with a tiny vanilla-JS/SSE
+layer — no build step, embedded in the binary.
 
 ---
 
@@ -274,7 +338,8 @@ step, embedded in the binary.
 | `GET /ui`, `/ui/...` | The read-only web console (see [Web console](#web-console)). |
 
 All control-plane routes except `/healthz`, `/ui/login`, and `/ui/static/*` are
-token-gated when auth is enabled (see [Authentication](#authentication)).
+gated by the identity middleware when auth is enabled (see
+[Authentication & multi-tenancy](#authentication--multi-tenancy)).
 
 ### Agent contract (served by each `agentd`; reach it via the proxy prefix)
 
@@ -739,7 +804,13 @@ unaffected.
 | `RUNTIME_AGENT_ID` | agentd | (set by runtimed per agent) | The agent's id. |
 | `RUNTIME_LOG_FORMAT` | runtimed | `text` | `json` switches `slog` to JSON output. |
 | `RUNTIME_CTL_URL` | runtimectl | `http://localhost:8080` | Control-plane base URL the CLI targets. |
-| `RUNTIME_TOKEN` | runtimectl | (unset) | Bearer token sent on every CLI request when set. |
+| `RUNTIME_TOKEN` | runtimectl | (unset) | Bearer credential (service key, OIDC token, or bootstrap key) sent on every CLI request when set. |
+| `RUNTIME_OIDC_ISSUER` | runtimed | (unset) | OIDC issuer URL; enables human login. Empty ⇒ OIDC disabled. |
+| `RUNTIME_OIDC_CLIENT_ID` | runtimed | (unset) | OIDC client id (expected token audience). |
+| `RUNTIME_OIDC_CLIENT_SECRET` | runtimed | (unset) | OIDC client secret for the console code exchange. |
+| `RUNTIME_OIDC_REDIRECT_URL` | runtimed | `http://localhost:8080/ui/callback` | OIDC redirect URL registered with the issuer. |
+| `RUNTIME_ADMIN_BOOTSTRAP` | runtimed | (unset) | One-time break-glass superuser service key (read from env, never stored). |
+| `RUNTIME_SHIM_DB` | (python shim) | `./shim.db` | SQLite path for the polyglot shim's Level-1 store (not used by runtimed). |
 
 `runtimed` injects `RUNTIME_LISTEN_ADDR` and `RUNTIME_AGENT_ID` into each agent
 subprocess from `runtime.yaml`; you don't set them by hand.
@@ -769,7 +840,7 @@ docker compose -f deploy/docker-compose.yml up -d   # or any Postgres at the DSN
 go test -tags integration ./test/ -v -count=1 -timeout 200s
 ```
 
-Two integration tests cover the platform's headline guarantees:
+Integration tests cover the platform's headline guarantees, including:
 
 - **`TestResumeAfterKill`** — starts a real `agentd`, kills it mid-turn,
   restarts it, and asserts the session resumes via DBOS recovery and completes
@@ -777,6 +848,10 @@ Two integration tests cover the platform's headline guarantees:
 - **`TestMultiAgentRouting`** — starts `runtimed` with a two-agent config,
   invokes a session on each agent through the router, and asserts both complete,
   sessions are isolated per agent, and status/turn_count are tracked.
+- **`TestIdentityE2E_TwoTenants`** — two tenants each with a scoped service key:
+  a tenant's key reaches its own agent (read + invoke), gets `404` on the other
+  tenant's agent, a viewer is `403` on invoke, no credential is `401`, and a
+  revoked key is `401`.
 
 ---
 
@@ -791,17 +866,21 @@ Two integration tests cover the platform's headline guarantees:
 Runtime is built in milestones. **Milestone 1** delivered the durable single-agent
 spine; **Milestone 2** added the multi-agent platform (config-driven registry,
 path routing, per-agent supervision, session status, full CLI); **Milestone 3**
-(current) adds the operability layer: token auth, the read-only web console,
-structured logging, the contract conformance suite, bounded shutdown,
-503-on-restart, per-agent health, and a full-stack Docker build.
+added the operability layer (the read-only web console, structured logging, the
+contract conformance suite, bounded shutdown, 503-on-restart, per-agent health,
+full-stack Docker build). Since then: **polyglot agent hosting** (host foreign-SDK
+agents via the contract — see the Python shim) and the **Identity** first
+milestone (multi-tenant access control, below).
 
 **Deliberately not yet implemented** (each is planned, scoped to a later
 milestone or sub-project):
 
-- **Identity: RBAC, users, OAuth, secrets, token rotation** — M3 has simple
-  bearer tokens; per-user identity and authorization are the Identity
-  sub-project. (Token comparison is also not constant-time — fine for static
-  config tokens, revisited there.)
+- **Identity — first milestone DONE** (see [Authentication & multi-tenancy](#authentication--multi-tenancy)):
+  multi-tenant access control with OIDC human login, bcrypt-hashed service keys
+  (constant-time verify), and per-agent admin/operator/viewer roles. **Still to
+  come:** secrets brokering (per-tenant provider keys → agents), fine-grained/
+  custom RBAC, cross-tenant users + self-service, an admin console UI, optional
+  local password accounts, and console CSRF (`state`/`nonce`) hardening.
 - **Observability dashboards** — M3 has structured `slog` logs; metrics,
   tracing, and dashboards are the Observability sub-project.
 - **Write actions from the console** — the console is read-only; deploy/stop/

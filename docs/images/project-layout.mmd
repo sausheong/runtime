@@ -9,13 +9,14 @@ flowchart LR
     runtimectl_b["runtimectl/<br/><i>operator CLI</i>"]
 
     sdk["agentruntime/<br/><i>the SDK: Serve(), durable DBOS<br/>workflow, HTTP/SSE contract,<br/>session manager</i>"]
-    ctrl["controlplane/<br/><i>Registry, /agents/{id} router,<br/>Supervisor, proxy, auth</i>"]
+    ctrl["controlplane/<br/><i>Registry, /agents/{id} router,<br/>Supervisor, proxy, identity<br/>middleware, /admin API</i>"]
     console["console/<br/><i>read-only web console:<br/>templates + static + handlers</i>"]
     conf["conformance/<br/><i>reusable contract<br/>conformance suite</i>"]
 
     internal["internal/"]
     cfg["config/<br/><i>runtime.yaml loader + validation</i>"]
     store["store/<br/><i>control-plane store:<br/>pg + in-memory</i>"]
+    ident["identity/<br/><i>multi-tenant authn/authz:<br/>Principal, Authorizer,<br/>Authenticator, OIDC, store</i>"]
 
     testagent["testagent/<br/><i>deterministic provider + marker tool</i>"]
     test["test/<br/><i>//go:build integration e2e tests</i>"]
@@ -34,6 +35,7 @@ flowchart LR
     root --> internal
     internal --> cfg
     internal --> store
+    internal --> ident
     root --> testagent
     root --> test
     root --> deploy
@@ -46,4 +48,4 @@ flowchart LR
 
     class root rootNode;
     class cmd,internal dir;
-    class runtimed_b,agentd_b,runtimectl_b,sdk,ctrl,console,conf,cfg,store,testagent,test,deploy,yaml,docs leaf;
+    class runtimed_b,agentd_b,runtimectl_b,sdk,ctrl,console,conf,cfg,store,ident,testagent,test,deploy,yaml,docs leaf;
