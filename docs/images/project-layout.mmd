@@ -1,0 +1,49 @@
+%% Runtime project layout (top-level packages and their responsibilities).
+%% Render: mmdc -i project-layout.mmd -o project-layout.png -t neutral -b white -s 3
+flowchart LR
+    root(["runtime/"])
+
+    cmd["cmd/"]
+    runtimed_b["runtimed/<br/><i>control-plane binary<br/>(registry, router, supervisors)</i>"]
+    agentd_b["agentd/<br/><i>agent subprocess binary<br/>(bundled test agent)</i>"]
+    runtimectl_b["runtimectl/<br/><i>operator CLI</i>"]
+
+    sdk["agentruntime/<br/><i>the SDK: Serve(), durable DBOS<br/>workflow, HTTP/SSE contract,<br/>session manager</i>"]
+    ctrl["controlplane/<br/><i>Registry, /agents/{id} router,<br/>Supervisor, proxy, auth</i>"]
+    console["console/<br/><i>read-only web console:<br/>templates + static + handlers</i>"]
+    conf["conformance/<br/><i>reusable contract<br/>conformance suite</i>"]
+
+    internal["internal/"]
+    cfg["config/<br/><i>runtime.yaml loader + validation</i>"]
+    store["store/<br/><i>control-plane store:<br/>pg + in-memory</i>"]
+
+    testagent["testagent/<br/><i>deterministic provider + marker tool</i>"]
+    test["test/<br/><i>//go:build integration e2e tests</i>"]
+    deploy["deploy/<br/><i>Dockerfile, compose files</i>"]
+    yaml["runtime.yaml<br/><i>example agent config</i>"]
+    docs["docs/superpowers/<br/><i>design specs + plans</i>"]
+
+    root --> cmd
+    cmd --> runtimed_b
+    cmd --> agentd_b
+    cmd --> runtimectl_b
+    root --> sdk
+    root --> ctrl
+    root --> console
+    root --> conf
+    root --> internal
+    internal --> cfg
+    internal --> store
+    root --> testagent
+    root --> test
+    root --> deploy
+    root --> yaml
+    root --> docs
+
+    classDef dir fill:#eef3fb,stroke:#3b6db5,stroke-width:1px,color:#1a2b45;
+    classDef leaf fill:#f7faff,stroke:#9bb6d8,stroke-width:1px,color:#1a2b45;
+    classDef rootNode fill:#1a2b45,stroke:#1a2b45,color:#ffffff,font-weight:bold;
+
+    class root rootNode;
+    class cmd,internal dir;
+    class runtimed_b,agentd_b,runtimectl_b,sdk,ctrl,console,conf,cfg,store,testagent,test,deploy,yaml,docs leaf;

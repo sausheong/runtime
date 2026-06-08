@@ -10,11 +10,7 @@ is checkpointed to Postgres via [DBOS](https://github.com/dbos-inc/dbos-transact
 so an agent that crashes mid-turn **resumes from its last completed turn** —
 no lost work, no duplicated committed tool calls.
 
-```
-┌──────────────────────────────────────────────────────────────┐
-│  Single binary + Postgres.  Many agents.  Durable by default.  │
-└──────────────────────────────────────────────────────────────┘
-```
+**Single binary + Postgres. Many agents. Durable by default.**
 
 ---
 
@@ -64,37 +60,7 @@ no lost work, no duplicated committed tool calls.
 
 ## Architecture
 
-```
-                        ┌─────────────────────────────┐
-   runtimectl ──HTTP──▶ │  runtimed  (control plane)  │
-   (operator CLI)       │                             │
-                        │  • Registry (runtime.yaml)  │
-                        │  • Router  /agents/{id}/*    │
-                        │  • GET /agents, /healthz     │
-                        │  • one Supervisor per agent  │
-                        └─────────────┬───────────────┘
-                       spawns +       │ reverse-proxy (SSE-aware)
-                       supervises     │
-            ┌──────────────┬──────────┴───────┬──────────────┐
-            ▼              ▼                   ▼              ▼
-        ┌────────┐    ┌────────┐          ┌────────┐
-        │agentd  │    │agentd  │   ...    │agentd  │   (one subprocess per agent)
-        │"support"│   │"research"│        │  "..." │
-        │        │    │        │          │        │
-        │ agentruntime.Serve:             │        │
-        │  • HTTP/SSE agent contract      │        │
-        │  • harness loop per session     │        │
-        │  • each turn = a DBOS step      │        │
-        └───┬────┘    └───┬────┘          └───┬────┘
-            └─────────────┴───────────────────┘
-                          ▼
-                  ┌───────────────┐
-                  │   Postgres    │
-                  │ • DBOS checkpoints (durable resume)
-                  │ • sessions (agent_id, status, turn_count, workflow_id)
-                  │ • session_events (append-only, for re-attach/replay)
-                  └───────────────┘
-```
+![Runtime architecture: runtimectl drives runtimed (the control plane), which spawns and supervises one agentd subprocess per agent; each agentd runs agentruntime.Serve and checkpoints to Postgres.](docs/images/architecture.png)
 
 **Three binaries:**
 
@@ -795,26 +761,7 @@ Two integration tests cover the platform's headline guarantees:
 
 ## Project layout
 
-```
-runtime/
-├── cmd/
-│   ├── runtimed/      # control-plane binary (registry, router, supervisors)
-│   ├── agentd/        # agent subprocess binary (bundled test agent)
-│   └── runtimectl/    # operator CLI
-├── agentruntime/      # the SDK: Serve(), the durable DBOS workflow, the
-│                      #   HTTP/SSE agent contract, session manager
-├── controlplane/      # Registry, /agents/{id} router, Supervisor, proxy, auth
-├── console/           # read-only web console: embedded templates + static + handlers
-├── conformance/       # reusable agent-contract conformance suite
-├── internal/
-│   ├── config/        # runtime.yaml loader + validation (agents + tokens)
-│   └── store/         # control-plane store (sessions, event log): pg + in-memory
-├── testagent/         # deterministic provider + marker tool (for tests/demo)
-├── test/              # //go:build integration end-to-end tests
-├── deploy/            # Dockerfile, docker-compose.yml (Postgres), docker-compose.full.yml
-├── runtime.yaml       # example agent config
-└── docs/superpowers/  # design specs and implementation plans
-```
+![Runtime project layout: top-level packages under runtime/ and their responsibilities.](docs/images/project-layout.png)
 
 ---
 

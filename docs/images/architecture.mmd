@@ -1,0 +1,42 @@
+%% Runtime architecture: control plane supervising per-agent subprocesses over Postgres.
+%% Render: mmdc -i architecture.mmd -o architecture.png -t neutral -b white -s 3
+flowchart TB
+    cli["runtimectl<br/><i>(operator CLI)</i>"]
+
+    subgraph cp["runtimed — control plane"]
+        direction TB
+        reg["Registry (runtime.yaml)"]
+        router["Router&nbsp;&nbsp;/agents/{id}/*"]
+        api["GET /agents, /healthz"]
+        sup["one Supervisor per agent"]
+    end
+
+    subgraph agents["agentd subprocesses — one per agent"]
+        direction LR
+        a1["agentd<br/><b>support</b>"]
+        a2["agentd<br/><b>research</b>"]
+        a3["agentd<br/><b>…</b>"]
+    end
+
+    note["each agentd runs agentruntime.Serve:<br/>• reads RUNTIME_PG_DSN + RUNTIME_LISTEN_ADDR from env<br/>• HTTP/SSE agent contract<br/>• harness loop per session<br/>• each turn = a DBOS step"]
+
+    pg[("Postgres<br/>• DBOS checkpoints (durable resume)<br/>• sessions (agent_id, status, turn_count, workflow_id)<br/>• session_events (append-only, replay/re-attach)")]
+
+    cli -->|HTTP| cp
+    cp -->|"spawns + supervises<br/>injects env: RUNTIME_PG_DSN, RUNTIME_LISTEN_ADDR, RUNTIME_AGENT_ID<br/>reverse-proxy (SSE-aware)"| agents
+    agents -.-> note
+    a1 --> pg
+    a2 --> pg
+    a3 --> pg
+
+    classDef plane fill:#eef3fb,stroke:#3b6db5,stroke-width:1px,color:#1a2b45;
+    classDef agent fill:#eafaf1,stroke:#2e9e6b,stroke-width:1px,color:#143b29;
+    classDef store fill:#fff4e6,stroke:#d98324,stroke-width:1px,color:#5a3410;
+    classDef cliNode fill:#f3eefb,stroke:#7a4fb5,stroke-width:1px,color:#2e1a45;
+    classDef noteNode fill:#f7f7f7,stroke:#bbbbbb,stroke-width:1px,color:#333333,font-size:12px;
+
+    class reg,router,api,sup plane;
+    class a1,a2,a3 agent;
+    class pg store;
+    class cli cliNode;
+    class note noteNode;
