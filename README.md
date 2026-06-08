@@ -31,6 +31,7 @@ no lost work, no duplicated committed tool calls.
 - [HTTP API reference](#http-api-reference)
 - [Contract conformance](#contract-conformance)
 - [Writing your own agent (the SDK)](#writing-your-own-agent-the-sdk)
+- [Deploying an example agent (SG Nutrition Investigator)](#deploying-an-example-agent-sg-nutrition-investigator)
 - [How durability works](#how-durability-works)
 - [Deployment](#deployment)
 - [Configuration reference](#configuration-reference)
@@ -451,6 +452,147 @@ your binary.
 | `Tools` | `*harness/tool.Registry` | The agent's tools. |
 | `ListenAddr` | `string` | HTTP bind address (injected by `runtimed`). |
 | `PostgresDSN` | `string` | DBOS system DB + control-plane store DSN (injected by `runtimed`). |
+
+---
+
+## Deploying an example agent (SG Nutrition Investigator)
+
+The repo ships a real, non-trivial example agent under `examples/nutrition`: the
+**SG Nutrition Investigator**, ported from an OpenAI Agents SDK demo into a
+harness-native Go agent. Given a Singapore food/drink nutrition label — pasted as
+**text** or supplied as a **photo** (vision via image input) — it investigates the
+product using four tools: `check_sfa_additive` (resolves additives against the
+full SFA permitted-additives table and learns name→E-number aliases across runs),
+`recall_product` (recalls prior verdicts), `check_hcs` (queries data.gov.sg for
+the Healthier Choice Symbol), and `calculate_nutri_grade` (A/B/C/D for beverages).
+It carries cross-run memory in a `nutrition_memory.json` file. The agent is backed
+by the OpenAI provider pointed at a LiteLLM proxy. This section walks the full path
+from source to a streamed verdict.
+
+### 1. Build the three binaries
+
+```bash
+go build -o agentd     ./cmd/agentd
+go build -o runtimed   ./cmd/runtimed
+go build -o runtimectl ./cmd/runtimectl
+```
+
+### 2. The config: `runtime.nutrition.yaml`
+
+A single-agent registry that selects the nutrition agent via the `kind` field
+(see [Adding your own agent kind](#adding-your-own-agent-kind)):
+
+```yaml
+# Single-agent registry for the SG Nutrition Investigator example.
+# Run with: RUNTIME_CONFIG=runtime.nutrition.yaml ./runtimed
+# Requires env: OPENAI_API_KEY, OPENAI_BASE_URL, OPENAI_MODEL, RUNTIME_PG_DSN.
+agents:
+  - id: nutrition
+    name: SG Nutrition Investigator
+    model: openai/gpt-5.4
+    kind: nutrition
+    listen_addr: 127.0.0.1:8201
+```
+
+### 3. Required environment
+
+`runtimed` inherits these and passes them down to the `agentd` subprocess (the
+nutrition builder reads `OPENAI_*` and `RUNTIME_NUTRITION_DATA_DIR` from the
+subprocess environment; `runtimed` also injects `RUNTIME_PG_DSN`,
+`RUNTIME_LISTEN_ADDR`, `RUNTIME_AGENT_ID`, and `RUNTIME_AGENT_KIND` per agent):
+
+```bash
+export OPENAI_API_KEY=sk-...                          # your LiteLLM key
+export OPENAI_BASE_URL=https://litellm-stg.aip.gov.sg # LiteLLM proxy base URL
+export OPENAI_MODEL=gpt-5.4                            # model name on the proxy
+export RUNTIME_PG_DSN=postgres://runtime:runtime@localhost:5432/runtime?sslmode=disable
+export RUNTIME_CONFIG=runtime.nutrition.yaml          # this config
+export RUNTIME_AGENTD_BIN=./agentd                    # the agent subprocess binary
+export RUNTIME_NUTRITION_DATA_DIR=./data              # optional; where nutrition_memory.json is written (default ".")
+```
+
+### 4. Run the control plane
+
+```bash
+./runtimed
+# control plane on :8080 hosting 1 agent
+# supervising agent "nutrition" at 127.0.0.1:8201
+```
+
+`runtimed` supervises the nutrition `agentd` subprocess (restarting it on crash),
+gates startup on the agent's `/healthz`, and serves the routed control plane on
+`:8080` (override with `RUNTIME_CTL_ADDR`).
+
+### 5. Invoke with text
+
+`runtimectl invoke` POSTs a session and streams its events to completion:
+
+```bash
+./runtimectl invoke --agent nutrition \
+  "Investigate this label (text): Product: Milo UHT. Ingredients: ... Sugar 6g/100ml, sat fat 1.5g/100ml. Beverage."
+# session: ses-…
+# data: {"type":"text","text":"…the verdict…"}
+# data: {"type":"done"}
+```
+
+### 6. Invoke with an image (photo of a label)
+
+The session contract accepts optional `image_b64` / `image_mime` fields on
+`POST /sessions`. Base64-encode the photo and POST it, then stream the returned
+session id:
+
+```bash
+IMG=$(base64 -i label.jpeg)
+curl -s localhost:8080/agents/nutrition/sessions \
+  -d "{\"message\":\"Investigate this label.\",\"image_b64\":\"$IMG\",\"image_mime\":\"image/jpeg\"}"
+# {"session_id":"ses-…"}
+
+# then stream (use the returned session id):
+curl -N "localhost:8080/agents/nutrition/sessions/ses-…/stream?since=0"
+# id: 1
+# data: {"type":"text","text":"…the verdict…"}
+# id: 2
+# data: {"type":"done"}
+```
+
+### 7. Observe sessions
+
+Every session is visible in the read-only web console at
+**`http://localhost:8080/ui`** (drill into the `nutrition` agent to see its
+sessions and a live SSE view), and from the CLI:
+
+```bash
+./runtimectl sessions --agent nutrition
+# ses-…   completed   turns=3
+```
+
+### How this maps to the platform
+
+- The agent is a **supervised subprocess** (`agentd`, `kind: nutrition`) behind
+  the `/agents/nutrition/...` route on the control plane.
+- Each session is a **durable DBOS workflow** whose id equals the session id; it
+  runs one turn per DBOS step and survives a process restart mid-run, resuming
+  from the last completed turn.
+- The **posted image is part of the checkpointed workflow input** (it rides on
+  the first turn), so a session started from a photo resumes correctly after a
+  crash without re-uploading.
+- Events stream over **SSE** and are persisted to an append-only log, so a client
+  can re-attach and replay with `?since=<seq>`.
+
+### Adding your own agent kind
+
+The nutrition example is selected by `kind: nutrition`. To add your own kind:
+
+1. Implement a `Builder` — a `func(Deps) (agentruntime.Config, error)` — that
+   assembles your agent's `agentruntime.Config` (its `AgentSpec`, LLM provider,
+   and tool registry). See `examples/nutrition` (`BuildConfig` in
+   `examples/nutrition/agent.go`) for a complete reference implementation.
+2. Register it in the `builders` map in `internal/agentkind/registry.go` under a
+   new kind string (e.g. `"mykind"`).
+3. Set `kind: mykind` on an agent in your config. The empty/absent kind (and
+   `"testagent"`) selects the bundled deterministic test agent. `runtimed` passes
+   the kind to the `agentd` subprocess via `RUNTIME_AGENT_KIND`, where the kind
+   registry resolves it to your builder.
 
 ---
 
