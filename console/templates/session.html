@@ -1,0 +1,9 @@
+<!doctype html><html><head><title>Runtime — session</title>
+<link rel="stylesheet" href="/ui/static/style.css"></head><body>
+<p><a href="/ui/agents/{{.AgentID}}">&larr; sessions</a></p>
+<h1>Session {{.SessionID}}</h1>
+<pre id="events"></pre>
+<script>const AGENT="{{.AgentID}}", SID="{{.SessionID}}";</script>
+<script src="/ui/static/app.js"></script>
+<script>streamSession();</script>
+</body></html>

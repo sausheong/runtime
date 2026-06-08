@@ -10,6 +10,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/sausheong/runtime/console"
 	"github.com/sausheong/runtime/controlplane"
 	"github.com/sausheong/runtime/internal/config"
 )
@@ -48,9 +49,13 @@ func main() {
 		}
 	}
 
-	mux := controlplane.NewAPI(reg)
-	// NOTE (Task 5): console routes are mounted here (composed with mux) before wrapping.
-	handler := controlplane.AuthMiddleware(mux, tokens)
+	apiMux := controlplane.NewAPI(reg)
+	consoleH := console.Handler(reg)
+	root := http.NewServeMux()
+	root.Handle("/ui", consoleH)
+	root.Handle("/ui/", consoleH)
+	root.Handle("/", apiMux)
+	handler := controlplane.AuthMiddleware(root, tokens)
 
 	srv := &http.Server{Addr: ctlAddr, Handler: handler}
 	serveErr := make(chan error, 1)

@@ -64,6 +64,27 @@ func TestAuth_MissingAndInvalid(t *testing.T) {
 	}
 }
 
+func TestAuth_UIRedirectsToLoginWhenNoToken(t *testing.T) {
+	h := AuthMiddleware(okHandler(), map[string]string{"abc": "ci"})
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest("GET", "/ui/agents/x", nil))
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("/ui without token: code = %d, want 303", rec.Code)
+	}
+	if loc := rec.Header().Get("Location"); loc != "/ui/login" {
+		t.Fatalf("redirect to %q, want /ui/login", loc)
+	}
+}
+
+func TestAuth_UILoginExempt(t *testing.T) {
+	h := AuthMiddleware(okHandler(), map[string]string{"abc": "ci"})
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest("GET", "/ui/login", nil))
+	if rec.Code != 200 {
+		t.Fatalf("/ui/login must be exempt: code = %d", rec.Code)
+	}
+}
+
 func TestAuth_HealthzExempt(t *testing.T) {
 	h := AuthMiddleware(okHandler(), map[string]string{"abc": "ci"})
 	rec := httptest.NewRecorder()

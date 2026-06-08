@@ -35,13 +35,18 @@ func extractToken(r *http.Request) string {
 // GET /healthz is always exempt so liveness probes work without a token.
 func AuthMiddleware(next http.Handler, tokens map[string]string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if len(tokens) == 0 || r.URL.Path == "/healthz" {
+		if len(tokens) == 0 || r.URL.Path == "/healthz" ||
+			r.URL.Path == "/ui/login" || strings.HasPrefix(r.URL.Path, "/ui/static/") {
 			next.ServeHTTP(w, r)
 			return
 		}
 		tok := extractToken(r)
 		label, ok := tokens[tok]
 		if !ok {
+			if strings.HasPrefix(r.URL.Path, "/ui") {
+				http.Redirect(w, r, "/ui/login", http.StatusSeeOther)
+				return
+			}
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
