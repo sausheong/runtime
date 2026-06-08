@@ -1,0 +1,63 @@
+package conformance
+
+import (
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+)
+
+func goodAgent() http.Handler {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(200) })
+	mux.HandleFunc("GET /meta", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]string{"agent_id": "a", "contract_version": "v1"})
+	})
+	mux.HandleFunc("POST /sessions", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]string{"session_id": "ses-1"})
+	})
+	mux.HandleFunc("GET /sessions", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode([]map[string]any{{"id": "ses-1", "status": "completed", "turn_count": 1}})
+	})
+	mux.HandleFunc("GET /sessions/{id}", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{"id": "ses-1", "status": "completed", "turn_count": 1})
+	})
+	mux.HandleFunc("GET /sessions/{id}/stream", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: {\"type\":\"text\",\"text\":\"hi\"}\n\n"))
+		_, _ = w.Write([]byte("data: {\"type\":\"done\"}\n\n"))
+	})
+	return mux
+}
+
+type recorder struct{ fails int }
+
+func (r *recorder) Errorf(string, ...any) { r.fails++ }
+func (r *recorder) Fatalf(string, ...any) { r.fails++ }
+func (r *recorder) Logf(string, ...any)   {}
+
+func TestRun_GoodAgentPasses(t *testing.T) {
+	srv := httptest.NewServer(goodAgent())
+	defer srv.Close()
+	rec := &recorder{}
+	Run(rec, srv.URL)
+	if rec.fails != 0 {
+		t.Fatalf("good agent should pass; got %d failures", rec.fails)
+	}
+}
+
+func TestRun_BrokenAgentFails(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(200) })
+	mux.HandleFunc("GET /meta", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"agent_id":"a"}`)) // missing contract_version
+	})
+	// no /sessions endpoints at all
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	rec := &recorder{}
+	Run(rec, srv.URL)
+	if rec.fails == 0 {
+		t.Fatal("broken agent should fail conformance")
+	}
+}

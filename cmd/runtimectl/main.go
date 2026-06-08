@@ -5,8 +5,11 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
+
+	"github.com/sausheong/runtime/conformance"
 )
 
 func main() {
@@ -34,14 +37,55 @@ func main() {
 			os.Exit(2)
 		}
 		stream(base, resolveAgent(base, agent), rest[0])
+	case "conformance":
+		runConformance(base, resolveAgent(base, agent))
 	default:
 		usage()
 	}
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: runtimectl <agents|invoke|sessions|logs> [--agent <id>] [args]")
+	fmt.Fprintln(os.Stderr, "usage: runtimectl <agents|invoke|sessions|logs|conformance> [--agent <id>] [args]")
 	os.Exit(2)
+}
+
+// authdGet issues a GET request with a bearer token when RUNTIME_TOKEN is set.
+func authdGet(url string) (*http.Response, error) {
+	req, _ := http.NewRequest("GET", url, nil)
+	addAuth(req)
+	return http.DefaultClient.Do(req)
+}
+
+// authdPost issues a POST request with a bearer token when RUNTIME_TOKEN is set.
+func authdPost(url, ctype string, body io.Reader) (*http.Response, error) {
+	req, _ := http.NewRequest("POST", url, body)
+	req.Header.Set("Content-Type", ctype)
+	addAuth(req)
+	return http.DefaultClient.Do(req)
+}
+
+// addAuth attaches a bearer token from RUNTIME_TOKEN to req when present.
+func addAuth(req *http.Request) {
+	if tok := os.Getenv("RUNTIME_TOKEN"); tok != "" {
+		req.Header.Set("Authorization", "Bearer "+tok)
+	}
+}
+
+// cliT adapts conformance.TestingT to stdout, tracking failure.
+type cliT struct{ failed bool }
+
+func (c *cliT) Errorf(f string, a ...any) { c.failed = true; fmt.Printf("FAIL: "+f+"\n", a...) }
+func (c *cliT) Fatalf(f string, a ...any) { c.failed = true; fmt.Printf("FATAL: "+f+"\n", a...) }
+func (c *cliT) Logf(f string, a ...any)   { fmt.Printf("ok: "+f+"\n", a...) }
+
+func runConformance(base, agent string) {
+	t := &cliT{}
+	conformance.Run(t, base+"/agents/"+agent)
+	if t.failed {
+		fmt.Fprintln(os.Stderr, "conformance: FAILED")
+		os.Exit(1)
+	}
+	fmt.Println("conformance: PASSED")
 }
 
 // popAgentFlag extracts "--agent <id>" from args, returning the id and the rest.
@@ -81,7 +125,7 @@ type agentInfo struct {
 }
 
 func fetchAgents(base string) []agentInfo {
-	resp, err := http.Get(base + "/agents")
+	resp, err := authdGet(base + "/agents")
 	check(err)
 	defer resp.Body.Close()
 	var infos []agentInfo
@@ -97,7 +141,7 @@ func listAgents(base string) {
 
 func invoke(base, agent, msg string) {
 	body, _ := json.Marshal(map[string]string{"message": msg})
-	resp, err := http.Post(base+"/agents/"+agent+"/sessions", "application/json", bytes.NewReader(body))
+	resp, err := authdPost(base+"/agents/"+agent+"/sessions", "application/json", bytes.NewReader(body))
 	check(err)
 	var out struct {
 		SessionID string `json:"session_id"`
@@ -113,7 +157,7 @@ func invoke(base, agent, msg string) {
 }
 
 func listSessions(base, agent string) {
-	resp, err := http.Get(base + "/agents/" + agent + "/sessions")
+	resp, err := authdGet(base + "/agents/" + agent + "/sessions")
 	check(err)
 	defer resp.Body.Close()
 	var rows []struct {
@@ -128,7 +172,7 @@ func listSessions(base, agent string) {
 }
 
 func stream(base, agent, id string) {
-	resp, err := http.Get(base + "/agents/" + agent + "/sessions/" + id + "/stream?since=0")
+	resp, err := authdGet(base + "/agents/" + agent + "/sessions/" + id + "/stream?since=0")
 	check(err)
 	defer resp.Body.Close()
 	sc := bufio.NewScanner(resp.Body)
