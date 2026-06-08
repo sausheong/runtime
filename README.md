@@ -281,6 +281,14 @@ When `RUNTIME_SECRETS_KEY` is unset the feature is disabled and agents inherit
 the operator's environment (the prior behavior). A set-but-malformed key is a
 fatal startup error.
 
+Managing secrets requires **identity to be configured** (OIDC, a service key, or
+`RUNTIME_ADMIN_BOOTSTRAP`): the `/admin/secrets` API is part of the admin surface,
+which is not mounted in open mode. With a master key set but identity open,
+runtimed logs a warning and brokering into spawns still works, but no secret can
+be created. A tenant admin manages its own tenant's secrets; a superuser can
+`set` a secret for a target tenant via `--tenant`, but `ls`/`rm` are scoped to
+the caller's own tenant (cross-tenant `ls`/`rm` is tracked in `ROADMAP.md` §B3).
+
 Manage secrets with `runtimectl` (admin role, scoped to your tenant):
 
 ```bash

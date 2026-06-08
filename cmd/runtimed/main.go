@@ -94,6 +94,12 @@ func main() {
 
 	if !identityOn {
 		slog.Warn("no identity configured — control plane is running OPEN (unauthenticated)")
+		if secretBroker != nil {
+			// The broker still injects secrets into spawns, but /admin/secrets is
+			// only mounted with an admin store (identity on). So a key is set yet
+			// no secret can be created — warn rather than silently mislead.
+			slog.Warn("RUNTIME_SECRETS_KEY is set but identity is open/unconfigured — /admin/secrets is unavailable and no secrets can be set; configure identity (OIDC, a service key, or RUNTIME_ADMIN_BOOTSTRAP) to manage secrets")
+		}
 		handler = accessLog(buildRoot(reg, nil, console.OIDCConfig{}, secretAdmin)) // no /admin in open mode
 	} else {
 		oidcVerifier, verr := identity.NewOIDCVerifier(ctx, oidcIssuer, oidcClientID)
