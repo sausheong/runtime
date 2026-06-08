@@ -1,0 +1,4871 @@
+[
+  {
+    "ins": null,
+    "e_number": "100",
+    "name": "Curcumin",
+    "name_in_regs": "Curcumin",
+    "schedule": "5th Schedule (Part II)",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "Turmeric",
+    "name_in_regs": "Turmeric",
+    "schedule": "5th Schedule (Part II)",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "Riboflavin, synthetic",
+    "name_in_regs": "Riboflavin",
+    "schedule": "7th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "101(ii)",
+    "e_number": null,
+    "name": "Riboflavin 5’- phosphate sodium",
+    "name_in_regs": "Riboflavin-5’-phosphate sodium",
+    "schedule": "7th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "102",
+    "e_number": "102",
+    "name": "Tartrazine",
+    "name_in_regs": "Tartrazine",
+    "schedule": "5th Schedule (Part I)",
+    "sfa_notes": "GMP (to note specific labelling requirements",
+    "table": 1
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "Alkanet",
+    "name_in_regs": "Alkannet",
+    "schedule": "5th Schedule (Part II)",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": null,
+    "e_number": "104",
+    "name": "Quinoline yellow",
+    "name_in_regs": "Quinoline yellow",
+    "schedule": "5th Schedule (Part I)",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": null,
+    "e_number": "110",
+    "name": "Sunset yellow FCF",
+    "name_in_regs": "Sunset yellow FCF",
+    "schedule": "5th Schedule (Part I)",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "120",
+    "e_number": "120",
+    "name": "Carmines",
+    "name_in_regs": "Colour obtained from cochineal",
+    "schedule": "5th Schedule (Part II)",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "122",
+    "e_number": "122",
+    "name": "Azorubine (carmoisine)",
+    "name_in_regs": "Carmoisine",
+    "schedule": "5th Schedule (Part I)",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": null,
+    "e_number": "123",
+    "name": "Amaranth",
+    "name_in_regs": "Amaranth",
+    "schedule": "5th Schedule (Part I)",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "124",
+    "e_number": "124",
+    "name": "Ponceau 4R (Cochineal red A)",
+    "name_in_regs": "Ponceau 4R",
+    "schedule": "5th Schedule (Part I)",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": null,
+    "e_number": "127",
+    "name": "Erythrosine",
+    "name_in_regs": "Erythrosine",
+    "schedule": "5th Schedule (Part I)",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": null,
+    "e_number": "129",
+    "name": "Allura red AC",
+    "name_in_regs": "Allura red AC",
+    "schedule": "5th Schedule (Part I)",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "132",
+    "e_number": "132",
+    "name": "Indigotine (Indigo carmine)",
+    "name_in_regs": "Indigo carmine",
+    "schedule": "5th Schedule (Part I)",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": null,
+    "e_number": "133",
+    "name": "Brilliant blue FCF",
+    "name_in_regs": "Brilliant blue FCF",
+    "schedule": "5th Schedule (Part I)",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "134",
+    "e_number": null,
+    "name": "Spirulina extract",
+    "name_in_regs": "Spirulina extract or cyanobacterial- phycocyanin extracted from Spirulina platensis",
+    "schedule": "5th Schedule (Part II)",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": null,
+    "e_number": "140",
+    "name": "Chlorophyll",
+    "name_in_regs": "Chlorophyll",
+    "schedule": "5th Schedule (Part II)",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "141(i)",
+    "e_number": "141",
+    "name": "Chlorophylls, copper complexes",
+    "name_in_regs": "Copper complexes of chlorophylls",
+    "schedule": "5th Schedule (Part I)",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "141(ii)",
+    "e_number": "141",
+    "name": "Chlorophyllins, copper complexes, potassium and sodium salts",
+    "name_in_regs": "Sodium and potassium salts of copper complexes of chlorophyllins",
+    "schedule": "5th Schedule (Part I)",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": null,
+    "e_number": "142",
+    "name": "Green S",
+    "name_in_regs": "Green S",
+    "schedule": "5th Schedule (Part I)",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "Fast green FCF",
+    "name_in_regs": "Fast green FCF",
+    "schedule": "5th Schedule (Part I)",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "150a",
+    "e_number": "150a",
+    "name": "Caramel I - plain (Caustic caramel)",
+    "name_in_regs": "Plain caramel (caustic caramel)",
+    "schedule": "5th Schedule (Part II)",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "150b",
+    "e_number": "150b",
+    "name": "Caramel II - caustic sulfite process",
+    "name_in_regs": "Caustic sulphite caramel",
+    "schedule": "5th Schedule (Part II)",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "150c",
+    "e_number": "150c",
+    "name": "Caramel III - ammonia process",
+    "name_in_regs": "Ammonia caramel",
+    "schedule": "5th Schedule (Part II)",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "150d",
+    "e_number": "150d",
+    "name": "Caramel IV - sulfite ammonia process",
+    "name_in_regs": "Sulphite ammonia caramel",
+    "schedule": "5th Schedule (Part II)",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "151",
+    "e_number": "151",
+    "name": "Brilliant black (Black PN )",
+    "name_in_regs": "Brilliant black PN",
+    "schedule": "5th Schedule (Part I)",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "153",
+    "e_number": "153",
+    "name": "Vegetable carbon",
+    "name_in_regs": "Carbon black (prepared from vegetable sources only)",
+    "schedule": "5th Schedule (Part II)",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": null,
+    "e_number": "155",
+    "name": "Brown HT",
+    "name_in_regs": "Chocolate brown HT",
+    "schedule": "5th Schedule (Part I)",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "160a(i)",
+    "e_number": null,
+    "name": "Beta-carotenes (synthetic)",
+    "name_in_regs": "Carotene / Beta- carotene",
+    "schedule": "5th Schedule(Part II), 7th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "160a(ii)",
+    "e_number": null,
+    "name": "Beta-carotenes (vegetable)",
+    "name_in_regs": "Carotene / Beta- carotene",
+    "schedule": "5th Schedule (Part II), 7th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "160a(iii)",
+    "e_number": null,
+    "name": "Beta-carotenes (Blakeslea trispora)",
+    "name_in_regs": "Carotene / Beta- carotene",
+    "schedule": "5th Schedule (Part II), 7th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": null,
+    "e_number": "160b",
+    "name": "Annatto extracts",
+    "name_in_regs": "Annatto",
+    "schedule": "5th Schedule (Part II)",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "160b(i)",
+    "e_number": "160b",
+    "name": "Annatto extracts, bixin-based",
+    "name_in_regs": "Annatto",
+    "schedule": "5th Schedule (Part II)",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "160b(ii)",
+    "e_number": "160b",
+    "name": "Annatto extracts, norbixin-based",
+    "name_in_regs": "Annatto",
+    "schedule": "5th Schedule(Part II)",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "160c(ii)",
+    "e_number": "160c",
+    "name": "Paprika extract",
+    "name_in_regs": "Paprika extract",
+    "schedule": "5th Schedule(Part II)",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "Lycopene (synthetic)",
+    "name_in_regs": "Lycopene",
+    "schedule": "5th Schedule (Part II)",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "Lycopenes (tomato)",
+    "name_in_regs": "Lycopene",
+    "schedule": "5th Schedule (Part II)",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "160d(iii)",
+    "e_number": null,
+    "name": "Lycopenes (Blakeslea trispora)",
+    "name_in_regs": "Lycopene",
+    "schedule": "5th Schedule (Part II)",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "160e",
+    "e_number": "160e",
+    "name": "Beta-apo-8'- carotenal",
+    "name_in_regs": "Carotene",
+    "schedule": "5th Schedule (Part II)",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "160f",
+    "e_number": null,
+    "name": "Beta-apo-8'- carotenoic acid, ethyl ester",
+    "name_in_regs": "Carotene",
+    "schedule": "5th Schedule (Part II)",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "161b(i)",
+    "e_number": "161b",
+    "name": "Lutein from Tagetes erecta",
+    "name_in_regs": "Lutein",
+    "schedule": "5th Schedule (Part II)",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "161b(iii)",
+    "e_number": null,
+    "name": "Lutein esters from Tagetes erecta",
+    "name_in_regs": "Lutein esters from Tagetes erecta",
+    "schedule": "5th Schedule (Part II)",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "162",
+    "e_number": "162",
+    "name": "Beet red",
+    "name_in_regs": "Beet red",
+    "schedule": "5th Schedule (Part II)",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "163(ii)",
+    "e_number": null,
+    "name": "Grape skin extract",
+    "name_in_regs": "Grape skin extract (Enociania)",
+    "schedule": "5th Schedule (Part II)",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "Red cabbage colour",
+    "name_in_regs": "Red cabbage colour",
+    "schedule": "5th Schedule (Part II)",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "Sandalwood",
+    "name_in_regs": "Sandalwood",
+    "schedule": "5th Schedule (Part II)",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "170(i)",
+    "e_number": "170",
+    "name": "Calcium carbonate",
+    "name_in_regs": "Calcium carbonate",
+    "schedule": "Regulation 16(3), 7th & 8th Schedules",
+    "sfa_notes": "*",
+    "table": 1
+  },
+  {
+    "ins": null,
+    "e_number": "171",
+    "name": "Titanium dioxide",
+    "name_in_regs": "Titanium dioxide",
+    "schedule": "5th Schedule (Part II)",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": null,
+    "e_number": "172",
+    "name": "Iron oxides",
+    "name_in_regs": "Iron oxide",
+    "schedule": "5th Schedule (Part II)",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": null,
+    "e_number": "172",
+    "name": "Iron oxide, black",
+    "name_in_regs": "Iron oxide",
+    "schedule": "5th Schedule (Part II)",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": null,
+    "e_number": "172",
+    "name": "Iron oxide, red",
+    "name_in_regs": "Iron oxide",
+    "schedule": "5th Schedule (Part II)",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": null,
+    "e_number": "172",
+    "name": "Iron oxide, yellow",
+    "name_in_regs": "Iron oxide",
+    "schedule": "5th Schedule (Part II)",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": null,
+    "e_number": "173",
+    "name": "Aluminium",
+    "name_in_regs": "Aluminium",
+    "schedule": "5th Schedule (Part II)",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": null,
+    "e_number": "174",
+    "name": "Silver",
+    "name_in_regs": "Silver",
+    "schedule": "5th Schedule (Part II)",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": null,
+    "e_number": "175",
+    "name": "Gold (metallic)",
+    "name_in_regs": "Gold",
+    "schedule": "5th Schedule (Part II)",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "200",
+    "e_number": "200",
+    "name": "Sorbic acid",
+    "name_in_regs": "Sorbic acid",
+    "schedule": "Regulation 19(2)(b), 4th Schedule (Part I)",
+    "sfa_notes": "*",
+    "table": 1
+  },
+  {
+    "ins": "201",
+    "e_number": null,
+    "name": "Sodium sorbate",
+    "name_in_regs": "Sodium salt of sorbic acid",
+    "schedule": "Regulation 19(2)(b), 4th Schedule (Part I)",
+    "sfa_notes": "*",
+    "table": 1
+  },
+  {
+    "ins": "202",
+    "e_number": "202",
+    "name": "Potassium sorbate",
+    "name_in_regs": "Potassium salt of sorbic acid",
+    "schedule": "Regulation 19(2)(b), 4th Schedule Part I",
+    "sfa_notes": "*",
+    "table": 1
+  },
+  {
+    "ins": "203",
+    "e_number": "203",
+    "name": "Calcium sorbate",
+    "name_in_regs": "Calcium salt of sorbic acid",
+    "schedule": "Regulation 19(2)(b), 4th Schedule (Part I)",
+    "sfa_notes": "*",
+    "table": 1
+  },
+  {
+    "ins": "210",
+    "e_number": "210",
+    "name": "Benzoic acid",
+    "name_in_regs": "Benzoic acid",
+    "schedule": "Regulation 19(2)(b), 4th Schedule Part I",
+    "sfa_notes": "*",
+    "table": 1
+  },
+  {
+    "ins": "211",
+    "e_number": "211",
+    "name": "Sodium benzoate",
+    "name_in_regs": "Sodium salt of benzoic acid",
+    "schedule": "Regulation 19(2)(b), 4th Schedule (Part I)",
+    "sfa_notes": "*",
+    "table": 1
+  },
+  {
+    "ins": "212",
+    "e_number": "212",
+    "name": "Potassium benzoate",
+    "name_in_regs": "Potassium salt of benzoic acid",
+    "schedule": "Regulation 19(2)(b), 4th Schedule (Part I)",
+    "sfa_notes": "*",
+    "table": 1
+  },
+  {
+    "ins": "218",
+    "e_number": "218",
+    "name": "Methyl para- hydroxybenzoate",
+    "name_in_regs": "Methyl para-hydroxy- benzoate",
+    "schedule": "Regulation 19(2)(b), 4th Schedule (Part I)",
+    "sfa_notes": "*",
+    "table": 1
+  },
+  {
+    "ins": "219",
+    "e_number": "219",
+    "name": "Sodium methyl para- hydroxybenzoate",
+    "name_in_regs": "Sodium salt of methyl para-hydroxy-benzoate",
+    "schedule": "Regulation 19(2)(b), 4th Schedule (Part I)",
+    "sfa_notes": "*",
+    "table": 1
+  },
+  {
+    "ins": "220",
+    "e_number": "220",
+    "name": "Sulfur dioxide",
+    "name_in_regs": "Sulphur dioxide",
+    "schedule": "Regulation 19(2)(b), 4th Schedule (Part I)",
+    "sfa_notes": "*",
+    "table": 1
+  },
+  {
+    "ins": "221",
+    "e_number": "221",
+    "name": "Sodium sulfite",
+    "name_in_regs": "Sodium salt of sulphurous acid",
+    "schedule": "Regulation 19(2)(b), 4th Schedule (Part I)",
+    "sfa_notes": "*",
+    "table": 1
+  },
+  {
+    "ins": "222",
+    "e_number": "222",
+    "name": "Sodium hydrogen sulfite",
+    "name_in_regs": "Sodium salt of sulphurous acid",
+    "schedule": "Regulation 19(2)(b), 4th Schedule (Part I)",
+    "sfa_notes": "*",
+    "table": 1
+  },
+  {
+    "ins": "223",
+    "e_number": "223",
+    "name": "Sodium metabisulfite",
+    "name_in_regs": "Sodium salt of sulphurous acid",
+    "schedule": "Regulation 19(2)(b), 4th Schedule (Part I)",
+    "sfa_notes": "*",
+    "table": 1
+  },
+  {
+    "ins": "224",
+    "e_number": "224",
+    "name": "Potassium metabisulphite",
+    "name_in_regs": "Potassium salt of sulphurous acid",
+    "schedule": "Regulation 19(2)(b), 4th Schedule (Part I)",
+    "sfa_notes": "*",
+    "table": 1
+  },
+  {
+    "ins": "225",
+    "e_number": null,
+    "name": "Potassium sulfite",
+    "name_in_regs": "Potassium salt of sulphurous acid",
+    "schedule": "Regulation 19(2)(b), 4th Schedule (Part I)",
+    "sfa_notes": "*",
+    "table": 1
+  },
+  {
+    "ins": "226",
+    "e_number": "226",
+    "name": "Calcium sulfite",
+    "name_in_regs": "Calcium salt of sulphurous acid",
+    "schedule": "Regulation 19(2)(b), 4th Schedule (Part I)",
+    "sfa_notes": "*",
+    "table": 1
+  },
+  {
+    "ins": "227",
+    "e_number": "227",
+    "name": "Calcium hydrogen sulfite",
+    "name_in_regs": "Calcium salt of sulphurous acid",
+    "schedule": "Regulation 19(2)(b), 4th Schedule (Part I)",
+    "sfa_notes": "*",
+    "table": 1
+  },
+  {
+    "ins": "228",
+    "e_number": "228",
+    "name": "Potassium bisulfite",
+    "name_in_regs": "Potassium salt of sulphurous acid",
+    "schedule": "Regulation 19(2)(b), 4th Schedule (Part I)",
+    "sfa_notes": "*",
+    "table": 1
+  },
+  {
+    "ins": "233",
+    "e_number": null,
+    "name": "Thiabendazole",
+    "name_in_regs": "Regulated as a pesticide for which maximum residue limits are specified under the Food Regulations",
+    "schedule": "9th Schedule",
+    "sfa_notes": "*",
+    "table": 1
+  },
+  {
+    "ins": null,
+    "e_number": "234",
+    "name": "Nisin",
+    "name_in_regs": "Nisin",
+    "schedule": "Regulation 32(3)",
+    "sfa_notes": "*",
+    "table": 1
+  },
+  {
+    "ins": "235",
+    "e_number": "235",
+    "name": "Natamycin (Pimaricin)",
+    "name_in_regs": "Natamycin",
+    "schedule": "Regulation 117(2)",
+    "sfa_notes": "*",
+    "table": 1
+  },
+  {
+    "ins": "242",
+    "e_number": "242",
+    "name": "Dimethyl dicarbonate",
+    "name_in_regs": "Dimethyl dicarbonate",
+    "schedule": "Regulation 19(2)(c), 4th Schedule (Part II)",
+    "sfa_notes": "*",
+    "table": 1
+  },
+  {
+    "ins": "249",
+    "e_number": "249",
+    "name": "Potassium nitrite",
+    "name_in_regs": "Nitrite of potassium",
+    "schedule": "Regulation 19(2)(b), 4th Schedule (Part I)",
+    "sfa_notes": "*",
+    "table": 1
+  },
+  {
+    "ins": "250",
+    "e_number": "250",
+    "name": "Sodium nitrite",
+    "name_in_regs": "Nitrite of sodium",
+    "schedule": "Regulation 19(2)(b), 4th Schedule (Part I)",
+    "sfa_notes": "*",
+    "table": 1
+  },
+  {
+    "ins": "251",
+    "e_number": "251",
+    "name": "Sodium nitrate",
+    "name_in_regs": "Nitrate of sodium",
+    "schedule": "Regulation 19(2)(b), 4th Schedule (Part I)",
+    "sfa_notes": "*",
+    "table": 1
+  },
+  {
+    "ins": "252",
+    "e_number": "252",
+    "name": "Potassium nitrate",
+    "name_in_regs": "Nitrate of potassium",
+    "schedule": "Regulation 19(2)(b), 4th Schedule (Part I)",
+    "sfa_notes": "*",
+    "table": 1
+  },
+  {
+    "ins": "260",
+    "e_number": "260",
+    "name": "Acetic acid (glacial)",
+    "name_in_regs": "Acetic acid",
+    "schedule": "Regulation 19(2)(a), 8th & 17th Schedules",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "261(i)",
+    "e_number": "261",
+    "name": "Potassium acetate",
+    "name_in_regs": "Potassium salt of acetic acid",
+    "schedule": "Regulation 19(2)(a)",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "261(ii)",
+    "e_number": null,
+    "name": "Potassium diacetate",
+    "name_in_regs": "Potassium salt of acetic acid",
+    "schedule": "Regulation 19(2)(a)",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "262(i)",
+    "e_number": null,
+    "name": "Sodium acetate",
+    "name_in_regs": "Sodium acetate / Sodium salt of acetic acid",
+    "schedule": "8th Schedule, Regulation 19(2)(a)",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "262(ii)",
+    "e_number": null,
+    "name": "Sodium diacetate",
+    "name_in_regs": "Sodium salt of acetic acid",
+    "schedule": "Regulation 19(2)(a)",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "263",
+    "e_number": "263",
+    "name": "Calcium acetate",
+    "name_in_regs": "Calcium salt of acetic acid",
+    "schedule": "Regulation 19(2)(a)",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "270",
+    "e_number": "270",
+    "name": "Lactic acid (L-, D- and DL-)",
+    "name_in_regs": "Lactic acid",
+    "schedule": "Regulation 19(2)(a), 8th & 17th Schedules",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "280",
+    "e_number": "280",
+    "name": "Propionic acid",
+    "name_in_regs": "Propionic acid",
+    "schedule": "Regulation 19(2)(a)",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "281",
+    "e_number": "281",
+    "name": "Sodium propionate",
+    "name_in_regs": "Sodium salt of propionic acid",
+    "schedule": "Regulation 19(2)(a)",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "282",
+    "e_number": "282",
+    "name": "Calcium propionate",
+    "name_in_regs": "Calcium salt of propionic acid",
+    "schedule": "Regulation 19(2)(a)",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "283",
+    "e_number": "283",
+    "name": "Potassium propionate",
+    "name_in_regs": "Potassium salt of propionic acid",
+    "schedule": "Regulation 19(2)(a)",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "290",
+    "e_number": "290",
+    "name": "Carbon dioxide",
+    "name_in_regs": "Carbon dioxide",
+    "schedule": "Regulation 27(2), 8th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "296",
+    "e_number": "296",
+    "name": "Malic acid (DL-)",
+    "name_in_regs": "Malic acid",
+    "schedule": "Regulations 19(2)(a), 141, 173 and 174, 8th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": null,
+    "e_number": "297",
+    "name": "Fumaric acid",
+    "name_in_regs": "Fumaric acid",
+    "schedule": "8th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "300",
+    "e_number": "300",
+    "name": "Ascorbic acid (L-)",
+    "name_in_regs": "Ascorbic acid",
+    "schedule": "Regulation 17(2), 19(2)(a), 39(2)(d), 171,",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "301",
+    "e_number": "301",
+    "name": "Sodium ascorbate",
+    "name_in_regs": "Sodium salt of ascorbic acid / Sodium ascorbate",
+    "schedule": "Regulation 19(2)(a), 7th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "302",
+    "e_number": "302",
+    "name": "Calcium ascorbate",
+    "name_in_regs": "Calcium salt of ascorbic acid / Calcium ascorbate",
+    "schedule": "Regulation 19(2)(a), 7th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "303",
+    "e_number": null,
+    "name": "Potassium ascorbate",
+    "name_in_regs": "Potassium salt of ascorbic acid / Potassium ascorbate",
+    "schedule": "Regulation 19(2)(a), 7th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "304",
+    "e_number": "304(i)",
+    "name": "Ascorbyl palmitate",
+    "name_in_regs": "Ascorbyl palmitate / Ascorbyl-6-palmitate",
+    "schedule": "3rd Schedule, 7th Schedule",
+    "sfa_notes": "*3rd Schedule",
+    "table": 1
+  },
+  {
+    "ins": "307",
+    "e_number": null,
+    "name": "Tocopherols",
+    "name_in_regs": "Tocopherols",
+    "schedule": "Regulation 17(2)",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "307a",
+    "e_number": "307",
+    "name": "Tocopherol, d-alpha",
+    "name_in_regs": "D-alpha tocopherol",
+    "schedule": "7th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "307b",
+    "e_number": "306",
+    "name": "Tocopherol concentrate, mixed",
+    "name_in_regs": "Tocopherols",
+    "schedule": "Regulation 17(2)",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "307c",
+    "e_number": "307",
+    "name": "Tocopherol, dl-alpha",
+    "name_in_regs": "DL-alpha tocopherol",
+    "schedule": "7th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": null,
+    "e_number": "311",
+    "name": "Octyl gallate",
+    "name_in_regs": "Octyl gallate",
+    "schedule": "3rd Schedule",
+    "sfa_notes": "*",
+    "table": 1
+  },
+  {
+    "ins": null,
+    "e_number": "312",
+    "name": "Dodecyl gallate",
+    "name_in_regs": "Dodecyl gallate",
+    "schedule": "3rd Schedule",
+    "sfa_notes": "*",
+    "table": 1
+  },
+  {
+    "ins": "315",
+    "e_number": "315",
+    "name": "Erythorbic acid (Isoascorbic acid)",
+    "name_in_regs": "Erythorbic acid",
+    "schedule": "Regulations 17(2) & 19(2)(a)",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "316",
+    "e_number": "316",
+    "name": "Sodium erythorbate (Sodium isoascorbate)",
+    "name_in_regs": "Sodium salt of erythorbic acid",
+    "schedule": "Regulation 19(2)(a)",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "317",
+    "e_number": null,
+    "name": "Potassium isoascorbate",
+    "name_in_regs": "Potassium salt of erythorbic acid",
+    "schedule": "Regulation 19(2)(a)",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "318",
+    "e_number": null,
+    "name": "Calcium isoascorbate",
+    "name_in_regs": "Calcium salt of erythorbic acid",
+    "schedule": "Regulation 19(2)(a)",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "319",
+    "e_number": "319",
+    "name": "Tertiary butylhydroquinone",
+    "name_in_regs": "Tertiary butylhydroquinone (TBHQ)",
+    "schedule": "3rd Schedule",
+    "sfa_notes": "*",
+    "table": 1
+  },
+  {
+    "ins": "320",
+    "e_number": "320",
+    "name": "Butylated hydroxyanisole",
+    "name_in_regs": "Butylated hydroxyanisole (BHA)",
+    "schedule": "3rd Schedule",
+    "sfa_notes": "*",
+    "table": 1
+  },
+  {
+    "ins": "321",
+    "e_number": "321",
+    "name": "Butylated hydroxytoluene",
+    "name_in_regs": "Butylated hydroxytoluene (BHT)",
+    "schedule": "3rd Schedule",
+    "sfa_notes": "*",
+    "table": 1
+  },
+  {
+    "ins": "322(i)",
+    "e_number": "322",
+    "name": "Lecithin",
+    "name_in_regs": "Lecithin",
+    "schedule": "Regulation 17(2), 6th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "322(ii)",
+    "e_number": null,
+    "name": "Partially hydrolysed lecithin",
+    "name_in_regs": "Partially hydrolysed lecithin",
+    "schedule": "6th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "Ethoxyquin",
+    "name_in_regs": "Ethoxyquin",
+    "schedule": "3rd & 9th Schedules",
+    "sfa_notes": "*",
+    "table": 1
+  },
+  {
+    "ins": "325",
+    "e_number": "325",
+    "name": "Sodium lactate",
+    "name_in_regs": "Sodium salt of lactic acid / Sodium lactate",
+    "schedule": "Regulation 19(2)(a), 7th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "326",
+    "e_number": "326",
+    "name": "Potassium lactate",
+    "name_in_regs": "Potassium salt of lactic acid / Potassium lactate",
+    "schedule": "Regulation 19(2)(a), 7th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "327",
+    "e_number": "327",
+    "name": "Calcium lactate",
+    "name_in_regs": "Calcium salt of lactic acid / Calcium lactate",
+    "schedule": "Regulation 19(2)(a), 7th & 8th Schedules",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "329",
+    "e_number": null,
+    "name": "Magnesium lactate (DL-)",
+    "name_in_regs": "Magnesium lactate",
+    "schedule": "8th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "330",
+    "e_number": "330",
+    "name": "Citric acid",
+    "name_in_regs": "Citric acid",
+    "schedule": "Regulations 17(2), 19(2)(a), 26(3), 125, 173 & 174, 8th & 17th Schedules",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "331(i)",
+    "e_number": null,
+    "name": "Sodium dihydrogen citrate",
+    "name_in_regs": "Sodium salt of citric acid",
+    "schedule": "Regulation 19(2)(a)",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "331(ii)",
+    "e_number": null,
+    "name": "Disodium monohydrogen citrate",
+    "name_in_regs": "Sodium salt of citric acid",
+    "schedule": "Regulation 19(2)(a)",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "331(iii)",
+    "e_number": null,
+    "name": "Trisodium citrate",
+    "name_in_regs": "Sodium salt of citric acid / Sodium citrate",
+    "schedule": "Regulation 19(2)(a), 7th & 8th Schedules",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "332(i)",
+    "e_number": null,
+    "name": "Potassium dihydrogen citrate",
+    "name_in_regs": "Potassium salt of citric acid",
+    "schedule": "Regulation 19(2)(a)",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "332(ii)",
+    "e_number": null,
+    "name": "Tripotassium citrate",
+    "name_in_regs": "Potassium salt of citric acid / Potassium citrate",
+    "schedule": "Regulation 19(2)(a), 7th & 8th Schedules",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "333(i)",
+    "e_number": null,
+    "name": "Monocalcium citrate",
+    "name_in_regs": "Calcium salt of citric acid",
+    "schedule": "Regulation 19(2)(a) & 26(3)",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "333(ii)",
+    "e_number": null,
+    "name": "Dicalcium citrate",
+    "name_in_regs": "Calcium salt of citric acid",
+    "schedule": "Regulation 19(2)(a) & 26(3)",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "333(iii)",
+    "e_number": null,
+    "name": "Tricalcium citrate",
+    "name_in_regs": "Calcium salt of citric acid / Calcium citrate",
+    "schedule": "Regulation 19(2)(a) & 26(3), 7th & 8th Schedules",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "334",
+    "e_number": "334",
+    "name": "Tartaric acid (L (+)-)",
+    "name_in_regs": "Tartaric acid",
+    "schedule": "Regulations 19(2)(a), 26(3), 173 & 174, 8th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "335(i)",
+    "e_number": null,
+    "name": "Monosodium tartrate",
+    "name_in_regs": "Sodium salt of tartaric acid",
+    "schedule": "Regulation 19(2)(a)",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "335(ii)",
+    "e_number": null,
+    "name": "Sodium L(+) - tartrate",
+    "name_in_regs": "Sodium salt of tartaric acid / Sodium tartrate",
+    "schedule": "Regulation 19(2)(a), 7th & 8th Schedules",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "336(i)",
+    "e_number": null,
+    "name": "Monopotassium tartrate",
+    "name_in_regs": "Potassium salt of tartaric acid",
+    "schedule": "Regulation 19(2)(a)",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "336(ii)",
+    "e_number": null,
+    "name": "Dipotassium tartrate",
+    "name_in_regs": "Potassium salt of tartaric acid",
+    "schedule": "Regulation 19(2)(a)",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "337",
+    "e_number": "337",
+    "name": "Potassium sodium L(+)-tartrate",
+    "name_in_regs": "Sodium potassium tartrate",
+    "schedule": "8th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "338",
+    "e_number": "338",
+    "name": "Phosphoric acid",
+    "name_in_regs": "Phosphoric acid",
+    "schedule": "Regulations 17(2), 19(2)(a) & 26(3), 7th & 8th Schedules",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "339(i)",
+    "e_number": null,
+    "name": "Sodium dihydrogen phosphate",
+    "name_in_regs": "Sodium salt of phosphoric acid / Sodium phosphate, monobasic",
+    "schedule": "Regulation 19(2)(a), 6th, 7th & 8th Schedules",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "339(ii)",
+    "e_number": null,
+    "name": "Disodium hydrogen phosphate",
+    "name_in_regs": "Sodium salt of phosphoric acid / Sodium phosphate, dibasic",
+    "schedule": "Regulation 19(2)(a), 6th, 7th & 8th Schedules",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "339(iii)",
+    "e_number": null,
+    "name": "Trisodium phosphate",
+    "name_in_regs": "Sodium salt of phosphoric acid / Sodium phosphate, tribasic",
+    "schedule": "Regulation 19(2)(a), 6th, 7th, 8th & 17th Schedules",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "340(i)",
+    "e_number": null,
+    "name": "Potassium dihydrogen phosphate",
+    "name_in_regs": "Potassium salt of phosphoric acid / Potassium phosphate, monobasic",
+    "schedule": "Regulation 19(2)(a), 6th & 7th Schedules",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "340(ii)",
+    "e_number": null,
+    "name": "Dipotassium hydrogen phosphate",
+    "name_in_regs": "Potassium salt of phosphoric acid / Potassium phosphate, dibasic",
+    "schedule": "Regulation 19(2)(a), 6th & 7th Schedules",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "340(iii)",
+    "e_number": null,
+    "name": "Tripotassium phosphate",
+    "name_in_regs": "Potassium salt of phosphoric acid",
+    "schedule": "Regulation 19(2)(a) 6th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "341(i)",
+    "e_number": null,
+    "name": "Calcium dihydrogen phosphate",
+    "name_in_regs": "Calcium salt of phosphoric acid / Acid calcium phosphate / Calcium phosphate, monobasic",
+    "schedule": "Regulations 19(2)(a) & 26(3), Regulation 39(2)(g), 7th & 8th Schedules",
+    "sfa_notes": "* Regulation 39(2)(g)",
+    "table": 1
+  },
+  {
+    "ins": "341(ii)",
+    "e_number": null,
+    "name": "Calcium hydrogen phosphate",
+    "name_in_regs": "Calcium salt of phosphoric acid / Calcium phosphate, dibasic",
+    "schedule": "Regulations 19(2)(a) & 26(3), 7th & 8th Schedules",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "341(iii)",
+    "e_number": null,
+    "name": "Tricalcium phosphate",
+    "name_in_regs": "Calcium salt of phosphoric acid / Calcium phosphate, tribasic",
+    "schedule": "Regulations 19(2)(a) & 26(3), 6th, 7th & 8th Schedules",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "342(i)",
+    "e_number": null,
+    "name": "Ammonium dihydrogen phosphate",
+    "name_in_regs": "Ammonium phosphate, monobasic",
+    "schedule": "8th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "342(ii)",
+    "e_number": null,
+    "name": "Diammonium hydrogen phosphate",
+    "name_in_regs": "Ammonium phosphate, dibasic",
+    "schedule": "8th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "343(ii)",
+    "e_number": null,
+    "name": "Magnesium hydrogen phosphate",
+    "name_in_regs": "Magnesium phosphate, dibasic",
+    "schedule": "7th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "343(iii)",
+    "e_number": null,
+    "name": "Trimagnesium phosphate",
+    "name_in_regs": "Magnesium phosphate, tribasic",
+    "schedule": "7th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "345",
+    "e_number": null,
+    "name": "Magnesium citrate",
+    "name_in_regs": "Magnesium citrate",
+    "schedule": "7th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "350(i)",
+    "e_number": null,
+    "name": "Sodium hydrogen DL-malate",
+    "name_in_regs": "Sodium salt of malic acid",
+    "schedule": "Regulation 19(2)(a)",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "350(ii)",
+    "e_number": null,
+    "name": "Sodium DL-malate",
+    "name_in_regs": "Sodium salt of malic acid",
+    "schedule": "Regulation 19(2)(a)",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "351(i)",
+    "e_number": null,
+    "name": "Potassium hydrogen malate",
+    "name_in_regs": "Potassium salt of malic acid",
+    "schedule": "Regulation 19(2)(a)",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "351(ii)",
+    "e_number": "351",
+    "name": "Potassium malate",
+    "name_in_regs": "Potassium salt of malic acid",
+    "schedule": "Regulation 19(2)(a)",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "352(i)",
+    "e_number": null,
+    "name": "Calcium hydrogen malate",
+    "name_in_regs": "Calcium salt of malic acid",
+    "schedule": "Regulation 19(2)(a)",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "352(ii)",
+    "e_number": null,
+    "name": "Calcium malate (D,L-)",
+    "name_in_regs": "Calcium salt of malic acid",
+    "schedule": "Regulation 19(2)(a)",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "354",
+    "e_number": "354",
+    "name": "Calcium tartrate (DL-)",
+    "name_in_regs": "Calcium salt of tartaric acid",
+    "schedule": "Regulations 19(2)(a) & 26(3)",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": null,
+    "e_number": "355",
+    "name": "Adipic acid",
+    "name_in_regs": "Adipic acid",
+    "schedule": "8th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": null,
+    "e_number": "363",
+    "name": "Succinic acid",
+    "name_in_regs": "Succinic acid",
+    "schedule": "8th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "Sodium fumarate",
+    "name_in_regs": "Sodium fumarate",
+    "schedule": "8th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "Nicotinic acid",
+    "name_in_regs": "Nicotinic acid",
+    "schedule": "7th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "380",
+    "e_number": "380",
+    "name": "Triammonium citrate",
+    "name_in_regs": "Triammonium citrate",
+    "schedule": "8th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "381",
+    "e_number": null,
+    "name": "Ferric ammonium citrate",
+    "name_in_regs": "Ferric ammonium citrate",
+    "schedule": "7th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "383",
+    "e_number": null,
+    "name": "Calcium glycerophosphate",
+    "name_in_regs": "Calcium glycerophosphate",
+    "schedule": "7th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "384",
+    "e_number": null,
+    "name": "Isopropyl citrates",
+    "name_in_regs": "Isopropyl citrate mixture (including monoisopropyl citrate)",
+    "schedule": "3rd Schedule",
+    "sfa_notes": "*",
+    "table": 1
+  },
+  {
+    "ins": "385",
+    "e_number": "385",
+    "name": "Calcium disodium ethylenediaminetetra acetate",
+    "name_in_regs": "Calcium disodium ethylenediaminetetraac etate",
+    "schedule": "Regulation 26(4)",
+    "sfa_notes": "*",
+    "table": 1
+  },
+  {
+    "ins": null,
+    "e_number": "392",
+    "name": "Rosemary extract",
+    "name_in_regs": "Rosemary extract",
+    "schedule": "3rd Schedule",
+    "sfa_notes": "*",
+    "table": 1
+  },
+  {
+    "ins": null,
+    "e_number": "400",
+    "name": "Alginic acid",
+    "name_in_regs": "Alginic acid",
+    "schedule": "6th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": null,
+    "e_number": "401",
+    "name": "Sodium alginate",
+    "name_in_regs": "Sodium alginate",
+    "schedule": "6th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": null,
+    "e_number": "402",
+    "name": "Potassium alginate",
+    "name_in_regs": "Potassium alginate",
+    "schedule": "6th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": null,
+    "e_number": "403",
+    "name": "Ammonium alginate",
+    "name_in_regs": "Ammonium alginate",
+    "schedule": "6th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": null,
+    "e_number": "404",
+    "name": "Calcium alginate",
+    "name_in_regs": "Calcium alginate",
+    "schedule": "6th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "405",
+    "e_number": "405",
+    "name": "Propylene glycol alginate",
+    "name_in_regs": "Propylene glycol alginate",
+    "schedule": "6th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "406",
+    "e_number": "406",
+    "name": "Agar",
+    "name_in_regs": "Agar",
+    "schedule": "6th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "407",
+    "e_number": "407",
+    "name": "Carrageenan (includes furcelleran)",
+    "name_in_regs": "Carrageenan and Furcelleran",
+    "schedule": "6th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "407a",
+    "e_number": "407a",
+    "name": "Processed eucheuma seaweed (PES)",
+    "name_in_regs": "Processed Eucheuma seaweed",
+    "schedule": "6th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "409",
+    "e_number": null,
+    "name": "Arabinogalactan",
+    "name_in_regs": "Arabinogalactan (larch gum)",
+    "schedule": "6th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": null,
+    "e_number": "410",
+    "name": "Carob bean gum",
+    "name_in_regs": "Carob gum",
+    "schedule": "6th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": null,
+    "e_number": "412",
+    "name": "Guar gum",
+    "name_in_regs": "Guar gum",
+    "schedule": "6th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": null,
+    "e_number": "413",
+    "name": "Tragacanth gum",
+    "name_in_regs": "Tragacanth gum",
+    "schedule": "6th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "414",
+    "e_number": "414",
+    "name": "Gum arabic (Acacia gum)",
+    "name_in_regs": "Acacia gum",
+    "schedule": "6th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": null,
+    "e_number": "415",
+    "name": "Xanthan gum",
+    "name_in_regs": "Xanthan gum",
+    "schedule": "6th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": null,
+    "e_number": "416",
+    "name": "Karaya gum",
+    "name_in_regs": "Karaya gum",
+    "schedule": "6th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": null,
+    "e_number": "417",
+    "name": "Tara gum",
+    "name_in_regs": "Tara gum",
+    "schedule": "6th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": null,
+    "e_number": "418",
+    "name": "Gellan gum",
+    "name_in_regs": "Gellan gum",
+    "schedule": "6th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "Gum ghatti",
+    "name_in_regs": "Ghatti gum",
+    "schedule": "6th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": null,
+    "e_number": "420",
+    "name": "Sorbitol",
+    "name_in_regs": "Sorbitol",
+    "schedule": "8th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": null,
+    "e_number": "420",
+    "name": "Sorbitol syrup",
+    "name_in_regs": "Sorbitol syrup",
+    "schedule": "8th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": null,
+    "e_number": "421",
+    "name": "Mannitol",
+    "name_in_regs": "Mannitol",
+    "schedule": "8th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "422",
+    "e_number": "422",
+    "name": "Glycerol",
+    "name_in_regs": "Glycerol / Glycerin or Glycerol",
+    "schedule": "Regulation 22(2), 8th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "Curdlan",
+    "name_in_regs": "Curdlan",
+    "schedule": "6th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": null,
+    "e_number": "425",
+    "name": "Konjac flour",
+    "name_in_regs": "Konjac flour",
+    "schedule": "6th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "432",
+    "e_number": "432",
+    "name": "Polyoxyethylene (20) sorbitan monolaurate",
+    "name_in_regs": "Polyoxyethylene (20) sorbitan monolaurate (polysorbate 20)",
+    "schedule": "6th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "433",
+    "e_number": "433",
+    "name": "Polyoxyethylene (20) sorbitan monooleate",
+    "name_in_regs": "Polyoxyethylene (20) sorbitan mono-oleate (polysorbate 80)",
+    "schedule": "6th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "434",
+    "e_number": "434",
+    "name": "Polyoxyethylene (20) sorbitan monopalmitate",
+    "name_in_regs": "Polyoxyethylene (20) sorbitan mono-palmitate (polysorbate 40)",
+    "schedule": "6th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "435",
+    "e_number": "435",
+    "name": "Polyoxyethylene (20) sorbitan monostearate",
+    "name_in_regs": "Polyoxyethylene (20) sorbitan monostearate (polysorbate 60)",
+    "schedule": "6th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "436",
+    "e_number": "436",
+    "name": "Polyoxyethylene (20) sorbitan tristearate",
+    "name_in_regs": "Polyoxyethylene (20) sorbitan tristearate (polysorbate 65)",
+    "schedule": "6th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "437",
+    "e_number": null,
+    "name": "Tamarind seed polysaccharide",
+    "name_in_regs": "Tamarind seed polysaccharide",
+    "schedule": "6th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "440",
+    "e_number": "440",
+    "name": "Pectins",
+    "name_in_regs": "Pectins, including amidated pectins",
+    "schedule": "6th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "442",
+    "e_number": "442",
+    "name": "Ammonium salts of phosphatidic acid",
+    "name_in_regs": "Ammonium phosphatides",
+    "schedule": "Regulation 168(1)(ga)",
+    "sfa_notes": "*",
+    "table": 1
+  },
+  {
+    "ins": "444",
+    "e_number": "444",
+    "name": "Sucrose acetate isobutyrate",
+    "name_in_regs": "Sucrose acetate isobutyrate",
+    "schedule": "Regulation 21(3)(b)",
+    "sfa_notes": "*",
+    "table": 1
+  },
+  {
+    "ins": "445(iii)",
+    "e_number": "445",
+    "name": "Glycerol ester of wood rosin",
+    "name_in_regs": "Ester gum",
+    "schedule": "Regulation 21(3)(a)",
+    "sfa_notes": "*",
+    "table": 1
+  },
+  {
+    "ins": "450(i)",
+    "e_number": null,
+    "name": "Disodium diphosphate",
+    "name_in_regs": "Sodium salt of phosphoric acid",
+    "schedule": "Regulation 19(2)(a) 6th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "450(ii)",
+    "e_number": null,
+    "name": "Trisodium diphosphate",
+    "name_in_regs": "Sodium salt of phosphoric acid",
+    "schedule": "Regulation 19(2)(a) 6th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "450(iii)",
+    "e_number": null,
+    "name": "Tetrasodium diphosphate",
+    "name_in_regs": "Sodium salt of phosphoric acid / Sodium pyrophosphate",
+    "schedule": "Regulation 19(2)(a), 6th & 8th Schedules",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "450(iv)",
+    "e_number": null,
+    "name": "Dipotassium diphosphate",
+    "name_in_regs": "Potassium salt of phosphoric acid",
+    "schedule": "Regulation 19(2)(a)",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "450(v)",
+    "e_number": null,
+    "name": "Tetrapotassium diphosphate",
+    "name_in_regs": "Potassium salt of phosphoric acid",
+    "schedule": "Regulation 19(2)(a) 6th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "450(vi)",
+    "e_number": null,
+    "name": "Dicalcium diphosphate",
+    "name_in_regs": "Calcium salt of phosphoric acid / Calcium pyrophosphate",
+    "schedule": "Regulation 19(2)(a), 6th & 7th Schedules",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "450(vii)",
+    "e_number": null,
+    "name": "Calcium dihydrogen diphosphate",
+    "name_in_regs": "Calcium salt of phosphoric acid",
+    "schedule": "Regulation 19(2)(a) 6th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "451(i)",
+    "e_number": null,
+    "name": "Pentasodium triphosphate",
+    "name_in_regs": "Sodium salt of phosphoric acid",
+    "schedule": "Regulation 19(2)(a) 6th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "451(ii)",
+    "e_number": null,
+    "name": "Pentapotassium triphosphate",
+    "name_in_regs": "Potassium salt of phosphoric acid",
+    "schedule": "Regulation 19(2)(a) 6th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "452(i)",
+    "e_number": null,
+    "name": "Sodium polyphosphate",
+    "name_in_regs": "Sodium salt of phosphoric acid / Sodium hexametaphosphate",
+    "schedule": "Regulations 19(2)(a), Regulation 100(c) 6th Schedule",
+    "sfa_notes": "* Regulation 100(c)",
+    "table": 1
+  },
+  {
+    "ins": "452(ii)",
+    "e_number": null,
+    "name": "Potassium polyphosphate",
+    "name_in_regs": "Potassium salt of phosphoric acid",
+    "schedule": "Regulation 19(2)(a) 6th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "452(iv)",
+    "e_number": null,
+    "name": "Calcium polyphosphate",
+    "name_in_regs": "Calcium salt of phosphoric acid",
+    "schedule": "Regulation 19(2)(a) 6th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "457",
+    "e_number": null,
+    "name": "Cyclodextrin, alpha-",
+    "name_in_regs": "Cyclodextrin, alpha-",
+    "schedule": "6th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "458",
+    "e_number": null,
+    "name": "Cyclodextrin, gamma-",
+    "name_in_regs": "Cyclodextrin, gamma-",
+    "schedule": "6th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": null,
+    "e_number": "459",
+    "name": "Cyclodextrin, beta-",
+    "name_in_regs": "beta-Cyclodextrin",
+    "schedule": "Regulation 22(2)",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "460(i)",
+    "e_number": null,
+    "name": "Microcrystalline cellulose (cellulose gel)",
+    "name_in_regs": "Cellulose",
+    "schedule": "6th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "460(ii)",
+    "e_number": null,
+    "name": "Powdered cellulose",
+    "name_in_regs": "Cellulose",
+    "schedule": "6th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": null,
+    "e_number": "461",
+    "name": "Methyl cellulose",
+    "name_in_regs": "Methyl cellulose",
+    "schedule": "6th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "462",
+    "e_number": "462",
+    "name": "Ethyl cellulose",
+    "name_in_regs": "Ethyl cellulose",
+    "schedule": "6th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "463",
+    "e_number": "463",
+    "name": "Hydroxypropyl cellulose",
+    "name_in_regs": "Hydroxy propyl cellulose",
+    "schedule": "6th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "464",
+    "e_number": "464",
+    "name": "Hydroxypropyl methyl cellulose",
+    "name_in_regs": "Hydroxy propyl methyl cellulose",
+    "schedule": "6th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "465",
+    "e_number": "465",
+    "name": "Methyl ethyl cellulose",
+    "name_in_regs": "Methyl ethyl cellulose",
+    "schedule": "6th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "466",
+    "e_number": "466",
+    "name": "Sodium carboxymethyl cellulose (cellulose gum)",
+    "name_in_regs": "Carboxy methyl cellulose",
+    "schedule": "6th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "467",
+    "e_number": null,
+    "name": "Ethyl hydroxyethyl cellulose",
+    "name_in_regs": "Ethyl hydroxyethyl cellulose",
+    "schedule": "6th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "468",
+    "e_number": "468",
+    "name": "Cross-linked sodium carboxymethyl cellulose (cross- linked cellulose gum)",
+    "name_in_regs": "Croscarmellose sodium",
+    "schedule": "Regulation 18(5), 6th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "469",
+    "e_number": "469",
+    "name": "Sodium carboxymethyl cellulose, enzymatically hydrolysed (cellulose gum, enzymatically hydrolysed)",
+    "name_in_regs": "Enzymatically hydrolysed sodium carboxymethyl cellulose (cellulose gum, enzymatically hydrolysed)",
+    "schedule": "6th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "470(i)",
+    "e_number": "470a",
+    "name": "Salts of myristic, palmitic and stearic acids with ammonia,",
+    "name_in_regs": "Ammonium, calcium, potassium or sodium myristate; Ammonium, calcium, potassium or sodium palmitate;",
+    "schedule": "Regulation 16(3), Regulation 18(5) (applies to calcium stearate only), 6th Schedule",
+    "sfa_notes": "* Regulation 16(3)",
+    "table": 1
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "calcium, potassium and sodium",
+    "name_in_regs": "Ammonium, calcium, potassium or sodium stearate",
+    "schedule": null,
+    "sfa_notes": null,
+    "table": 1
+  },
+  {
+    "ins": "470(ii)",
+    "e_number": "470a",
+    "name": "Salts of oleic acid with calcium, potassium and sodium",
+    "name_in_regs": "Calcium, potassium or sodium oleate",
+    "schedule": "Regulation 16(3), 6th Schedule",
+    "sfa_notes": "* Regulation 16(3)",
+    "table": 1
+  },
+  {
+    "ins": "470(iii)",
+    "e_number": null,
+    "name": "Magnesium stearate",
+    "name_in_regs": "Magnesium stearate",
+    "schedule": "Regulation 16(3), 8th Schedule",
+    "sfa_notes": "* Regulation 16(3)",
+    "table": 1
+  },
+  {
+    "ins": "471",
+    "e_number": "471",
+    "name": "Mono- and di- glycerides of fatty acids",
+    "name_in_regs": "Mono and diglycerides of fatty acids",
+    "schedule": "6th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "472a",
+    "e_number": "472a",
+    "name": "Acetic and fatty acid esters of glycerol",
+    "name_in_regs": "Acetylated mono- glycerides",
+    "schedule": "6th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "472b",
+    "e_number": "472b",
+    "name": "Lactic and fatty acid esters of glycerol",
+    "name_in_regs": "Glycerol esters of lactic acid",
+    "schedule": "8th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "472c",
+    "e_number": "472c",
+    "name": "Citric and fatty acid esters of glycerol",
+    "name_in_regs": "Citric acid glycerides / Glycerol esters of citric acid",
+    "schedule": "6th & 8th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "472d",
+    "e_number": "472d",
+    "name": "Tartaric acid esters of mono- and di- glycerides of fatty acids",
+    "name_in_regs": "Tartaric acid glycerides",
+    "schedule": "6th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "472e",
+    "e_number": "472e",
+    "name": "Diacetyltartaric and fatty acid esters of glycerol",
+    "name_in_regs": "Diacetyl tartaric acid glycerides",
+    "schedule": "6th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "473",
+    "e_number": "473",
+    "name": "Sucrose esters of fatty acids",
+    "name_in_regs": "Sucrose esters of fatty acids",
+    "schedule": "8th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "473a",
+    "e_number": null,
+    "name": "Sucrose oligoesters, type I and type II",
+    "name_in_regs": "Sucrose oligoesters, type I and type II",
+    "schedule": "8th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "475",
+    "e_number": "475",
+    "name": "Polyglycerol esters of fatty acids",
+    "name_in_regs": "Polyglycerol esters of fatty acids",
+    "schedule": "6th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "476",
+    "e_number": "476",
+    "name": "Polyglycerol esters of interesterified ricinoleic acid",
+    "name_in_regs": "Polyglycerol polyricinoleate",
+    "schedule": "6th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "477",
+    "e_number": "477",
+    "name": "Propylene glycol esters of fatty acids",
+    "name_in_regs": "Propylene glycol esters of fatty acids",
+    "schedule": "6th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "480",
+    "e_number": null,
+    "name": "Dioctyl sodium sulfosuccinate",
+    "name_in_regs": "Dioctyl sodium sulphosuccinate",
+    "schedule": "6th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "481(i)",
+    "e_number": "481",
+    "name": "Sodium stearoyl lactylate",
+    "name_in_regs": "Sodium salt of stearoyl- 2-lactylic acid",
+    "schedule": "6th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "482(i)",
+    "e_number": "482",
+    "name": "Calcium stearoyl lactylate",
+    "name_in_regs": "Calcium salt of stearoyl- 2-lactylic acid",
+    "schedule": "6th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "483",
+    "e_number": "483",
+    "name": "Stearyl tartrate",
+    "name_in_regs": "Stearyl tartrate",
+    "schedule": "6th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "491",
+    "e_number": "491",
+    "name": "Sorbitan monostearate",
+    "name_in_regs": "Sorbitan monostearate",
+    "schedule": "6th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "492",
+    "e_number": "492",
+    "name": "Sorbitan tristearate",
+    "name_in_regs": "Sorbitan tristearate",
+    "schedule": "6th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "493",
+    "e_number": "493",
+    "name": "Sorbitan monolaurate",
+    "name_in_regs": "Sorbitan monolaurate",
+    "schedule": "6th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "494",
+    "e_number": "494",
+    "name": "Sorbitan monooleate",
+    "name_in_regs": "Sorbitan mono-oleate",
+    "schedule": "6th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "495",
+    "e_number": "495",
+    "name": "Sorbitan monopalmitate",
+    "name_in_regs": "Sorbitan mono- palmitate",
+    "schedule": "6th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "500(i)",
+    "e_number": null,
+    "name": "Sodium carbonate",
+    "name_in_regs": "Sodium carbonate",
+    "schedule": "Regulation 181, 7th & 8th Schedules",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "500(ii)",
+    "e_number": "500(ii)",
+    "name": "Sodium hydrogen carbonate",
+    "name_in_regs": "Sodium bicarbonate",
+    "schedule": "7th & 8th Schedules",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "500(iii)",
+    "e_number": null,
+    "name": "Sodium sesquicarbonate",
+    "name_in_regs": "Sodium sesquicarbonate",
+    "schedule": "8th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "501(i)",
+    "e_number": null,
+    "name": "Potassium carbonate",
+    "name_in_regs": "Potassium carbonate",
+    "schedule": "7th & 8th Schedules",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "501(ii)",
+    "e_number": null,
+    "name": "Potassium hydrogen carbonate",
+    "name_in_regs": "Potassium bicarbonate",
+    "schedule": "7th & 8th Schedules",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "503(i)",
+    "e_number": null,
+    "name": "Ammonium carbonate",
+    "name_in_regs": "Ammonium carbonate",
+    "schedule": "8th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "503(ii)",
+    "e_number": null,
+    "name": "Ammonium hydrogen carbonate",
+    "name_in_regs": "Ammonium bicarbonate",
+    "schedule": "8th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "504(i)",
+    "e_number": "504",
+    "name": "Magnesium carbonate",
+    "name_in_regs": "Magnesium carbonate",
+    "schedule": "Regulation 16(3), 7th & 8th Schedules",
+    "sfa_notes": "* Regulation 16(3)",
+    "table": 1
+  },
+  {
+    "ins": "504(ii)",
+    "e_number": null,
+    "name": "Magnesium hydroxide carbonate",
+    "name_in_regs": "Magnesium hydroxide carbonate",
+    "schedule": "8th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "505",
+    "e_number": null,
+    "name": "Ferrous carbonate",
+    "name_in_regs": "Ferrous carbonate",
+    "schedule": "7th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": null,
+    "e_number": "507",
+    "name": "Hydrochloric acid",
+    "name_in_regs": "Hydrochloric acid",
+    "schedule": "8th & 17th Schedules",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": null,
+    "e_number": "508",
+    "name": "Potassium chloride",
+    "name_in_regs": "Potassium chloride",
+    "schedule": "7th & 8th Schedules",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "509",
+    "e_number": "509",
+    "name": "Calcium chloride",
+    "name_in_regs": "Calcium chloride",
+    "schedule": "Regulation 211, 7th & 8th Schedules",
+    "sfa_notes": "* Regulation 211",
+    "table": 1
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "Ammonium chloride",
+    "name_in_regs": "Ammonium chloride",
+    "schedule": "Regulation 39(2)(f)",
+    "sfa_notes": "*",
+    "table": 1
+  },
+  {
+    "ins": "511",
+    "e_number": "511",
+    "name": "Magnesium chloride",
+    "name_in_regs": "Magnesium chloride",
+    "schedule": "Regulation 211, 7th & 8th Schedules",
+    "sfa_notes": "*",
+    "table": 1
+  },
+  {
+    "ins": null,
+    "e_number": "513",
+    "name": "Sulfuric acid",
+    "name_in_regs": "Sulphuric acid",
+    "schedule": "8th & 17th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "Sodium sulfate",
+    "name_in_regs": "Sodium sulphate",
+    "schedule": "7th, 8th & 17th Schedules",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "514(ii)",
+    "e_number": null,
+    "name": "Sodium hydrogen sulfate",
+    "name_in_regs": "Sodium acid sulphate (sodium hydrogen sulphate)",
+    "schedule": "8th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": null,
+    "e_number": "515",
+    "name": "Potassium sulfate",
+    "name_in_regs": "Potassium sulphate",
+    "schedule": "8th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "516",
+    "e_number": "516",
+    "name": "Calcium sulfate",
+    "name_in_regs": "Calcium sulphate",
+    "schedule": "Regulations 42 & 211, 7th & 8th Schedules",
+    "sfa_notes": "* Regulations 42 & 211",
+    "table": 1
+  },
+  {
+    "ins": null,
+    "e_number": "517",
+    "name": "Ammonium sulfate",
+    "name_in_regs": "Ammonium sulphate",
+    "schedule": "8th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "Magnesium sulfate",
+    "name_in_regs": "Magnesium sulphate",
+    "schedule": "7th & 8th Schedules",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "Cupric sulfate",
+    "name_in_regs": "Cupric sulphate",
+    "schedule": "7th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "522",
+    "e_number": "522",
+    "name": "Aluminium potassium sulfate",
+    "name_in_regs": "Aluminium potassium sulphate",
+    "schedule": "Regulation 141(d)",
+    "sfa_notes": "*",
+    "table": 1
+  },
+  {
+    "ins": null,
+    "e_number": "524",
+    "name": "Sodium hydroxide",
+    "name_in_regs": "Sodium hydroxide",
+    "schedule": "7th, 8th & 17th Schedules",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": null,
+    "e_number": "525",
+    "name": "Potassium hydroxide",
+    "name_in_regs": "Potassium hydroxide",
+    "schedule": "7th, 8th & 17th Schedules",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": null,
+    "e_number": "526",
+    "name": "Calcium hydroxide",
+    "name_in_regs": "Calcium hydroxide",
+    "schedule": "7th & 8th Schedules",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "527",
+    "e_number": "527",
+    "name": "Ammonium hydroxide",
+    "name_in_regs": "Ammonium hydroxide",
+    "schedule": "8th & 17th Schedules",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "528",
+    "e_number": "528",
+    "name": "Magnesium hydroxide",
+    "name_in_regs": "Magnesium hydroxide",
+    "schedule": "7th & 8th Schedules",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "529",
+    "e_number": "529",
+    "name": "Calcium oxide",
+    "name_in_regs": "Calcium oxide",
+    "schedule": "7th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "530",
+    "e_number": "530",
+    "name": "Magnesium oxide",
+    "name_in_regs": "Magnesium oxide",
+    "schedule": "7th & 8th Schedules",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "535",
+    "e_number": "535",
+    "name": "Sodium ferrocyanide",
+    "name_in_regs": "Sodium ferrocyanide",
+    "schedule": "Regulation 16(4)",
+    "sfa_notes": "*",
+    "table": 1
+  },
+  {
+    "ins": "536",
+    "e_number": "536",
+    "name": "Potassium ferrocyanide",
+    "name_in_regs": "Potassium ferrocyanide",
+    "schedule": "Regulation 16(4)",
+    "sfa_notes": "*",
+    "table": 1
+  },
+  {
+    "ins": "539",
+    "e_number": null,
+    "name": "Sodium thiosulfate",
+    "name_in_regs": "Sodium salt of sulphurous acid",
+    "schedule": "Regulation 19(2)(b), 4th Schedule (Part I)",
+    "sfa_notes": "*",
+    "table": 1
+  },
+  {
+    "ins": "541(i)",
+    "e_number": "541",
+    "name": "Sodium aluminium phosphate (acidic)",
+    "name_in_regs": "Sodium aluminium phosphate",
+    "schedule": "8th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "541(ii)",
+    "e_number": null,
+    "name": "Sodium aluminium phosphate (basic)",
+    "name_in_regs": "Sodium aluminium phosphate",
+    "schedule": "8th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "Bone phosphate",
+    "name_in_regs": "Edible bone phosphate",
+    "schedule": "Regulation 16(3)",
+    "sfa_notes": "*",
+    "table": 1
+  },
+  {
+    "ins": "551",
+    "e_number": "551",
+    "name": "Silicon dioxide, amorphous",
+    "name_in_regs": "Silicon dioxide / Silica aerogel",
+    "schedule": "Regulation 16(3), 8th Schedule",
+    "sfa_notes": "* Regulation 16(3)",
+    "table": 1
+  },
+  {
+    "ins": "552",
+    "e_number": "552",
+    "name": "Calcium silicate",
+    "name_in_regs": "Calcium silicate",
+    "schedule": "Regulation 16(3)",
+    "sfa_notes": "*",
+    "table": 1
+  },
+  {
+    "ins": "553(i)",
+    "e_number": null,
+    "name": "Magnesium silicate, synthetic",
+    "name_in_regs": "Magnesium silicate (synthetic)",
+    "schedule": "Regulation 16(3)",
+    "sfa_notes": "*",
+    "table": 1
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "Magnesium trisilicate",
+    "name_in_regs": "Magnesium trisilicate",
+    "schedule": "Regulation 16(3)",
+    "sfa_notes": "*",
+    "table": 1
+  },
+  {
+    "ins": null,
+    "e_number": "553b",
+    "name": "Talc",
+    "name_in_regs": "Talc",
+    "schedule": "Regulation 16(3)",
+    "sfa_notes": "*",
+    "table": 1
+  },
+  {
+    "ins": "554",
+    "e_number": "554",
+    "name": "Sodium aluminosilicate",
+    "name_in_regs": "Sodium aluminium silicate",
+    "schedule": "Regulation 16(3)",
+    "sfa_notes": "*",
+    "table": 1
+  },
+  {
+    "ins": "556",
+    "e_number": "556",
+    "name": "Calcium aluminium silicate",
+    "name_in_regs": "Calcium aluminium silicate",
+    "schedule": "Regulation 16(3)",
+    "sfa_notes": "*",
+    "table": 1
+  },
+  {
+    "ins": "575",
+    "e_number": "575",
+    "name": "Glucono delta- lactone",
+    "name_in_regs": "Glucono delta-lactone",
+    "schedule": "8th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": null,
+    "e_number": "576",
+    "name": "Sodium gluconate",
+    "name_in_regs": "Sodium gluconate",
+    "schedule": "7th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": null,
+    "e_number": "577",
+    "name": "Potassium gluconate",
+    "name_in_regs": "Potassium gluconate",
+    "schedule": "7th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "578",
+    "e_number": "578",
+    "name": "Calcium gluconate",
+    "name_in_regs": "Calcium gluconate",
+    "schedule": "7th & 8th Schedules",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": null,
+    "e_number": "579",
+    "name": "Ferrous gluconate",
+    "name_in_regs": "Ferrous gluconate",
+    "schedule": "7th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "580",
+    "e_number": null,
+    "name": "Magnesium gluconate",
+    "name_in_regs": "Magnesium gluconate",
+    "schedule": "7th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": null,
+    "e_number": "585",
+    "name": "Ferrous lactate",
+    "name_in_regs": "Ferrous lactate",
+    "schedule": "7th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": null,
+    "e_number": "620",
+    "name": "Glutamic acid, L(+)",
+    "name_in_regs": "L-glutamic aicd",
+    "schedule": "Regulation 23(2)",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "621",
+    "e_number": "621",
+    "name": "Monosodium L- glutamate",
+    "name_in_regs": "Monosodium L- glutamate / Mono- sodium salt of L-",
+    "schedule": "Regulations 23(2), 23(3) & 246",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "622",
+    "e_number": "622",
+    "name": "Monopotassium L- glutamate",
+    "name_in_regs": "Monopotassium L- glutamate",
+    "schedule": "Regulation 23(2)",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "623",
+    "e_number": "623",
+    "name": "Calcium di-L- glutamate",
+    "name_in_regs": "Calcium di-L-glutamate",
+    "schedule": "Regulation 23(2)",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "624",
+    "e_number": "624",
+    "name": "Monoammonium L- glutamate",
+    "name_in_regs": "Monoammonium L- glutamate",
+    "schedule": "Regulation 23(2)",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "625",
+    "e_number": "625",
+    "name": "Magnesium di-L- glutamate",
+    "name_in_regs": "Magnesium di-L- glutamate",
+    "schedule": "Regulation 23(2)",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": null,
+    "e_number": "626",
+    "name": "Guanylic acid, 5’-",
+    "name_in_regs": "Guanylic acid",
+    "schedule": "Regulation 23(2)",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "627",
+    "e_number": "627",
+    "name": "Disodium 5’- guanylate",
+    "name_in_regs": "Disodium 5’-guanylate",
+    "schedule": "Regulation 23(2)",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "628",
+    "e_number": "628",
+    "name": "Dipotassium 5’- guanylate",
+    "name_in_regs": "Dipotassium 5’- guanylate",
+    "schedule": "Regulation 23(2)",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": null,
+    "e_number": "629",
+    "name": "Calcium 5'-guanylate",
+    "name_in_regs": "Calcium 5'-guanylate",
+    "schedule": "Regulation 23(2)",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": null,
+    "e_number": "630",
+    "name": "Inosinic acid, 5’-",
+    "name_in_regs": "Inosinic acid",
+    "schedule": "Regulation 23(2)",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "631",
+    "e_number": "631",
+    "name": "Disodium 5'- inosinate",
+    "name_in_regs": "Disodium 5'-inosinate",
+    "schedule": "Regulation 23(2)",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "632",
+    "e_number": "632",
+    "name": "Potassium 5’- inosinate",
+    "name_in_regs": "Dipotassium 5'- inosinate",
+    "schedule": "Regulation 23(2)",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": null,
+    "e_number": "633",
+    "name": "Calcium 5'-inosinate",
+    "name_in_regs": "Calcium 5'-inosinate",
+    "schedule": "Regulation 23(2)",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "Ethyl maltol",
+    "name_in_regs": "Ethyl maltol",
+    "schedule": "Regulation 23(2)",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": null,
+    "e_number": "640",
+    "name": "Glycine",
+    "name_in_regs": "Glycine",
+    "schedule": "Regulation 26(3)",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": null,
+    "e_number": "641",
+    "name": "L-Leucine",
+    "name_in_regs": "L-Leucine",
+    "schedule": "7th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": null,
+    "e_number": "650",
+    "name": "Zinc acetate",
+    "name_in_regs": "Zinc acetate",
+    "schedule": "7th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": null,
+    "e_number": "900",
+    "name": "Polydimethylsiloxane",
+    "name_in_regs": "Dimethyl polysiloxane",
+    "schedule": "Regulations 16A(3) & (4)",
+    "sfa_notes": "*",
+    "table": 1
+  },
+  {
+    "ins": null,
+    "e_number": "901",
+    "name": "Beeswax",
+    "name_in_regs": "Beeswax",
+    "schedule": "8th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "902",
+    "e_number": "902",
+    "name": "Candelilla wax",
+    "name_in_regs": "Candelilla wax",
+    "schedule": "8th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "903",
+    "e_number": "903",
+    "name": "Carnauba wax",
+    "name_in_regs": "Carnauba wax",
+    "schedule": "8th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": null,
+    "e_number": "904",
+    "name": "Shellac, bleached",
+    "name_in_regs": "Shellac",
+    "schedule": "8th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "905b",
+    "e_number": null,
+    "name": "Petroleum jelly (Petrolatum)",
+    "name_in_regs": "Petroleum jellies",
+    "schedule": "Regulation 36",
+    "sfa_notes": "*",
+    "table": 1
+  },
+  {
+    "ins": null,
+    "e_number": "905",
+    "name": "Microcrystalline wax",
+    "name_in_regs": "Micro-crystalline waxes",
+    "schedule": "Regulation 36",
+    "sfa_notes": "*",
+    "table": 1
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "Paraffin wax",
+    "name_in_regs": "Hard paraffins",
+    "schedule": "Regulation 36",
+    "sfa_notes": "*",
+    "table": 1
+  },
+  {
+    "ins": "905d",
+    "e_number": null,
+    "name": "Mineral Oil (High Viscosity)",
+    "name_in_regs": "White mineral oils",
+    "schedule": "Regulation 36",
+    "sfa_notes": "*",
+    "table": 1
+  },
+  {
+    "ins": "905e",
+    "e_number": null,
+    "name": "Mineral Oil (Medium Viscosity)",
+    "name_in_regs": "White mineral oils",
+    "schedule": "Regulation 36",
+    "sfa_notes": "*",
+    "table": 1
+  },
+  {
+    "ins": "917",
+    "e_number": null,
+    "name": "Potassium iodate",
+    "name_in_regs": "Potassium iodate",
+    "schedule": "Regulation 212, 7th Schedule",
+    "sfa_notes": "* Regulation 212",
+    "table": 1
+  },
+  {
+    "ins": "920",
+    "e_number": "920",
+    "name": "Cysteine, L- and its hydrochlorides - sodium and potassium salts",
+    "name_in_regs": "Only L-cysteine is permitted",
+    "schedule": "Regulation 23(2)",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "922",
+    "e_number": null,
+    "name": "Potassium persulfate",
+    "name_in_regs": "Potassium persulphate",
+    "schedule": "Regulation 39(2)(e)",
+    "sfa_notes": "*",
+    "table": 1
+  },
+  {
+    "ins": "923",
+    "e_number": null,
+    "name": "Ammonium persulfate",
+    "name_in_regs": "Ammonium persulphate",
+    "schedule": "Regulation 39(2)(e)",
+    "sfa_notes": "*",
+    "table": 1
+  },
+  {
+    "ins": "925",
+    "e_number": null,
+    "name": "Chlorine",
+    "name_in_regs": "Chlorine",
+    "schedule": "Regulation 39(3)",
+    "sfa_notes": "*",
+    "table": 1
+  },
+  {
+    "ins": "926",
+    "e_number": null,
+    "name": "Chlorine dioxide",
+    "name_in_regs": "Chlorine dioxide",
+    "schedule": "Regulation 39(3), 17th Schedule",
+    "sfa_notes": "*",
+    "table": 1
+  },
+  {
+    "ins": "928",
+    "e_number": null,
+    "name": "Benzoyl peroxide",
+    "name_in_regs": "Benzoyl peroxide",
+    "schedule": "Regulation 39(3)",
+    "sfa_notes": "*",
+    "table": 1
+  },
+  {
+    "ins": "-",
+    "e_number": "939",
+    "name": "Helium",
+    "name_in_regs": "Helium",
+    "schedule": "Regulation 27(2), 8th Schedule",
+    "sfa_notes": "*",
+    "table": 1
+  },
+  {
+    "ins": "941",
+    "e_number": "941",
+    "name": "Nitrogen",
+    "name_in_regs": "Nitrogen",
+    "schedule": "Regulation 27(2), 8th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": null,
+    "e_number": "942",
+    "name": "Nitrous oxide",
+    "name_in_regs": "Nitrous oxide",
+    "schedule": "8th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "950",
+    "e_number": "950",
+    "name": "Acesulfame potassium",
+    "name_in_regs": "Acesulfame-K",
+    "schedule": "Regulation 18, 13th Schedule",
+    "sfa_notes": "*",
+    "table": 1
+  },
+  {
+    "ins": "951",
+    "e_number": "951",
+    "name": "Aspartame",
+    "name_in_regs": "Aspartame",
+    "schedule": "8th Schedule",
+    "sfa_notes": "GMP (to note specific labelling requirements for food products containing aspartame in Regulation 5(4)(f))",
+    "table": 1
+  },
+  {
+    "ins": "952(i)",
+    "e_number": "952",
+    "name": "Cyclamic acid",
+    "name_in_regs": "Cyclamic acid",
+    "schedule": "Regulation 18, 13th Schedule",
+    "sfa_notes": "*",
+    "table": 1
+  },
+  {
+    "ins": "952(ii)",
+    "e_number": "952",
+    "name": "Calcium cyclamate",
+    "name_in_regs": "Calcium salt of cyclamic acid",
+    "schedule": "Regulation 18, 13th Schedule",
+    "sfa_notes": "*",
+    "table": 1
+  },
+  {
+    "ins": "952(iv)",
+    "e_number": "952",
+    "name": "Sodium cyclamate",
+    "name_in_regs": "Sodium salt of cyclamic acid",
+    "schedule": "Regulation 18, 13th Schedule",
+    "sfa_notes": "*",
+    "table": 1
+  },
+  {
+    "ins": "953",
+    "e_number": "953",
+    "name": "Isomalt (Hydrogenated isomaltulose)",
+    "name_in_regs": "Isomalt",
+    "schedule": "8th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "954(i)",
+    "e_number": "954",
+    "name": "Saccharin",
+    "name_in_regs": "Saccharin",
+    "schedule": "Regulation 18, 13th Schedule",
+    "sfa_notes": "*",
+    "table": 1
+  },
+  {
+    "ins": "954(ii)",
+    "e_number": "954",
+    "name": "Calcium saccharin",
+    "name_in_regs": "Calcium salt of saccharin",
+    "schedule": "Regulation 18, 13th Schedule",
+    "sfa_notes": "*",
+    "table": 1
+  },
+  {
+    "ins": "954(iii)",
+    "e_number": "954",
+    "name": "Potassium saccharin",
+    "name_in_regs": "Potassium salt of saccharin",
+    "schedule": "Regulation 18, 13th Schedule",
+    "sfa_notes": "*",
+    "table": 1
+  },
+  {
+    "ins": "954(iv)",
+    "e_number": "954",
+    "name": "Sodium saccharin",
+    "name_in_regs": "Sodium salt of saccharin",
+    "schedule": "Regulation 18, 13th Schedule",
+    "sfa_notes": "*",
+    "table": 1
+  },
+  {
+    "ins": "955",
+    "e_number": "955",
+    "name": "Sucralose (Trichlorogalactosucr ose)",
+    "name_in_regs": "Sucralose",
+    "schedule": "Regulation 18, 13th Schedule",
+    "sfa_notes": "*",
+    "table": 1
+  },
+  {
+    "ins": null,
+    "e_number": "957",
+    "name": "Thaumatin",
+    "name_in_regs": "Thaumatin",
+    "schedule": "8th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "960",
+    "e_number": "960",
+    "name": "Steviol glycosides",
+    "name_in_regs": "Steviol glycosides",
+    "schedule": "Regulation 18, 13th Schedule",
+    "sfa_notes": "*",
+    "table": 1
+  },
+  {
+    "ins": "960a",
+    "e_number": "960a",
+    "name": "Steviol glycosides from Stevia rebaudiana Bertoni (steviol glycosides from Stevia)",
+    "name_in_regs": "Steviol glycosides from Stevia rebaudiana Bertoni (steviol glycosides from Stevia)",
+    "schedule": "Regulation 18, 13th Schedule",
+    "sfa_notes": "*",
+    "table": 1
+  },
+  {
+    "ins": "960b",
+    "e_number": "960b",
+    "name": "Steviol glycosides from fermentation",
+    "name_in_regs": "Steviol glycosides from fermentation",
+    "schedule": "Regulation 18, 13th Schedule",
+    "sfa_notes": "*",
+    "table": 1
+  },
+  {
+    "ins": "960c",
+    "e_number": "960c",
+    "name": "Enzymatically produced steviol glycosides",
+    "name_in_regs": "Enzymatically produced steviol glycosides (including steviol glycosides produced using the enzyme uridine triphosphate (UTP)‑glucose‑1‑phosp hate uridyltransferase (EC 2.7.7.9) from the source organism Bifidobacterium bifidum)",
+    "schedule": "Regulation 18, 13th Schedule",
+    "sfa_notes": "*",
+    "table": 1
+  },
+  {
+    "ins": "960d",
+    "e_number": "960d",
+    "name": "Glucosylated steviol glycosides",
+    "name_in_regs": "Glucosylated steviol glycosides",
+    "schedule": "Regulation 18, 13th Schedule",
+    "sfa_notes": "*",
+    "table": 1
+  },
+  {
+    "ins": "961",
+    "e_number": "961",
+    "name": "Neotame",
+    "name_in_regs": "Neotame",
+    "schedule": "Regulation 18, 13th Schedule",
+    "sfa_notes": "*",
+    "table": 1
+  },
+  {
+    "ins": "964",
+    "e_number": "964",
+    "name": "Polyglycitol syrup",
+    "name_in_regs": "Hydrogenated starch hydrolysate (polyglycitol syrup)",
+    "schedule": "8th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "965",
+    "e_number": "965",
+    "name": "Maltitols",
+    "name_in_regs": "Hydrogenated glucose syrup (maltitol and maltitol-based products)",
+    "schedule": "8th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "965(i)",
+    "e_number": null,
+    "name": "Maltitol",
+    "name_in_regs": "Hydrogenated glucose syrup (maltitol and maltitol-based products)",
+    "schedule": "8th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "965(ii)",
+    "e_number": null,
+    "name": "Maltitol syrup",
+    "name_in_regs": "Hydrogenated glucose syrup (maltitol and maltitol-based products)",
+    "schedule": "8th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": null,
+    "e_number": "966",
+    "name": "Lactitol",
+    "name_in_regs": "Lactitol",
+    "schedule": "8th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": null,
+    "e_number": "967",
+    "name": "Xylitol",
+    "name_in_regs": "Xylitol",
+    "schedule": "8th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": null,
+    "e_number": "968",
+    "name": "Erythritol",
+    "name_in_regs": "Erythritol",
+    "schedule": "8th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": null,
+    "e_number": "969",
+    "name": "Advantame",
+    "name_in_regs": "Advantame",
+    "schedule": "Regulation 18(3A)",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "999",
+    "e_number": "999",
+    "name": "Quillaia extracts",
+    "name_in_regs": "Quillaia extracts",
+    "schedule": "Regulation 21(3A)",
+    "sfa_notes": "*",
+    "table": 1
+  },
+  {
+    "ins": "999(i)",
+    "e_number": "999",
+    "name": "Quillaia extract type 1",
+    "name_in_regs": "Quillaia extract (Type I)",
+    "schedule": "Regulation 21(3A)",
+    "sfa_notes": "*",
+    "table": 1
+  },
+  {
+    "ins": "999(ii)",
+    "e_number": "999",
+    "name": "Quillaia extract type 2",
+    "name_in_regs": "Quillaia extract (Type II)",
+    "schedule": "Regulation 21(3A)",
+    "sfa_notes": "*",
+    "table": 1
+  },
+  {
+    "ins": "1001(iii)",
+    "e_number": null,
+    "name": "Choline chloride",
+    "name_in_regs": "Choline chloride",
+    "schedule": "7th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "1001(v)",
+    "e_number": null,
+    "name": "Choline tartrate",
+    "name_in_regs": "Choline bitartrate",
+    "schedule": "7th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "1100",
+    "e_number": null,
+    "name": "Amylases",
+    "name_in_regs": "Harmless preparation of enzymes obtained from Aspergillus oryzae",
+    "schedule": "Regulation 39(2)(c), 8th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "1101(i)",
+    "e_number": null,
+    "name": "Protease",
+    "name_in_regs": "Harmless preparation of enzymes obtained from Aspergillus oryzae",
+    "schedule": "Regulation 39(2)(c), 8th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "1105",
+    "e_number": "1105",
+    "name": "Lysozyme",
+    "name_in_regs": "Lysozyme",
+    "schedule": "Regulation 117(1)",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "1200",
+    "e_number": "1200",
+    "name": "Polydextroses",
+    "name_in_regs": "Polydextrose",
+    "schedule": "Regulation 252(6)(d), 8th Schedule",
+    "sfa_notes": "* Regulation 252(6)(d)",
+    "table": 1
+  },
+  {
+    "ins": "1202",
+    "e_number": "1202",
+    "name": "Polyvinylpyrrolidone, insoluble (polyvinylpolypyrrolid one)",
+    "name_in_regs": "Polyvinylpyrrolidone, insoluble (polyvinylpolypyrrolidon e)",
+    "schedule": "8th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": null,
+    "e_number": "1204",
+    "name": "Pullulan",
+    "name_in_regs": "Pullulan",
+    "schedule": "8th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "1210",
+    "e_number": null,
+    "name": "Sodium polyacrylate",
+    "name_in_regs": "Sodium polyacrylate",
+    "schedule": "Regulation 55(4A)",
+    "sfa_notes": "*",
+    "table": 1
+  },
+  {
+    "ins": "1400",
+    "e_number": null,
+    "name": "Dextrins, roasted starch",
+    "name_in_regs": "Dextrin roasted starch",
+    "schedule": "6th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "Acid-treated starch",
+    "name_in_regs": "Acid-treated starch",
+    "schedule": "6th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "1402",
+    "e_number": null,
+    "name": "Alkaline treated starch",
+    "name_in_regs": "Alkaline-treated starch",
+    "schedule": "6th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "Bleached starch",
+    "name_in_regs": "Bleached starch",
+    "schedule": "6th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": null,
+    "e_number": "1404",
+    "name": "Oxidized starch",
+    "name_in_regs": "Oxidised starch",
+    "schedule": "6th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "1405",
+    "e_number": null,
+    "name": "Starches, enzyme treated",
+    "name_in_regs": "Enzyme-treated starch",
+    "schedule": "6th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "1410",
+    "e_number": "1410",
+    "name": "Monostarch phosphate",
+    "name_in_regs": "Monostarch phosphate",
+    "schedule": "6th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": null,
+    "e_number": "1412",
+    "name": "Distarch phosphate",
+    "name_in_regs": "Distarch phosphate",
+    "schedule": "6th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "1413",
+    "e_number": "1413",
+    "name": "Phosphated distarch phosphate",
+    "name_in_regs": "Phosphated distarch phosphate",
+    "schedule": "6th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "1414",
+    "e_number": "1414",
+    "name": "Acetylated distarch phosphate",
+    "name_in_regs": "Acetylated distarch phosphate",
+    "schedule": "6th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": null,
+    "e_number": "1420",
+    "name": "Starch acetate",
+    "name_in_regs": "Starch acetate",
+    "schedule": "6th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "1422",
+    "e_number": "1422",
+    "name": "Acetylated distarch adipate",
+    "name_in_regs": "Acetylated distarch adipate",
+    "schedule": "6th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "1440",
+    "e_number": "1440",
+    "name": "Hydroxypropyl starch",
+    "name_in_regs": "Hydroxypropyl starch",
+    "schedule": "6th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "1442",
+    "e_number": "1442",
+    "name": "Hydroxypropyl distarch phosphate",
+    "name_in_regs": "Hydroxypropyl distarch phosphate",
+    "schedule": "6th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "1450",
+    "e_number": "1450",
+    "name": "Starch sodium octenyl succinate",
+    "name_in_regs": "Starch sodium octenyl succinate",
+    "schedule": "6th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "1451",
+    "e_number": "1451",
+    "name": "Acetylated oxidized starch",
+    "name_in_regs": "Acetylated oxidised starch",
+    "schedule": "6th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "Cyclotetraglucose",
+    "name_in_regs": "Cyclotetraglucose",
+    "schedule": "8th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "1504(ii)",
+    "e_number": null,
+    "name": "Cyclotetraglucose syrup",
+    "name_in_regs": "Cyclotetraglucose syrup",
+    "schedule": "8th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": null,
+    "e_number": "1505",
+    "name": "Triethyl citrate",
+    "name_in_regs": "Triethyl citrate",
+    "schedule": "Regulation 28(6)",
+    "sfa_notes": "*",
+    "table": 1
+  },
+  {
+    "ins": null,
+    "e_number": "1517",
+    "name": "Glycerol diacetate",
+    "name_in_regs": "Diacetin",
+    "schedule": "Regulation 22(2)",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": null,
+    "e_number": "1518",
+    "name": "Triacetin",
+    "name_in_regs": "Triacetin",
+    "schedule": "Regulation 22(2)",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": null,
+    "e_number": "1519",
+    "name": "Benzyl alcohol",
+    "name_in_regs": "Benzyl alcohol",
+    "schedule": "Regulation 22(2)",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": "1520",
+    "e_number": "1520",
+    "name": "Propylene glycol",
+    "name_in_regs": "Propylene glycol",
+    "schedule": "Regulation 22(2), 8th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": null,
+    "e_number": "1521",
+    "name": "Polyethylene glycol",
+    "name_in_regs": "Polyethylene glycol",
+    "schedule": "8th Schedule",
+    "sfa_notes": "GMP",
+    "table": 1
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "Name of additive / ingredient as listed in Food Regulations",
+    "name_in_regs": null,
+    "schedule": "Regulation / Schedule No. (under Food Regulations)",
+    "sfa_notes": "Maximum level (mg/l or mg/kg as appropriate",
+    "table": 2
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "Acetone",
+    "name_in_regs": null,
+    "schedule": "Regulation 28(4) & 8th Schedule",
+    "sfa_notes": "* Regulation 28(4)",
+    "table": 2
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "Acidified sodium chlorite",
+    "name_in_regs": null,
+    "schedule": "17th Schedule",
+    "sfa_notes": "*",
+    "table": 2
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "Ammonium molybdate",
+    "name_in_regs": null,
+    "schedule": "7th Schedule",
+    "sfa_notes": "GMP",
+    "table": 2
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "Biotin (Vitamin H)",
+    "name_in_regs": null,
+    "schedule": "Regulation 252(3)(n), 7th Schedule",
+    "sfa_notes": "* Regulation 252(3)(n)",
+    "table": 2
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "Bovine lactoferrin",
+    "name_in_regs": null,
+    "schedule": "Regulation 252(6)(e)",
+    "sfa_notes": "*",
+    "table": 2
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "Calcium caseinate",
+    "name_in_regs": null,
+    "schedule": "6th Schedule",
+    "sfa_notes": "GMP",
+    "table": 2
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "Calcium hypochlorite",
+    "name_in_regs": null,
+    "schedule": "17th Schedule",
+    "sfa_notes": "*",
+    "table": 2
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "Calcium L-methylfolate",
+    "name_in_regs": null,
+    "schedule": "7th Schedule",
+    "sfa_notes": "GMP",
+    "table": 2
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "Calcium pantothenate",
+    "name_in_regs": null,
+    "schedule": "7th Schedule",
+    "sfa_notes": "GMP",
+    "table": 2
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "Carbonyl iron",
+    "name_in_regs": null,
+    "schedule": "7th Schedule",
+    "sfa_notes": "GMP",
+    "table": 2
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "Cetylpyridinium chloride solution, with or without propylene glycol",
+    "name_in_regs": null,
+    "schedule": "17th Schedule",
+    "sfa_notes": "*",
+    "table": 2
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "Cholecalciferol (Vitamin D3)",
+    "name_in_regs": null,
+    "schedule": "7th Schedule",
+    "sfa_notes": "GMP",
+    "table": 2
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "Cholecalciferol-cholesterol (Vitamin D3)",
+    "name_in_regs": null,
+    "schedule": "7th Schedule",
+    "sfa_notes": "GMP",
+    "table": 2
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "Chromium chloride hexahydrate",
+    "name_in_regs": null,
+    "schedule": "7th Schedule",
+    "sfa_notes": "GMP",
+    "table": 2
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "Chromium picolinate",
+    "name_in_regs": null,
+    "schedule": "7th Schedule",
+    "sfa_notes": "GMP",
+    "table": 2
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "Copper gluconate",
+    "name_in_regs": null,
+    "schedule": "7th Schedule",
+    "sfa_notes": "GMP",
+    "table": 2
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "Cupric carbonate",
+    "name_in_regs": null,
+    "schedule": "7th Schedule",
+    "sfa_notes": "GMP",
+    "table": 2
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "Cupric citrate",
+    "name_in_regs": null,
+    "schedule": "7th Schedule",
+    "sfa_notes": "GMP",
+    "table": 2
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "Cyanocobalamin",
+    "name_in_regs": null,
+    "schedule": "7th Schedule",
+    "sfa_notes": "GMP",
+    "table": 2
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "D-alpha-tocopheryl acetate",
+    "name_in_regs": null,
+    "schedule": "7th Schedule",
+    "sfa_notes": "GMP",
+    "table": 2
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "D-alpha-tocopheryl succinate",
+    "name_in_regs": null,
+    "schedule": "7th Schedule",
+    "sfa_notes": "GMP",
+    "table": 2
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "D-biotin",
+    "name_in_regs": null,
+    "schedule": "7th Schedule",
+    "sfa_notes": "GMP",
+    "table": 2
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "DL-alpha-tocopheryl acetate",
+    "name_in_regs": null,
+    "schedule": "7th Schedule",
+    "sfa_notes": "GMP",
+    "table": 2
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "DL-alpha-tocopheryl succinate",
+    "name_in_regs": null,
+    "schedule": "7th Schedule",
+    "sfa_notes": "GMP",
+    "table": 2
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "1,3-dibromo-5,5- dimethylhydantoin",
+    "name_in_regs": null,
+    "schedule": "17th Schedule",
+    "sfa_notes": "*",
+    "table": 2
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "Electrolytic iron",
+    "name_in_regs": null,
+    "schedule": "7th Schedule",
+    "sfa_notes": "GMP",
+    "table": 2
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "Ergocalciferol (Vitamin D2)",
+    "name_in_regs": null,
+    "schedule": "7th Schedule",
+    "sfa_notes": "GMP",
+    "table": 2
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "Ethyl alcohol",
+    "name_in_regs": null,
+    "schedule": "Regulation 19(2)(a) & 17th Schedule",
+    "sfa_notes": "GMP",
+    "table": 2
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "Ferric citrate",
+    "name_in_regs": null,
+    "schedule": "7th Schedule",
+    "sfa_notes": "GMP",
+    "table": 2
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "Ferric gluconate",
+    "name_in_regs": null,
+    "schedule": "7th Schedule",
+    "sfa_notes": "GMP",
+    "table": 2
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "Ferric phosphate",
+    "name_in_regs": null,
+    "schedule": "7th Schedule",
+    "sfa_notes": "GMP",
+    "table": 2
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "Ferric pyrophosphate",
+    "name_in_regs": null,
+    "schedule": "7th Schedule",
+    "sfa_notes": "GMP",
+    "table": 2
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "Ferric saccharate",
+    "name_in_regs": null,
+    "schedule": "7th Schedule",
+    "sfa_notes": "GMP",
+    "table": 2
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "Ferrous ammonium phosphate",
+    "name_in_regs": null,
+    "schedule": "7th Schedule",
+    "sfa_notes": "GMP",
+    "table": 2
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "Ferrous citrate",
+    "name_in_regs": null,
+    "schedule": "7th Schedule",
+    "sfa_notes": "GMP",
+    "table": 2
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "Ferrous fumarate",
+    "name_in_regs": null,
+    "schedule": "7th Schedule",
+    "sfa_notes": "GMP",
+    "table": 2
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "Ferrous bisglycinate (ferrous glycinate processed with citric acid)",
+    "name_in_regs": null,
+    "schedule": "7th Schedule",
+    "sfa_notes": "GMP",
+    "table": 2
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "Ferrous succinate",
+    "name_in_regs": null,
+    "schedule": "7th Schedule",
+    "sfa_notes": "GMP",
+    "table": 2
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "Ferrous sulphate",
+    "name_in_regs": null,
+    "schedule": "7th Schedule",
+    "sfa_notes": "GMP",
+    "table": 2
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "Folic acid",
+    "name_in_regs": null,
+    "schedule": "7th Schedule",
+    "sfa_notes": "GMP",
+    "table": 2
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "2’-fucosyllactose",
+    "name_in_regs": null,
+    "schedule": "Regulation 252(6)(g)",
+    "sfa_notes": "*",
+    "table": 2
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "2’-fucosyllactose/ difucosyllactose (2’-FL/DFL) mixture",
+    "name_in_regs": null,
+    "schedule": "Regulation 252(6)(i)",
+    "sfa_notes": "*",
+    "table": 2
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "3‑fucosyllactose",
+    "name_in_regs": null,
+    "schedule": "Regulation 252(6)(m)",
+    "sfa_notes": "*",
+    "table": 2
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "Galacto-oligosaccharides",
+    "name_in_regs": null,
+    "schedule": "Regulation 252(6)(c)",
+    "sfa_notes": "*",
+    "table": 2
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "High fructose syrup",
+    "name_in_regs": null,
+    "schedule": "8th Schedule",
+    "sfa_notes": "GMP",
+    "table": 2
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "Hydrogen peroxide",
+    "name_in_regs": null,
+    "schedule": "8th Schedule",
+    "sfa_notes": "GMP",
+    "table": 2
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "Hydrogen reduced iron",
+    "name_in_regs": null,
+    "schedule": "7th Schedule",
+    "sfa_notes": "GMP",
+    "table": 2
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "Hydroxocobalamin",
+    "name_in_regs": null,
+    "schedule": "7th Schedule",
+    "sfa_notes": "GMP",
+    "table": 2
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "Hypobromous acid",
+    "name_in_regs": null,
+    "schedule": "17th Schedule",
+    "sfa_notes": "*",
+    "table": 2
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "Inositol",
+    "name_in_regs": null,
+    "schedule": "7th Schedule",
+    "sfa_notes": "GMP",
+    "table": 2
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "L-Isoleucine",
+    "name_in_regs": null,
+    "schedule": "7th Schedule",
+    "sfa_notes": "GMP",
+    "table": 2
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "L- Isoleucine monohydrochloride",
+    "name_in_regs": null,
+    "schedule": "7th Schedule",
+    "sfa_notes": "GMP",
+    "table": 2
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "Lactated mono-diglycerides",
+    "name_in_regs": null,
+    "schedule": "6th Schedule",
+    "sfa_notes": "GMP",
+    "table": 2
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "Lactoferrin",
+    "name_in_regs": null,
+    "schedule": "17th Schedule",
+    "sfa_notes": "*",
+    "table": 2
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "Lacto-N-neotetraose",
+    "name_in_regs": null,
+    "schedule": "Regulation 252(6)(h)",
+    "sfa_notes": "*",
+    "table": 2
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "Lacto-N-tetraose",
+    "name_in_regs": null,
+    "schedule": "Regulation 252(6)(j)",
+    "sfa_notes": "*",
+    "table": 2
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "L-Leucine monohydrochloride",
+    "name_in_regs": null,
+    "schedule": "7th Schedule",
+    "sfa_notes": "GMP",
+    "table": 2
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "L-Lysine",
+    "name_in_regs": null,
+    "schedule": "7th Schedule",
+    "sfa_notes": "GMP",
+    "table": 2
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "L- Lysine acetate",
+    "name_in_regs": null,
+    "schedule": "7th Schedule",
+    "sfa_notes": "GMP",
+    "table": 2
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "L-Lysine monohydrochloride",
+    "name_in_regs": null,
+    "schedule": "7th Schedule",
+    "sfa_notes": "GMP",
+    "table": 2
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "Magnesium glycerophosphate",
+    "name_in_regs": null,
+    "schedule": "7th Schedule",
+    "sfa_notes": "GMP",
+    "table": 2
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "Manganese carbonate",
+    "name_in_regs": null,
+    "schedule": "7th Schedule",
+    "sfa_notes": "GMP",
+    "table": 2
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "Manganese chloride",
+    "name_in_regs": null,
+    "schedule": "7th Schedule",
+    "sfa_notes": "GMP",
+    "table": 2
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "Manganese citrate",
+    "name_in_regs": null,
+    "schedule": "7th Schedule",
+    "sfa_notes": "GMP",
+    "table": 2
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "Manganese gluconate",
+    "name_in_regs": null,
+    "schedule": "7th Schedule",
+    "sfa_notes": "GMP",
+    "table": 2
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "Manganese glycerophosphate",
+    "name_in_regs": null,
+    "schedule": "7th Schedule",
+    "sfa_notes": "GMP",
+    "table": 2
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "Manganese sulphate",
+    "name_in_regs": null,
+    "schedule": "7th Schedule",
+    "sfa_notes": "GMP",
+    "table": 2
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "Menaquinone-7",
+    "name_in_regs": null,
+    "schedule": "7th Schedule",
+    "sfa_notes": "GMP",
+    "table": 2
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "Methanol",
+    "name_in_regs": null,
+    "schedule": "Regulation 28(5)",
+    "sfa_notes": "*",
+    "table": 2
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "L-Methionine",
+    "name_in_regs": null,
+    "schedule": "7th Schedule",
+    "sfa_notes": "GMP",
+    "table": 2
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "Monk fruit extract",
+    "name_in_regs": null,
+    "schedule": "Regulation 18(3B)",
+    "sfa_notes": "GMP",
+    "table": 2
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "Niacin",
+    "name_in_regs": null,
+    "schedule": "7th Schedule",
+    "sfa_notes": "GMP",
+    "table": 2
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "Niacinamide",
+    "name_in_regs": null,
+    "schedule": "7th Schedule",
+    "sfa_notes": "GMP",
+    "table": 2
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "Nicotinamide",
+    "name_in_regs": null,
+    "schedule": "Regulation 252(3)(h), 7th Schedule",
+    "sfa_notes": "*, Regulation 252(3)(h)",
+    "table": 2
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "Oligofructose (from chicory root)",
+    "name_in_regs": null,
+    "schedule": "Regulation 252(6)(c), 8th Schedule",
+    "sfa_notes": "* , Regulation 252(6)(c)",
+    "table": 2
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "Ozone",
+    "name_in_regs": null,
+    "schedule": "17th Schedule",
+    "sfa_notes": "GMP",
+    "table": 2
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "Panthenol (Dexpanthenol or D- pantothenyl alcohol)",
+    "name_in_regs": null,
+    "schedule": "7th Schedule",
+    "sfa_notes": "GMP",
+    "table": 2
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "Pantothenic acid",
+    "name_in_regs": null,
+    "schedule": "Regulation 252(3)(k), 7th Schedule",
+    "sfa_notes": "Regulation 252(3)(k), *",
+    "table": 2
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "Peracetic acid",
+    "name_in_regs": null,
+    "schedule": "8th Schedule",
+    "sfa_notes": "GMP",
+    "table": 2
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "Peroxyacetic acid and hydrogen peroxide, with or without 1-hydroxyethylidine-1,",
+    "name_in_regs": null,
+    "schedule": "17th Schedule",
+    "sfa_notes": "GMP",
+    "table": 2
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "1-diphosphonic acid, acetic acid or sulfuric acid or octanoic acid",
+    "name_in_regs": null,
+    "schedule": null,
+    "sfa_notes": null,
+    "table": 2
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "L-Phenylalanine",
+    "name_in_regs": null,
+    "schedule": "7th Schedule",
+    "sfa_notes": "GMP",
+    "table": 2
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "Phylloquinone",
+    "name_in_regs": null,
+    "schedule": "7th Schedule",
+    "sfa_notes": "GMP",
+    "table": 2
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "Phytostanols, phytostanol esters (also known as plant stanols, plant stanol esters)",
+    "name_in_regs": null,
+    "schedule": "Regulations 247(2), 250A",
+    "sfa_notes": "*",
+    "table": 2
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "Phytosterols, phytosterol esters (also known as plant sterols, plant sterol esters)",
+    "name_in_regs": null,
+    "schedule": "Regulations 91A(3), 247(2), 250A",
+    "sfa_notes": "*",
+    "table": 2
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "Potassium acid tartrate",
+    "name_in_regs": null,
+    "schedule": "8th Schedule",
+    "sfa_notes": "GMP",
+    "table": 2
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "Potassium caseinate",
+    "name_in_regs": null,
+    "schedule": "6th Schedule",
+    "sfa_notes": "GMP",
+    "table": 2
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "Potassium glycerophosphate",
+    "name_in_regs": null,
+    "schedule": "7th Schedule",
+    "sfa_notes": "GMP",
+    "table": 2
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "Potassium iodide",
+    "name_in_regs": null,
+    "schedule": "Regulation 212, 7th Schedule",
+    "sfa_notes": "* Regulation 212",
+    "table": 2
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "1,3-propanediol",
+    "name_in_regs": null,
+    "schedule": "Regulation 22",
+    "sfa_notes": "GMP",
+    "table": 2
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "Pyridoxal",
+    "name_in_regs": null,
+    "schedule": "7th Schedule",
+    "sfa_notes": "GMP",
+    "table": 2
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "Pyridoxamine",
+    "name_in_regs": null,
+    "schedule": "7th Schedule",
+    "sfa_notes": "GMP",
+    "table": 2
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "Pyridoxine",
+    "name_in_regs": null,
+    "schedule": "7th Schedule",
+    "sfa_notes": "GMP",
+    "table": 2
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "Pyridoxine hydrochloride",
+    "name_in_regs": null,
+    "schedule": "7th Schedule",
+    "sfa_notes": "GMP",
+    "table": 2
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "Retinol",
+    "name_in_regs": null,
+    "schedule": "7th Schedule",
+    "sfa_notes": "GMP",
+    "table": 2
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "Retinyl acetate (Vitamin A acetate)",
+    "name_in_regs": null,
+    "schedule": "7th Schedule",
+    "sfa_notes": "GMP",
+    "table": 2
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "Retinyl palmitate (Vitamin A palmitate)",
+    "name_in_regs": null,
+    "schedule": "7th Schedule",
+    "sfa_notes": "GMP",
+    "table": 2
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "Retinyl propionate (Vitamin A propionate)",
+    "name_in_regs": null,
+    "schedule": "7th Schedule",
+    "sfa_notes": "GMP",
+    "table": 2
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "Sodium salt of 3'-sialyllactose",
+    "name_in_regs": null,
+    "schedule": "Regulation 252(6)(k)",
+    "sfa_notes": "*",
+    "table": 2
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "Sodium salt of 6'-sialyllactose",
+    "name_in_regs": null,
+    "schedule": "Regulation 252(6)(l)",
+    "sfa_notes": "*",
+    "table": 2
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "Sodium caseinate",
+    "name_in_regs": null,
+    "schedule": "Regulation 65(1), 6th Schedule",
+    "sfa_notes": "GMP",
+    "table": 2
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "Sodium chloride",
+    "name_in_regs": null,
+    "schedule": "7th Schedule",
+    "sfa_notes": "GMP",
+    "table": 2
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "Sodium chloride, iodised",
+    "name_in_regs": null,
+    "schedule": "7th Schedule",
+    "sfa_notes": "GMP",
+    "table": 2
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "Sodium ferric pyrophosphate",
+    "name_in_regs": null,
+    "schedule": "7th Schedule",
+    "sfa_notes": "GMP",
+    "table": 2
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "Sodium ferrous citrate",
+    "name_in_regs": null,
+    "schedule": "7th Schedule",
+    "sfa_notes": "GMP",
+    "table": 2
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "Sodium hypochlorite",
+    "name_in_regs": null,
+    "schedule": "17th Schedule",
+    "sfa_notes": "*",
+    "table": 2
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "Sodium iodate",
+    "name_in_regs": null,
+    "schedule": "Regulation 212, 7th Schedule",
+    "sfa_notes": "* Regulation 212",
+    "table": 2
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "Sodium iodide",
+    "name_in_regs": null,
+    "schedule": "Regulation 212, 7th Schedule",
+    "sfa_notes": "* Regulation 212",
+    "table": 2
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "Sodium molybdate dihydrate",
+    "name_in_regs": null,
+    "schedule": "7th Schedule",
+    "sfa_notes": "GMP",
+    "table": 2
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "Sodium pantothenate",
+    "name_in_regs": null,
+    "schedule": "7th Schedule",
+    "sfa_notes": "GMP",
+    "table": 2
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "Sodium selenate",
+    "name_in_regs": null,
+    "schedule": "7th Schedule",
+    "sfa_notes": "GMP",
+    "table": 2
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "Sodium selenite",
+    "name_in_regs": null,
+    "schedule": "7th Schedule",
+    "sfa_notes": "GMP",
+    "table": 2
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "Soy leghemoglobin derived from genetically modified Pichia pastoris",
+    "name_in_regs": null,
+    "schedule": "Regulation 28(7)",
+    "sfa_notes": "*",
+    "table": 2
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "Stearoyl-2-lactylic acid",
+    "name_in_regs": null,
+    "schedule": "6th Schedule",
+    "sfa_notes": "GMP",
+    "table": 2
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "Sulphurous acid",
+    "name_in_regs": null,
+    "schedule": "Regulations 19(2)(b)(i) & 146(b), 8th Schedule",
+    "sfa_notes": "* Regulations 19(2)(b)(i) & 146(b),",
+    "table": 2
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "Thiamin hydrochloride",
+    "name_in_regs": null,
+    "schedule": "7th Schedule",
+    "sfa_notes": "GMP",
+    "table": 2
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "Thiamin mononitrate",
+    "name_in_regs": null,
+    "schedule": "7th Schedule",
+    "sfa_notes": "GMP",
+    "table": 2
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "L-theanine",
+    "name_in_regs": null,
+    "schedule": "Regulation 23(2)(e) & (f)",
+    "sfa_notes": "*",
+    "table": 2
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "Threonine",
+    "name_in_regs": null,
+    "schedule": "7th Schedule",
+    "sfa_notes": "GMP",
+    "table": 2
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "Trehalose",
+    "name_in_regs": null,
+    "schedule": "8th Schedule",
+    "sfa_notes": "GMP",
+    "table": 2
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "Tryptophan",
+    "name_in_regs": null,
+    "schedule": "7th Schedule",
+    "sfa_notes": "GMP",
+    "table": 2
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "Valine",
+    "name_in_regs": null,
+    "schedule": "7th Schedule",
+    "sfa_notes": "GMP",
+    "table": 2
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "Vitamin A",
+    "name_in_regs": null,
+    "schedule": "Regulations 91(2)(a) & 252(3)(c), 7th Schedule",
+    "sfa_notes": "* Regulations 91(2)(a) & 252(3)(c)",
+    "table": 2
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "Vitamin B1 (Thiamin)",
+    "name_in_regs": null,
+    "schedule": "Regulation 252(3)(f), 7th Schedule",
+    "sfa_notes": "* Regulation 252(3)(f)",
+    "table": 2
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "Vitamin B12",
+    "name_in_regs": null,
+    "schedule": "Regulation 252(3)(l), 7th Schedule",
+    "sfa_notes": "* Regulation 252(3)(l)",
+    "table": 2
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "Vitamin B2 (Riboflavin)",
+    "name_in_regs": null,
+    "schedule": "Regulation 252(3)(g), 7th Schedule",
+    "sfa_notes": "* Regulation 252(3)(g)",
+    "table": 2
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "Vitamin B6",
+    "name_in_regs": null,
+    "schedule": "Regulation 252(3)(i), 7th Schedule",
+    "sfa_notes": "* Regulation 252(3)(i)",
+    "table": 2
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "Vitamin C",
+    "name_in_regs": null,
+    "schedule": "Regulation 252(3)(e), 7th Schedule",
+    "sfa_notes": "* Regulation 252(3)(e)",
+    "table": 2
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "Vitamin D",
+    "name_in_regs": null,
+    "schedule": "Regulations 91(2)(b) & 252(3)(d), 7th Schedule",
+    "sfa_notes": "* Regulations 91(2)(b) & 252(3)(d)",
+    "table": 2
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "Vitamin E",
+    "name_in_regs": null,
+    "schedule": "Regulations 252(3)(o), 7th Schedule",
+    "sfa_notes": "* Regulations 252(3)(o)",
+    "table": 2
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "Zinc chloride",
+    "name_in_regs": null,
+    "schedule": "7th Schedule",
+    "sfa_notes": "GMP",
+    "table": 2
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "Zinc citrate",
+    "name_in_regs": null,
+    "schedule": "7th Schedule",
+    "sfa_notes": "GMP",
+    "table": 2
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "Zinc gluconate",
+    "name_in_regs": null,
+    "schedule": "7th Schedule",
+    "sfa_notes": "GMP",
+    "table": 2
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "Zinc lactate",
+    "name_in_regs": null,
+    "schedule": "7th Schedule",
+    "sfa_notes": "GMP",
+    "table": 2
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "Zinc oxide",
+    "name_in_regs": null,
+    "schedule": "7th Schedule",
+    "sfa_notes": "GMP",
+    "table": 2
+  },
+  {
+    "ins": null,
+    "e_number": null,
+    "name": "Zinc sulphate",
+    "name_in_regs": null,
+    "schedule": "7th Schedule",
+    "sfa_notes": "GMP",
+    "table": 2
+  }
+]
