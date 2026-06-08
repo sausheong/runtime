@@ -36,29 +36,25 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	// Start agents sequentially with a readiness gate (M2: DBOS first-run
-	// schema init is not safe to run concurrently).
-	for _, info := range reg.List() {
-		ap, _ := reg.Get(info.ID)
-		sup := &controlplane.Supervisor{Spawn: ap.SpawnFunc(), Backoff: time.Second}
-		go sup.Run(ctx)
-		slog.Info("supervising agent", "agent", ap.AgentID, "addr", ap.Addr)
-		if err := waitAgentHealthy(ctx, ap.Addr, 30*time.Second); err != nil {
-			slog.Warn("agent not healthy yet; continuing", "agent", ap.AgentID, "err", err)
-		}
-	}
-
 	// Identity layer (M1). Operator config via env:
 	//   RUNTIME_OIDC_ISSUER / RUNTIME_OIDC_CLIENT_ID — enable OIDC human login.
 	//   RUNTIME_ADMIN_BOOTSTRAP — one-time superuser service key (break-glass).
+	//
+	// Initialized BEFORE spawning agents: its failure paths os.Exit(1), which
+	// skips deferred cleanup. Doing it first means no agentd subprocess has been
+	// spawned yet, so a misconfig (e.g. bad OIDC issuer) can't orphan children.
 	oidcIssuer := os.Getenv("RUNTIME_OIDC_ISSUER")
 	oidcClientID := os.Getenv("RUNTIME_OIDC_CLIENT_ID")
 	bootstrapKey := os.Getenv("RUNTIME_ADMIN_BOOTSTRAP")
+	if oidcIssuer == "" && oidcClientID != "" {
+		slog.Warn("RUNTIME_OIDC_CLIENT_ID set but RUNTIME_OIDC_ISSUER is empty — OIDC disabled")
+	}
 	legacyTokens := cfg.TokenMap()
 
 	var handler http.Handler
 
-	// Open the identity store first (it shares the control-plane Postgres).
+	// Open a (separate) connection pool to the same Postgres the agents' control
+	// plane uses; identity tables are created here under the shared DDL lock.
 	identityDB, err := sql.Open("pgx", dsn)
 	if err != nil {
 		slog.Error("identity db open failed", "err", err)
@@ -92,6 +88,18 @@ func main() {
 		root := buildRoot(reg, idStore) // mounts /admin since the store is non-nil
 		handler = controlplane.IdentityMiddleware(accessLog(root), authr, azr)
 		slog.Info("identity enabled", "oidc", oidcIssuer != "", "bootstrap", bootstrapKey != "", "legacy_tokens", len(legacyTokens))
+	}
+
+	// Start agents sequentially with a readiness gate (M2: DBOS first-run
+	// schema init is not safe to run concurrently).
+	for _, info := range reg.List() {
+		ap, _ := reg.Get(info.ID)
+		sup := &controlplane.Supervisor{Spawn: ap.SpawnFunc(), Backoff: time.Second}
+		go sup.Run(ctx)
+		slog.Info("supervising agent", "agent", ap.AgentID, "addr", ap.Addr)
+		if err := waitAgentHealthy(ctx, ap.Addr, 30*time.Second); err != nil {
+			slog.Warn("agent not healthy yet; continuing", "agent", ap.AgentID, "err", err)
+		}
 	}
 
 	srv := &http.Server{Addr: ctlAddr, Handler: handler}
