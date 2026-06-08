@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -10,9 +11,13 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/coreos/go-oidc/v3/oidc"
+	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/sausheong/runtime/console"
 	"github.com/sausheong/runtime/controlplane"
 	"github.com/sausheong/runtime/internal/config"
+	"github.com/sausheong/runtime/internal/identity"
+	"golang.org/x/oauth2"
 )
 
 func main() {
@@ -29,13 +34,92 @@ func main() {
 		os.Exit(1)
 	}
 	reg := controlplane.NewRegistry(cfg, agentBin, dsn)
-	tokens := cfg.TokenMap()
-	if len(tokens) == 0 {
-		slog.Warn("no API tokens configured — control plane is running OPEN (unauthenticated)")
-	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+
+	// Identity layer (M1). Operator config via env:
+	//   RUNTIME_OIDC_ISSUER / RUNTIME_OIDC_CLIENT_ID — enable OIDC human login.
+	//   RUNTIME_ADMIN_BOOTSTRAP — one-time superuser service key (break-glass).
+	//
+	// Initialized BEFORE spawning agents: its failure paths os.Exit(1), which
+	// skips deferred cleanup. Doing it first means no agentd subprocess has been
+	// spawned yet, so a misconfig (e.g. bad OIDC issuer) can't orphan children.
+	oidcIssuer := os.Getenv("RUNTIME_OIDC_ISSUER")
+	oidcClientID := os.Getenv("RUNTIME_OIDC_CLIENT_ID")
+	bootstrapKey := os.Getenv("RUNTIME_ADMIN_BOOTSTRAP")
+	if oidcIssuer == "" && oidcClientID != "" {
+		slog.Warn("RUNTIME_OIDC_CLIENT_ID set but RUNTIME_OIDC_ISSUER is empty — OIDC disabled")
+	}
+	legacyTokens := cfg.TokenMap()
+
+	var handler http.Handler
+
+	// Open a (separate) connection pool to the same Postgres the agents' control
+	// plane uses; identity tables are created here under the shared DDL lock.
+	identityDB, err := sql.Open("pgx", dsn)
+	if err != nil {
+		slog.Error("identity db open failed", "err", err)
+		os.Exit(1)
+	}
+	defer identityDB.Close()
+	idStore, err := identity.NewStore(ctx, identityDB)
+	if err != nil {
+		slog.Error("identity store init failed", "err", err)
+		os.Exit(1)
+	}
+
+	configured, err := idStore.AnyConfigured(ctx)
+	if err != nil {
+		slog.Error("identity configured-check failed", "err", err)
+		os.Exit(1)
+	}
+	identityOn := configured || oidcIssuer != "" || bootstrapKey != "" || len(legacyTokens) > 0
+
+	if !identityOn {
+		slog.Warn("no identity configured — control plane is running OPEN (unauthenticated)")
+		handler = accessLog(buildRoot(reg, nil, console.OIDCConfig{})) // no /admin in open mode
+	} else {
+		oidcVerifier, verr := identity.NewOIDCVerifier(ctx, oidcIssuer, oidcClientID)
+		if verr != nil {
+			slog.Error("oidc init failed", "issuer", oidcIssuer, "err", verr)
+			os.Exit(1)
+		}
+		consoleOIDC := console.OIDCConfig{}
+		if oidcIssuer != "" {
+			if prov, perr := oidc.NewProvider(ctx, oidcIssuer); perr == nil {
+				oauthCfg := &oauth2.Config{
+					ClientID:     oidcClientID,
+					ClientSecret: os.Getenv("RUNTIME_OIDC_CLIENT_SECRET"),
+					Endpoint:     prov.Endpoint(),
+					RedirectURL:  envOr("RUNTIME_OIDC_REDIRECT_URL", "http://localhost:8080/ui/callback"),
+					Scopes:       []string{oidc.ScopeOpenID, "email"},
+				}
+				consoleOIDC = console.OIDCConfig{
+					Enabled:     true,
+					AuthCodeURL: func(state string) string { return oauthCfg.AuthCodeURL(state) },
+					Exchange: func(c context.Context, code string) (string, error) {
+						tok, exErr := oauthCfg.Exchange(c, code)
+						if exErr != nil {
+							return "", exErr
+						}
+						raw, ok := tok.Extra("id_token").(string)
+						if !ok {
+							return "", fmt.Errorf("no id_token in token response")
+						}
+						return raw, nil
+					},
+				}
+			} else {
+				slog.Warn("oidc provider discovery failed; console OIDC login disabled", "err", perr)
+			}
+		}
+		authr := identity.NewAuthenticator(idStore, oidcVerifier, bootstrapKey, legacyTokens)
+		azr := identity.NewAuthorizer(reg.AgentTenants())
+		root := buildRoot(reg, idStore, consoleOIDC) // mounts /admin since the store is non-nil
+		handler = controlplane.IdentityMiddleware(accessLog(root), authr, azr)
+		slog.Info("identity enabled", "oidc", oidcIssuer != "", "bootstrap", bootstrapKey != "", "legacy_tokens", len(legacyTokens))
+	}
 
 	// Start agents sequentially with a readiness gate (M2: DBOS first-run
 	// schema init is not safe to run concurrently).
@@ -49,21 +133,10 @@ func main() {
 		}
 	}
 
-	apiMux := controlplane.NewAPI(reg)
-	consoleH := console.Handler(reg)
-	root := http.NewServeMux()
-	root.Handle("/ui", consoleH)
-	root.Handle("/ui/", consoleH)
-	root.Handle("/", apiMux)
-	// AuthMiddleware (outer) runs first and stashes the matched token label in
-	// the request context; accessLog (inner) reads it so each request line is
-	// attributed to the calling token.
-	handler := controlplane.AuthMiddleware(accessLog(root), tokens)
-
 	srv := &http.Server{Addr: ctlAddr, Handler: handler}
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- srv.ListenAndServe() }()
-	slog.Info("control plane listening", "addr", ctlAddr, "agents", len(reg.List()), "auth", len(tokens) > 0)
+	slog.Info("control plane listening", "addr", ctlAddr, "agents", len(reg.List()), "identity", identityOn)
 
 	select {
 	case <-ctx.Done():
@@ -98,16 +171,35 @@ func (r *statusRecorder) Flush() {
 }
 
 // accessLog logs one structured line per request, including the authenticated
-// token label (empty in open mode) from the auth middleware's context.
+// principal subject and tenant (empty in open mode) from the identity context.
 func accessLog(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
 		next.ServeHTTP(rec, r)
-		label, _ := controlplane.TokenLabelFromContext(r.Context())
+		var subject, tenant string
+		if p, ok := controlplane.PrincipalFromContext(r.Context()); ok {
+			subject, tenant = p.Subject, p.TenantID
+		}
 		slog.Info("request",
 			"method", r.Method, "path", r.URL.Path,
-			"status", rec.status, "token_label", label, "remote", r.RemoteAddr)
+			"status", rec.status, "subject", subject, "tenant", tenant, "remote", r.RemoteAddr)
 	})
+}
+
+// buildRoot assembles the root mux: console at /ui, control-plane API at /, and
+// (when adminS is non-nil) the admin API at /admin. Admin handlers self-enforce
+// the admin role; mounting is gated here so open mode has no /admin surface.
+func buildRoot(reg *controlplane.Registry, adminS controlplane.AdminStore, consoleOIDC console.OIDCConfig) http.Handler {
+	apiMux := controlplane.NewAPI(reg)
+	if adminS != nil {
+		controlplane.RegisterAdmin(apiMux, adminS)
+	}
+	consoleH := console.Handler(reg, consoleOIDC)
+	root := http.NewServeMux()
+	root.Handle("/ui", consoleH)
+	root.Handle("/ui/", consoleH)
+	root.Handle("/", apiMux)
+	return root
 }
 
 func setupLogging() {
