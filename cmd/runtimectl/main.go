@@ -232,7 +232,10 @@ func runAdmin(base string, args []string) {
 		label := flagValue(args[2:], "--label", "")
 		out := mustAdminPost(base, "/admin/keys", map[string]string{"role": role, "label": label})
 		var resp struct{ ID, Plaintext string }
-		_ = json.Unmarshal(out, &resp)
+		if err := json.Unmarshal(out, &resp); err != nil || resp.Plaintext == "" {
+			fmt.Fprintf(os.Stderr, "key created but plaintext missing from response: %s\n", out)
+			os.Exit(1)
+		}
 		fmt.Printf("%s\n(store this now — shown once)\n", resp.Plaintext)
 	case "key ls":
 		fmt.Print(string(mustAdminGet(base, "/admin/keys")))
