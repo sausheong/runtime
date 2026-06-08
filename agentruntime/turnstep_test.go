@@ -1,10 +1,23 @@
 package agentruntime
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/sausheong/harness/session"
 )
+
+func TestTurnInputImageRoundTrip(t *testing.T) {
+	in := turnInput{UserMsg: "hi", ImageB64: "QUJD", ImageMime: "image/png"}
+	b, _ := json.Marshal(in)
+	var out turnInput
+	if err := json.Unmarshal(b, &out); err != nil {
+		t.Fatal(err)
+	}
+	if out.ImageB64 != "QUJD" || out.ImageMime != "image/png" || out.UserMsg != "hi" {
+		t.Fatalf("round-trip lost fields: %+v", out)
+	}
+}
 
 func TestApplyEntries_RebuildsSession(t *testing.T) {
 	sess := session.NewSession("a", "k")

@@ -2,6 +2,7 @@ package agentruntime
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	"github.com/dbos-inc/dbos-transact-golang/dbos"
+	"github.com/sausheong/harness/llm"
 	hrt "github.com/sausheong/harness/runtime"
 	"github.com/sausheong/harness/session"
 	"github.com/sausheong/runtime/internal/store"
@@ -108,6 +110,22 @@ func (m *Manager) sessionWorkflow(ctx dbos.DBOSContext, in turnInput) (string, e
 		maxTurns = 25
 	}
 
+	// Decode the optional first-turn image once. It derives ONLY from `in` (the
+	// checkpointed workflow input), so on DBOS replay `in` is re-supplied
+	// identically and firstImages is reconstructed deterministically.
+	var firstImages []llm.ImageContent
+	if in.ImageB64 != "" {
+		if raw, err := base64.StdEncoding.DecodeString(in.ImageB64); err == nil {
+			mime := in.ImageMime
+			if mime == "" {
+				mime = "image/jpeg"
+			}
+			firstImages = []llm.ImageContent{{MimeType: mime, Data: raw}}
+		} else {
+			slog.Warn("session image decode failed; proceeding text-only", "session", wfID, "err", err)
+		}
+	}
+
 	userMsg := in.UserMsg
 	for turn := 0; ; turn++ {
 		if turn >= maxTurns {
@@ -128,7 +146,15 @@ func (m *Manager) sessionWorkflow(ctx dbos.DBOSContext, in turnInput) (string, e
 			if err != nil {
 				return turnOutput{}, err
 			}
-			tr, terr := rt.RunTurn(stepCtx, userMsg, nil, nil) // headless (emit=nil)
+			// Images apply on the FIRST turn only. firstImages and turn are
+			// captured from the enclosing deterministic scope; both are
+			// reconstructed identically on replay (firstImages from `in`, turn
+			// from the loop index), so this is replay-safe.
+			var images []llm.ImageContent
+			if turn == 0 {
+				images = firstImages
+			}
+			tr, terr := rt.RunTurn(stepCtx, userMsg, images, nil) // headless (emit=nil)
 			if terr != nil {
 				return turnOutput{}, terr
 			}
@@ -165,12 +191,13 @@ func (m *Manager) sessionWorkflow(ctx dbos.DBOSContext, in turnInput) (string, e
 
 // startSession creates a store session row and launches the durable workflow
 // with the session id as the stable DBOS workflow id.
-func (m *Manager) startSession(ctx context.Context, userMsg string) (string, error) {
+func (m *Manager) startSession(ctx context.Context, userMsg, imageB64, imageMime string) (string, error) {
 	sessionID, err := m.st.CreateSession(ctx, m.agentID)
 	if err != nil {
 		return "", err
 	}
-	if _, err := dbos.RunWorkflow(m.dbosCtx, m.sessionWorkflow, turnInput{UserMsg: userMsg}, dbos.WithWorkflowID(sessionID)); err != nil {
+	in := turnInput{UserMsg: userMsg, ImageB64: imageB64, ImageMime: imageMime}
+	if _, err := dbos.RunWorkflow(m.dbosCtx, m.sessionWorkflow, in, dbos.WithWorkflowID(sessionID)); err != nil {
 		return "", err
 	}
 	return sessionID, nil
