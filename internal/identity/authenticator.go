@@ -56,7 +56,9 @@ func (a *Authenticator) Authenticate(ctx context.Context, r *http.Request) (Prin
 
 	// 1b. Legacy M3 token (deprecated): maps to a default-tenant superuser so
 	// existing deployments keep working after upgrade. Removed in a later
-	// milestone once service keys are adopted.
+	// milestone once service keys are adopted. The map lookup is intentionally
+	// not constant-time: these tokens are an opt-in, deprecated compat shim, and
+	// the cost of hardening a feature slated for removal isn't worth it.
 	if lbl, ok := a.legacy[cred]; ok {
 		return Principal{Subject: "legacy:" + lbl, Role: RoleAdmin, Superuser: true}, nil
 	}

@@ -130,6 +130,19 @@ func TestAuthenticate_OIDCDisabledRejectsJWT(t *testing.T) {
 	}
 }
 
+func TestAuthenticate_HeaderBeatsCookie(t *testing.T) {
+	// A valid bearer header must win over a stale/garbage cookie.
+	src := memSource{users: map[string]UserRow{"alice@corp": {TenantID: "beta", Subject: "alice@corp", Role: RoleViewer}}}
+	a := NewAuthenticator(src, fakeVerifier{good: "jwt.aaa.bbb", sub: "alice@corp"}, "", nil)
+	r := httptest.NewRequest("GET", "/agents", nil)
+	r.Header.Set("Authorization", "Bearer jwt.aaa.bbb")
+	r.AddCookie(&http.Cookie{Name: "runtime_token", Value: "stale-garbage"})
+	p, err := a.Authenticate(context.Background(), r)
+	if err != nil || p.Subject != "alice@corp" {
+		t.Fatalf("header should win over cookie: p=%+v err=%v", p, err)
+	}
+}
+
 func TestAuthenticate_CookieFallback(t *testing.T) {
 	src := memSource{users: map[string]UserRow{"alice@corp": {TenantID: "beta", Subject: "alice@corp", Role: RoleViewer}}}
 	a := NewAuthenticator(src, fakeVerifier{good: "jwt.aaa.bbb", sub: "alice@corp"}, "", nil)
