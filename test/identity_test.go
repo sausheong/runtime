@@ -39,6 +39,25 @@ func TestIdentityE2E_TwoTenants(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Clean up identity tables at test end so we leave the shared DB as we
+	// found it. Otherwise leftover tenant/key rows make AnyConfigured() true,
+	// flipping runtimed into enforced mode for sibling integration tests whose
+	// unauthenticated health probes then 401. Use a fresh connection because
+	// the deferred db.Close() above runs before t.Cleanup functions.
+	t.Cleanup(func() {
+		cdb, err := sql.Open("pgx", dsn)
+		if err != nil {
+			return
+		}
+		defer cdb.Close()
+		for _, q := range []string{
+			`DROP TABLE IF EXISTS service_keys CASCADE`,
+			`DROP TABLE IF EXISTS identity_users CASCADE`,
+			`DROP TABLE IF EXISTS tenants CASCADE`,
+		} {
+			_, _ = cdb.Exec(q)
+		}
+	})
 	// Two tenants, each owning one agent (a1→alpha, b1→beta).
 	if err := st.CreateTenant(ctx, "alpha", "Alpha"); err != nil {
 		t.Fatal(err)
