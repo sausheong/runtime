@@ -11,7 +11,66 @@ import (
 
 	"github.com/sausheong/runtime/controlplane"
 	"github.com/sausheong/runtime/internal/config"
+	"github.com/sausheong/runtime/internal/identity"
 )
+
+func testRegMulti(t *testing.T) *controlplane.Registry {
+	t.Helper()
+	cfg := &config.Config{Agents: []config.AgentConfig{
+		{ID: "a", Name: "AlphaAgent", Model: "m", ListenAddr: "127.0.0.1:9001", Tenant: "alpha"},
+		{ID: "b", Name: "BetaAgent", Model: "m", ListenAddr: "127.0.0.1:9002", Tenant: "beta"},
+	}}
+	return controlplane.NewRegistry(cfg, "./agentd", "dsn")
+}
+
+// stubAuth is a minimal authenticator that always returns a fixed principal,
+// letting tests drive the console through the real IdentityMiddleware.
+type stubAuth struct{ p identity.Principal }
+
+func (s stubAuth) Authenticate(_ context.Context, _ *http.Request) (identity.Principal, error) {
+	return s.p, nil
+}
+
+func TestConsole_OverviewFiltersByTenant(t *testing.T) {
+	h := controlplane.IdentityMiddleware(
+		Handler(testRegMulti(t), OIDCConfig{}),
+		stubAuth{p: identity.Principal{TenantID: "beta", Role: identity.RoleViewer}},
+		identity.NewAuthorizer(map[string]string{"a": "alpha", "b": "beta"}),
+	)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest("GET", "/ui", nil))
+	body := rec.Body.String()
+	if strings.Contains(body, "AlphaAgent") {
+		t.Error("beta user must NOT see AlphaAgent in overview")
+	}
+	if !strings.Contains(body, "BetaAgent") {
+		t.Error("beta user should see BetaAgent")
+	}
+}
+
+func TestConsole_AgentPageCrossTenant404(t *testing.T) {
+	h := controlplane.IdentityMiddleware(
+		Handler(testRegMulti(t), OIDCConfig{}),
+		stubAuth{p: identity.Principal{TenantID: "beta", Role: identity.RoleViewer}},
+		identity.NewAuthorizer(map[string]string{"a": "alpha", "b": "beta"}),
+	)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest("GET", "/ui/agents/a", nil)) // a is alpha's
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("beta user GET /ui/agents/a (alpha): code=%d want 404", rec.Code)
+	}
+}
+
+func TestConsole_OpenModeShowsAll(t *testing.T) {
+	// No principal in context (open mode) → all agents visible.
+	h := Handler(testRegMulti(t), OIDCConfig{})
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest("GET", "/ui", nil))
+	body := rec.Body.String()
+	if !strings.Contains(body, "AlphaAgent") || !strings.Contains(body, "BetaAgent") {
+		t.Error("open mode should show all agents")
+	}
+}
 
 func testReg(t *testing.T) *controlplane.Registry {
 	t.Helper()

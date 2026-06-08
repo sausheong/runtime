@@ -78,13 +78,14 @@ func Handler(reg *controlplane.Registry, oidc OIDCConfig) http.Handler {
 		http.Redirect(w, r, "/ui", http.StatusSeeOther)
 	})
 
-	mux.HandleFunc("GET /ui", func(w http.ResponseWriter, _ *http.Request) {
-		render(w, "overview.html", map[string]any{"Agents": reg.List()})
+	mux.HandleFunc("GET /ui", func(w http.ResponseWriter, r *http.Request) {
+		render(w, "overview.html", map[string]any{"Agents": visibleAgents(r, reg)})
 	})
 
 	mux.HandleFunc("GET /ui/agents/{id}", func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
-		if _, ok := reg.Get(id); !ok {
+		ap, ok := reg.Get(id)
+		if !ok || !principalCanSeeTenant(r, ap.Tenant) {
 			http.NotFound(w, r)
 			return
 		}
@@ -110,6 +111,32 @@ func setSessionCookie(w http.ResponseWriter, value string) {
 		Name: "runtime_token", Value: value,
 		Path: "/", HttpOnly: true, SameSite: http.SameSiteLaxMode,
 	})
+}
+
+// principalCanSeeTenant reports whether the request's principal may see resources
+// owned by the given tenant, applying the same rule as the control-plane API:
+// open mode (no principal) or superuser → all tenants; otherwise only the
+// principal's own tenant.
+func principalCanSeeTenant(r *http.Request, tenant string) bool {
+	p, hasP := controlplane.PrincipalFromContext(r.Context())
+	if !hasP || p.Superuser {
+		return true
+	}
+	return tenant == p.TenantID
+}
+
+// visibleAgents returns the agents the request's principal may see, applying the
+// tenant rule from principalCanSeeTenant (open mode / superuser → all; else only
+// the principal's tenant).
+func visibleAgents(r *http.Request, reg *controlplane.Registry) []controlplane.AgentInfo {
+	all := reg.List()
+	out := make([]controlplane.AgentInfo, 0, len(all))
+	for _, a := range all {
+		if principalCanSeeTenant(r, a.Tenant) {
+			out = append(out, a)
+		}
+	}
+	return out
 }
 
 func render(w http.ResponseWriter, name string, data any) {
