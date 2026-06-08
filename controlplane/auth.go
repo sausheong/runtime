@@ -4,11 +4,21 @@ import (
 	"context"
 	"net/http"
 	"strings"
+
+	"github.com/sausheong/runtime/internal/identity"
 )
 
 type ctxKey int
 
 const tokenLabelKey ctxKey = 0
+const principalKey ctxKey = 1
+
+// PrincipalFromContext returns the authenticated identity.Principal, if the
+// identity middleware set one.
+func PrincipalFromContext(ctx context.Context) (identity.Principal, bool) {
+	p, ok := ctx.Value(principalKey).(identity.Principal)
+	return p, ok
+}
 
 // TokenLabelFromContext returns the matched token's label, if the request was
 // authenticated. ok is false in open mode or when unset.

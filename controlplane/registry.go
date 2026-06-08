@@ -4,9 +4,10 @@ import "github.com/sausheong/runtime/internal/config"
 
 // AgentInfo is the public description of a registered agent.
 type AgentInfo struct {
-	ID    string `json:"id"`
-	Name  string `json:"name"`
-	Model string `json:"model"`
+	ID     string `json:"id"`
+	Name   string `json:"name"`
+	Model  string `json:"model"`
+	Tenant string `json:"tenant"`
 }
 
 // Registry holds the agents the control plane hosts, built from config.
@@ -25,11 +26,20 @@ func NewRegistry(cfg *config.Config, binPath, dsn string) *Registry {
 		r.order = append(r.order, a.ID)
 		r.agents[a.ID] = AgentProcess{
 			AgentID: a.ID, Addr: a.ListenAddr, BinPath: binPath, PGDSN: dsn,
-			Kind: a.Kind, Command: a.Command, WorkDir: a.WorkDir,
+			Kind: a.Kind, Command: a.Command, WorkDir: a.WorkDir, Tenant: a.Tenant,
 		}
-		r.infos[a.ID] = AgentInfo{ID: a.ID, Name: a.Name, Model: a.Model}
+		r.infos[a.ID] = AgentInfo{ID: a.ID, Name: a.Name, Model: a.Model, Tenant: a.Tenant}
 	}
 	return r
+}
+
+// AgentTenants returns agentID→tenantID for all registered agents.
+func (r *Registry) AgentTenants() map[string]string {
+	m := make(map[string]string, len(r.order))
+	for _, id := range r.order {
+		m[id] = r.agents[id].Tenant
+	}
+	return m
 }
 
 // Get returns the AgentProcess for id.

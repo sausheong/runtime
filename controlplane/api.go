@@ -18,31 +18,43 @@ func NewAPI(reg *Registry) *http.ServeMux {
 		_, _ = w.Write([]byte("ok"))
 	})
 
-	mux.HandleFunc("GET /agents", func(w http.ResponseWriter, _ *http.Request) {
+	mux.HandleFunc("GET /agents", func(w http.ResponseWriter, r *http.Request) {
 		type agentStatus struct {
 			ID      string `json:"id"`
 			Name    string `json:"name"`
 			Model   string `json:"model"`
 			Healthy bool   `json:"healthy"`
 		}
+		p, hasP := PrincipalFromContext(r.Context())
 		infos := reg.List()
-		out := make([]agentStatus, len(infos))
+		var out []agentStatus
+		var mu sync.Mutex
 		var wg sync.WaitGroup
 		client := &http.Client{Timeout: 1 * time.Second}
-		for i, info := range infos {
-			out[i] = agentStatus{ID: info.ID, Name: info.Name, Model: info.Model}
+		for _, info := range infos {
+			// In open mode (no principal) show all; otherwise filter by tenant.
+			if hasP && !p.Superuser && info.Tenant != p.TenantID {
+				continue
+			}
 			ap, _ := reg.Get(info.ID)
 			wg.Add(1)
-			go func(i int, addr string) {
+			go func(info AgentInfo, addr string) {
 				defer wg.Done()
+				st := agentStatus{ID: info.ID, Name: info.Name, Model: info.Model}
 				resp, err := client.Get("http://" + addr + "/healthz")
 				if err == nil {
-					out[i].Healthy = resp.StatusCode == 200
+					st.Healthy = resp.StatusCode == 200
 					resp.Body.Close()
 				}
-			}(i, ap.Addr)
+				mu.Lock()
+				out = append(out, st)
+				mu.Unlock()
+			}(info, ap.Addr)
 		}
 		wg.Wait()
+		if out == nil {
+			out = []agentStatus{}
+		}
 		_ = json.NewEncoder(w).Encode(out)
 	})
 

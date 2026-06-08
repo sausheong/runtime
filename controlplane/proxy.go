@@ -18,6 +18,7 @@ type AgentProcess struct {
 	Kind    string   // optional agent kind; "" ⇒ testagent. Passed to agentd via RUNTIME_AGENT_KIND.
 	Command []string // when non-empty, exec this instead of BinPath (foreign-process agents)
 	WorkDir string   // optional working directory for Command
+	Tenant  string   // tenant that owns this agent (from runtime.yaml; "default" if unset)
 }
 
 // SpawnFunc returns a Supervisor-compatible spawn closure that launches agentd
