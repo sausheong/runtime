@@ -2,6 +2,7 @@
 package console
 
 import (
+	"context"
 	"embed"
 	"html/template"
 	"io/fs"
@@ -28,26 +29,47 @@ func mustSub(f fs.FS, dir string) fs.FS {
 	return sub
 }
 
+// OIDCConfig configures the console's OIDC login. Zero value = OIDC disabled
+// (paste-token fallback shown).
+type OIDCConfig struct {
+	AuthCodeURL func(state string) string                                             // builds the IdP authorize URL
+	Exchange    func(ctx context.Context, code string) (rawIDToken string, err error) // code -> validated ID token
+	Enabled     bool
+}
+
 // Handler returns the console's HTTP handler. Read-only: it renders the agents
 // overview from the registry and links to the control-plane API + SSE endpoints
 // it is mounted beside.
-func Handler(reg *controlplane.Registry) http.Handler {
+func Handler(reg *controlplane.Registry, oidc OIDCConfig) http.Handler {
 	mux := http.NewServeMux()
 
 	mux.Handle("GET /ui/static/", http.StripPrefix("/ui/static/", http.FileServerFS(staticFS)))
 
-	mux.HandleFunc("GET /ui/login", func(w http.ResponseWriter, _ *http.Request) {
+	mux.HandleFunc("GET /ui/login", func(w http.ResponseWriter, r *http.Request) {
+		if oidc.Enabled && oidc.AuthCodeURL != nil {
+			http.Redirect(w, r, oidc.AuthCodeURL("state"), http.StatusSeeOther)
+			return
+		}
 		render(w, "login.html", nil)
 	})
+
 	mux.HandleFunc("POST /ui/login", func(w http.ResponseWriter, r *http.Request) {
 		_ = r.ParseForm()
-		// HttpOnly + SameSite=Lax. Secure is intentionally NOT set so the
-		// console works over plain HTTP for local/internal use; terminate TLS
-		// upstream in production (and set Secure there if exposing the console).
-		http.SetCookie(w, &http.Cookie{
-			Name: "runtime_token", Value: r.FormValue("token"),
-			Path: "/", HttpOnly: true, SameSite: http.SameSiteLaxMode,
-		})
+		setSessionCookie(w, r.FormValue("token"))
+		http.Redirect(w, r, "/ui", http.StatusSeeOther)
+	})
+
+	mux.HandleFunc("GET /ui/callback", func(w http.ResponseWriter, r *http.Request) {
+		if oidc.Exchange == nil {
+			http.Error(w, "oidc not configured", http.StatusBadRequest)
+			return
+		}
+		idToken, err := oidc.Exchange(r.Context(), r.URL.Query().Get("code"))
+		if err != nil {
+			http.Error(w, "login failed", http.StatusUnauthorized)
+			return
+		}
+		setSessionCookie(w, idToken)
 		http.Redirect(w, r, "/ui", http.StatusSeeOther)
 	})
 
@@ -72,6 +94,17 @@ func Handler(reg *controlplane.Registry) http.Handler {
 	})
 
 	return mux
+}
+
+// setSessionCookie writes the runtime_token cookie the identity Authenticator
+// reads. HttpOnly + SameSite=Lax. Secure is intentionally NOT set so the console
+// works over plain HTTP for local/internal use; terminate TLS upstream in
+// production (and set Secure there if exposing the console).
+func setSessionCookie(w http.ResponseWriter, value string) {
+	http.SetCookie(w, &http.Cookie{
+		Name: "runtime_token", Value: value,
+		Path: "/", HttpOnly: true, SameSite: http.SameSiteLaxMode,
+	})
 }
 
 func render(w http.ResponseWriter, name string, data any) {

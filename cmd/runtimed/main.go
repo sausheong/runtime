@@ -11,11 +11,13 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/coreos/go-oidc/v3/oidc"
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/sausheong/runtime/console"
 	"github.com/sausheong/runtime/controlplane"
 	"github.com/sausheong/runtime/internal/config"
 	"github.com/sausheong/runtime/internal/identity"
+	"golang.org/x/oauth2"
 )
 
 func main() {
@@ -76,16 +78,45 @@ func main() {
 
 	if !identityOn {
 		slog.Warn("no identity configured — control plane is running OPEN (unauthenticated)")
-		handler = accessLog(buildRoot(reg, nil)) // no /admin in open mode
+		handler = accessLog(buildRoot(reg, nil, console.OIDCConfig{})) // no /admin in open mode
 	} else {
 		oidcVerifier, verr := identity.NewOIDCVerifier(ctx, oidcIssuer, oidcClientID)
 		if verr != nil {
 			slog.Error("oidc init failed", "issuer", oidcIssuer, "err", verr)
 			os.Exit(1)
 		}
+		consoleOIDC := console.OIDCConfig{}
+		if oidcIssuer != "" {
+			if prov, perr := oidc.NewProvider(ctx, oidcIssuer); perr == nil {
+				oauthCfg := &oauth2.Config{
+					ClientID:     oidcClientID,
+					ClientSecret: os.Getenv("RUNTIME_OIDC_CLIENT_SECRET"),
+					Endpoint:     prov.Endpoint(),
+					RedirectURL:  envOr("RUNTIME_OIDC_REDIRECT_URL", "http://localhost:8080/ui/callback"),
+					Scopes:       []string{oidc.ScopeOpenID, "email"},
+				}
+				consoleOIDC = console.OIDCConfig{
+					Enabled:     true,
+					AuthCodeURL: func(state string) string { return oauthCfg.AuthCodeURL(state) },
+					Exchange: func(c context.Context, code string) (string, error) {
+						tok, exErr := oauthCfg.Exchange(c, code)
+						if exErr != nil {
+							return "", exErr
+						}
+						raw, ok := tok.Extra("id_token").(string)
+						if !ok {
+							return "", fmt.Errorf("no id_token in token response")
+						}
+						return raw, nil
+					},
+				}
+			} else {
+				slog.Warn("oidc provider discovery failed; console OIDC login disabled", "err", perr)
+			}
+		}
 		authr := identity.NewAuthenticator(idStore, oidcVerifier, bootstrapKey, legacyTokens)
 		azr := identity.NewAuthorizer(reg.AgentTenants())
-		root := buildRoot(reg, idStore) // mounts /admin since the store is non-nil
+		root := buildRoot(reg, idStore, consoleOIDC) // mounts /admin since the store is non-nil
 		handler = controlplane.IdentityMiddleware(accessLog(root), authr, azr)
 		slog.Info("identity enabled", "oidc", oidcIssuer != "", "bootstrap", bootstrapKey != "", "legacy_tokens", len(legacyTokens))
 	}
@@ -158,12 +189,12 @@ func accessLog(next http.Handler) http.Handler {
 // buildRoot assembles the root mux: console at /ui, control-plane API at /, and
 // (when adminS is non-nil) the admin API at /admin. Admin handlers self-enforce
 // the admin role; mounting is gated here so open mode has no /admin surface.
-func buildRoot(reg *controlplane.Registry, adminS controlplane.AdminStore) http.Handler {
+func buildRoot(reg *controlplane.Registry, adminS controlplane.AdminStore, consoleOIDC console.OIDCConfig) http.Handler {
 	apiMux := controlplane.NewAPI(reg)
 	if adminS != nil {
 		controlplane.RegisterAdmin(apiMux, adminS)
 	}
-	consoleH := console.Handler(reg)
+	consoleH := console.Handler(reg, consoleOIDC)
 	root := http.NewServeMux()
 	root.Handle("/ui", consoleH)
 	root.Handle("/ui/", consoleH)
