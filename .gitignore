@@ -8,3 +8,5 @@ nutrition_memory.json
 /agentd
 /runtimed
 /runtimectl
+# Local LLM credentials for examples (never commit real keys; .env.example is the template)
+.env
