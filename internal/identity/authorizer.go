@@ -27,13 +27,18 @@ func NewAuthorizer(agentTenant map[string]string) *Authorizer {
 // AgentTenant returns the tenant for an agent, or "" if unknown.
 func (a *Authorizer) AgentTenant(agentID string) string { return a.agentTenant[agentID] }
 
-// CanSeeAgent reports whether p's tenant owns agentID (superuser sees all).
+// CanSeeAgent reports whether p's tenant owns agentID (superuser sees all). A
+// non-superuser with an empty TenantID is always denied, so a misconfigured
+// empty tenant can never match.
 func (a *Authorizer) CanSeeAgent(p Principal, agentID string) bool {
 	t, ok := a.agentTenant[agentID]
 	if !ok {
 		return false
 	}
-	return p.Superuser || t == p.TenantID
+	if p.Superuser {
+		return true
+	}
+	return p.TenantID != "" && t == p.TenantID
 }
 
 // Authorize returns nil if p may take action on agentID. It returns ErrNotFound

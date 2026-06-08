@@ -66,7 +66,7 @@ func TestAuthorize_SuperuserCrossTenantAllowed(t *testing.T) {
 	}
 }
 
-func TestVisibleAgents_FiltersByTenant(t *testing.T) {
+func TestCanSeeAgent_FiltersByTenant(t *testing.T) {
 	az := newTestAuthorizer()
 	p := Principal{TenantID: "alpha", Role: RoleViewer}
 	got := az.AgentTenant("a1")
@@ -75,5 +75,37 @@ func TestVisibleAgents_FiltersByTenant(t *testing.T) {
 	}
 	if !az.CanSeeAgent(p, "a1") || az.CanSeeAgent(p, "b1") {
 		t.Fatalf("alpha viewer should see a1 not b1")
+	}
+}
+
+func TestAuthorize_SuperuserStillGatedByRole(t *testing.T) {
+	// Superuser bypasses TENANT isolation, NOT the role matrix: a superuser with
+	// a low role still cannot perform a higher action.
+	az := newTestAuthorizer()
+	p := Principal{Subject: "bootstrap", Role: RoleViewer, Superuser: true}
+	if err := az.Authorize(p, "b1", ActionInvoke); err != ErrForbidden {
+		t.Fatalf("superuser viewer invoke: err=%v, want ErrForbidden", err)
+	}
+}
+
+func TestRoleFromString(t *testing.T) {
+	for _, s := range []string{"viewer", "operator", "admin"} {
+		if r, err := RoleFromString(s); err != nil || string(r) != s {
+			t.Errorf("RoleFromString(%q) = %q,%v", s, r, err)
+		}
+	}
+	for _, s := range []string{"", "superuser", "Admin", "root"} {
+		if _, err := RoleFromString(s); err == nil {
+			t.Errorf("RoleFromString(%q) should error", s)
+		}
+	}
+}
+
+func TestCanSeeAgent_EmptyTenantDenied(t *testing.T) {
+	az := newTestAuthorizer()
+	// A non-superuser with no tenant must never see any agent.
+	p := Principal{Role: RoleAdmin} // TenantID == ""
+	if az.CanSeeAgent(p, "a1") {
+		t.Fatal("empty-tenant non-superuser must not see a1")
 	}
 }
