@@ -81,6 +81,9 @@ func (c *Config) Validate() error {
 func (c *Config) TokenMap() map[string]string {
 	m := make(map[string]string, len(c.Tokens))
 	for _, tk := range c.Tokens {
+		if tk.Token == "" {
+			continue // never authenticate an empty token (Validate also rejects these)
+		}
 		m[tk.Token] = tk.Label
 	}
 	return m
