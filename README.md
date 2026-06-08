@@ -32,6 +32,7 @@ no lost work, no duplicated committed tool calls.
 - [Contract conformance](#contract-conformance)
 - [Writing your own agent (the SDK)](#writing-your-own-agent-the-sdk)
 - [Deploying an example agent (SG Nutrition Investigator)](#deploying-an-example-agent-sg-nutrition-investigator)
+- [Hosting a foreign-SDK agent (Python shim)](#hosting-a-foreign-sdk-agent-python-shim)
 - [How durability works](#how-durability-works)
 - [Deployment](#deployment)
 - [Configuration reference](#configuration-reference)
@@ -457,7 +458,7 @@ your binary.
 
 ## Deploying an example agent (SG Nutrition Investigator)
 
-The repo ships a real, non-trivial example agent under `examples/nutrition`: the
+The repo ships a real, non-trivial example agent under `examples/nutrition-label-go`: the
 **SG Nutrition Investigator**, ported from an OpenAI Agents SDK demo into a
 harness-native Go agent. Given a Singapore food/drink nutrition label — pasted as
 **text** or supplied as a **photo** (vision via image input) — it investigates the
@@ -585,14 +586,48 @@ The nutrition example is selected by `kind: nutrition`. To add your own kind:
 
 1. Implement a `Builder` — a `func(Deps) (agentruntime.Config, error)` — that
    assembles your agent's `agentruntime.Config` (its `AgentSpec`, LLM provider,
-   and tool registry). See `examples/nutrition` (`BuildConfig` in
-   `examples/nutrition/agent.go`) for a complete reference implementation.
+   and tool registry). See `examples/nutrition-label-go` (`BuildConfig` in
+   `examples/nutrition-label-go/agent.go`) for a complete reference implementation.
 2. Register it in the `builders` map in `internal/agentkind/registry.go` under a
    new kind string (e.g. `"mykind"`).
 3. Set `kind: mykind` on an agent in your config. The empty/absent kind (and
    `"testagent"`) selects the bundled deterministic test agent. `runtimed` passes
    the kind to the `agentd` subprocess via `RUNTIME_AGENT_KIND`, where the kind
    registry resolves it to your builder.
+
+### Hosting a foreign-SDK agent (Python shim)
+
+Runtime is not limited to Go agents. An agent entry in `runtime.yaml` may set an
+optional `command:` (argv) and `workdir:`; when `command` is present,
+`runtimed`'s supervisor execs that process — in `workdir`, with
+`RUNTIME_LISTEN_ADDR`/`RUNTIME_AGENT_ID` injected and the parent environment
+inherited — instead of the bundled `agentd` binary. The control plane still
+routes `/agents/{id}/...`, health-gates on `/healthz`, and restarts on crash, so
+the foreign process is a first-class supervised agent. The only requirement is
+that it speaks the [agent contract](#agent-contract-served-by-each-agentd-reach-it-via-the-proxy-prefix).
+
+`contrib/shims/python/` ships a reusable Python shim that does exactly this: a
+framework-agnostic `runtime_contract` library (the six contract endpoints + SSE
++ `?since=N` replay + a SQLite session/event store) plus a thin adapter that
+hosts an [OpenAI Agents SDK](https://github.com/openai/openai-agents-python)
+agent. Adding another framework is one new adapter file.
+
+```bash
+make build
+export OPENAI_API_KEY=...  OPENAI_BASE_URL=...  OPENAI_MODEL=gpt-5.4
+RUNTIME_CONFIG=contrib/shims/python/runtime.openai-shim.yaml ./bin/runtimed
+
+# in another shell — the same conformance gate that validates Go agents:
+./bin/runtimectl conformance --agent openai
+./bin/runtimectl invoke --agent openai "Investigate: ... Sugar 11g/100ml. Beverage."
+```
+
+The shim provides **Level-1 durability** (sessions and their event logs persist
+in `shim.db`, so after a restart sessions are listable, replayable, and
+conversation memory continues) — but **not** Level-2 in-flight crash resume,
+which remains the Go agents' DBOS-backed advantage. See
+[`contrib/shims/python/README.md`](contrib/shims/python/README.md) for the full
+walkthrough, the adapter seam, and standalone-dev instructions.
 
 ---
 

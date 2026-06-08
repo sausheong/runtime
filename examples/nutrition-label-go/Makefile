@@ -19,7 +19,7 @@
 #   make demo-text              # (in another shell) investigate a pasted label
 #   make demo-image IMAGE=label.jpeg   # investigate a label photo
 
-# Repo root (this Makefile lives in examples/nutrition/).
+# Repo root (this Makefile lives in examples/nutrition-label-go/).
 ROOT := $(abspath $(dir $(lastword $(MAKEFILE_LIST)))/../..)
 
 # Load local LLM credentials if present (gitignored). Assignments here override
@@ -62,11 +62,11 @@ build: ## Build the platform binaries (delegates to the repo-root Makefile)
 
 .PHONY: test
 test: ## Run this agent's unit tests
-	cd $(ROOT) && go test ./examples/nutrition/...
+	cd $(ROOT) && go test ./examples/nutrition-label-go/...
 
 .PHONY: test-live
 test-live: ## Run the live one-turn smoke (requires OPENAI_API_KEY)
-	cd $(ROOT) && go test -tags live ./examples/nutrition/ -run TestLiveOneTurn -v
+	cd $(ROOT) && go test -tags live ./examples/nutrition-label-go/ -run TestLiveOneTurn -v
 
 # ---- Run ----
 .PHONY: check-env

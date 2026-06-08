@@ -52,6 +52,29 @@ func TestLoadKind(t *testing.T) {
 	}
 }
 
+func TestLoadCommandWorkdir(t *testing.T) {
+	p := writeTmp(t, `
+agents:
+  - id: openai
+    name: OpenAI SDK Agent
+    model: openai/gpt-5.4
+    listen_addr: 127.0.0.1:8301
+    workdir: /tmp/shim
+    command: ["uv", "run", "python", "main.py"]
+`)
+	cfg, err := Load(p)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	a := cfg.Agents[0]
+	if a.WorkDir != "/tmp/shim" {
+		t.Errorf("workdir = %q, want /tmp/shim", a.WorkDir)
+	}
+	if len(a.Command) != 4 || a.Command[0] != "uv" || a.Command[3] != "main.py" {
+		t.Errorf("command = %v, want [uv run python main.py]", a.Command)
+	}
+}
+
 func TestLoad_DuplicateID(t *testing.T) {
 	p := writeTmp(t, `
 agents:

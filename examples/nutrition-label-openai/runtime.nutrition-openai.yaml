@@ -1,0 +1,13 @@
+# Host the OpenAI Agents SDK nutrition agent via the Python contract shim.
+# Driven by this directory's Makefile (`make run`), which runs runtimed from the
+# repo root, so `workdir` is repo-root-relative.
+#
+#   cp .env.example .env   # fill in your proxy key
+#   make run               # builds binaries, uv sync, runs the control plane
+agents:
+  - id: nutrition-openai
+    name: SG Nutrition Investigator (OpenAI SDK)
+    model: openai/gpt-5.4
+    listen_addr: 127.0.0.1:8302
+    workdir: ./examples/nutrition-label-openai
+    command: ["uv", "run", "python", "serve.py"]

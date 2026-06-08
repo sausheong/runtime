@@ -15,14 +15,25 @@ type AgentProcess struct {
 	Addr    string // host:port the subprocess listens on, e.g. "127.0.0.1:8081"
 	BinPath string // path to the agentd binary
 	PGDSN   string
-	Kind    string // optional agent kind; "" ⇒ testagent. Passed to agentd via RUNTIME_AGENT_KIND.
+	Kind    string   // optional agent kind; "" ⇒ testagent. Passed to agentd via RUNTIME_AGENT_KIND.
+	Command []string // when non-empty, exec this instead of BinPath (foreign-process agents)
+	WorkDir string   // optional working directory for Command
 }
 
 // SpawnFunc returns a Supervisor-compatible spawn closure that launches agentd
-// with the right env and reports its exit on the returned channel.
+// (or, when Command is set, an arbitrary command) with the right env and reports
+// its exit on the returned channel.
 func (a AgentProcess) SpawnFunc() func(ctx context.Context) <-chan error {
 	return func(ctx context.Context) <-chan error {
-		cmd := exec.CommandContext(ctx, a.BinPath)
+		var cmd *exec.Cmd
+		if len(a.Command) > 0 {
+			cmd = exec.CommandContext(ctx, a.Command[0], a.Command[1:]...)
+			if a.WorkDir != "" {
+				cmd.Dir = a.WorkDir
+			}
+		} else {
+			cmd = exec.CommandContext(ctx, a.BinPath)
+		}
 		cmd.Env = append(os.Environ(),
 			"RUNTIME_PG_DSN="+a.PGDSN,
 			"RUNTIME_LISTEN_ADDR="+a.Addr,

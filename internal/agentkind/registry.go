@@ -9,7 +9,7 @@ import (
 	"github.com/sausheong/harness/tool"
 
 	"github.com/sausheong/runtime/agentruntime"
-	"github.com/sausheong/runtime/examples/nutrition"
+	nutrition "github.com/sausheong/runtime/examples/nutrition-label-go"
 	"github.com/sausheong/runtime/testagent"
 )
 
