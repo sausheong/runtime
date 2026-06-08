@@ -55,7 +55,10 @@ func main() {
 	root.Handle("/ui", consoleH)
 	root.Handle("/ui/", consoleH)
 	root.Handle("/", apiMux)
-	handler := controlplane.AuthMiddleware(root, tokens)
+	// AuthMiddleware (outer) runs first and stashes the matched token label in
+	// the request context; accessLog (inner) reads it so each request line is
+	// attributed to the calling token.
+	handler := controlplane.AuthMiddleware(accessLog(root), tokens)
 
 	srv := &http.Server{Addr: ctlAddr, Handler: handler}
 	serveErr := make(chan error, 1)
@@ -73,6 +76,38 @@ func main() {
 			os.Exit(1)
 		}
 	}
+}
+
+// statusRecorder captures the response status code for access logging.
+type statusRecorder struct {
+	http.ResponseWriter
+	status int
+}
+
+func (r *statusRecorder) WriteHeader(code int) {
+	r.status = code
+	r.ResponseWriter.WriteHeader(code)
+}
+
+// Flush forwards to the underlying ResponseWriter so SSE streaming still flushes
+// immediately through this wrapper.
+func (r *statusRecorder) Flush() {
+	if f, ok := r.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
+// accessLog logs one structured line per request, including the authenticated
+// token label (empty in open mode) from the auth middleware's context.
+func accessLog(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
+		next.ServeHTTP(rec, r)
+		label, _ := controlplane.TokenLabelFromContext(r.Context())
+		slog.Info("request",
+			"method", r.Method, "path", r.URL.Path,
+			"status", rec.status, "token_label", label, "remote", r.RemoteAddr)
+	})
 }
 
 func setupLogging() {
