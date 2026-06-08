@@ -99,9 +99,20 @@ as the standalone, path-installable `runtime_contract` package; the worked agent
 + its ~30-line adapter live at `examples/nutrition-label-openai/` (`agent.py`,
 `adapter.py`, `serve.py`, Makefile, `runtime.nutrition-openai.yaml`). Spec:
 `docs/superpowers/specs/2026-06-08-nutrition-openai-on-runtime-design.md`; plan:
-`docs/superpowers/plans/2026-06-08-nutrition-openai-on-runtime.md`. **Remaining
-C1 work:** Level 2 (in-flight crash resume), a second framework/adapter to prove
-reuse, and a TS shim — all below.
+`docs/superpowers/plans/2026-06-08-nutrition-openai-on-runtime.md`.
+
+**Author-surface cleanup (2026-06-08, post-milestone):** both contract layers now
+keep operator/deployment parameters off the agent-author surface, symmetrically.
+Go — `agentruntime.Config` shrank to `{Spec, Provider, Tools}`; `Serve` reads
+`RUNTIME_PG_DSN` + `RUNTIME_LISTEN_ADDR` from the injected env, so a builder never
+carries connection details (a builder that tried wouldn't compile). Python —
+`runtime_contract.serve(adapter)` is the analog: it reads `RUNTIME_LISTEN_ADDR` /
+`RUNTIME_AGENT_ID` / `RUNTIME_SHIM_DB` itself and builds the store + app + server,
+so an adapter author only writes `run()`. This is the reusable pattern the next
+language/framework should follow.
+
+**Remaining C1 work:** Level 2 (in-flight crash resume), a second framework/adapter
+to prove reuse, and a TS shim — all below.
 
 Host agents written in **any language / framework** (OpenAI Agents SDK, Claude
 Agent SDK, PydanticAI, CrewAI, LangGraph/LangChain, Google ADK, …), not just
@@ -115,11 +126,12 @@ harness-specific layer is the DBOS durable loop inside `agentd`/`agentruntime`.
 framework."** A foreign agent just has to speak the 6 contract endpoints
 (`/healthz`, `/meta`, `POST /sessions`, `GET /sessions/{id}/stream?since=N`,
 `GET /sessions/{id}`, `GET /sessions`). Write the contract server once per language
-(~100 lines: endpoints + SSE framing + session bookkeeping + `?since=N` replay),
-then a ~10-30 line per-framework adapter maps that framework's run/stream API to
-the contract's `text`/`tool_result`/`done`/`error` events. One Python shim then
-covers OpenAI SDK, PydanticAI, CrewAI, LangGraph, LangChain, ADK; one TS shim
-covers the JS frameworks.
+(~100 lines: endpoints + SSE framing + session bookkeeping + `?since=N` replay +
+a `serve()`-style entry point that reads the operator env), then a ~10-30 line
+per-framework adapter maps that framework's run/stream API to the contract's
+`text`/`tool_result`/`done`/`error` events — the adapter author writes only the
+adapter, never deployment glue. One Python shim then covers OpenAI SDK, PydanticAI,
+CrewAI, LangGraph, LangChain, ADK; one TS shim covers the JS frameworks.
 
 **Two durability levels** (a foreign agent being *hosted* is separate from being
 *durable*):

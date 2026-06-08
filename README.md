@@ -577,18 +577,36 @@ that it speaks the [agent contract](#agent-contract-served-by-each-agentd-reach-
 
 `contrib/shims/python/` ships a reusable Python shim that does exactly this: a
 framework-agnostic `runtime_contract` library (the six contract endpoints + SSE
-+ `?since=N` replay + a SQLite session/event store) plus a thin adapter that
-hosts an [OpenAI Agents SDK](https://github.com/openai/openai-agents-python)
-agent. Adding another framework is one new adapter file.
++ `?since=N` replay + a SQLite session/event store). A foreign framework is
+hosted by writing a thin **adapter** (the `AgentAdapter` protocol — one `run()`
+method that drives the SDK and yields contract events) and an entrypoint that
+calls `runtime_contract.serve(adapter)`:
+
+```python
+from runtime_contract import serve
+from adapter import MyFrameworkAdapter
+
+serve(MyFrameworkAdapter)   # reads RUNTIME_* from env; builds the store + app + server
+```
+
+`serve()` is the Python analog of `agentruntime.Serve`: it reads the
+operator-injected env (`RUNTIME_LISTEN_ADDR`, `RUNTIME_AGENT_ID`, and the
+optional `RUNTIME_SHIM_DB`) itself, so the adapter author never handles
+deployment parameters — exactly the same separation as the Go SDK. Adding
+another framework is one new adapter file.
+
+The worked example is the SG Nutrition Investigator on the OpenAI Agents SDK
+(`examples/nutrition-label-openai/`), which boots under `runtimed` via its
+Makefile:
 
 ```bash
-make build
-export OPENAI_API_KEY=...  OPENAI_BASE_URL=...  OPENAI_MODEL=gpt-5.4
-RUNTIME_CONFIG=contrib/shims/python/runtime.openai-shim.yaml ./bin/runtimed
+cd examples/nutrition-label-openai
+cp .env.example .env          # fill in OPENAI_API_KEY / OPENAI_BASE_URL / OPENAI_MODEL
+make run                      # builds binaries, uv sync, runs the control plane
 
 # in another shell — the same conformance gate that validates Go agents:
-./bin/runtimectl conformance --agent openai
-./bin/runtimectl invoke --agent openai "Investigate: ... Sugar 11g/100ml. Beverage."
+make conformance              # runtimectl conformance --agent nutrition-openai
+make demo-image IMAGE=milo.jpeg   # base64 a label photo → POST → stream the verdict
 ```
 
 The shim provides **Level-1 durability** (sessions and their event logs persist
