@@ -77,3 +77,63 @@ func TestLoad_NoAgents(t *testing.T) {
 		t.Fatal("expected error for empty agents list")
 	}
 }
+
+func TestLoad_WithTokens(t *testing.T) {
+	p := writeTmp(t, `
+agents:
+  - {id: a, name: A, model: m, listen_addr: 127.0.0.1:8101}
+tokens:
+  - {token: "abc", label: "ci"}
+  - {token: "xyz", label: "ops"}
+`)
+	cfg, err := Load(p)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(cfg.Tokens) != 2 {
+		t.Fatalf("tokens = %d, want 2", len(cfg.Tokens))
+	}
+	tm := cfg.TokenMap()
+	if tm["abc"] != "ci" || tm["xyz"] != "ops" {
+		t.Fatalf("TokenMap wrong: %+v", tm)
+	}
+}
+
+func TestLoad_NoTokensIsValid(t *testing.T) {
+	p := writeTmp(t, `
+agents:
+  - {id: a, name: A, model: m, listen_addr: 127.0.0.1:8101}
+`)
+	cfg, err := Load(p)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(cfg.Tokens) != 0 || len(cfg.TokenMap()) != 0 {
+		t.Fatalf("expected no tokens")
+	}
+}
+
+func TestLoad_DuplicateToken(t *testing.T) {
+	p := writeTmp(t, `
+agents:
+  - {id: a, name: A, model: m, listen_addr: 127.0.0.1:8101}
+tokens:
+  - {token: "dup", label: "one"}
+  - {token: "dup", label: "two"}
+`)
+	if _, err := Load(p); err == nil {
+		t.Fatal("expected error for duplicate token")
+	}
+}
+
+func TestLoad_EmptyTokenString(t *testing.T) {
+	p := writeTmp(t, `
+agents:
+  - {id: a, name: A, model: m, listen_addr: 127.0.0.1:8101}
+tokens:
+  - {token: "", label: "x"}
+`)
+	if _, err := Load(p); err == nil {
+		t.Fatal("expected error for empty token")
+	}
+}

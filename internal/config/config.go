@@ -16,9 +16,16 @@ type AgentConfig struct {
 	ListenAddr string `yaml:"listen_addr"`
 }
 
+// TokenConfig is one control-plane API token. Label is for log attribution.
+type TokenConfig struct {
+	Token string `yaml:"token"`
+	Label string `yaml:"label"`
+}
+
 // Config is the parsed runtime.yaml.
 type Config struct {
 	Agents []AgentConfig `yaml:"agents"`
+	Tokens []TokenConfig `yaml:"tokens"`
 }
 
 // Load reads and validates the config file at path.
@@ -57,5 +64,27 @@ func (c *Config) Validate() error {
 		ids[a.ID] = true
 		addrs[a.ListenAddr] = true
 	}
+	seen := map[string]bool{}
+	for i, tk := range c.Tokens {
+		if tk.Token == "" {
+			return fmt.Errorf("config: token[%d] has empty token string", i)
+		}
+		if seen[tk.Token] {
+			return fmt.Errorf("config: duplicate token at index %d", i)
+		}
+		seen[tk.Token] = true
+	}
 	return nil
+}
+
+// TokenMap returns token→label for all configured tokens. Empty when none.
+func (c *Config) TokenMap() map[string]string {
+	m := make(map[string]string, len(c.Tokens))
+	for _, tk := range c.Tokens {
+		if tk.Token == "" {
+			continue // never authenticate an empty token (Validate also rejects these)
+		}
+		m[tk.Token] = tk.Label
+	}
+	return m
 }

@@ -1,0 +1,9 @@
+<!doctype html><html><head><title>Runtime — {{.AgentID}}</title>
+<link rel="stylesheet" href="/ui/static/style.css"></head><body>
+<p><a href="/ui">&larr; agents</a></p>
+<h1>Sessions — {{.AgentID}}</h1>
+<table id="sessions"><thead><tr><th>Session</th><th>Status</th><th>Turns</th></tr></thead><tbody></tbody></table>
+<script>const AGENT="{{.AgentID}}";</script>
+<script src="/ui/static/app.js"></script>
+<script>loadSessions();</script>
+</body></html>

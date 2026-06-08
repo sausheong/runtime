@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
+	"sync"
+	"time"
 )
 
 // NewAPI returns the control-plane HTTP handler routing /agents/{id}/... to
@@ -17,7 +19,31 @@ func NewAPI(reg *Registry) *http.ServeMux {
 	})
 
 	mux.HandleFunc("GET /agents", func(w http.ResponseWriter, _ *http.Request) {
-		_ = json.NewEncoder(w).Encode(reg.List())
+		type agentStatus struct {
+			ID      string `json:"id"`
+			Name    string `json:"name"`
+			Model   string `json:"model"`
+			Healthy bool   `json:"healthy"`
+		}
+		infos := reg.List()
+		out := make([]agentStatus, len(infos))
+		var wg sync.WaitGroup
+		client := &http.Client{Timeout: 1 * time.Second}
+		for i, info := range infos {
+			out[i] = agentStatus{ID: info.ID, Name: info.Name, Model: info.Model}
+			ap, _ := reg.Get(info.ID)
+			wg.Add(1)
+			go func(i int, addr string) {
+				defer wg.Done()
+				resp, err := client.Get("http://" + addr + "/healthz")
+				if err == nil {
+					out[i].Healthy = resp.StatusCode == 200
+					resp.Body.Close()
+				}
+			}(i, ap.Addr)
+		}
+		wg.Wait()
+		_ = json.NewEncoder(w).Encode(out)
 	})
 
 	// Subtree pattern: matches /agents/{id}/sessions, /agents/{id}/healthz, etc.

@@ -25,8 +25,11 @@ no lost work, no duplicated committed tool calls.
 - [Concepts](#concepts)
 - [Quick start](#quick-start)
 - [Configuring agents (`runtime.yaml`)](#configuring-agents-runtimeyaml)
+- [Authentication](#authentication)
 - [The CLI (`runtimectl`)](#the-cli-runtimectl)
+- [Web console](#web-console)
 - [HTTP API reference](#http-api-reference)
+- [Contract conformance](#contract-conformance)
 - [Writing your own agent (the SDK)](#writing-your-own-agent-the-sdk)
 - [How durability works](#how-durability-works)
 - [Deployment](#deployment)
@@ -47,9 +50,13 @@ no lost work, no duplicated committed tool calls.
 | **Crash supervision** | Every agent has a supervisor that restarts it (capped backoff) if it dies. One agent crashing never affects the others. |
 | **Session management** | Create sessions, stream their events (SSE), re-attach after a disconnect, list an agent's sessions, and see real per-session status + turn counts. |
 | **Streaming everything** | Agent output streams as Server-Sent Events end-to-end, through the control-plane proxy, with immediate flush. |
-| **Operator CLI** | `runtimectl` to list agents, invoke sessions, stream logs, and list sessions. |
+| **Operator CLI** | `runtimectl` to list agents, invoke sessions, stream logs, list sessions, and run contract conformance. |
+| **Token auth** | Optional bearer-token auth (named tokens in `runtime.yaml`) on the control plane, via header or cookie. Open mode when no tokens are configured. |
+| **Read-only web console** | A built-in `/ui` console: fleet overview → per-agent sessions → live SSE session view. Server-rendered, zero JS build step. |
+| **Contract conformance** | A reusable Go suite (and `runtimectl conformance`) that verifies any agent satisfies the HTTP/SSE contract — executable proof, CI-ready. |
+| **Structured logging** | `slog` everywhere (text or JSON via `RUNTIME_LOG_FORMAT`), with agent/session fields. |
 | **BYO agent** | Link the `agentruntime` SDK, hand it a harness `AgentSpec` + provider + tools, and get the durable contract for free — zero durability or HTTP code. |
-| **On-prem & self-contained** | Go binaries + Postgres. No cloud, no Kubernetes required, air-gap friendly. |
+| **On-prem & self-contained** | Go binaries + Postgres. No cloud, no Kubernetes required, air-gap friendly. Full-stack `docker compose` included. |
 
 ---
 
@@ -214,10 +221,47 @@ To add or remove an agent, edit `runtime.yaml` and restart `runtimed`.
 
 ---
 
+## Authentication
+
+The control plane supports optional bearer-token auth. Add a `tokens:` section
+to `runtime.yaml`:
+
+```yaml
+agents:
+  - {id: support, name: Support Agent, model: test/scripted, listen_addr: 127.0.0.1:8101}
+tokens:
+  - token: "s3cr3t-ci"
+    label: "ci"          # label is for log attribution
+  - token: "s3cr3t-ops"
+    label: "ops"
+```
+
+- **When `tokens:` is present**, every control-plane request must carry a valid
+  token, sent EITHER as `Authorization: Bearer <token>` OR as a `runtime_token`
+  cookie (the console uses the cookie; `EventSource` can't set headers).
+  `GET /healthz` is always exempt (for liveness probes), as are the console
+  login page and its static assets.
+- **When `tokens:` is absent/empty**, auth is **disabled** (open mode) and
+  `runtimed` logs a startup warning. This keeps local development friction-free.
+- The CLI sends `Authorization: Bearer $RUNTIME_TOKEN` automatically when that
+  env var is set.
+
+```bash
+export RUNTIME_TOKEN=s3cr3t-ops
+runtimectl agents          # now authenticated
+```
+
+> Token comparison is a plain lookup (not constant-time) and tokens travel in
+> the clear — terminate TLS upstream and treat tokens as bearer secrets.
+> Per-user identity, RBAC, and rotation belong to the future Identity
+> sub-project.
+
+---
+
 ## The CLI (`runtimectl`)
 
 `runtimectl` talks to the control plane at `RUNTIME_CTL_URL` (default
-`http://localhost:8080`).
+`http://localhost:8080`), sending `RUNTIME_TOKEN` as a bearer token when set.
 
 | Command | Description |
 |---|---|
@@ -225,9 +269,28 @@ To add or remove an agent, edit `runtime.yaml` and restart `runtimed`.
 | `runtimectl invoke [--agent <id>] "<message>"` | Start a session on an agent and stream its events to completion. |
 | `runtimectl sessions [--agent <id>]` | List an agent's sessions (`id  status  turns=N`). |
 | `runtimectl logs [--agent <id>] <session-id>` | Replay/stream a session's events from the start. |
+| `runtimectl conformance [--agent <id>]` | Run the contract conformance suite against an agent; exits non-zero on failure. |
 
 `--agent` may be omitted when exactly one agent is registered (it's auto-selected);
 it's required when there are several.
+
+---
+
+## Web console
+
+`runtimed` serves a read-only operator console at **`/ui`** (same port as the
+API). Open `http://localhost:8080/ui` in a browser.
+
+- **`/ui`** — fleet overview: every registered agent.
+- **`/ui/agents/{id}`** — that agent's sessions (id, status, turn count).
+- **`/ui/agents/{id}/sessions/{sid}`** — live session view, streaming events via
+  `EventSource`.
+
+When auth is enabled, the console redirects to **`/ui/login`**; enter a token
+once and it's stored in the `runtime_token` cookie. The console is strictly
+read-only — it observes agents and sessions but cannot deploy, stop, or invoke.
+It's server-rendered Go templates with a tiny vanilla-JS/SSE layer — no build
+step, embedded in the binary.
 
 ---
 
@@ -237,9 +300,13 @@ it's required when there are several.
 
 | Method & path | Description |
 |---|---|
-| `GET /healthz` | Control-plane liveness. |
-| `GET /agents` | JSON list of registered agents: `[{id,name,model}]`. |
-| `ANY /agents/{id}/...` | Reverse-proxied to agent `{id}`'s subprocess, with the `/agents/{id}` prefix stripped. Unknown id → `404`. |
+| `GET /healthz` | Control-plane liveness (always auth-exempt). |
+| `GET /agents` | JSON list of registered agents with a best-effort health probe: `[{id,name,model,healthy}]`. |
+| `ANY /agents/{id}/...` | Reverse-proxied to agent `{id}`'s subprocess, with the `/agents/{id}` prefix stripped. Unknown id → `404`; agent down/restarting → `503`. |
+| `GET /ui`, `/ui/...` | The read-only web console (see [Web console](#web-console)). |
+
+All control-plane routes except `/healthz`, `/ui/login`, and `/ui/static/*` are
+token-gated when auth is enabled (see [Authentication](#authentication)).
 
 ### Agent contract (served by each `agentd`; reach it via the proxy prefix)
 
@@ -273,6 +340,43 @@ curl -N localhost:8080/agents/support/sessions/$SID/stream?since=0
 # id: 2
 # data: {"type":"done"}
 ```
+
+---
+
+## Contract conformance
+
+The `conformance` package is an executable definition of the agent contract: it
+exercises `/healthz`, `/meta`, `POST /sessions`, the SSE stream (to a terminal
+`done`), `GET /sessions/{id}`, and `GET /sessions` against any agent at a base
+URL. Use it two ways:
+
+**Operator — against a live agent through the control plane:**
+
+```bash
+runtimectl conformance --agent support
+# ok: healthz: ok
+# ok: meta: ok (contract v1)
+# ok: create session: ok (ses-…)
+# ok: stream: ok
+# conformance: PASSED        (exit 0; non-zero on any failure)
+```
+
+**Agent author — as a Go test for your own agent binary:**
+
+```go
+import "github.com/sausheong/runtime/conformance"
+
+func TestMyAgentConformsToContract(t *testing.T) {
+    addr := startMyAgent(t) // however you boot it
+    conformance.Run(t, "http://"+addr)
+}
+```
+
+`conformance.Run(t, baseURL)` takes any `TestingT` (satisfied by `*testing.T`
+and the CLI adapter), so the same checks gate CI for new agent binaries and
+serve as the operator's live smoke test. This is what makes the contract a gate
+rather than prose — and the same suite will validate containerized agents when
+those land.
 
 ---
 
@@ -414,13 +518,25 @@ WorkingDirectory=/opt/runtime
 WantedBy=multi-user.target
 ```
 
-### Docker Compose
+### Docker Compose (full stack)
 
-The bundled `deploy/docker-compose.yml` provisions Postgres (pgvector image).
-Add `runtimed` as a service that mounts your `runtime.yaml` and agent binary,
-sets `RUNTIME_PG_DSN` to the `postgres` service, and exposes `:8080`. Build the
-binaries into the image (multi-stage Go build) so `RUNTIME_AGENTD_BIN` points at
-the in-image `agentd`.
+`deploy/docker-compose.full.yml` runs the whole platform — Postgres + the
+control plane — with one command. It builds `runtimed` + `agentd` via
+`deploy/Dockerfile` (a multi-stage Go build).
+
+> **Build context:** the `runtime` module depends on `../harness` via a `replace`
+> directive, so the Docker build context must contain BOTH `runtime/` and
+> `harness/`. The compose file sets `context: ../..` (the projects root). Run it
+> from that root:
+
+```bash
+# from the directory that contains both runtime/ and harness/
+docker compose -f runtime/deploy/docker-compose.full.yml up --build
+# control plane on http://localhost:8080  (Postgres stays internal to the compose network)
+```
+
+`deploy/docker-compose.yml` (Postgres only) remains for the local-dev workflow
+where you run the Go binaries directly.
 
 ### Notes on multi-agent startup
 
@@ -457,7 +573,9 @@ unaffected.
 | `RUNTIME_AGENTD_BIN` | runtimed | `./agentd` | Path to the agent subprocess binary to spawn. |
 | `RUNTIME_LISTEN_ADDR` | agentd | (set by runtimed per agent) | Agent subprocess HTTP bind address. |
 | `RUNTIME_AGENT_ID` | agentd | (set by runtimed per agent) | The agent's id. |
+| `RUNTIME_LOG_FORMAT` | runtimed | `text` | `json` switches `slog` to JSON output. |
 | `RUNTIME_CTL_URL` | runtimectl | `http://localhost:8080` | Control-plane base URL the CLI targets. |
+| `RUNTIME_TOKEN` | runtimectl | (unset) | Bearer token sent on every CLI request when set. |
 
 `runtimed` injects `RUNTIME_LISTEN_ADDR` and `RUNTIME_AGENT_ID` into each agent
 subprocess from `runtime.yaml`; you don't set them by hand.
@@ -508,13 +626,15 @@ runtime/
 │   └── runtimectl/    # operator CLI
 ├── agentruntime/      # the SDK: Serve(), the durable DBOS workflow, the
 │                      #   HTTP/SSE agent contract, session manager
-├── controlplane/      # Registry, /agents/{id} router, Supervisor, proxy
+├── controlplane/      # Registry, /agents/{id} router, Supervisor, proxy, auth
+├── console/           # read-only web console: embedded templates + static + handlers
+├── conformance/       # reusable agent-contract conformance suite
 ├── internal/
-│   ├── config/        # runtime.yaml loader + validation
+│   ├── config/        # runtime.yaml loader + validation (agents + tokens)
 │   └── store/         # control-plane store (sessions, event log): pg + in-memory
 ├── testagent/         # deterministic provider + marker tool (for tests/demo)
 ├── test/              # //go:build integration end-to-end tests
-├── deploy/            # docker-compose.yml (Postgres)
+├── deploy/            # Dockerfile, docker-compose.yml (Postgres), docker-compose.full.yml
 ├── runtime.yaml       # example agent config
 └── docs/superpowers/  # design specs and implementation plans
 ```
@@ -524,30 +644,37 @@ runtime/
 ## Status, scope & limitations
 
 Runtime is built in milestones. **Milestone 1** delivered the durable single-agent
-spine; **Milestone 2** (current) adds the multi-agent platform: config-driven
-registry, path routing, per-agent supervision, session status tracking, and the
-full CLI.
+spine; **Milestone 2** added the multi-agent platform (config-driven registry,
+path routing, per-agent supervision, session status, full CLI); **Milestone 3**
+(current) adds the operability layer: token auth, the read-only web console,
+structured logging, the contract conformance suite, bounded shutdown,
+503-on-restart, per-agent health, and a full-stack Docker build.
 
 **Deliberately not yet implemented** (each is planned, scoped to a later
 milestone or sub-project):
 
-- **Web console** — a read-only operator UI (next milestone). Today: CLI + API.
-- **Authentication / RBAC / multi-tenancy** — no auth on the control API yet
-  (Identity sub-project).
+- **Identity: RBAC, users, OAuth, secrets, token rotation** — M3 has simple
+  bearer tokens; per-user identity and authorization are the Identity
+  sub-project. (Token comparison is also not constant-time — fine for static
+  config tokens, revisited there.)
+- **Observability dashboards** — M3 has structured `slog` logs; metrics,
+  tracing, and dashboards are the Observability sub-project.
+- **Write actions from the console** — the console is read-only; deploy/stop/
+  invoke from the UI is future work.
 - **Subprocess pools / autoscaling** — one subprocess per agent today; no
   per-agent replicas or load-based scaling.
 - **Dynamic deploy** — agents come from `runtime.yaml` at startup; no runtime
-  `POST /agents` registration or rollback yet.
+  `POST /agents` registration or rollback yet (tokens are config-only too).
 - **Sandboxes** (isolated browser / code-interpreter tools), a **tool/MCP
   gateway**, and **managed memory** — each its own sub-project.
 - **Containers / Kubernetes** — the agent contract is designed to admit
-  containerized agents later; today agents are local subprocesses.
-- **`GET /sessions/{id}` over the proxy returns status** but the control plane
-  does not yet aggregate cross-agent session views (per-agent only).
-- **Hardening details**: control-plane graceful shutdown uses an unbounded
-  timeout; the reverse proxy returns the default 502 if a backend is mid-restart;
-  `session_events` sequence allocation assumes one writer per session (true
-  today). These are tracked for the operability milestone.
+  containerized agents later (the conformance suite already validates them);
+  today agents are local subprocesses.
+- **Cross-agent aggregate views** — session listing is per-agent; a fleet-wide
+  session view is future console work.
+- **Minor hardening**: `session_events` sequence allocation assumes one writer
+  per session (true today, since one subprocess owns a session); the console
+  cookie is not `Secure` (terminate TLS upstream).
 
 See `docs/superpowers/specs/` for the full design and milestone specs.
 

@@ -2,6 +2,7 @@ package controlplane
 
 import (
 	"context"
+	"net/http"
 	"net/http/httputil"
 	"net/url"
 	"os"
@@ -45,5 +46,8 @@ func reverseProxy(addr string) *httputil.ReverseProxy {
 	target, _ := url.Parse("http://" + addr)
 	rp := httputil.NewSingleHostReverseProxy(target)
 	rp.FlushInterval = -1
+	rp.ErrorHandler = func(w http.ResponseWriter, _ *http.Request, _ error) {
+		http.Error(w, "agent unavailable", http.StatusServiceUnavailable)
+	}
 	return rp
 }
