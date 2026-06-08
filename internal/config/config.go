@@ -14,6 +14,7 @@ type AgentConfig struct {
 	Name       string `yaml:"name"`
 	Model      string `yaml:"model"`
 	ListenAddr string `yaml:"listen_addr"`
+	Kind       string `yaml:"kind"` // optional; "" ⇒ testagent. Resolved by agentd's kind registry.
 }
 
 // TokenConfig is one control-plane API token. Label is for log attribution.

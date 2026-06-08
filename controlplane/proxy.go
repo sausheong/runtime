@@ -15,6 +15,7 @@ type AgentProcess struct {
 	Addr    string // host:port the subprocess listens on, e.g. "127.0.0.1:8081"
 	BinPath string // path to the agentd binary
 	PGDSN   string
+	Kind    string // optional agent kind; "" ⇒ testagent. Passed to agentd via RUNTIME_AGENT_KIND.
 }
 
 // SpawnFunc returns a Supervisor-compatible spawn closure that launches agentd
@@ -26,6 +27,7 @@ func (a AgentProcess) SpawnFunc() func(ctx context.Context) <-chan error {
 			"RUNTIME_PG_DSN="+a.PGDSN,
 			"RUNTIME_LISTEN_ADDR="+a.Addr,
 			"RUNTIME_AGENT_ID="+a.AgentID,
+			"RUNTIME_AGENT_KIND="+a.Kind,
 		)
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
