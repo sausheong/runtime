@@ -10,3 +10,10 @@ nutrition_memory.json
 /runtimectl
 # Local LLM credentials for examples (never commit real keys; .env.example is the template)
 .env
+# Python shim artifacts
+contrib/shims/python/shim.db
+contrib/shims/python/.venv/
+contrib/shims/python/**/__pycache__/
+contrib/shims/python/.pytest_cache/
+*.db-wal
+*.db-shm

@@ -1,0 +1,12 @@
+# Host the OpenAI Agents SDK agent via the Python contract shim.
+# Run from the repo root:
+#   export OPENAI_API_KEY=...  OPENAI_BASE_URL=https://litellm-stg.aip.gov.sg  OPENAI_MODEL=gpt-5.4
+#   RUNTIME_CONFIG=contrib/shims/python/runtime.openai-shim.yaml ./bin/runtimed
+# workdir is relative to runtimed's cwd; run from the repo root, or use an absolute path.
+agents:
+  - id: openai
+    name: OpenAI SDK Nutrition Agent
+    model: openai/gpt-5.4
+    listen_addr: 127.0.0.1:8301
+    workdir: ./contrib/shims/python
+    command: ["uv", "run", "python", "main.py"]
