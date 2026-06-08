@@ -83,11 +83,64 @@ exposing the platform broadly.
 
 ### C. Cross-cutting / platform-level (later)
 
-- **Containers / Kubernetes** — host arbitrary containerized agents (any
-  language), not just harness-native Go subprocesses. The agent HTTP/SSE
-  contract was deliberately designed to admit this; the conformance suite
-  already validates any binary against it. Then Helm charts / an operator for
-  orchestrated scale (the "K8s later" half of the deploy decision).
+### C1. Polyglot agent hosting (foreign SDK agents via the contract)
+
+Host agents written in **any language / framework** (OpenAI Agents SDK, Claude
+Agent SDK, PydanticAI, CrewAI, LangGraph/LangChain, Google ADK, …), not just
+harness-native Go subprocesses. The agent HTTP/SSE contract was deliberately
+designed to admit this, and most of the platform is already framework-agnostic:
+routing (`reverseProxy`), supervision, auth, the `/ui` console, `runtimectl`, and
+the conformance suite all operate on the wire contract, not on Go types. The only
+harness-specific layer is the DBOS durable loop inside `agentd`/`agentruntime`.
+
+**The integration seam is "one contract layer per language + a thin adapter per
+framework."** A foreign agent just has to speak the 6 contract endpoints
+(`/healthz`, `/meta`, `POST /sessions`, `GET /sessions/{id}/stream?since=N`,
+`GET /sessions/{id}`, `GET /sessions`). Write the contract server once per language
+(~100 lines: endpoints + SSE framing + session bookkeeping + `?since=N` replay),
+then a ~10-30 line per-framework adapter maps that framework's run/stream API to
+the contract's `text`/`tool_result`/`done`/`error` events. One Python shim then
+covers OpenAI SDK, PydanticAI, CrewAI, LangGraph, LangChain, ADK; one TS shim
+covers the JS frameworks.
+
+**Two durability levels** (a foreign agent being *hosted* is separate from being
+*durable*):
+
+- **Level 1 — conversation resume** (restart the process, the chat continues).
+  Cheap: a persistent per-session message store (e.g. the SDK's own Session /
+  SQLite/Postgres) keyed by the runtime `session_id`. The contract shim just uses
+  a persistent store instead of in-memory. **This is the near-term target.**
+- **Level 2 — in-flight crash resume** (a run that died mid-execution completes
+  without losing work). Requires wrapping the foreign run in a durable engine —
+  either DBOS-Python *inside* the shim, or a Go "external-kind" `agentd` that
+  drives the shim as a `RunAsStep`. Granularity is **whole-run** for opaque-loop
+  SDKs (OpenAI/Claude/CrewAI/LangChain) — a crash re-runs the whole agent, so
+  tools must be idempotent (at-least-once). Frameworks with their OWN durability
+  (LangGraph checkpointers, PydanticAI+DBOS) should keep ownership of it rather
+  than be double-wrapped. **Deferred** — Level 1 first.
+
+  - **PydanticAI + DBOS is the standout** for a future deep integration: its
+    durable-execution backend can be DBOS — the same engine runtime uses — so a
+    PydanticAI agent and a runtime session could align on one Postgres rather than
+    nest. Worth its own spec when Level 2 is taken up.
+
+**Platform prerequisite (blocks all of the above):** the **generalized spawn
+path**. Today `controlplane.AgentProcess.SpawnFunc` only launches the `agentd`
+binary; the supervisor must be able to launch an arbitrary command (e.g.
+`python contract_server.py`). Needs a `command:`/`exec:` field on the config
+agent entry, threaded through `registry` → `AgentProcess` → `SpawnFunc`. Small,
+localized change; do it as part of the first polyglot milestone.
+
+**First milestone (in progress):** Level-1 contract shim for the OpenAI Agents
+SDK, proven against `../agents_sdk/openai-demo`, + the generalized spawn path.
+Spec: `docs/superpowers/specs/` (dated when started).
+
+### C2. Containers / Kubernetes
+
+- **Containers / Kubernetes** — once C1 makes foreign agents first-class, package
+  them as containers and add Helm charts / an operator for orchestrated scale (the
+  "K8s later" half of the deploy decision). The conformance suite already validates
+  any binary/container against the contract.
 
 ---
 
