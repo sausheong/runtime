@@ -1,47 +1,36 @@
 """Entry point: serve the SG Nutrition Investigator over the runtime contract.
 
 runtimed execs this (via the config's command/workdir) as a supervised agent.
-It reads RUNTIME_* env injected by the control plane and serves the six contract
-endpoints through the reusable runtime_contract library.
+Operator parameters (listen address, the Level-1 SQLite path, the agent id) are
+read from the injected RUNTIME_* env by runtime_contract.serve — this file only
+has to build the agent. NutritionAdapter is passed as a factory: serve() calls
+NutritionAdapter(db_path) so the adapter keys its SQLiteSession on the same db
+the contract store uses.
 """
 from __future__ import annotations
 
 import os
 
-import uvicorn
+from runtime_contract import serve
 
-from runtime_contract.app import create_app
-from runtime_contract.store import Store
 from adapter import NutritionAdapter
 
 
 def main() -> None:
-    addr = os.environ.get("RUNTIME_LISTEN_ADDR", "127.0.0.1:8302")
-    host, _, port = addr.partition(":")
-    agent_id = os.environ.get("RUNTIME_AGENT_ID", "nutrition-openai")
-    # RUNTIME_SHIM_DB is an optional override; the control plane does not inject
-    # it, so it defaults to ./shim.db under the agent's workdir.
-    db = os.environ.get("RUNTIME_SHIM_DB", "./shim.db")
-
     # The control plane's /agents listing shows the config's `model:` string,
     # but the SDK actually runs OPENAI_MODEL (default gpt-4o). Print the resolved
     # model at startup so the two are never silently out of step. (Plain print —
-    # uvicorn's loggers aren't configured until uvicorn.run() below.)
+    # uvicorn's loggers aren't configured until serve() runs uvicorn.)
     print(
-        f"serving agent {agent_id} with OPENAI_MODEL="
-        f"{os.environ.get('OPENAI_MODEL', 'gpt-4o')}",
+        f"serving agent {os.environ.get('RUNTIME_AGENT_ID', 'nutrition-openai')} "
+        f"with OPENAI_MODEL={os.environ.get('OPENAI_MODEL', 'gpt-4o')}",
         flush=True,
     )
 
-    store = Store(db)
-    adapter = NutritionAdapter(db_path=db)  # builds the agent; fails fast if no key
-    app = create_app(adapter, store, agent_id)
-    uvicorn.run(
-        app,
-        host=host or "127.0.0.1",
-        port=int(port or "8302"),
-        log_level="info",
-    )
+    # NutritionAdapter(db_path) builds the agent (fails fast if OPENAI_API_KEY is
+    # missing). serve() resolves db_path from RUNTIME_SHIM_DB and binds
+    # RUNTIME_LISTEN_ADDR.
+    serve(NutritionAdapter)
 
 
 if __name__ == "__main__":

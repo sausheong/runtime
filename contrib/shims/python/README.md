@@ -38,10 +38,36 @@ The library is two layers:
   into contract events. The adapter lives with the consumer, not in this library;
   see the example for a working one (`NutritionAdapter`).
 
-A consumer wires the two together in a short entrypoint: it constructs its
-adapter and a `Store`, calls `create_app(adapter, store, agent_id)` to build the
-FastAPI app, and serves it on `RUNTIME_LISTEN_ADDR`. The Runtime config's
-`command:` then points at that entrypoint (e.g. `uv run python serve.py`).
+A consumer's entrypoint just builds the adapter and calls `serve()`. The helper
+reads the **operator parameters** from the environment the control plane injects
+— it is the Python analog of the Go `agentruntime.Serve`, which likewise reads
+`RUNTIME_PG_DSN`/`RUNTIME_LISTEN_ADDR` from env rather than from the agent
+author. The adapter author never handles them:
+
+| Env var | Meaning | Source |
+|---|---|---|
+| `RUNTIME_LISTEN_ADDR` | `host:port` to bind (required) | injected by `runtimed` |
+| `RUNTIME_AGENT_ID` | agent id surfaced on `/meta` (default `agent`) | injected by `runtimed` |
+| `RUNTIME_SHIM_DB` | SQLite path for the Level-1 store (default `./shim.db`) | optional; *not* injected — defaults under the agent's workdir |
+
+`serve()` resolves those, builds the `Store` and the FastAPI app, and runs
+uvicorn. The Runtime config's `command:` points at the entrypoint (e.g.
+`uv run python serve.py`):
+
+```python
+from runtime_contract import serve
+from adapter import MyFrameworkAdapter
+
+serve(MyFrameworkAdapter)   # reads RUNTIME_* from env; builds Store + app + uvicorn
+```
+
+`serve(adapter)` accepts either a ready adapter instance or a **factory**
+`make(db_path) -> AgentAdapter`. A class whose constructor takes the db path
+(e.g. `MyFrameworkAdapter(db_path)`) is itself a factory, so `serve(MyClass)`
+works directly — and lets the adapter key its own per-session store (e.g. an
+SDK's `SQLiteSession`) on the same `RUNTIME_SHIM_DB` the contract store uses.
+(The lower-level `create_app(adapter, store, agent_id)` and `Store` remain
+exported if you need to assemble the app yourself.)
 
 Adding support for another framework is **one new file** implementing the
 `AgentAdapter` protocol (`runtime_contract/adapter.py`):
@@ -65,9 +91,9 @@ class MyFrameworkAdapter:
         yield ContractEvent(type="text", text="hello")
 ```
 
-Then point your entrypoint at the new adapter (`create_app(MyFrameworkAdapter(),
-store, agent_id)`). The library handles persistence, SSE fan-out, `?since=N`
-replay, and the terminal event.
+Then point your entrypoint at the new adapter (`serve(MyFrameworkAdapter)`). The
+library handles persistence, SSE fan-out, `?since=N` replay, and the terminal
+event.
 
 ---
 
@@ -105,8 +131,8 @@ make demo-image IMAGE=milo.jpeg
 ```
 
 To wire your own consumer, follow the same shape: an entrypoint that builds an
-adapter + `Store` and calls `create_app(adapter, store, agent_id)`, plus a
-Runtime config whose `command:` points at it.
+adapter and calls `serve(adapter)`, plus a Runtime config whose `command:` points
+at it.
 
 ---
 
