@@ -3,6 +3,7 @@ package identity
 import (
 	"bytes"
 	"encoding/base64"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"strings"
@@ -50,8 +51,20 @@ func (k *Keyring) PrimaryID() string { return k.primaryID }
 // NumKeys is the number of keys in the ring (for startup logging).
 func (k *Keyring) NumKeys() int { return len(k.ciphers) }
 
+// aadFor builds the AAD bound into a secret's seal: a length-prefixed encoding of
+// (tenant, name) so distinct pairs can never collide (a plain separator would let
+// e.g. ("a\x00b","c") and ("a","b\x00c") share AAD). Length-prefixing makes the
+// binding unambiguous regardless of the bytes in either field.
 func aadFor(tenant, name string) []byte {
-	return []byte(tenant + "\x00" + name)
+	out := make([]byte, 0, 8+len(tenant)+len(name))
+	var l [4]byte
+	binary.BigEndian.PutUint32(l[:], uint32(len(tenant)))
+	out = append(out, l[:]...)
+	out = append(out, tenant...)
+	binary.BigEndian.PutUint32(l[:], uint32(len(name)))
+	out = append(out, l[:]...)
+	out = append(out, name...)
+	return out
 }
 
 // Seal produces a new-format blob under the primary key, binding (tenant, name).

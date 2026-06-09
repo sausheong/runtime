@@ -54,6 +54,23 @@ func TestKeyring_OpenWrongTenantOrNameFails(t *testing.T) {
 	}
 }
 
+func TestKeyring_AADNoSeparatorCollision(t *testing.T) {
+	kr, _ := NewKeyring(map[string]*Cipher{"v1": mkCipher(t, 1)}, "v1", "v1")
+	// Two (tenant,name) pairs that would share AAD under a plain "\x00" separator.
+	blob, err := kr.Seal("a\x00b", "c", []byte("secret"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := kr.Open("a", "b\x00c", blob); err == nil {
+		t.Fatal("AAD collision: blob sealed for (\"a\\x00b\",\"c\") opened for (\"a\",\"b\\x00c\")")
+	}
+	// Sanity: it still opens for its own exact pair.
+	got, err := kr.Open("a\x00b", "c", blob)
+	if err != nil || string(got) != "secret" {
+		t.Fatalf("round-trip under exact pair failed: got=%q err=%v", got, err)
+	}
+}
+
 func TestKeyring_MixedKeyVersions(t *testing.T) {
 	cOld, cNew := mkCipher(t, 1), mkCipher(t, 9)
 	krOld, _ := NewKeyring(map[string]*Cipher{"v1": cOld}, "v1", "v1")
