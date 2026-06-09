@@ -92,7 +92,13 @@ func wireMemory(cfg *agentruntime.Config, d Deps) error {
 	cfg.Tools.Register(&hmemory.MemoryTool{Store: st})
 	if enabled {
 		k := envInt("RUNTIME_EMBED_RECALL_K", 5)
-		floor := envFloat("RUNTIME_EMBED_RECALL_FLOOR", 0.7)
+		// Default tuned for OpenAI-family embeddings (text-embedding-3-*), where a
+		// question scores only ~0.25-0.40 cosine against the declarative memory it
+		// should recall (measured ~0.27 against text-embedding-3-small; unrelated
+		// text sits near 0). A higher floor like 0.7 silently suppresses ALL recall
+		// on those models. Operators on normalized-embedding families may raise it;
+		// see the README per-model guidance.
+		floor := envFloat("RUNTIME_EMBED_RECALL_FLOOR", 0.25)
 		var kgOpts []memory.KGOption
 		if ingestExt != nil {
 			dedupFloor := envFloat("RUNTIME_INGEST_DEDUP_FLOOR", 0.85)

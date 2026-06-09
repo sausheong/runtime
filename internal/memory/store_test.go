@@ -312,9 +312,11 @@ func TestStore_SearchSimilarCrossTenantIsolation(t *testing.T) {
 }
 
 func TestStore_DedupFloorSeparation(t *testing.T) {
-	// vectors chosen for known cosine similarities to the query {1,0,0}:
+	// Synthetic vectors with known cosine similarities to the query {1,0,0}.
+	// (The 0.7/0.85 thresholds below are illustrative test values for proving
+	// floor separation, not the product defaults.)
 	//   near    = {0.97, 0.243, 0}  → cosine ≈ 0.970 (>= 0.85 dedup floor)
-	//   related = {0.8, 0.6, 0}     → cosine = 0.800 (between recall 0.7 and dedup 0.85)
+	//   related = {0.8, 0.6, 0}     → cosine = 0.800 (between a 0.7 floor and 0.85 dedup)
 	emb := &fixedEmbedder{vecs: map[string][]float32{
 		"near":    {0.97, 0.243, 0},
 		"related": {0.8, 0.6, 0},
@@ -334,8 +336,8 @@ func TestStore_DedupFloorSeparation(t *testing.T) {
 		t.Fatalf("dedup floor 0.85 should match only 'near': %+v", dupHits)
 	}
 
-	// "related" sits above the recall floor (0.7) but below dedup (0.85): it would
-	// be recalled, but is NOT treated as a duplicate.
+	// "related" (0.80) sits above a 0.7 recall-style floor but below the 0.85
+	// dedup floor: it would be recalled, but is NOT treated as a duplicate.
 	recallHits, _ := st.SearchSimilar(ctx, []float32{1, 0, 0}, 5, 0.7)
 	var sawRelated bool
 	for _, h := range recallHits {

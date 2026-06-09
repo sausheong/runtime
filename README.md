@@ -385,9 +385,28 @@ export RUNTIME_EMBED_MODEL=text-embedding-3-small
 export RUNTIME_EMBED_DIM=1536          # must match the model's output dimension
 # reuses OPENAI_BASE_URL / OPENAI_API_KEY
 # optional tuning:
-export RUNTIME_EMBED_RECALL_K=5        # max memories injected per turn (default 5)
-export RUNTIME_EMBED_RECALL_FLOOR=0.7  # min cosine similarity to inject (default 0.7)
+export RUNTIME_EMBED_RECALL_K=5         # max memories injected per turn (default 5)
+export RUNTIME_EMBED_RECALL_FLOOR=0.25  # min cosine similarity to inject (default 0.25)
 ```
+
+**Tuning the recall floor per embedding model.** `RUNTIME_EMBED_RECALL_FLOOR`
+is the minimum cosine similarity a stored memory must have to the user's query
+to be injected. The right value depends heavily on the embedding model, because
+a *question* and the *declarative fact* it should recall are worded very
+differently and so score lower than two similar facts would. Measured against
+`text-embedding-3-small`, a relevant query→memory pair scores only ~0.25–0.40,
+while unrelated text sits near 0 — so the default is **0.25**. Guidance:
+
+| Embedding family | Suggested `RECALL_FLOOR` | Notes |
+|---|---|---|
+| OpenAI `text-embedding-3-small` / `-3-large`, `ada-002` | **0.20–0.35** (default 0.25) | Question↔fact pairs rarely exceed ~0.4; 0.7 silently suppresses all recall. |
+| Cohere `embed-v3`, Gemini `gemini-embedding-001` | start ~0.3, calibrate | Similar low question↔fact range; measure on your data. |
+| Normalized / symmetric-similarity models | 0.5–0.7 | If your model reports high cosines for related pairs, raise the floor. |
+
+If recall never returns anything, your floor is almost certainly too high:
+embed a representative query and a memory it should match, compute their cosine,
+and set the floor a little below that. Too low injects marginally-related
+memories (noise); too high injects nothing.
 
 **Postgres prerequisite:** semantic recall needs the pgvector extension. The
 deploy image (`pgvector/pgvector:pg16`) ships it, but the extension must be
@@ -984,7 +1003,7 @@ unaffected.
 | `RUNTIME_EMBED_MODEL` | agentd | (unset) | Embedding model for semantic recall. Unset ⇒ recall disabled (tag/id memory only). |
 | `RUNTIME_EMBED_DIM` | agentd | (unset) | Embedding dimension (the `vector(N)` width). Required + positive when `RUNTIME_EMBED_MODEL` is set; invalid ⇒ fatal at startup. |
 | `RUNTIME_EMBED_RECALL_K` | agentd | `5` | Max memories injected per turn. |
-| `RUNTIME_EMBED_RECALL_FLOOR` | agentd | `0.7` | Minimum cosine similarity (0–1) for a memory to be injected. |
+| `RUNTIME_EMBED_RECALL_FLOOR` | agentd | `0.25` | Minimum cosine similarity (0–1) for a memory to be injected. Tuned for OpenAI-family embeddings; see the per-model guidance under "Semantic recall". |
 | `RUNTIME_INGEST_ENABLED` | agentd | (unset) | `1`/`true`/`yes`/`on` enables auto-ingestion. Requires semantic recall; ignored (warn) if embeddings are unset. |
 | `RUNTIME_INGEST_MODEL` | agentd | (unset) | Chat model for fact extraction (reuses `OPENAI_*`). Required when ingestion is enabled with embeddings on; missing ⇒ fatal at startup. |
 | `RUNTIME_INGEST_MIN_MESSAGES` | agentd | `2` | Growth gate: minimum thread messages before a turn is extracted. |
