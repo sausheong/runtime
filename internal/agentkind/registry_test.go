@@ -75,3 +75,70 @@ func TestBuildTestAgent_NoKGFnWhenEmbeddingsUnset(t *testing.T) {
 		t.Fatal("KGFn must be nil when embeddings/memory are off")
 	}
 }
+
+func TestWireMemory_IngestEnabledWithoutModelFatal(t *testing.T) {
+	t.Setenv("RUNTIME_EMBED_MODEL", "embed-1")
+	t.Setenv("RUNTIME_EMBED_DIM", "3")
+	t.Setenv("OPENAI_BASE_URL", "https://proxy.invalid")
+	t.Setenv("OPENAI_API_KEY", "k")
+	t.Setenv("RUNTIME_INGEST_ENABLED", "1")
+	t.Setenv("RUNTIME_INGEST_MODEL", "") // enabled but no model
+	build, _ := Get("testagent")
+	// DB nil is fine: ingest config is validated BEFORE the DB check, so this
+	// genuinely exercises the ingest-misconfig-fatal path.
+	_, err := build(Deps{AgentID: "a1", Memory: true, Tenant: "alpha", DB: nil})
+	if err == nil {
+		t.Fatal("ingest enabled + no model must error")
+	}
+	if !strings.Contains(err.Error(), "ingest config") {
+		t.Fatalf("expected ingest-config error, got: %v", err)
+	}
+}
+
+func TestWireMemory_IngestWithoutEmbeddingsNotFatal(t *testing.T) {
+	t.Setenv("RUNTIME_EMBED_MODEL", "") // embeddings off
+	t.Setenv("RUNTIME_INGEST_ENABLED", "1")
+	t.Setenv("RUNTIME_INGEST_MODEL", "chat-1")
+	build, _ := Get("testagent")
+	_, err := build(Deps{AgentID: "a1", Memory: true, Tenant: "alpha", DB: nil})
+	// Ingest-without-embeddings warns and is ignored; the only error is the nil DB.
+	if err == nil {
+		t.Fatal("memory enabled + nil DB still errors")
+	}
+	if strings.Contains(err.Error(), "ingest config") {
+		t.Fatalf("ingest-without-embeddings must not be an ingest-config fatal: %v", err)
+	}
+	if !strings.Contains(err.Error(), "no DB handle") {
+		t.Fatalf("expected the nil-DB error, got: %v", err)
+	}
+}
+
+func TestWireMemory_IngestDisabledUnaffected(t *testing.T) {
+	t.Setenv("RUNTIME_EMBED_MODEL", "embed-1")
+	t.Setenv("RUNTIME_EMBED_DIM", "3")
+	t.Setenv("OPENAI_BASE_URL", "https://proxy.invalid")
+	t.Setenv("OPENAI_API_KEY", "k")
+	t.Setenv("RUNTIME_INGEST_ENABLED", "") // off
+	build, _ := Get("testagent")
+	_, err := build(Deps{AgentID: "a1", Memory: true, Tenant: "alpha", DB: nil})
+	// With ingest off this is exactly the M2 path: nil DB ⇒ the DB error, no
+	// ingest-config error.
+	if err == nil || strings.Contains(err.Error(), "ingest config") {
+		t.Fatalf("ingest off should not change M2 behavior; got: %v", err)
+	}
+}
+
+func TestEnvBool(t *testing.T) {
+	for _, v := range []string{"1", "true", "TRUE", "yes", "on", " On "} {
+		t.Setenv("X_FLAG", v)
+		if !envBool("X_FLAG") {
+			t.Fatalf("%q should be truthy", v)
+		}
+	}
+	for _, v := range []string{"", "0", "false", "no", "off", "nope"} {
+		t.Setenv("X_FLAG", v)
+		if envBool("X_FLAG") {
+			t.Fatalf("%q should be falsy", v)
+		}
+	}
+}
