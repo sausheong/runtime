@@ -3,6 +3,7 @@ package identity
 import (
 	"context"
 	"fmt"
+	"log/slog"
 )
 
 // secretStore is the slice of *Store the Broker needs. Declared as an interface
@@ -14,17 +15,17 @@ type secretStore interface {
 	LoadSecrets(ctx context.Context, tenantID string) ([]EncryptedSecret, error)
 }
 
-// Broker is the single place where the Cipher meets storage. It seals on write
+// Broker is the single place where the Keyring meets storage. It seals on write
 // and opens on read; the control plane sees it only through the SecretBroker
 // (read) and SecretAdmin (write) interfaces it satisfies.
 type Broker struct {
-	store  secretStore
-	cipher *Cipher
+	store   secretStore
+	keyring *Keyring
 }
 
-// NewBroker pairs a store with a cipher.
-func NewBroker(store secretStore, cipher *Cipher) *Broker {
-	return &Broker{store: store, cipher: cipher}
+// NewBroker pairs a store with a keyring.
+func NewBroker(store secretStore, keyring *Keyring) *Broker {
+	return &Broker{store: store, keyring: keyring}
 }
 
 // SecretsFor decrypts all of a tenant's secrets into name->plaintext. It fails
@@ -37,7 +38,7 @@ func (b *Broker) SecretsFor(ctx context.Context, tenant string) (map[string]stri
 	}
 	out := make(map[string]string, len(enc))
 	for _, e := range enc {
-		pt, err := b.cipher.Open(e.ValueEnc)
+		pt, err := b.keyring.Open(tenant, e.Name, e.ValueEnc)
 		if err != nil {
 			return nil, fmt.Errorf("identity: decrypt secret %q for tenant %q: %w", e.Name, tenant, err)
 		}
@@ -46,9 +47,10 @@ func (b *Broker) SecretsFor(ctx context.Context, tenant string) (map[string]stri
 	return out, nil
 }
 
-// SetSecret seals the plaintext and persists it (UPSERT).
+// SetSecret seals the plaintext under the primary key (binding tenant+name) and
+// persists it (UPSERT).
 func (b *Broker) SetSecret(ctx context.Context, tenant, name, plaintext string) error {
-	enc, err := b.cipher.Seal([]byte(plaintext))
+	enc, err := b.keyring.Seal(tenant, name, []byte(plaintext))
 	if err != nil {
 		return fmt.Errorf("identity: seal secret %q for tenant %q: %w", name, tenant, err)
 	}
@@ -66,4 +68,52 @@ func (b *Broker) ListSecretNames(ctx context.Context, tenant string) ([]SecretMe
 // DeleteSecret passes through to the store.
 func (b *Broker) DeleteSecret(ctx context.Context, tenant, name string) error {
 	return b.store.DeleteSecret(ctx, tenant, name)
+}
+
+// RotateStats reports the outcome of a re-encrypt pass. It carries no secret
+// values — only counts and the tenant.
+type RotateStats struct {
+	Tenant  string `json:"tenant"`
+	Total   int    `json:"total"`
+	Rotated int    `json:"rotated"`
+	Failed  int    `json:"failed"`
+}
+
+// Rotate re-encrypts every secret of a tenant under the current primary key,
+// binding (tenant, name) as AAD. It is idempotent and re-runnable. Unlike the
+// fail-closed spawn path, one undecryptable row is counted as failed and skipped
+// so a single corrupt row cannot block migrating the rest; the row name (never
+// the value) is logged.
+func (b *Broker) Rotate(ctx context.Context, tenant string) (RotateStats, error) {
+	enc, err := b.store.LoadSecrets(ctx, tenant)
+	if err != nil {
+		return RotateStats{Tenant: tenant}, err
+	}
+	st := RotateStats{Tenant: tenant, Total: len(enc)}
+	for _, e := range enc {
+		pt, err := b.keyring.Open(tenant, e.Name, e.ValueEnc)
+		if err != nil {
+			st.Failed++
+			slog.Error("rotate: open failed", "tenant", tenant, "name", e.Name, "err", err)
+			continue
+		}
+		nb, err := b.keyring.Seal(tenant, e.Name, pt)
+		if err != nil {
+			st.Failed++
+			slog.Error("rotate: seal failed", "tenant", tenant, "name", e.Name, "err", err)
+			continue
+		}
+		if err := b.store.PutSecret(ctx, tenant, e.Name, nb); err != nil {
+			st.Failed++
+			slog.Error("rotate: store failed", "tenant", tenant, "name", e.Name, "err", err)
+			continue
+		}
+		st.Rotated++
+	}
+	return st, nil
+}
+
+// RotateSecrets satisfies controlplane.SecretAdmin; it is an alias for Rotate.
+func (b *Broker) RotateSecrets(ctx context.Context, tenant string) (RotateStats, error) {
+	return b.Rotate(ctx, tenant)
 }

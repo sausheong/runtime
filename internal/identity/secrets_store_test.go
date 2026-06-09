@@ -94,3 +94,61 @@ func TestSecretsStore_TenantCascade(t *testing.T) {
 		t.Fatalf("secrets not cascade-deleted with tenant: %d remain", n)
 	}
 }
+
+func TestBroker_RotateOverPostgres(t *testing.T) {
+	ctx := context.Background()
+	s, db := freshStore(t)
+	defer db.Close()
+	if err := s.CreateTenant(ctx, "alpha", "A"); err != nil {
+		t.Fatal(err)
+	}
+
+	cOld, _ := NewCipher(key32())
+	nk := key32()
+	nk[0] ^= 0xff
+	cNew, _ := NewCipher(nk)
+
+	// Seed a hand-written LEGACY row (version-less: nonce||ct, nil AAD) under the
+	// old key, plus a v1 new-format row.
+	legacyBlob, err := cOld.Seal([]byte("sk-legacy"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.PutSecret(ctx, "alpha", "LEG", legacyBlob); err != nil {
+		t.Fatal(err)
+	}
+	krOld, _ := NewKeyring(map[string]*Cipher{"v1": cOld}, "v1", "v1")
+	seed := NewBroker(s, krOld)
+	if err := seed.SetSecret(ctx, "alpha", "NEWK", "sk-new"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Rotate under a ring whose primary is v2 (legacy v1 still present).
+	krBoth, _ := NewKeyring(map[string]*Cipher{"v1": cOld, "v2": cNew}, "v2", "v1")
+	b := NewBroker(s, krBoth)
+	st, err := b.Rotate(ctx, "alpha")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Total != 2 || st.Rotated != 2 || st.Failed != 0 {
+		t.Fatalf("rotate stats = %+v, want total=2 rotated=2 failed=0", st)
+	}
+
+	// Every stored row must now be v2 new-format and decrypt to the originals
+	// under a ring with ONLY the new key (proves the old key is retireable).
+	krNew, _ := NewKeyring(map[string]*Cipher{"v2": cNew}, "v2", "")
+	retired := NewBroker(s, krNew)
+	got, err := retired.SecretsFor(ctx, "alpha")
+	if err != nil {
+		t.Fatalf("post-rotate read under new-only ring failed: %v", err)
+	}
+	if got["LEG"] != "sk-legacy" || got["NEWK"] != "sk-new" {
+		t.Fatalf("post-rotate values wrong: %+v", got)
+	}
+	enc, _ := s.LoadSecrets(ctx, "alpha")
+	for _, e := range enc {
+		if len(e.ValueEnc) < 4 || e.ValueEnc[0] != 0x01 || string(e.ValueEnc[2:2+int(e.ValueEnc[1])]) != "v2" {
+			t.Fatalf("row %q not migrated to v2 new-format", e.Name)
+		}
+	}
+}

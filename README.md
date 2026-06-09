@@ -304,12 +304,45 @@ restart** (resolution happens at spawn). Tenant secrets shadow an inherited
 operator var of the same name; a tenant with no secret falls back to the
 operator env.
 
-> **Security:** the master key lives in runtimed's environment (operator-managed,
-> like the Postgres DSN). Losing it makes existing ciphertext unrecoverable —
-> there is no key rotation in this milestone. The `set` value travels as JSON, so
-> terminate TLS upstream; it also lands in shell history, so prefer a
-> leading-space invocation (`HISTCONTROL=ignorespace`) for real keys. A
-> `--value-stdin` flag is a candidate follow-up.
+> **Security:** the keyring keys live in runtimed's environment (operator-managed,
+> like the Postgres DSN). Losing **all** keys makes existing ciphertext
+> unrecoverable. The `set` value travels as JSON, so terminate TLS upstream; it
+> also lands in shell history, so prefer a leading-space invocation
+> (`HISTCONTROL=ignorespace`) for real keys. A `--value-stdin` flag is a candidate
+> follow-up.
+
+#### Key rotation
+
+The secrets master key is a **keyring** of one or more 32-byte keys, one
+designated primary. New secrets are sealed under the primary; each stored blob is
+self-describing (it carries the id of the key that sealed it) and is bound to its
+`(tenant, name)` so a ciphertext cannot be swapped to another row. Configure the
+keyring with:
+
+- `RUNTIME_SECRETS_KEYS` — `id:base64key,id:base64key` (each key is base64 of 32
+  bytes; ids are operator-chosen, e.g. `v1`, `2026q2`).
+- `RUNTIME_SECRETS_PRIMARY` — the id new secrets are sealed under (required when
+  `RUNTIME_SECRETS_KEYS` is set).
+- `RUNTIME_SECRETS_KEY` — the legacy single key (still honored). On its own it is
+  the keyring `{v1: key}`. Alongside `RUNTIME_SECRETS_KEYS` it names the key that
+  decrypts pre-rotation (version-less) rows; its bytes must match a keyring entry.
+
+To rotate:
+
+```bash
+# 1. Add a new key, make it primary, keep the old key in the ring, restart runtimed.
+export RUNTIME_SECRETS_KEYS="v1:$OLD_B64,v2:$NEW_B64"
+export RUNTIME_SECRETS_PRIMARY=v2
+# 2. Re-encrypt the backlog (superuser: all tenants; or --tenant <t>).
+runtimectl admin secret rotate
+# 3. Once rotate reports 0 failures, drop the old key and restart:
+export RUNTIME_SECRETS_KEYS="v2:$NEW_B64"
+```
+
+`rotate` is idempotent and re-runnable, and exits non-zero if any row failed.
+Legacy single-key (`RUNTIME_SECRETS_KEY`-only) deployments keep working unchanged;
+their rows decrypt transparently until rotated. Base64 uses standard encoding
+(not URL-safe).
 
 ### Open mode & backward compatibility
 
@@ -323,8 +356,8 @@ operator env.
 
 > Service-key secrets and OIDC tokens travel as bearer credentials — terminate
 > TLS upstream. Service-key verification is constant-time (bcrypt) and hashed at
-> rest. Per-tenant secrets brokering is implemented (see above). Console session
-> CSRF hardening (`state`/`nonce`) and secrets key rotation are tracked for later
+> rest. Per-tenant secrets brokering and key rotation are implemented (see above).
+> Console session CSRF hardening (`state`/`nonce`) is tracked for later
 > Identity milestones (see `ROADMAP.md` §B3).
 
 ---
@@ -350,6 +383,7 @@ operator env.
 | `runtimectl admin secret set <name> <value> [--tenant <t>]` | Set/overwrite a tenant secret (write-only; injected into the tenant's agents). |
 | `runtimectl admin secret ls` | List the tenant's secret names + timestamps (never the values). |
 | `runtimectl admin secret rm <name>` | Delete a tenant secret. |
+| `runtimectl admin secret rotate [--tenant <t>]` | Re-encrypt secrets under the current primary key (superuser: all tenants). |
 
 `--agent` may be omitted when exactly one agent is registered (it's auto-selected);
 it's required when there are several. The `admin` commands require an `admin`
@@ -862,7 +896,9 @@ unaffected.
 | `RUNTIME_OIDC_CLIENT_SECRET` | runtimed | (unset) | OIDC client secret for the console code exchange. |
 | `RUNTIME_OIDC_REDIRECT_URL` | runtimed | `http://localhost:8080/ui/callback` | OIDC redirect URL registered with the issuer. |
 | `RUNTIME_ADMIN_BOOTSTRAP` | runtimed | (unset) | One-time break-glass superuser service key (read from env, never stored). |
-| `RUNTIME_SECRETS_KEY` | runtimed | (unset) | base64 of 32 bytes; enables per-tenant secrets brokering. Unset ⇒ disabled (agents inherit operator env); malformed ⇒ fatal. |
+| `RUNTIME_SECRETS_KEYS` | runtimed | (unset) | Keyring: `id:base64key,id:base64key` (each 32 bytes). Enables multi-key rotation. Requires `RUNTIME_SECRETS_PRIMARY`. |
+| `RUNTIME_SECRETS_PRIMARY` | runtimed | (unset) | Keyring id new secrets are sealed under. Required when `RUNTIME_SECRETS_KEYS` is set. |
+| `RUNTIME_SECRETS_KEY` | runtimed | (unset) | Legacy/back-compat single key (base64 of 32 bytes). On its own ⇒ keyring `{v1:key}`. With `RUNTIME_SECRETS_KEYS` ⇒ names the legacy-decrypt key. Unset (and no keyring) ⇒ disabled; malformed ⇒ fatal. |
 | `RUNTIME_SHIM_DB` | (python shim) | `./shim.db` | SQLite path for the polyglot shim's Level-1 store (not used by runtimed). |
 
 `runtimed` injects `RUNTIME_LISTEN_ADDR` and `RUNTIME_AGENT_ID` into each agent
