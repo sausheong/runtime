@@ -267,13 +267,35 @@ func runAdmin(base string, args []string) {
 		}
 		mustAdminDelete(base, "/admin/secrets/"+args[2])
 		fmt.Printf("secret %s removed\n", args[2])
+	case "secret rotate":
+		// admin secret rotate [--tenant t]
+		tenant := flagValue(args[2:], "--tenant", "")
+		out := mustAdminPost(base, "/admin/secrets/rotate", map[string]string{"tenant": tenant})
+		var stats []struct {
+			Tenant  string `json:"tenant"`
+			Total   int    `json:"total"`
+			Rotated int    `json:"rotated"`
+			Failed  int    `json:"failed"`
+		}
+		if err := json.Unmarshal(out, &stats); err != nil {
+			fmt.Fprintf(os.Stderr, "rotate: bad response: %s\n", out)
+			os.Exit(1)
+		}
+		failed := 0
+		for _, s := range stats {
+			fmt.Printf("tenant %s: total=%d rotated=%d failed=%d\n", s.Tenant, s.Total, s.Rotated, s.Failed)
+			failed += s.Failed
+		}
+		if failed > 0 {
+			os.Exit(1)
+		}
 	default:
 		adminUsage()
 	}
 }
 
 func adminUsage() {
-	fmt.Fprintln(os.Stderr, "usage: runtimectl admin <tenant create <id> [--name n]|user add <subject> --role r [--tenant t]|user ls|key create --role r [--label l] [--tenant t]|key ls|key revoke <id>|secret set <name> <value> [--tenant t]|secret ls|secret rm <name>>")
+	fmt.Fprintln(os.Stderr, "usage: runtimectl admin <tenant create <id> [--name n]|user add <subject> --role r [--tenant t]|user ls|key create --role r [--label l] [--tenant t]|key ls|key revoke <id>|secret set <name> <value> [--tenant t]|secret ls|secret rm <name>|secret rotate [--tenant t]>")
 	os.Exit(2)
 }
 
