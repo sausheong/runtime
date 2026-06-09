@@ -35,6 +35,13 @@ func NewStore(ctx context.Context, db *sql.DB, tenant string) (*Store, error) {
 	return &Store{db: db, tenant: tenant}, nil
 }
 
+// The projection assumes entry ids are unique over the table's lifetime, which
+// harness guarantees (generateID mints a fresh id per create/update). Two
+// consequences of the append-only model follow from that assumption: a
+// tombstoned id stays dead permanently (a later create reusing it would remain
+// hidden), and a duplicate-id create would yield two live rows. Neither is
+// reachable through normal unique-id operation; they are noted, not handled.
+//
 // liveSelect projects the live set: a defining (create|update) row for an
 // entry_id that is neither superseded by an update nor tombstoned by a delete,
 // within the pinned tenant.
@@ -59,11 +66,14 @@ func scanEntry(rows *sql.Rows) (hmem.Entry, error) {
 		return hmem.Entry{}, err
 	}
 	e.Tags = []string(tags)
-	e.UpdatedAt = created
+	// Normalize to UTC: pgx returns TIMESTAMPTZ in Local location, but the
+	// store's contract (and Save/Update's return values) are UTC. Without this,
+	// a re-read entry differs in zone string from the same freshly-saved entry.
+	e.UpdatedAt = created.UTC()
 	if original.Valid {
-		e.CreatedAt = original.Time
+		e.CreatedAt = original.Time.UTC()
 	} else {
-		e.CreatedAt = created
+		e.CreatedAt = created.UTC()
 	}
 	return e, nil
 }
