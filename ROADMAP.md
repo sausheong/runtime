@@ -4,10 +4,11 @@
 **Current state:** Runtime spine complete (Milestones 1–3 merged to `master`);
 polyglot agent hosting (C1) first milestone complete — Level-1 OpenAI Agents SDK
 shim merged to `master`, hosting a full foreign agent end-to-end (see §C1);
-Identity (B3) first two milestones complete — M1 multi-tenant, edge-enforced
-access control (OIDC + service keys + per-agent RBAC), and M2 per-tenant secrets
-brokering (AES-256-GCM provider credentials injected into agents at spawn), both
-merged to `master` (see §B3).
+Identity (B3) first three milestones complete — M1 multi-tenant, edge-enforced
+access control (OIDC + service keys + per-agent RBAC), M2 per-tenant secrets
+brokering (AES-256-GCM provider credentials injected into agents at spawn), and
+M3 secrets key rotation (a multi-key keyring with self-describing, AAD-bound
+blobs + an explicit re-encrypt command), all merged to `master` (see §B3).
 **Goal:** an on-prem, open-source equivalent of AWS Bedrock AgentCore.
 
 This file is the parking lot for everything *not yet built*. Each item below is a
@@ -103,10 +104,18 @@ exposing the platform broadly.
    when no master key is set; agents stay unmodified. Spec/plan:
    `docs/superpowers/{specs,plans}/2026-06-09-identity-m2-secrets-brokering*`.
 
-   **Remaining Identity work:** secrets **key rotation** (re-encrypt all rows on a
-   master-key change; per-tenant keys; optional AAD binding of tenant/name into
-   the AEAD to defeat DB-level row swaps), fine-grained/custom RBAC beyond the 3
-   roles, cross-tenant users + user self-service, an admin console UI (incl.
+   **Third milestone DONE (merged to `master`, 2026-06-09):** secrets key
+   rotation. The master key is now a keyring (`RUNTIME_SECRETS_KEYS` +
+   `RUNTIME_SECRETS_PRIMARY`; the legacy `RUNTIME_SECRETS_KEY` is the back-compat
+   single key). Ciphertext blobs are self-describing (versioned `0x01` prefix +
+   embedded key id) and AAD-bound to `(tenant, name)` to defeat DB row swaps. An
+   explicit, idempotent `runtimectl admin secret rotate` re-encrypts a tenant
+   (superuser: all tenants) under the primary so retired keys can be dropped.
+   Legacy M2 rows decrypt transparently until rotated. Spec/plan:
+   `docs/superpowers/{specs,plans}/2026-06-09-identity-m3-secrets-key-rotation*`.
+
+   **Remaining Identity work:** per-tenant keys, fine-grained/custom RBAC beyond
+   the 3 roles, cross-tenant users + user self-service, an admin console UI (incl.
    superuser GET/DELETE secrets across a target tenant — POST already supports
    it), and optional local password accounts (the `Authenticator` interface
    already admits new methods). Console CSRF (`state`/`nonce`) is a known M1

@@ -97,7 +97,7 @@ func main() {
 			// The broker still injects secrets into spawns, but /admin/secrets is
 			// only mounted with an admin store (identity on). So a key is set yet
 			// no secret can be created — warn rather than silently mislead.
-			slog.Warn("RUNTIME_SECRETS_KEY is set but identity is open/unconfigured — /admin/secrets is unavailable and no secrets can be set; configure identity (OIDC, a service key, or RUNTIME_ADMIN_BOOTSTRAP) to manage secrets")
+			slog.Warn("a secrets key is set (RUNTIME_SECRETS_KEYS/RUNTIME_SECRETS_KEY) but identity is open/unconfigured — /admin/secrets is unavailable and no secrets can be set; configure identity (OIDC, a service key, or RUNTIME_ADMIN_BOOTSTRAP) to manage secrets")
 		}
 		handler = accessLog(buildRoot(reg, nil, console.OIDCConfig{}, secretAdmin)) // no /admin in open mode
 	} else {
