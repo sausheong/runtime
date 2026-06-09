@@ -269,6 +269,9 @@ func (v pgVector) Value() (driver.Value, error) {
 // whose cosine similarity to queryVec is >= floor, nearest first. Reuses M1's
 // liveness clauses (superseded/tombstoned excluded) and skips NULL embeddings.
 func (s *Store) SearchSimilar(ctx context.Context, queryVec []float32, k int, floor float64) ([]hmem.Entry, error) {
+	// The liveness clauses (op IN, the two NOT EXISTS) mirror the liveSelect
+	// constant; they are re-spelled inline because SearchSimilar needs $2/$3/$4
+	// for the vector/floor/limit args. Keep these in sync with liveSelect.
 	q := `
 SELECT e.entry_id, e.content, e.tags, e.origin, e.created_at, e.original_created_at
 FROM   memory_events e
