@@ -66,6 +66,13 @@ func (f *fakeAdminStore) ListKeys(_ context.Context, tid string) ([]identity.Key
 	}
 	return out, nil
 }
+func (f *fakeAdminStore) ListTenants(_ context.Context) ([]identity.TenantRow, error) {
+	var out []identity.TenantRow
+	for id, name := range f.tenants {
+		out = append(out, identity.TenantRow{ID: id, Name: name})
+	}
+	return out, nil
+}
 
 func withPrincipal(r *http.Request, p identity.Principal) *http.Request {
 	return r.WithContext(context.WithValue(r.Context(), principalKey, p))
@@ -263,8 +270,9 @@ func TestAdmin_RevokeKeyTenantScoped(t *testing.T) {
 
 // fakeSecretAdmin implements SecretAdmin in-memory.
 type fakeSecretAdmin struct {
-	set   map[string]map[string]string // tenant -> name -> plaintext
-	names map[string][]identity.SecretMeta
+	set     map[string]map[string]string // tenant -> name -> plaintext
+	names   map[string][]identity.SecretMeta
+	rotated []string
 }
 
 func newFakeSecretAdmin() *fakeSecretAdmin {
@@ -284,6 +292,10 @@ func (f *fakeSecretAdmin) ListSecretNames(_ context.Context, tenant string) ([]i
 func (f *fakeSecretAdmin) DeleteSecret(_ context.Context, tenant, name string) error {
 	delete(f.set[tenant], name)
 	return nil
+}
+func (f *fakeSecretAdmin) RotateSecrets(_ context.Context, tenant string) (identity.RotateStats, error) {
+	f.rotated = append(f.rotated, tenant)
+	return identity.RotateStats{Tenant: tenant, Total: 1, Rotated: 1}, nil
 }
 
 // adminMuxWithSecrets wires both the store and the secret admin.
@@ -390,5 +402,83 @@ func TestSecretAdmin_Delete(t *testing.T) {
 	}
 	if _, ok := sa.set["alpha"]["K"]; ok {
 		t.Fatal("secret not deleted")
+	}
+}
+
+func TestSecretAdmin_RotateNonAdminForbidden(t *testing.T) {
+	mux := adminMuxWithSecrets(newFakeAdminStore(), newFakeSecretAdmin())
+	r := withPrincipal(httptest.NewRequest("POST", "/admin/secrets/rotate", strings.NewReader(`{}`)),
+		identity.Principal{TenantID: "alpha", Role: identity.RoleOperator})
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, r)
+	if rec.Code != 403 {
+		t.Fatalf("operator rotate: code=%d want 403", rec.Code)
+	}
+}
+
+func TestSecretAdmin_RotateDisabledIs503(t *testing.T) {
+	s := newFakeAdminStore()
+	mux := http.NewServeMux()
+	RegisterAdmin(mux, s)
+	RegisterSecretAdmin(mux, s, nil)
+	r := withPrincipal(httptest.NewRequest("POST", "/admin/secrets/rotate", strings.NewReader(`{}`)),
+		identity.Principal{TenantID: "alpha", Role: identity.RoleAdmin})
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, r)
+	if rec.Code != 503 {
+		t.Fatalf("nil broker rotate: code=%d want 503", rec.Code)
+	}
+}
+
+func TestSecretAdmin_RotateNonSuperuserScopedToOwnTenant(t *testing.T) {
+	s := newFakeAdminStore()
+	s.CreateTenant(context.Background(), "alpha", "A")
+	sa := newFakeSecretAdmin()
+	mux := adminMuxWithSecrets(s, sa)
+	// tenant-admin in alpha tries to target beta via body — must rotate alpha only.
+	r := withPrincipal(httptest.NewRequest("POST", "/admin/secrets/rotate", strings.NewReader(`{"tenant":"beta"}`)),
+		identity.Principal{TenantID: "alpha", Role: identity.RoleAdmin})
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, r)
+	if rec.Code != 200 {
+		t.Fatalf("admin rotate: code=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if len(sa.rotated) != 1 || sa.rotated[0] != "alpha" {
+		t.Fatalf("non-superuser rotated %v, want [alpha]", sa.rotated)
+	}
+}
+
+func TestSecretAdmin_RotateSuperuserAllTenants(t *testing.T) {
+	s := newFakeAdminStore()
+	s.CreateTenant(context.Background(), "alpha", "A")
+	s.CreateTenant(context.Background(), "beta", "B")
+	sa := newFakeSecretAdmin()
+	mux := adminMuxWithSecrets(s, sa)
+	r := withPrincipal(httptest.NewRequest("POST", "/admin/secrets/rotate", strings.NewReader(`{}`)),
+		identity.Principal{Role: identity.RoleAdmin, Superuser: true})
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, r)
+	if rec.Code != 200 {
+		t.Fatalf("superuser rotate-all: code=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if len(sa.rotated) != 2 {
+		t.Fatalf("superuser all-tenants rotated %v, want 2", sa.rotated)
+	}
+}
+
+func TestSecretAdmin_RotateSuperuserSpecificTenant(t *testing.T) {
+	s := newFakeAdminStore()
+	s.CreateTenant(context.Background(), "acme", "Acme")
+	sa := newFakeSecretAdmin()
+	mux := adminMuxWithSecrets(s, sa)
+	r := withPrincipal(httptest.NewRequest("POST", "/admin/secrets/rotate", strings.NewReader(`{"tenant":"acme"}`)),
+		identity.Principal{Role: identity.RoleAdmin, Superuser: true})
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, r)
+	if rec.Code != 200 {
+		t.Fatalf("superuser rotate acme: code=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if len(sa.rotated) != 1 || sa.rotated[0] != "acme" {
+		t.Fatalf("rotated %v, want [acme]", sa.rotated)
 	}
 }

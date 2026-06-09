@@ -112,3 +112,8 @@ func (b *Broker) Rotate(ctx context.Context, tenant string) (RotateStats, error)
 	}
 	return st, nil
 }
+
+// RotateSecrets satisfies controlplane.SecretAdmin; it is an alias for Rotate.
+func (b *Broker) RotateSecrets(ctx context.Context, tenant string) (RotateStats, error) {
+	return b.Rotate(ctx, tenant)
+}

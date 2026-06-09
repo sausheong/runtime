@@ -23,6 +23,7 @@ type AdminStore interface {
 	InsertServiceKey(ctx context.Context, id, tenantID, hash string, role identity.Role, label string) error
 	RevokeKey(ctx context.Context, tenantID, id string) error
 	ListKeys(ctx context.Context, tenantID string) ([]identity.KeyRow, error)
+	ListTenants(ctx context.Context) ([]identity.TenantRow, error)
 }
 
 // RegisterAdmin mounts the /admin/* routes on mux. Every handler requires an
@@ -166,6 +167,7 @@ type SecretAdmin interface {
 	SetSecret(ctx context.Context, tenant, name, plaintext string) error
 	ListSecretNames(ctx context.Context, tenant string) ([]identity.SecretMeta, error)
 	DeleteSecret(ctx context.Context, tenant, name string) error
+	RotateSecrets(ctx context.Context, tenant string) (identity.RotateStats, error)
 }
 
 // envNameRe restricts secret names to valid env-var identifiers so an injected
@@ -234,6 +236,50 @@ func RegisterSecretAdmin(mux *http.ServeMux, store AdminStore, sa SecretAdmin) {
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
+	})
+
+	mux.HandleFunc("POST /admin/secrets/rotate", func(w http.ResponseWriter, r *http.Request) {
+		p, ok := requireAdmin(w, r)
+		if !ok {
+			return
+		}
+		if sa == nil {
+			http.Error(w, "secrets not configured", http.StatusServiceUnavailable)
+			return
+		}
+		var body struct{ Tenant string }
+		if !decode(w, r, &body) {
+			return
+		}
+		// Superuser with no explicit tenant rotates every tenant.
+		if p.Superuser && body.Tenant == "" {
+			trs, err := store.ListTenants(r.Context())
+			if err != nil {
+				serverError(w, "list tenants", err)
+				return
+			}
+			out := make([]identity.RotateStats, 0, len(trs))
+			for _, tr := range trs {
+				st, err := sa.RotateSecrets(r.Context(), tr.ID)
+				if err != nil {
+					serverError(w, "rotate secrets", err)
+					return
+				}
+				out = append(out, st)
+			}
+			writeJSON(w, http.StatusOK, out)
+			return
+		}
+		tenant, ok := effectiveTenant(w, r, store, p, body.Tenant)
+		if !ok {
+			return
+		}
+		st, err := sa.RotateSecrets(r.Context(), tenant)
+		if err != nil {
+			serverError(w, "rotate secrets", err)
+			return
+		}
+		writeJSON(w, http.StatusOK, []identity.RotateStats{st})
 	})
 }
 
