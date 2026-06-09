@@ -5,6 +5,7 @@ package memory
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"testing"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
@@ -169,5 +170,143 @@ func TestStore_CrossTenantIsolation(t *testing.T) {
 	}
 	if _, ok, _ := alpha.Get(ctx, ae.ID); !ok {
 		t.Fatal("alpha lost its entry after beta's no-op remove")
+	}
+}
+
+// fixedEmbedder maps content→a deterministic vector for hermetic-but-real pgvector
+// math. Unknown content embeds to a far-away vector. Dim is 3 for tests.
+type fixedEmbedder struct {
+	vecs map[string][]float32
+	fail bool
+}
+
+func (f *fixedEmbedder) Dim() int { return 3 }
+func (f *fixedEmbedder) Embed(_ context.Context, text string) ([]float32, error) {
+	if f.fail {
+		return nil, fmt.Errorf("embed failed")
+	}
+	if v, ok := f.vecs[text]; ok {
+		return v, nil
+	}
+	return []float32{0, 0, 1}, nil
+}
+
+func freshStoreEmbedded(t *testing.T, tenant string, emb Embedder) (*Store, *sql.DB) {
+	t.Helper()
+	db, err := sql.Open("pgx", dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Ping(); err != nil {
+		t.Skipf("postgres not reachable: %v", err)
+	}
+	if _, err := db.Exec(`DROP TABLE IF EXISTS memory_events CASCADE`); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = db.Exec(`DROP TABLE IF EXISTS memory_events CASCADE`) })
+	st, err := NewStore(context.Background(), db, tenant, WithEmbedder(emb))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return st, db
+}
+
+func TestStore_SaveWritesEmbedding(t *testing.T) {
+	emb := &fixedEmbedder{vecs: map[string][]float32{"cats": {1, 0, 0}}}
+	st, db := freshStoreEmbedded(t, "alpha", emb)
+	defer db.Close()
+	ctx := context.Background()
+	e, err := st.Save(ctx, hmem.Entry{Content: "cats"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var n int
+	if err := db.QueryRow(`SELECT count(1) FROM memory_events WHERE entry_id=$1 AND embedding IS NOT NULL`, e.ID).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Fatalf("embedding not written: n=%d", n)
+	}
+}
+
+func TestStore_SaveDegradesToNullOnEmbedError(t *testing.T) {
+	emb := &fixedEmbedder{fail: true}
+	st, db := freshStoreEmbedded(t, "alpha", emb)
+	defer db.Close()
+	ctx := context.Background()
+	e, err := st.Save(ctx, hmem.Entry{Content: "x"})
+	if err != nil {
+		t.Fatalf("save must succeed despite embed failure: %v", err)
+	}
+	if _, ok, _ := st.Get(ctx, e.ID); !ok {
+		t.Fatal("entry must be retrievable after embed-fail degrade")
+	}
+	var nullCount int
+	db.QueryRow(`SELECT count(1) FROM memory_events WHERE entry_id=$1 AND embedding IS NULL`, e.ID).Scan(&nullCount)
+	if nullCount != 1 {
+		t.Fatalf("expected NULL embedding row, got %d", nullCount)
+	}
+}
+
+func TestStore_SearchSimilar(t *testing.T) {
+	emb := &fixedEmbedder{vecs: map[string][]float32{
+		"cats are great": {1, 0, 0},
+		"felines rule":   {0.9, 0.1, 0},
+		"stock prices":   {0, 1, 0},
+	}}
+	st, db := freshStoreEmbedded(t, "alpha", emb)
+	defer db.Close()
+	ctx := context.Background()
+	st.Save(ctx, hmem.Entry{Content: "cats are great"})
+	st.Save(ctx, hmem.Entry{Content: "felines rule"})
+	st.Save(ctx, hmem.Entry{Content: "stock prices"})
+
+	hits, err := st.SearchSimilar(ctx, []float32{1, 0, 0}, 5, 0.5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hits) != 2 {
+		t.Fatalf("want 2 hits above floor, got %d: %+v", len(hits), hits)
+	}
+	if hits[0].Content != "cats are great" {
+		t.Fatalf("nearest should be exact match, got %q", hits[0].Content)
+	}
+	hits2, _ := st.SearchSimilar(ctx, []float32{1, 0, 0}, 1, 0.0)
+	if len(hits2) != 1 {
+		t.Fatalf("K=1 cap failed: %d", len(hits2))
+	}
+}
+
+func TestStore_SearchSimilarSkipsNullAndRespectsLiveness(t *testing.T) {
+	emb := &fixedEmbedder{vecs: map[string][]float32{"keep": {1, 0, 0}, "gone": {1, 0, 0}}}
+	st, db := freshStoreEmbedded(t, "alpha", emb)
+	defer db.Close()
+	ctx := context.Background()
+	keep, _ := st.Save(ctx, hmem.Entry{Content: "keep"})
+	gone, _ := st.Save(ctx, hmem.Entry{Content: "gone"})
+	st.Remove(ctx, gone.ID)
+	emb.fail = true
+	st.Save(ctx, hmem.Entry{Content: "nullrow"})
+	emb.fail = false
+
+	hits, _ := st.SearchSimilar(ctx, []float32{1, 0, 0}, 10, 0.0)
+	if len(hits) != 1 || hits[0].ID != keep.ID {
+		t.Fatalf("want only the live, embedded entry; got %+v", hits)
+	}
+}
+
+func TestStore_SearchSimilarCrossTenantIsolation(t *testing.T) {
+	emb := &fixedEmbedder{vecs: map[string][]float32{"alpha-secret": {1, 0, 0}}}
+	alpha, db := freshStoreEmbedded(t, "alpha", emb)
+	defer db.Close()
+	beta, err := NewStore(context.Background(), db, "beta", WithEmbedder(emb))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	alpha.Save(ctx, hmem.Entry{Content: "alpha-secret"})
+	hits, _ := beta.SearchSimilar(ctx, []float32{1, 0, 0}, 10, 0.0)
+	if len(hits) != 0 {
+		t.Fatalf("beta must not recall alpha's memory: %+v", hits)
 	}
 }
