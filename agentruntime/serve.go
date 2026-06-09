@@ -33,7 +33,7 @@ type Manager struct {
 // in M1 (durability correctness first).
 func (m *Manager) buildRuntime(sess *session.Session) (*hrt.Runtime, error) {
 	return hrt.BuildRuntime(
-		hrt.RuntimeDeps{},
+		hrt.RuntimeDeps{KGFn: m.cfg.KGFn},
 		hrt.RuntimeInputs{
 			Provider:   m.cfg.Provider,
 			Tools:      m.cfg.Tools,

@@ -17,6 +17,7 @@ type Config struct {
 	Spec     hrt.AgentSpec   // harness agent spec (id, model, system prompt, ...)
 	Provider llm.LLMProvider // resolved LLM provider for Spec.Model
 	Tools    *tool.Registry  // the agent's tool registry
+	KGFn     func(model string) hrt.KnowledgeGraph // optional; nil ⇒ no semantic recall
 }
 
 // Validate checks required fields.
