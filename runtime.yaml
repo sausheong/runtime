@@ -4,6 +4,7 @@ agents:
     name: Support Agent
     model: test/scripted
     listen_addr: 127.0.0.1:8101
+    memory: true        # durable per-tenant memory
   - id: research
     name: Research Agent
     model: test/scripted

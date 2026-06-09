@@ -25,6 +25,7 @@ type AgentProcess struct {
 	Command []string // when non-empty, exec this instead of BinPath (foreign-process agents)
 	WorkDir string   // optional working directory for Command
 	Tenant  string   // tenant that owns this agent (from runtime.yaml; "default" if unset)
+	Memory  bool     // opt-in: when true, the spawn env carries RUNTIME_AGENT_MEMORY=1 so agentd wires the memory tool.
 
 	broker SecretBroker // optional; injected by the Registry. nil ⇒ no secret brokering.
 }
@@ -39,7 +40,11 @@ func (a AgentProcess) buildEnv(ctx context.Context) ([]string, error) {
 		"RUNTIME_LISTEN_ADDR="+a.Addr,
 		"RUNTIME_AGENT_ID="+a.AgentID,
 		"RUNTIME_AGENT_KIND="+a.Kind,
+		"RUNTIME_AGENT_TENANT="+a.Tenant,
 	)
+	if a.Memory {
+		env = append(env, "RUNTIME_AGENT_MEMORY=1")
+	}
 	if a.broker != nil {
 		secrets, err := a.broker.SecretsFor(ctx, a.Tenant)
 		if err != nil {

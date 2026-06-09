@@ -344,6 +344,31 @@ Legacy single-key (`RUNTIME_SECRETS_KEY`-only) deployments keep working unchange
 their rows decrypt transparently until rotated. Base64 uses standard encoding
 (not URL-safe).
 
+### Per-tenant agent memory
+
+An agent can opt into durable, per-tenant memory: set `memory: true` on its
+`runtime.yaml` entry and it gets harness's `memory` tool
+(`save`/`update`/`remove`/`list`/`get`), backed by Postgres. All agents owned by
+a tenant share one memory pool; a tenant can never read another tenant's memory.
+Entries survive restarts and are shared across the tenant's agents.
+
+```yaml
+agents:
+  - id: assistant
+    name: Assistant
+    model: anthropic/claude-sonnet-4-6
+    listen_addr: "127.0.0.1:8081"
+    tenant: acme
+    memory: true        # opt in to durable per-tenant memory
+```
+
+Retrieval in this milestone is by tag and by id (the durable store). Semantic
+recall (embeddings + vector search) is a planned follow-up via harness's
+`KnowledgeGraph` seam. Memory is disabled by default; agents without the flag are
+unaffected. The platform injects `RUNTIME_AGENT_TENANT` (and, when enabled,
+`RUNTIME_AGENT_MEMORY=1`) into the agent subprocess; agentd constructs a
+tenant-pinned store so memory is isolated by construction.
+
 ### Open mode & backward compatibility
 
 - **No identity configured** (no OIDC issuer, no service keys, no users, no
@@ -888,6 +913,8 @@ unaffected.
 | `RUNTIME_AGENTD_BIN` | runtimed | `./agentd` | Path to the agent subprocess binary to spawn. |
 | `RUNTIME_LISTEN_ADDR` | agentd | (set by runtimed per agent) | Agent subprocess HTTP bind address. |
 | `RUNTIME_AGENT_ID` | agentd | (set by runtimed per agent) | The agent's id. |
+| `RUNTIME_AGENT_TENANT` | agentd | `default` | The agent's tenant, injected by the control plane; pins the memory store's isolation. |
+| `RUNTIME_AGENT_MEMORY` | agentd | (unset) | `1` when the agent opted into memory (`memory: true`); tells agentd to wire the memory tool. |
 | `RUNTIME_LOG_FORMAT` | runtimed | `text` | `json` switches `slog` to JSON output. |
 | `RUNTIME_CTL_URL` | runtimectl | `http://localhost:8080` | Control-plane base URL the CLI targets. |
 | `RUNTIME_TOKEN` | runtimectl | (unset) | Bearer credential (service key, OIDC token, or bootstrap key) sent on every CLI request when set. |

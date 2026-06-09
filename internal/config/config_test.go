@@ -193,6 +193,35 @@ agents:
 	}
 }
 
+func TestLoad_MemoryFlag(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "runtime.yaml")
+	body := `agents:
+  - id: a1
+    name: A1
+    model: test/scripted
+    listen_addr: "127.0.0.1:9101"
+    memory: true
+  - id: a2
+    name: A2
+    model: test/scripted
+    listen_addr: "127.0.0.1:9102"
+`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.Agents[0].Memory {
+		t.Fatal("agent a1 should have memory enabled")
+	}
+	if cfg.Agents[1].Memory {
+		t.Fatal("agent a2 should default memory to false")
+	}
+}
+
 func TestAgentTenants(t *testing.T) {
 	p := writeTmp(t, `
 agents:

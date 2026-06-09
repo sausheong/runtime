@@ -123,6 +123,33 @@ func TestBuildEnv_BrokerErrorFailsClosed(t *testing.T) {
 	}
 }
 
+func TestBuildEnv_InjectsTenantAndMemory(t *testing.T) {
+	ap := AgentProcess{AgentID: "a1", Addr: "127.0.0.1:9111", PGDSN: "dsn", Tenant: "alpha", Memory: true}
+	env, err := ap.buildEnv(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(env, "\n")
+	if !strings.Contains(joined, "RUNTIME_AGENT_TENANT=alpha") {
+		t.Fatalf("missing tenant in env:\n%s", joined)
+	}
+	if !strings.Contains(joined, "RUNTIME_AGENT_MEMORY=1") {
+		t.Fatalf("missing memory flag in env:\n%s", joined)
+	}
+}
+
+func TestBuildEnv_NoMemoryFlagWhenDisabled(t *testing.T) {
+	ap := AgentProcess{AgentID: "a1", Addr: "127.0.0.1:9111", PGDSN: "dsn", Tenant: "alpha"}
+	env, _ := ap.buildEnv(context.Background())
+	joined := strings.Join(env, "\n")
+	if strings.Contains(joined, "RUNTIME_AGENT_MEMORY") {
+		t.Fatalf("memory flag must be absent when disabled:\n%s", joined)
+	}
+	if !strings.Contains(joined, "RUNTIME_AGENT_TENANT=alpha") {
+		t.Fatalf("tenant must always be present:\n%s", joined)
+	}
+}
+
 var errBrokerTest = errors.New("broker boom")
 
 // lastIndexWithPrefix returns the index of the last env entry with the prefix.
