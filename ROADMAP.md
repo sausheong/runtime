@@ -116,6 +116,15 @@ exposing the platform broadly.
    rows, finer (per-agent/per-user) scoping, per-tenant embedding models,
    refinement/merge dedup (Update-on-similar), and session-level synthesis.
    Spec/plan: `docs/superpowers/{specs,plans}/2026-06-09-memory-m3-auto-ingestion*`.
+
+   **Wiring correction (merged with M3):** the M3 final review found harness's
+   `RunTurn` (the runtime's sole turn executor) never consulted `r.KG`, so M2
+   recall AND M3 ingest were inert on the serve path. Fixed by wiring the KG seam
+   into `RunTurn` (bounded-synchronous recall on the first round, ingest on the
+   completing round); replay-safe because `RunTurn` runs inside the DBOS step.
+   Harness `RunTurn` is owned code, so this was an in-scope change. A through-serve
+   integration test (`test/kg_runturn_e2e_test.go`) now guards the path. Spec:
+   `docs/superpowers/specs/2026-06-09-kg-runturn-wiring-design.md`.
 3. **Identity** — proper auth done right: agent identity, secrets brokering,
    OAuth, RBAC, per-user/multi-tenant. Supersedes M3's simple bearer tokens.
    **First milestone DONE (merged to `master`, 2026-06-09):** multi-tenant,

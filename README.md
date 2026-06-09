@@ -405,8 +405,8 @@ documented migration).
 #### Auto-ingestion
 
 When semantic recall is enabled **and** `RUNTIME_INGEST_ENABLED` is set, the
-agent also *captures* memories automatically. After each chat turn, a background
-extractor reads the conversation, pulls out durable facts, dedups them against
+agent also *captures* memories automatically. After each completed chat exchange,
+a background extractor reads the conversation, pulls out durable facts, dedups them against
 existing memory, and saves the new ones — which embed-on-save makes recallable on
 the next turn. The agent does not have to call the memory tool to remember.
 
