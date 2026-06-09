@@ -14,17 +14,17 @@ type secretStore interface {
 	LoadSecrets(ctx context.Context, tenantID string) ([]EncryptedSecret, error)
 }
 
-// Broker is the single place where the Cipher meets storage. It seals on write
+// Broker is the single place where the Keyring meets storage. It seals on write
 // and opens on read; the control plane sees it only through the SecretBroker
 // (read) and SecretAdmin (write) interfaces it satisfies.
 type Broker struct {
-	store  secretStore
-	cipher *Cipher
+	store   secretStore
+	keyring *Keyring
 }
 
-// NewBroker pairs a store with a cipher.
-func NewBroker(store secretStore, cipher *Cipher) *Broker {
-	return &Broker{store: store, cipher: cipher}
+// NewBroker pairs a store with a keyring.
+func NewBroker(store secretStore, keyring *Keyring) *Broker {
+	return &Broker{store: store, keyring: keyring}
 }
 
 // SecretsFor decrypts all of a tenant's secrets into name->plaintext. It fails
@@ -37,7 +37,7 @@ func (b *Broker) SecretsFor(ctx context.Context, tenant string) (map[string]stri
 	}
 	out := make(map[string]string, len(enc))
 	for _, e := range enc {
-		pt, err := b.cipher.Open(e.ValueEnc, nil)
+		pt, err := b.keyring.Open(tenant, e.Name, e.ValueEnc)
 		if err != nil {
 			return nil, fmt.Errorf("identity: decrypt secret %q for tenant %q: %w", e.Name, tenant, err)
 		}
@@ -46,9 +46,10 @@ func (b *Broker) SecretsFor(ctx context.Context, tenant string) (map[string]stri
 	return out, nil
 }
 
-// SetSecret seals the plaintext and persists it (UPSERT).
+// SetSecret seals the plaintext under the primary key (binding tenant+name) and
+// persists it (UPSERT).
 func (b *Broker) SetSecret(ctx context.Context, tenant, name, plaintext string) error {
-	enc, err := b.cipher.Seal([]byte(plaintext), nil)
+	enc, err := b.keyring.Seal(tenant, name, []byte(plaintext))
 	if err != nil {
 		return fmt.Errorf("identity: seal secret %q for tenant %q: %w", name, tenant, err)
 	}

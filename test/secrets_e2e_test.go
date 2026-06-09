@@ -88,7 +88,11 @@ func TestSecretsE2E_PerTenantInjection(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	broker := identity.NewBroker(st, cipher)
+	kr, err := identity.NewKeyring(map[string]*identity.Cipher{"v1": cipher}, "v1", "v1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	broker := identity.NewBroker(st, kr)
 
 	for _, tn := range []string{"alpha", "beta", "gamma"} {
 		if err := st.CreateTenant(ctx, tn, tn); err != nil {

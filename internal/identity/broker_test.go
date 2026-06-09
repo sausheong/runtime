@@ -34,7 +34,11 @@ func newTestBroker(t *testing.T, fs *fakeSecretStore) *Broker {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return NewBroker(fs, c)
+	kr, err := NewKeyring(map[string]*Cipher{"v1": c}, "v1", "v1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return NewBroker(fs, kr)
 }
 
 func TestBroker_SetThenSecretsFor(t *testing.T) {
@@ -47,6 +51,9 @@ func TestBroker_SetThenSecretsFor(t *testing.T) {
 	}
 	if string(fs.put["OPENAI_API_KEY"]) == "sk-xyz" {
 		t.Fatal("SetSecret stored plaintext, expected ciphertext")
+	}
+	if fs.put["OPENAI_API_KEY"][0] != 0x01 {
+		t.Fatal("SetSecret did not store a new-format (0x01) blob")
 	}
 
 	fs.loaded = []EncryptedSecret{{Name: "OPENAI_API_KEY", ValueEnc: fs.put["OPENAI_API_KEY"]}}
@@ -75,15 +82,14 @@ func TestBroker_SecretsForFailsClosedOnBadCiphertext(t *testing.T) {
 	b := newTestBroker(t, fs)
 	ctx := context.Background()
 
-	// One validly-sealed secret...
-	good, err := b.cipher.Seal([]byte("sk-good"), nil)
-	if err != nil {
+	// One validly-sealed secret (correct tenant+name AAD)...
+	if err := b.SetSecret(ctx, "alpha", "GOOD", "sk-good"); err != nil {
 		t.Fatal(err)
 	}
 	// ...alongside a corrupt row. The whole resolution must fail closed:
 	// the good secret must NOT survive in a partial map.
 	fs.loaded = []EncryptedSecret{
-		{Name: "GOOD", ValueEnc: good},
+		{Name: "GOOD", ValueEnc: fs.put["GOOD"]},
 		{Name: "BAD", ValueEnc: []byte("not-valid-ciphertext")},
 	}
 	got, err := b.SecretsFor(ctx, "alpha")

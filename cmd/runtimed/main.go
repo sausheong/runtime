@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"database/sql"
-	"encoding/base64"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -267,26 +266,27 @@ func envOr(k, d string) string {
 	return d
 }
 
-// buildSecretBroker constructs a secret broker from RUNTIME_SECRETS_KEY (base64
-// of 32 bytes) over the identity store. Returns nil when the key is unset
-// (feature disabled, backward-compatible). A set-but-malformed key is an
-// operator error and is fatal.
+// buildSecretBroker constructs a secret broker from the keyring env vars over the
+// identity store. Returns nil when no key is configured (feature disabled,
+// backward-compatible). Any malformed config is an operator error and is fatal.
+//
+//	RUNTIME_SECRETS_KEYS    "id:base64key,id:base64key" (each key 32 bytes)
+//	RUNTIME_SECRETS_PRIMARY id new writes seal under (required when KEYS is set)
+//	RUNTIME_SECRETS_KEY     legacy single key; also names the version-less decrypt key
 func buildSecretBroker(idStore *identity.Store) *identity.Broker {
-	raw := os.Getenv("RUNTIME_SECRETS_KEY")
-	if raw == "" {
-		slog.Info("secrets brokering disabled: RUNTIME_SECRETS_KEY not set")
+	kr, err := identity.ParseKeyring(
+		os.Getenv("RUNTIME_SECRETS_KEYS"),
+		os.Getenv("RUNTIME_SECRETS_PRIMARY"),
+		os.Getenv("RUNTIME_SECRETS_KEY"),
+	)
+	if err != nil {
+		slog.Error("secrets keyring invalid", "err", err)
+		os.Exit(1)
+	}
+	if kr == nil {
+		slog.Info("secrets brokering disabled: no secrets key configured")
 		return nil
 	}
-	key, err := base64.StdEncoding.DecodeString(raw)
-	if err != nil {
-		slog.Error("RUNTIME_SECRETS_KEY is not valid base64", "err", err)
-		os.Exit(1)
-	}
-	cipher, err := identity.NewCipher(key)
-	if err != nil {
-		slog.Error("RUNTIME_SECRETS_KEY invalid", "err", err)
-		os.Exit(1)
-	}
-	slog.Info("secrets brokering enabled")
-	return identity.NewBroker(idStore, cipher)
+	slog.Info("secrets brokering enabled", "keys", kr.NumKeys(), "primary", kr.PrimaryID())
+	return identity.NewBroker(idStore, kr)
 }
