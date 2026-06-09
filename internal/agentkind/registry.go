@@ -6,6 +6,8 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"os"
+	"strconv"
 
 	hrt "github.com/sausheong/harness/runtime"
 	"github.com/sausheong/harness/tool"
@@ -44,22 +46,57 @@ func Get(kind string) (Builder, bool) {
 	return b, ok
 }
 
-// attachMemory adds the per-tenant Postgres memory tool to reg when d.Memory is
-// set. Requires d.DB. Returns an error if the store cannot be constructed — an
-// agent that asked for memory must not start without it (fail fast).
-func attachMemory(reg *tool.Registry, d Deps) error {
+// wireMemory attaches the per-tenant memory tool to cfg.Tools when d.Memory is
+// set, and — when embeddings are configured (RUNTIME_EMBED_*) — embeds entries on
+// save and installs cfg.KGFn for semantic recall. Fail-fast: an agent that asked
+// for memory must not start without it, and misconfigured embeddings are fatal.
+func wireMemory(cfg *agentruntime.Config, d Deps) error {
 	if !d.Memory {
 		return nil
 	}
 	if d.DB == nil {
 		return fmt.Errorf("agentkind: memory enabled for %q but no DB handle", d.AgentID)
 	}
-	st, err := memory.NewStore(context.Background(), d.DB, d.Tenant)
+	emb, _, enabled, err := memory.NewEmbedderFromEnv()
+	if err != nil {
+		return fmt.Errorf("agentkind: embeddings config for %q: %w", d.AgentID, err)
+	}
+	var opts []memory.Option
+	if enabled {
+		opts = append(opts, memory.WithEmbedder(emb))
+	}
+	st, err := memory.NewStore(context.Background(), d.DB, d.Tenant, opts...)
 	if err != nil {
 		return fmt.Errorf("agentkind: memory store for %q: %w", d.AgentID, err)
 	}
-	reg.Register(&hmemory.MemoryTool{Store: st})
+	cfg.Tools.Register(&hmemory.MemoryTool{Store: st})
+	if enabled {
+		k := envInt("RUNTIME_EMBED_RECALL_K", 5)
+		floor := envFloat("RUNTIME_EMBED_RECALL_FLOOR", 0.7)
+		kg := memory.NewKG(st, k, floor)
+		cfg.KGFn = func(string) hrt.KnowledgeGraph { return kg }
+	}
 	return nil
+}
+
+// envInt reads an int env var with a default.
+func envInt(key string, def int) int {
+	if v := os.Getenv(key); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			return n
+		}
+	}
+	return def
+}
+
+// envFloat reads a float64 env var with a default.
+func envFloat(key string, def float64) float64 {
+	if v := os.Getenv(key); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil {
+			return f
+		}
+	}
+	return def
 }
 
 func buildNutrition(d Deps) (agentruntime.Config, error) {
@@ -67,7 +104,7 @@ func buildNutrition(d Deps) (agentruntime.Config, error) {
 	if err != nil {
 		return agentruntime.Config{}, err
 	}
-	if err := attachMemory(cfg.Tools, d); err != nil {
+	if err := wireMemory(&cfg, d); err != nil {
 		return agentruntime.Config{}, err
 	}
 	return cfg, nil
@@ -76,14 +113,15 @@ func buildNutrition(d Deps) (agentruntime.Config, error) {
 func buildTestAgent(d Deps) (agentruntime.Config, error) {
 	reg := tool.NewRegistry()
 	reg.Register(testagent.MarkerTool{DB: d.DB})
-	if err := attachMemory(reg, d); err != nil {
-		return agentruntime.Config{}, err
-	}
-	return agentruntime.Config{
+	cfg := agentruntime.Config{
 		Spec: hrt.AgentSpec{
 			ID: d.AgentID, Name: d.AgentID, Model: "test/scripted", MaxTurns: 10,
 		},
 		Provider: testagent.New(),
 		Tools:    reg,
-	}, nil
+	}
+	if err := wireMemory(&cfg, d); err != nil {
+		return agentruntime.Config{}, err
+	}
+	return cfg, nil
 }
