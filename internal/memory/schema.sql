@@ -12,3 +12,4 @@ CREATE TABLE IF NOT EXISTS memory_events (
 );
 CREATE INDEX IF NOT EXISTS memory_events_tenant_idx ON memory_events (tenant_id);
 CREATE INDEX IF NOT EXISTS memory_events_supersedes_idx ON memory_events (tenant_id, supersedes);
+CREATE INDEX IF NOT EXISTS memory_events_entry_idx ON memory_events (tenant_id, entry_id);
