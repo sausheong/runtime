@@ -28,6 +28,7 @@ func NewRegistry(cfg *config.Config, binPath, dsn string) *Registry {
 		r.agents[a.ID] = AgentProcess{
 			AgentID: a.ID, Addr: a.ListenAddr, BinPath: binPath, PGDSN: dsn,
 			Kind: a.Kind, Command: a.Command, WorkDir: a.WorkDir, Tenant: a.Tenant,
+			Memory: a.Memory,
 		}
 		r.infos[a.ID] = AgentInfo{ID: a.ID, Name: a.Name, Model: a.Model, Tenant: a.Tenant}
 	}
