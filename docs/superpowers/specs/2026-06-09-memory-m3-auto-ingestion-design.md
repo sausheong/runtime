@@ -384,3 +384,17 @@ semantic-recall paths, secrets/identity, and conformance suite are untouched.
   refinement/merge dedup, session-level synthesis).
 - `docs/images/project-layout.mmd` → note ingest/extractor in the `memory/` node.
 - Project memory `runtime-platform-project.md` → Memory M3 paragraph.
+
+---
+
+## Addendum (2026-06-09): RunTurn wiring correction
+
+This spec's "Why the seam forces async" section assumed harness fires `Ingest`
+inside `RunTurn`. That was not true: `RunTurn` did not consult `r.KG` at all, so
+both M3 ingest and M2 recall were inert on the runtime's serve path. The M3 final
+holistic review caught this. The fix is a separate milestone —
+`docs/superpowers/specs/2026-06-09-kg-runturn-wiring-design.md` — which wires the
+KG seam into `RunTurn` (bounded recall on the first round, ingest on the
+completing round). M3 merges together with that wiring so the feature is live, not
+dormant. The async/degrade/dedup design above is unchanged and correct; only the
+call site was missing.

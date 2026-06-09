@@ -310,3 +310,40 @@ func TestStore_SearchSimilarCrossTenantIsolation(t *testing.T) {
 		t.Fatalf("beta must not recall alpha's memory: %+v", hits)
 	}
 }
+
+func TestStore_DedupFloorSeparation(t *testing.T) {
+	// vectors chosen for known cosine similarities to the query {1,0,0}:
+	//   near    = {0.97, 0.243, 0}  → cosine ≈ 0.970 (>= 0.85 dedup floor)
+	//   related = {0.8, 0.6, 0}     → cosine = 0.800 (between recall 0.7 and dedup 0.85)
+	emb := &fixedEmbedder{vecs: map[string][]float32{
+		"near":    {0.97, 0.243, 0},
+		"related": {0.8, 0.6, 0},
+	}}
+	st, db := freshStoreEmbedded(t, "alpha", emb)
+	defer db.Close()
+	ctx := context.Background()
+	st.Save(ctx, hmem.Entry{Content: "near"})
+	st.Save(ctx, hmem.Entry{Content: "related"})
+
+	// At the dedup floor, only "near" is a duplicate of the query.
+	dupHits, err := st.SearchSimilar(ctx, []float32{1, 0, 0}, 1, 0.85)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(dupHits) != 1 || dupHits[0].Content != "near" {
+		t.Fatalf("dedup floor 0.85 should match only 'near': %+v", dupHits)
+	}
+
+	// "related" sits above the recall floor (0.7) but below dedup (0.85): it would
+	// be recalled, but is NOT treated as a duplicate.
+	recallHits, _ := st.SearchSimilar(ctx, []float32{1, 0, 0}, 5, 0.7)
+	var sawRelated bool
+	for _, h := range recallHits {
+		if h.Content == "related" {
+			sawRelated = true
+		}
+	}
+	if !sawRelated {
+		t.Fatalf("'related' should clear the recall floor 0.7: %+v", recallHits)
+	}
+}

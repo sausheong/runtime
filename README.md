@@ -399,9 +399,41 @@ start (the store's DDL errors). With the extension present, startup is idempoten
 If `RUNTIME_EMBED_MODEL` is unset, memory works exactly as before (tag/id
 retrieval, no recall). If an embedding call fails on save, the entry is still
 stored (durable) but is invisible to recall until re-embedded (e.g. on its next
-update). Auto-ingestion of conversation facts is a planned follow-up; today
-memories come only from the agent's explicit `memory` tool. Changing the
-embedding model/dimension requires re-embedding (a documented migration).
+update). Changing the embedding model/dimension requires re-embedding (a
+documented migration).
+
+#### Auto-ingestion
+
+When semantic recall is enabled **and** `RUNTIME_INGEST_ENABLED` is set, the
+agent also *captures* memories automatically. After each completed chat exchange,
+a background extractor reads the conversation, pulls out durable facts, dedups them against
+existing memory, and saves the new ones — which embed-on-save makes recallable on
+the next turn. The agent does not have to call the memory tool to remember.
+
+```bash
+export RUNTIME_INGEST_ENABLED=1
+export RUNTIME_INGEST_MODEL=gpt-4o-mini   # chat model for fact extraction
+# reuses OPENAI_BASE_URL / OPENAI_API_KEY
+# optional tuning:
+export RUNTIME_INGEST_MIN_MESSAGES=2      # growth gate: min thread messages (default 2)
+export RUNTIME_INGEST_MAX_INFLIGHT=4      # max concurrent extractions, drop over (default 4)
+export RUNTIME_INGEST_DEDUP_FLOOR=0.85    # skip a fact this similar to an existing one (default 0.85)
+export RUNTIME_INGEST_MAX_FACTS=10        # cap on facts saved per turn (default 10)
+```
+
+It is best-effort and never affects a turn: extraction runs in a bounded
+background goroutine after the response is delivered, and any failure
+(extraction, embedding, save) degrades silently. A trivial turn is skipped by a
+cheap message-count gate; when too many extractions are already in flight, a
+turn's ingest is dropped rather than queued. Auto-captured entries carry origin
+`ingest` and the `auto` tag, distinguishing them from tool-saved memories.
+
+Ingestion is per-turn (no whole-session synthesis) and append-or-skip (a
+near-duplicate is skipped, not merged). It requires semantic recall: if
+`RUNTIME_INGEST_ENABLED` is set without embeddings configured, it is ignored
+(with a warning); if set with embeddings but no `RUNTIME_INGEST_MODEL`, agent
+startup fails. Conversation content is sent to the same proxy used for chat and
+embeddings — no new egress.
 
 ### Open mode & backward compatibility
 
@@ -953,6 +985,12 @@ unaffected.
 | `RUNTIME_EMBED_DIM` | agentd | (unset) | Embedding dimension (the `vector(N)` width). Required + positive when `RUNTIME_EMBED_MODEL` is set; invalid ⇒ fatal at startup. |
 | `RUNTIME_EMBED_RECALL_K` | agentd | `5` | Max memories injected per turn. |
 | `RUNTIME_EMBED_RECALL_FLOOR` | agentd | `0.7` | Minimum cosine similarity (0–1) for a memory to be injected. |
+| `RUNTIME_INGEST_ENABLED` | agentd | (unset) | `1`/`true`/`yes`/`on` enables auto-ingestion. Requires semantic recall; ignored (warn) if embeddings are unset. |
+| `RUNTIME_INGEST_MODEL` | agentd | (unset) | Chat model for fact extraction (reuses `OPENAI_*`). Required when ingestion is enabled with embeddings on; missing ⇒ fatal at startup. |
+| `RUNTIME_INGEST_MIN_MESSAGES` | agentd | `2` | Growth gate: minimum thread messages before a turn is extracted. |
+| `RUNTIME_INGEST_MAX_INFLIGHT` | agentd | `4` | Max concurrent extraction goroutines; turns over the cap are dropped. |
+| `RUNTIME_INGEST_DEDUP_FLOOR` | agentd | `0.85` | Cosine similarity at/above which a candidate fact is treated as a duplicate and skipped. |
+| `RUNTIME_INGEST_MAX_FACTS` | agentd | `10` | Hard cap on facts saved per turn. |
 | `RUNTIME_LOG_FORMAT` | runtimed | `text` | `json` switches `slog` to JSON output. |
 | `RUNTIME_CTL_URL` | runtimectl | `http://localhost:8080` | Control-plane base URL the CLI targets. |
 | `RUNTIME_TOKEN` | runtimectl | (unset) | Bearer credential (service key, OIDC token, or bootstrap key) sent on every CLI request when set. |

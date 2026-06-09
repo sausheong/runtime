@@ -4,8 +4,10 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 
+	hrt "github.com/sausheong/harness/runtime"
 	hmem "github.com/sausheong/harness/tool/memory"
 )
 
@@ -80,4 +82,172 @@ func TestKG_RecallEmptyOnEmbedError(t *testing.T) {
 func TestKG_IngestIsNoop(t *testing.T) {
 	k := &KG{}
 	k.Ingest(context.Background(), nil) // must not panic
+}
+
+// fakeExtractor returns preset facts (or an error) regardless of input.
+type fakeExtractor struct {
+	facts []string
+	err   error
+}
+
+func (f *fakeExtractor) Extract(_ context.Context, _ []hrt.Message) ([]string, error) {
+	return f.facts, f.err
+}
+
+// recordingSaver records saved entries; optionally fails on the first call.
+type recordingSaver struct {
+	mu        sync.Mutex
+	saved     []hmem.Entry
+	failFirst bool
+	calls     int
+}
+
+func (r *recordingSaver) save(_ context.Context, e hmem.Entry) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.calls++
+	if r.failFirst && r.calls == 1 {
+		return fmt.Errorf("save boom")
+	}
+	r.saved = append(r.saved, e)
+	return nil
+}
+
+func (r *recordingSaver) snapshot() []hmem.Entry {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]hmem.Entry(nil), r.saved...)
+}
+
+func twoMsgThread() []hrt.Message {
+	return []hrt.Message{{Role: "user", Content: "hi"}, {Role: "assistant", Content: "yo"}}
+}
+
+func TestKG_IngestGateSkipsShortThread(t *testing.T) {
+	ext := &fakeExtractor{facts: []string{"should not run"}}
+	saver := &recordingSaver{}
+	done := make(chan struct{}, 1)
+	emb := &kgFakeEmbedder{}
+	search := func(_ context.Context, _ []float32, _ int, _ float64) ([]hmem.Entry, error) { return nil, nil }
+	k := newKGWithIngest(emb, ext, search, saver.save, 0.85, 2, 4, func() { done <- struct{}{} })
+
+	k.Ingest(context.Background(), []hrt.Message{{Role: "user", Content: "hi"}}) // len 1 < minMsgs 2
+	select {
+	case <-done:
+		t.Fatal("ingest must not run for a sub-threshold thread")
+	default:
+	}
+	if len(saver.snapshot()) != 0 {
+		t.Fatal("nothing should be saved")
+	}
+}
+
+func TestKG_IngestSavesNewFacts(t *testing.T) {
+	ext := &fakeExtractor{facts: []string{"alpha fact", "beta fact"}}
+	saver := &recordingSaver{}
+	done := make(chan struct{}, 1)
+	emb := &kgFakeEmbedder{}
+	// search returns no hits → nothing is a duplicate.
+	search := func(_ context.Context, _ []float32, _ int, _ float64) ([]hmem.Entry, error) { return nil, nil }
+	k := newKGWithIngest(emb, ext, search, saver.save, 0.85, 2, 4, func() { done <- struct{}{} })
+
+	k.Ingest(context.Background(), twoMsgThread())
+	<-done
+	got := saver.snapshot()
+	if len(got) != 2 || got[0].Content != "alpha fact" || got[1].Content != "beta fact" {
+		t.Fatalf("want both facts saved in order: %+v", got)
+	}
+	if got[0].Origin != "ingest" || len(got[0].Tags) != 1 || got[0].Tags[0] != "auto" {
+		t.Fatalf("saved entry must carry ingest origin + auto tag: %+v", got[0])
+	}
+}
+
+func TestKG_IngestSkipsDuplicates(t *testing.T) {
+	ext := &fakeExtractor{facts: []string{"dup fact", "new fact"}}
+	saver := &recordingSaver{}
+	done := make(chan struct{}, 1)
+	emb := &kgFakeEmbedder{}
+	emb.vecs = map[string][]float32{"dup fact": {1, 0, 0}, "new fact": {0, 1, 0}}
+	// "dup fact" → a hit (duplicate); "new fact" → no hit.
+	search := func(_ context.Context, vec []float32, _ int, _ float64) ([]hmem.Entry, error) {
+		if vec[0] == 1 { // dup fact's vector
+			return []hmem.Entry{{Content: "already stored"}}, nil
+		}
+		return nil, nil
+	}
+	k := newKGWithIngest(emb, ext, search, saver.save, 0.85, 2, 4, func() { done <- struct{}{} })
+
+	k.Ingest(context.Background(), twoMsgThread())
+	<-done
+	got := saver.snapshot()
+	if len(got) != 1 || got[0].Content != "new fact" {
+		t.Fatalf("duplicate must be skipped, only new fact saved: %+v", got)
+	}
+}
+
+func TestKG_IngestExtractErrorDegrades(t *testing.T) {
+	ext := &fakeExtractor{err: fmt.Errorf("extract boom")}
+	saver := &recordingSaver{}
+	done := make(chan struct{}, 1)
+	search := func(_ context.Context, _ []float32, _ int, _ float64) ([]hmem.Entry, error) { return nil, nil }
+	k := newKGWithIngest(&kgFakeEmbedder{}, ext, search, saver.save, 0.85, 2, 4, func() { done <- struct{}{} })
+
+	k.Ingest(context.Background(), twoMsgThread())
+	<-done
+	if len(saver.snapshot()) != 0 {
+		t.Fatal("extractor error ⇒ nothing saved")
+	}
+}
+
+func TestKG_IngestSaveErrorContinues(t *testing.T) {
+	ext := &fakeExtractor{facts: []string{"first", "second"}}
+	saver := &recordingSaver{failFirst: true}
+	done := make(chan struct{}, 1)
+	search := func(_ context.Context, _ []float32, _ int, _ float64) ([]hmem.Entry, error) { return nil, nil }
+	k := newKGWithIngest(&kgFakeEmbedder{}, ext, search, saver.save, 0.85, 2, 4, func() { done <- struct{}{} })
+
+	k.Ingest(context.Background(), twoMsgThread())
+	<-done
+	got := saver.snapshot()
+	if len(got) != 1 || got[0].Content != "second" {
+		t.Fatalf("save error on first ⇒ second still saved: %+v", got)
+	}
+}
+
+func TestKG_IngestEmbedFailSavesAnyway(t *testing.T) {
+	ext := &fakeExtractor{facts: []string{"fact"}}
+	saver := &recordingSaver{}
+	done := make(chan struct{}, 1)
+	emb := &kgFakeEmbedder{fail: true} // dedup embed fails → cannot dedup → save anyway
+	searchCalled := false
+	search := func(_ context.Context, _ []float32, _ int, _ float64) ([]hmem.Entry, error) {
+		searchCalled = true
+		return nil, nil
+	}
+	k := newKGWithIngest(emb, ext, search, saver.save, 0.85, 2, 4, func() { done <- struct{}{} })
+
+	k.Ingest(context.Background(), twoMsgThread())
+	<-done
+	if searchCalled {
+		t.Fatal("search must be skipped when dedup embed fails")
+	}
+	if got := saver.snapshot(); len(got) != 1 || got[0].Content != "fact" {
+		t.Fatalf("embed-fail dedup ⇒ save anyway: %+v", got)
+	}
+}
+
+func TestKG_IngestDropsOverCapacity(t *testing.T) {
+	ext := &fakeExtractor{facts: []string{"x"}}
+	saver := &recordingSaver{}
+	done := make(chan struct{}, 1)
+	search := func(_ context.Context, _ []float32, _ int, _ float64) ([]hmem.Entry, error) { return nil, nil }
+	// maxInflight 1; pre-fill the slot so the next Ingest is dropped.
+	k := newKGWithIngest(&kgFakeEmbedder{}, ext, search, saver.save, 0.85, 2, 1, func() { done <- struct{}{} })
+	k.sem <- struct{}{} // occupy the only slot
+
+	k.Ingest(context.Background(), twoMsgThread()) // must drop, not block
+	<-done                                          // drop path still fires ingestDone
+	if len(saver.snapshot()) != 0 {
+		t.Fatal("over-capacity ingest must drop (no extract/save)")
+	}
 }

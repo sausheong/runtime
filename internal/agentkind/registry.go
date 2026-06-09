@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"strconv"
+	"strings"
 
 	hrt "github.com/sausheong/harness/runtime"
 	"github.com/sausheong/harness/tool"
@@ -49,8 +50,10 @@ func Get(kind string) (Builder, bool) {
 
 // wireMemory attaches the per-tenant memory tool to cfg.Tools when d.Memory is
 // set, and — when embeddings are configured (RUNTIME_EMBED_*) — embeds entries on
-// save and installs cfg.KGFn for semantic recall. Fail-fast: an agent that asked
-// for memory must not start without it, and misconfigured embeddings are fatal.
+// save and installs cfg.KGFn for semantic recall. When RUNTIME_INGEST_ENABLED is
+// truthy (and recall is on), it also installs auto-ingestion. Fail-fast: an agent
+// that asked for memory must not start without it; misconfigured embeddings or a
+// requested-but-modelless ingest are fatal.
 func wireMemory(cfg *agentruntime.Config, d Deps) error {
 	if !d.Memory {
 		return nil
@@ -59,6 +62,22 @@ func wireMemory(cfg *agentruntime.Config, d Deps) error {
 	if err != nil {
 		return fmt.Errorf("agentkind: embeddings config for %q: %w", d.AgentID, err)
 	}
+
+	// Resolve auto-ingestion config BEFORE the DB check so a misconfiguration is
+	// fatal regardless of DB state (mirrors the embeddings-config ordering).
+	var ingestExt memory.Extractor
+	if envBool("RUNTIME_INGEST_ENABLED") {
+		if !enabled {
+			slog.Warn("agentkind: RUNTIME_INGEST_ENABLED set but embeddings are not configured; ingestion disabled", "agent", d.AgentID)
+		} else {
+			ext, ingEnabled := memory.NewExtractorFromEnv()
+			if !ingEnabled {
+				return fmt.Errorf("agentkind: ingest config for %q: RUNTIME_INGEST_ENABLED set but RUNTIME_INGEST_MODEL is empty", d.AgentID)
+			}
+			ingestExt = ext
+		}
+	}
+
 	if d.DB == nil {
 		return fmt.Errorf("agentkind: memory enabled for %q but no DB handle", d.AgentID)
 	}
@@ -74,10 +93,28 @@ func wireMemory(cfg *agentruntime.Config, d Deps) error {
 	if enabled {
 		k := envInt("RUNTIME_EMBED_RECALL_K", 5)
 		floor := envFloat("RUNTIME_EMBED_RECALL_FLOOR", 0.7)
-		kg := memory.NewKG(st, k, floor)
+		var kgOpts []memory.KGOption
+		if ingestExt != nil {
+			dedupFloor := envFloat("RUNTIME_INGEST_DEDUP_FLOOR", 0.85)
+			minMsgs := envInt("RUNTIME_INGEST_MIN_MESSAGES", 2)
+			maxInflight := envInt("RUNTIME_INGEST_MAX_INFLIGHT", 4)
+			kgOpts = append(kgOpts, memory.WithIngest(ingestExt, dedupFloor, minMsgs, maxInflight))
+		}
+		kg := memory.NewKG(st, k, floor, kgOpts...)
 		cfg.KGFn = func(string) hrt.KnowledgeGraph { return kg }
 	}
 	return nil
+}
+
+// envBool reports whether key is set to a truthy value (1/true/yes/on,
+// case-insensitive, surrounding spaces ignored).
+func envBool(key string) bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(key))) {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
+	}
 }
 
 // envInt reads an int env var with a default, warning (and using the default)
