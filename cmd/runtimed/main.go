@@ -69,7 +69,8 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Secret broker (Identity M2): built whenever RUNTIME_SECRETS_KEY is set,
+	// Secret broker (Identity M2/M3): built whenever a secrets keyring is
+	// configured (RUNTIME_SECRETS_KEYS or the legacy RUNTIME_SECRETS_KEY),
 	// independent of whether identity enforcement is on. Injected into the
 	// registry so each agent's SpawnFunc brokers its tenant's secrets.
 	secretBroker := buildSecretBroker(idStore)
