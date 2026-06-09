@@ -25,6 +25,11 @@ func NewKeyring(ciphers map[string]*Cipher, primaryID, legacyID string) (*Keyrin
 	if len(ciphers) == 0 {
 		return nil, errors.New("identity: keyring needs at least one key")
 	}
+	for id := range ciphers {
+		if id == "" || len(id) > 255 {
+			return nil, fmt.Errorf("identity: key id must be 1-255 bytes, got %d", len(id))
+		}
+	}
 	if _, ok := ciphers[primaryID]; !ok {
 		return nil, fmt.Errorf("identity: primary key id %q not in keyring", primaryID)
 	}

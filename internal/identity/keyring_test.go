@@ -1,7 +1,6 @@
 package identity
 
 import (
-	"bytes"
 	"testing"
 )
 
@@ -152,5 +151,14 @@ func TestNewKeyring_Validation(t *testing.T) {
 	if kr.PrimaryID() != "v1" || kr.NumKeys() != 1 {
 		t.Fatalf("accessor mismatch: primary=%q n=%d", kr.PrimaryID(), kr.NumKeys())
 	}
-	_ = bytes.Equal // keep import if unused above
+}
+
+func TestNewKeyring_RejectsOverlongKeyID(t *testing.T) {
+	long := make([]byte, 256)
+	for i := range long {
+		long[i] = 'a'
+	}
+	if _, err := NewKeyring(map[string]*Cipher{string(long): mkCipher(t, 1)}, string(long), ""); err == nil {
+		t.Fatal("NewKeyring accepted a 256-byte key id, want error")
+	}
 }
