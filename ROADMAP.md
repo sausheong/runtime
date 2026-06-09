@@ -8,7 +8,9 @@ Identity (B3) first three milestones complete — M1 multi-tenant, edge-enforced
 access control (OIDC + service keys + per-agent RBAC), M2 per-tenant secrets
 brokering (AES-256-GCM provider credentials injected into agents at spawn), and
 M3 secrets key rotation (a multi-key keyring with self-describing, AAD-bound
-blobs + an explicit re-encrypt command), all merged to `master` (see §B3).
+blobs + an explicit re-encrypt command), all merged to `master` (see §B3);
+Memory (B2) first milestone complete — multi-tenant durable MemoryStore, merged
+to `master` (see §B2).
 **Goal:** an on-prem, open-source equivalent of AWS Bedrock AgentCore.
 
 This file is the parking lot for everything *not yet built*. Each item below is a
@@ -77,6 +79,16 @@ exposing the platform broadly.
    retrieval across sessions, per-tenant isolation. Builds on harness
    `tool/memory` + Postgres/pgvector (pgvector is already provisioned in the
    Compose image, unused so far).
+   **First milestone DONE (merged to `master`, 2026-06-09):** multi-tenant
+   durable memory. A Postgres backend (`internal/memory`) implements harness's
+   `tool/memory.MemoryStore` over an append-only `memory_events` table with a
+   SQL live-set projection; agents opt in with `memory: true` in `runtime.yaml`
+   and get harness's stock `memory` tool. Per-tenant pool (shared across a
+   tenant's agents), isolated by construction (the store is pinned to its tenant;
+   the platform injects `RUNTIME_AGENT_TENANT`). Tag/id retrieval only — semantic
+   recall via harness's `KnowledgeGraph` seam, plus compaction/TTL and finer
+   (per-agent/per-user) scoping, remain. Spec/plan:
+   `docs/superpowers/{specs,plans}/2026-06-09-memory-m1-pg-memorystore*`.
 3. **Identity** — proper auth done right: agent identity, secrets brokering,
    OAuth, RBAC, per-user/multi-tenant. Supersedes M3's simple bearer tokens.
    **First milestone DONE (merged to `master`, 2026-06-09):** multi-tenant,
