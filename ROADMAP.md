@@ -100,8 +100,22 @@ exposing the platform broadly.
    write / "" on recall, never breaks a turn). Embeddings come from the
    OpenAI-compatible proxy (`RUNTIME_EMBED_MODEL`/`RUNTIME_EMBED_DIM`, reusing
    `OPENAI_*`); unset ⇒ M1 behavior. The pgvector extension must be pre-created by
-   a superuser. Auto-ingestion (`Ingest`) deferred. Spec/plan:
+   a superuser. Spec/plan:
    `docs/superpowers/{specs,plans}/2026-06-09-memory-m2-semantic-recall*`.
+
+   **Third milestone DONE (merged to `master`, 2026-06-09):** auto-ingestion.
+   Harness's `KnowledgeGraph.Ingest` (previously a no-op) now captures memories
+   automatically — after each chat turn a bounded background goroutine runs an LLM
+   extractor (`internal/memory/ingest.go`, OpenAI-compatible `/chat/completions`)
+   over the thread, semantically dedups the candidate facts against existing
+   memory (reusing M2's `SearchSimilar`), and saves the new ones (embed-on-save ⇒
+   recallable next turn). Opt-in via `RUNTIME_INGEST_ENABLED`, layered on semantic
+   recall; degrade-don't-fail throughout (extraction/embed/save errors never break
+   a turn); growth-gated + inflight-capped (drop, not queue). Auto-captured entries
+   carry origin `ingest` + the `auto` tag. Remaining B2: compaction/TTL/GC of dead
+   rows, finer (per-agent/per-user) scoping, per-tenant embedding models,
+   refinement/merge dedup (Update-on-similar), and session-level synthesis.
+   Spec/plan: `docs/superpowers/{specs,plans}/2026-06-09-memory-m3-auto-ingestion*`.
 3. **Identity** — proper auth done right: agent identity, secrets brokering,
    OAuth, RBAC, per-user/multi-tenant. Supersedes M3's simple bearer tokens.
    **First milestone DONE (merged to `master`, 2026-06-09):** multi-tenant,
