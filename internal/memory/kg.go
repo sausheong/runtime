@@ -14,7 +14,7 @@ import (
 // KG is unit-testable without Postgres).
 type searcher func(ctx context.Context, queryVec []float32, k int, floor float64) ([]hmem.Entry, error)
 
-// saver is the slice of *Store the ingest path needs (func type for testability).
+// saver wraps the one Store method the ingest path needs (func type for testability).
 type saver func(ctx context.Context, e hmem.Entry) error
 
 // ingestOrigin / ingestTags mark auto-captured memories so they are
@@ -173,7 +173,8 @@ func (g *KG) runIngest(thread []hrt.Message) {
 		}
 	}()
 	// Fresh context: the request ctx is typically cancelled by the time the
-	// harness fires Ingest in its end-of-Run defer.
+	// harness fires Ingest in its end-of-Run defer. The extractor's own client
+	// timeout (30s) bounds how long a stuck extraction can hold its sem slot.
 	ctx := context.Background()
 	facts, err := g.extractor.Extract(ctx, thread)
 	if err != nil {
