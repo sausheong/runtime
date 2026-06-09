@@ -1,6 +1,7 @@
 package identity
 
 import (
+	"encoding/base64"
 	"testing"
 )
 
@@ -160,5 +161,73 @@ func TestNewKeyring_RejectsOverlongKeyID(t *testing.T) {
 	}
 	if _, err := NewKeyring(map[string]*Cipher{string(long): mkCipher(t, 1)}, string(long), ""); err == nil {
 		t.Fatal("NewKeyring accepted a 256-byte key id, want error")
+	}
+}
+
+func b64key(seed byte) string {
+	k := make([]byte, 32)
+	for i := range k {
+		k[i] = seed + byte(i)
+	}
+	return base64.StdEncoding.EncodeToString(k)
+}
+
+func TestParseKeyring_AllEmptyDisabled(t *testing.T) {
+	kr, err := ParseKeyring("", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if kr != nil {
+		t.Fatal("all-empty config must yield nil keyring (feature disabled)")
+	}
+}
+
+func TestParseKeyring_LegacySingleKey(t *testing.T) {
+	kr, err := ParseKeyring("", "", b64key(1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if kr.PrimaryID() != "v1" || kr.NumKeys() != 1 || kr.legacyID != "v1" {
+		t.Fatalf("legacy single-key mismatch: primary=%q n=%d legacy=%q", kr.PrimaryID(), kr.NumKeys(), kr.legacyID)
+	}
+}
+
+func TestParseKeyring_MultiKeyPrimary(t *testing.T) {
+	kr, err := ParseKeyring("v1:"+b64key(1)+",v2:"+b64key(9), "v2", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if kr.PrimaryID() != "v2" || kr.NumKeys() != 2 || kr.legacyID != "" {
+		t.Fatalf("multi-key mismatch: primary=%q n=%d legacy=%q", kr.PrimaryID(), kr.NumKeys(), kr.legacyID)
+	}
+}
+
+func TestParseKeyring_LegacyKeyNamesRingEntry(t *testing.T) {
+	// RUNTIME_SECRETS_KEY equals the v1 entry's bytes ⇒ v1 is the legacy id.
+	kr, err := ParseKeyring("v1:"+b64key(1)+",v2:"+b64key(9), "v2", b64key(1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if kr.legacyID != "v1" {
+		t.Fatalf("legacy id = %q, want v1", kr.legacyID)
+	}
+}
+
+func TestParseKeyring_Errors(t *testing.T) {
+	cases := []struct {
+		name, keys, primary, legacy string
+	}{
+		{"bad base64", "v1:!!!notb64", "v1", ""},
+		{"short key", "v1:" + base64.StdEncoding.EncodeToString(make([]byte, 16)), "v1", ""},
+		{"dup id", "v1:" + b64key(1) + ",v1:" + b64key(9), "v1", ""},
+		{"no colon", "v1" + b64key(1), "v1", ""},
+		{"primary missing", "v1:" + b64key(1), "", ""},
+		{"primary not in ring", "v1:" + b64key(1), "v9", ""},
+		{"legacy not in ring", "v1:" + b64key(1), "v1", b64key(7)},
+	}
+	for _, c := range cases {
+		if _, err := ParseKeyring(c.keys, c.primary, c.legacy); err == nil {
+			t.Errorf("%s: expected error, got nil", c.name)
+		}
 	}
 }

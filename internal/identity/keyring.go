@@ -1,8 +1,11 @@
 package identity
 
 import (
+	"bytes"
+	"encoding/base64"
 	"errors"
 	"fmt"
+	"strings"
 )
 
 // formatV1 marks a new-format secret blob: 0x01 | keyIDLen(1) | keyID | nonce | ct.
@@ -108,4 +111,89 @@ func (k *Keyring) openLegacy(blob []byte) ([]byte, error) {
 		return nil, errors.New("identity: version-less secret but no legacy key configured")
 	}
 	return k.ciphers[k.legacyID].Open(blob, nil)
+}
+
+// ParseKeyring builds a Keyring from operator env values:
+//
+//	keysEnv      RUNTIME_SECRETS_KEYS    "id:base64key,id:base64key" (each key 32 bytes)
+//	primaryEnv   RUNTIME_SECRETS_PRIMARY id of the key new writes seal under
+//	legacyKeyEnv RUNTIME_SECRETS_KEY     base64 of the legacy single key
+//
+// All empty ⇒ (nil, nil): the feature is disabled. keysEnv empty but legacyKeyEnv
+// set ⇒ the M2 back-compat ring {v1: key}, primary and legacy v1. keysEnv set ⇒ a
+// multi-key ring; primaryEnv must name a ring entry, and a non-empty legacyKeyEnv
+// must match exactly one entry's bytes (that id becomes the version-less decrypt
+// key). Any malformed input is an error (runtimed turns it into a fatal startup).
+func ParseKeyring(keysEnv, primaryEnv, legacyKeyEnv string) (*Keyring, error) {
+	if keysEnv == "" && legacyKeyEnv == "" {
+		return nil, nil
+	}
+	if keysEnv == "" {
+		key, err := decodeKey(legacyKeyEnv)
+		if err != nil {
+			return nil, fmt.Errorf("identity: RUNTIME_SECRETS_KEY: %w", err)
+		}
+		c, err := NewCipher(key)
+		if err != nil {
+			return nil, err
+		}
+		return NewKeyring(map[string]*Cipher{"v1": c}, "v1", "v1")
+	}
+
+	ciphers := map[string]*Cipher{}
+	rawKeys := map[string][]byte{}
+	for _, pair := range strings.Split(keysEnv, ",") {
+		pair = strings.TrimSpace(pair)
+		if pair == "" {
+			continue
+		}
+		id, b64, ok := strings.Cut(pair, ":")
+		if !ok || id == "" {
+			return nil, fmt.Errorf("identity: RUNTIME_SECRETS_KEYS entry %q must be id:base64", pair)
+		}
+		if _, dup := ciphers[id]; dup {
+			return nil, fmt.Errorf("identity: duplicate key id %q in RUNTIME_SECRETS_KEYS", id)
+		}
+		key, err := decodeKey(b64)
+		if err != nil {
+			return nil, fmt.Errorf("identity: key %q: %w", id, err)
+		}
+		c, err := NewCipher(key)
+		if err != nil {
+			return nil, fmt.Errorf("identity: key %q: %w", id, err)
+		}
+		ciphers[id] = c
+		rawKeys[id] = key
+	}
+	if primaryEnv == "" {
+		return nil, errors.New("identity: RUNTIME_SECRETS_PRIMARY is required when RUNTIME_SECRETS_KEYS is set")
+	}
+
+	legacyID := ""
+	if legacyKeyEnv != "" {
+		lk, err := decodeKey(legacyKeyEnv)
+		if err != nil {
+			return nil, fmt.Errorf("identity: RUNTIME_SECRETS_KEY: %w", err)
+		}
+		for id, k := range rawKeys {
+			if bytes.Equal(k, lk) {
+				legacyID = id
+				break
+			}
+		}
+		if legacyID == "" {
+			return nil, errors.New("identity: RUNTIME_SECRETS_KEY does not match any key in RUNTIME_SECRETS_KEYS")
+		}
+	}
+	return NewKeyring(ciphers, primaryEnv, legacyID)
+}
+
+// decodeKey base64-decodes a 32-byte AES key (length validated by NewCipher; this
+// surfaces a clear decode error first).
+func decodeKey(b64 string) ([]byte, error) {
+	key, err := base64.StdEncoding.DecodeString(b64)
+	if err != nil {
+		return nil, fmt.Errorf("not valid base64: %w", err)
+	}
+	return key, nil
 }
