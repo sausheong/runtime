@@ -9,8 +9,9 @@ access control (OIDC + service keys + per-agent RBAC), M2 per-tenant secrets
 brokering (AES-256-GCM provider credentials injected into agents at spawn), and
 M3 secrets key rotation (a multi-key keyring with self-describing, AAD-bound
 blobs + an explicit re-encrypt command), all merged to `master` (see §B3);
-Memory (B2) first milestone complete — multi-tenant durable MemoryStore, merged
-to `master` (see §B2).
+Memory (B2) first milestone complete — multi-tenant durable MemoryStore, and M2
+semantic recall (pgvector embeddings + KnowledgeGraph recall into the prompt),
+merged to `master` (see §B2).
 **Goal:** an on-prem, open-source equivalent of AWS Bedrock AgentCore.
 
 This file is the parking lot for everything *not yet built*. Each item below is a
@@ -85,10 +86,22 @@ exposing the platform broadly.
    SQL live-set projection; agents opt in with `memory: true` in `runtime.yaml`
    and get harness's stock `memory` tool. Per-tenant pool (shared across a
    tenant's agents), isolated by construction (the store is pinned to its tenant;
-   the platform injects `RUNTIME_AGENT_TENANT`). Tag/id retrieval only — semantic
-   recall via harness's `KnowledgeGraph` seam, plus compaction/TTL and finer
-   (per-agent/per-user) scoping, remain. Spec/plan:
+   the platform injects `RUNTIME_AGENT_TENANT`). Tag/id retrieval only —
+   auto-ingestion, compaction/TTL, finer (per-agent/per-user) scoping, and
+   per-tenant embedding models remain. Spec/plan:
    `docs/superpowers/{specs,plans}/2026-06-09-memory-m1-pg-memorystore*`.
+
+   **Second milestone DONE (merged to `master`, 2026-06-09):** semantic recall.
+   Memory entries are embedded on save into a pgvector `vector(N)` column on
+   `memory_events`; harness's `KnowledgeGraph` seam (wired via a new optional
+   `agentruntime.Config.KGFn`) embeds each turn's query and injects the nearest
+   tenant memories (top-K above a cosine floor) into the prompt — tenant-isolated
+   (reuses M1's live-set projection) and best-effort (embed failure ⇒ NULL on
+   write / "" on recall, never breaks a turn). Embeddings come from the
+   OpenAI-compatible proxy (`RUNTIME_EMBED_MODEL`/`RUNTIME_EMBED_DIM`, reusing
+   `OPENAI_*`); unset ⇒ M1 behavior. The pgvector extension must be pre-created by
+   a superuser. Auto-ingestion (`Ingest`) deferred. Spec/plan:
+   `docs/superpowers/{specs,plans}/2026-06-09-memory-m2-semantic-recall*`.
 3. **Identity** — proper auth done right: agent identity, secrets brokering,
    OAuth, RBAC, per-user/multi-tenant. Supersedes M3's simple bearer tokens.
    **First milestone DONE (merged to `master`, 2026-06-09):** multi-tenant,

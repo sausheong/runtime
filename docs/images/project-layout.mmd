@@ -17,7 +17,7 @@ flowchart LR
     cfg["config/<br/><i>runtime.yaml loader + validation</i>"]
     store["store/<br/><i>control-plane store:<br/>pg + in-memory</i>"]
     ident["identity/<br/><i>multi-tenant authn/authz +<br/>secrets brokering:<br/>Principal, Authorizer, Authenticator,<br/>OIDC, Cipher, Keyring, Broker, store</i>"]
-    mem["memory/<br/><i>per-tenant Postgres MemoryStore<br/>(append-only events + SQL projection)</i>"]
+    mem["memory/<br/><i>per-tenant Postgres MemoryStore<br/>(events + SQL projection, pgvector recall)</i>"]
 
     testagent["testagent/<br/><i>deterministic provider + marker tool</i>"]
     test["test/<br/><i>//go:build integration e2e tests</i>"]

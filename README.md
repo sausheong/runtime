@@ -369,6 +369,40 @@ unaffected. The platform injects `RUNTIME_AGENT_TENANT` (and, when enabled,
 `RUNTIME_AGENT_MEMORY=1`) into the agent subprocess; agentd constructs a
 tenant-pinned store so memory is isolated by construction.
 
+#### Semantic recall
+
+When embeddings are configured, a memory-enabled agent also gets **automatic
+semantic recall**: each saved entry is embedded, and at the start of every turn
+the most similar past memories are retrieved and injected into the prompt — no
+agent code, no explicit lookup. Recall is tenant-isolated (same boundary as the
+store) and best-effort (a slow or failing embedding service never breaks a turn).
+
+Enable it by pointing the platform at an OpenAI-compatible embeddings endpoint
+(the same proxy used for chat) and choosing a model + dimension:
+
+```bash
+export RUNTIME_EMBED_MODEL=text-embedding-3-small
+export RUNTIME_EMBED_DIM=1536          # must match the model's output dimension
+# reuses OPENAI_BASE_URL / OPENAI_API_KEY
+# optional tuning:
+export RUNTIME_EMBED_RECALL_K=5        # max memories injected per turn (default 5)
+export RUNTIME_EMBED_RECALL_FLOOR=0.7  # min cosine similarity to inject (default 0.7)
+```
+
+**Postgres prerequisite:** semantic recall needs the pgvector extension. The
+deploy image (`pgvector/pgvector:pg16`) ships it, but the extension must be
+**created once by a Postgres superuser** in each target database
+(`CREATE EXTENSION IF NOT EXISTS vector;`) — the unprivileged `runtime` role
+cannot create it. If it is missing, an agent with embeddings enabled fails to
+start (the store's DDL errors). With the extension present, startup is idempotent.
+
+If `RUNTIME_EMBED_MODEL` is unset, memory works exactly as before (tag/id
+retrieval, no recall). If an embedding call fails on save, the entry is still
+stored (durable) but is invisible to recall until re-embedded (e.g. on its next
+update). Auto-ingestion of conversation facts is a planned follow-up; today
+memories come only from the agent's explicit `memory` tool. Changing the
+embedding model/dimension requires re-embedding (a documented migration).
+
 ### Open mode & backward compatibility
 
 - **No identity configured** (no OIDC issuer, no service keys, no users, no
@@ -915,6 +949,10 @@ unaffected.
 | `RUNTIME_AGENT_ID` | agentd | (set by runtimed per agent) | The agent's id. |
 | `RUNTIME_AGENT_TENANT` | agentd | `default` | The agent's tenant, injected by the control plane; pins the memory store's isolation. |
 | `RUNTIME_AGENT_MEMORY` | agentd | (unset) | `1` when the agent opted into memory (`memory: true`); tells agentd to wire the memory tool. |
+| `RUNTIME_EMBED_MODEL` | agentd | (unset) | Embedding model for semantic recall. Unset ⇒ recall disabled (tag/id memory only). |
+| `RUNTIME_EMBED_DIM` | agentd | (unset) | Embedding dimension (the `vector(N)` width). Required + positive when `RUNTIME_EMBED_MODEL` is set; invalid ⇒ fatal at startup. |
+| `RUNTIME_EMBED_RECALL_K` | agentd | `5` | Max memories injected per turn. |
+| `RUNTIME_EMBED_RECALL_FLOOR` | agentd | `0.7` | Minimum cosine similarity (0–1) for a memory to be injected. |
 | `RUNTIME_LOG_FORMAT` | runtimed | `text` | `json` switches `slog` to JSON output. |
 | `RUNTIME_CTL_URL` | runtimectl | `http://localhost:8080` | Control-plane base URL the CLI targets. |
 | `RUNTIME_TOKEN` | runtimectl | (unset) | Bearer credential (service key, OIDC token, or bootstrap key) sent on every CLI request when set. |
