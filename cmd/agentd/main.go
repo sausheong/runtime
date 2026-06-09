@@ -33,7 +33,9 @@ func main() {
 	// are not threaded through the builder.
 	dsn := mustEnv("RUNTIME_PG_DSN")
 	agentID := mustEnv("RUNTIME_AGENT_ID")
-	kind := os.Getenv("RUNTIME_AGENT_KIND") // "" ⇒ testagent
+	kind := os.Getenv("RUNTIME_AGENT_KIND")     // "" ⇒ testagent
+	tenant := os.Getenv("RUNTIME_AGENT_TENANT") // "" ⇒ memory.NewStore defaults to "default"
+	memoryOn := os.Getenv("RUNTIME_AGENT_MEMORY") == "1"
 
 	db, err := sql.Open("pgx", dsn)
 	if err != nil {
@@ -53,7 +55,7 @@ func main() {
 	if !ok {
 		log.Fatalf("agentd: unknown agent kind %q", kind)
 	}
-	cfg, err := build(agentkind.Deps{AgentID: agentID, DB: db})
+	cfg, err := build(agentkind.Deps{AgentID: agentID, DB: db, Tenant: tenant, Memory: memoryOn})
 	if err != nil {
 		log.Fatalf("agentd: build agent kind %q: %v", kind, err)
 	}
