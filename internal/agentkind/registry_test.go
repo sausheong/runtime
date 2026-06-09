@@ -1,6 +1,9 @@
 package agentkind
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestGetKnownKinds(t *testing.T) {
 	for _, k := range []string{"", "testagent", "nutrition"} {
@@ -48,11 +51,16 @@ func TestBuildTestAgent_SetsKGFnWhenEmbeddingsConfigured(t *testing.T) {
 
 func TestBuildTestAgent_EmbeddingsMisconfiguredFatal(t *testing.T) {
 	t.Setenv("RUNTIME_EMBED_MODEL", "embed-1")
-	t.Setenv("RUNTIME_EMBED_DIM", "") // bad
+	t.Setenv("RUNTIME_EMBED_DIM", "") // bad: model set, dim missing
 	build, _ := Get("testagent")
+	// DB nil is fine here: embeddings config is validated BEFORE the DB check,
+	// so this genuinely exercises the misconfig-fatal path.
 	_, err := build(Deps{AgentID: "a1", Memory: true, Tenant: "alpha", DB: nil})
 	if err == nil {
 		t.Fatal("model set + bad dim must error")
+	}
+	if !strings.Contains(err.Error(), "embeddings config") {
+		t.Fatalf("expected embeddings-config error, got: %v", err)
 	}
 }
 

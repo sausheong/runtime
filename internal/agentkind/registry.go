@@ -6,6 +6,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"log/slog"
 	"os"
 	"strconv"
 
@@ -54,12 +55,12 @@ func wireMemory(cfg *agentruntime.Config, d Deps) error {
 	if !d.Memory {
 		return nil
 	}
-	if d.DB == nil {
-		return fmt.Errorf("agentkind: memory enabled for %q but no DB handle", d.AgentID)
-	}
 	emb, _, enabled, err := memory.NewEmbedderFromEnv()
 	if err != nil {
 		return fmt.Errorf("agentkind: embeddings config for %q: %w", d.AgentID, err)
+	}
+	if d.DB == nil {
+		return fmt.Errorf("agentkind: memory enabled for %q but no DB handle", d.AgentID)
 	}
 	var opts []memory.Option
 	if enabled {
@@ -79,24 +80,34 @@ func wireMemory(cfg *agentruntime.Config, d Deps) error {
 	return nil
 }
 
-// envInt reads an int env var with a default.
+// envInt reads an int env var with a default, warning (and using the default)
+// on a malformed value.
 func envInt(key string, def int) int {
-	if v := os.Getenv(key); v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			return n
-		}
+	v := os.Getenv(key)
+	if v == "" {
+		return def
 	}
-	return def
+	n, err := strconv.Atoi(v)
+	if err != nil {
+		slog.Warn("agentkind: ignoring malformed env int; using default", "key", key, "value", v, "default", def)
+		return def
+	}
+	return n
 }
 
-// envFloat reads a float64 env var with a default.
+// envFloat reads a float64 env var with a default, warning (and using the
+// default) on a malformed value.
 func envFloat(key string, def float64) float64 {
-	if v := os.Getenv(key); v != "" {
-		if f, err := strconv.ParseFloat(v, 64); err == nil {
-			return f
-		}
+	v := os.Getenv(key)
+	if v == "" {
+		return def
 	}
-	return def
+	f, err := strconv.ParseFloat(v, 64)
+	if err != nil {
+		slog.Warn("agentkind: ignoring malformed env float; using default", "key", key, "value", v, "default", def)
+		return def
+	}
+	return f
 }
 
 func buildNutrition(d Deps) (agentruntime.Config, error) {
