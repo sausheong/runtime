@@ -14,6 +14,7 @@ import (
 	hrt "github.com/sausheong/harness/runtime"
 	"github.com/sausheong/harness/tool"
 	hmemory "github.com/sausheong/harness/tool/memory"
+	hmcp "github.com/sausheong/harness/tools/mcp"
 
 	"github.com/sausheong/runtime/agentruntime"
 	nutrition "github.com/sausheong/runtime/examples/nutrition-label-go"
@@ -31,6 +32,9 @@ type Deps struct {
 	DB      *sql.DB
 	Tenant  string // the agent's tenant; pins the memory store. "" ⇒ "default".
 	Memory  bool   // when true, attach the per-tenant Postgres memory tool.
+
+	GatewayURL string // when set, append the platform gateway as an MCP server on the spec.
+	GatewayKey string // optional Bearer key for the gateway ("" in open mode).
 }
 
 // Builder turns Deps into a serveable Config.
@@ -112,6 +116,20 @@ func wireMemory(cfg *agentruntime.Config, d Deps) error {
 	return nil
 }
 
+// wireGateway appends the platform MCP gateway to the agent's spec when the
+// control plane injected RUNTIME_GATEWAY_URL. BuildRuntime then connects to it
+// like any other MCP server; tools surface as mcp__gateway__<server>__<tool>.
+func wireGateway(cfg *agentruntime.Config, d Deps) {
+	if d.GatewayURL == "" {
+		return
+	}
+	s := hmcp.ServerConfig{Name: "gateway", URL: d.GatewayURL}
+	if d.GatewayKey != "" {
+		s.Headers = map[string]string{"Authorization": "Bearer " + d.GatewayKey}
+	}
+	cfg.Spec.MCPServers = append(cfg.Spec.MCPServers, s)
+}
+
 // envBool reports whether key is set to a truthy value (1/true/yes/on,
 // case-insensitive, surrounding spaces ignored).
 func envBool(key string) bool {
@@ -161,6 +179,7 @@ func buildNutrition(d Deps) (agentruntime.Config, error) {
 	if err := wireMemory(&cfg, d); err != nil {
 		return agentruntime.Config{}, err
 	}
+	wireGateway(&cfg, d)
 	return cfg, nil
 }
 
@@ -177,5 +196,6 @@ func buildTestAgent(d Deps) (agentruntime.Config, error) {
 	if err := wireMemory(&cfg, d); err != nil {
 		return agentruntime.Config{}, err
 	}
+	wireGateway(&cfg, d)
 	return cfg, nil
 }

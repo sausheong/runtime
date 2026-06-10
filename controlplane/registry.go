@@ -11,7 +11,8 @@ type AgentInfo struct {
 }
 
 // Registry holds the agents the control plane hosts, built from config.
-// Read-only after construction except for the optional secret broker.
+// Read-only after construction except for the optional secret broker and the
+// gateway stamp (SetGateway); both must complete before serving starts.
 type Registry struct {
 	order  []string
 	agents map[string]AgentProcess
