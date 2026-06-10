@@ -194,10 +194,17 @@ func TestManagerMarkDownTriggersRedial(t *testing.T) {
 	// First dial yields fc; redials yield a fresh conn each time, matching
 	// real dialers (a recycled pointer would defeat the conn-identity check
 	// that distinguishes a stale failure report from a current one).
+	// Redials are gated: without the gate, the supervise loop (10ms poll) can
+	// reconnect between markDown and the "tools cleared" assertion below and
+	// flake the test.
 	var dials atomic.Int32
+	var allowRedial atomic.Bool
 	dial := func(_ context.Context, _ config.GatewayServer) (upstreamConn, error) {
 		if dials.Add(1) == 1 {
 			return fc, nil
+		}
+		if !allowRedial.Load() {
+			return nil, errors.New("redial gated")
 		}
 		return &fakeConn{tools: fc.tools}, nil
 	}
@@ -225,7 +232,8 @@ func TestManagerMarkDownTriggersRedial(t *testing.T) {
 	if m.Generation() <= gBefore {
 		t.Fatal("generation not bumped on markDown")
 	}
-	// Supervise loop notices and redials (scriptDial keeps succeeding).
+	// Supervise loop notices and redials once the gate opens.
+	allowRedial.Store(true)
 	waitFor(t, 5*time.Second, func() bool { return len(m.AllTools()) == 1 })
 
 	// Stale report: marking down with the OLD conn must NOT touch the new one.
