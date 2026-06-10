@@ -119,6 +119,11 @@ func (m *Manager) Create(ctx context.Context, tenant string) (*Session, error) {
 		m.mu.Lock()
 		delete(m.sessions, s.ID)
 		m.mu.Unlock()
+		// This wraps the raw backend error, which reaches the LLM via the
+		// tool result. That is deliberate: create failures (daemon down,
+		// image missing) are operator-relevant and carry no per-sandbox
+		// state worth hiding — unlike post-create errors, which maskIfGone
+		// scrubs.
 		return nil, fmt.Errorf("sandbox backend unavailable: %w", err)
 	}
 
@@ -152,10 +157,11 @@ func (m *Manager) lookup(tenant, id string) (*Session, error) {
 	return s, nil
 }
 
-// maskIfGone hides backend errors for sessions that vanished mid-call: if
-// the backend call failed and the session no longer exists (e.g. the reaper
-// removed it while the call was in flight), return errNoSandbox instead of
-// the raw backend error, which could leak container ids.
+// maskIfGone scrubs backend errors before they reach the LLM via tool
+// results. If the session vanished mid-call (e.g. the reaper removed it
+// while the call was in flight), return errNoSandbox. If the session still
+// exists, the raw error (which can carry container ids and engine internals)
+// is logged for the operator and replaced with a generic message.
 func (m *Manager) maskIfGone(id string, err error) error {
 	if err == nil {
 		return nil
@@ -166,7 +172,8 @@ func (m *Manager) maskIfGone(id string, err error) error {
 	if !ok {
 		return errNoSandbox
 	}
-	return err
+	slog.Warn("sandbox: backend error", "sandbox", id, "err", err)
+	return errors.New("sandbox execution failed (see sandboxd logs)")
 }
 
 // clampTimeout converts a caller-supplied timeout in seconds into a bounded
