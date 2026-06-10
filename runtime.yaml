@@ -9,3 +9,22 @@ agents:
     name: Research Agent
     model: test/scripted
     listen_addr: 127.0.0.1:8102
+
+# Optional: MCP gateway — federate upstream MCP servers into one endpoint at
+# /gateway/mcp. Agents opt in with `gateway: true` (the platform injects
+# RUNTIME_GATEWAY_URL and, when identity is on, RUNTIME_GATEWAY_KEY).
+# Note: header/env/agent_keys values may not contain a literal `$` — put such
+# values in an env var and reference them as ${VAR}.
+#
+# gateway:
+#   self_url: http://127.0.0.1:8080      # base URL agents use; default derives from RUNTIME_CTL_ADDR
+#   agent_keys:                          # tenant → service key for gateway:true agents (identity on)
+#     default: ${GW_DEFAULT_KEY}
+#   servers:
+#     - name: fs                         # tools exposed as fs__<tool> (agents see mcp__gateway__fs__<tool>)
+#       command: npx
+#       args: ["-y", "@modelcontextprotocol/server-filesystem", "/data"]
+#     - name: search
+#       url: https://mcp.example.com/mcp
+#       headers: {Authorization: "Bearer ${SEARCH_TOKEN}"}
+#       tenants: [acme]                  # omit ⇒ visible to all tenants

@@ -5,6 +5,7 @@ package test
 import (
 	"context"
 	"database/sql"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -21,8 +22,10 @@ import (
 
 // TestGatewayE2E boots the WHOLE stack with a gateway section: runtimed
 // federates a fake Streamable HTTP MCP upstream, an external MCP client lists
-// and calls a tool through /gateway/mcp, and a gateway:true agent (which
-// connects to the gateway during BuildRuntime) completes a scripted turn.
+// and calls a tool through /gateway/mcp, and a gateway:true agent completes a
+// scripted turn. BuildRuntime runs per-turn inside the DBOS step (not at agent
+// boot), so the completed turn — not the healthz — is the proof that the
+// agent's gateway MCP connection works.
 func TestGatewayE2E(t *testing.T) {
 	db, err := sql.Open("pgx", dsn)
 	if err != nil {
@@ -127,8 +130,15 @@ func TestGatewayE2E(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("call errored: %+v", res.Content)
 	}
-	if txt := res.Content[0].(*sdk.TextContent).Text; txt != "hello from upstream" {
-		t.Fatalf("wrong result: %q", txt)
+	if len(res.Content) == 0 {
+		t.Fatal("call returned empty content")
+	}
+	tc, ok := res.Content[0].(*sdk.TextContent)
+	if !ok {
+		t.Fatalf("want *sdk.TextContent, got %T", res.Content[0])
+	}
+	if tc.Text != "hello from upstream" {
+		t.Fatalf("wrong result: %q", tc.Text)
 	}
 
 	// (b) Gateway status visible.
@@ -136,31 +146,22 @@ func TestGatewayE2E(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	stBody := readAllBody(t, stResp)
+	stRaw, err := io.ReadAll(stResp.Body)
+	stResp.Body.Close()
+	if err != nil {
+		t.Fatalf("read status body: %v", err)
+	}
+	stBody := string(stRaw)
 	if !strings.Contains(stBody, `"fake"`) || !strings.Contains(stBody, `"up"`) {
 		t.Fatalf("status missing upstream: %s", stBody)
 	}
 
-	// (c) The gateway:true agent — which connected to the gateway during
-	// BuildRuntime — boots healthy and completes a scripted turn.
+	// (c) The gateway:true agent boots healthy and completes a scripted turn.
+	// BuildRuntime (and thus the gateway MCP connect) happens per-turn inside
+	// the DBOS step, so the completed turn is the connectivity proof.
 	waitURL(t, base+"/agents/gw-agent/healthz", 30*time.Second)
 	_, body := invokeOn(t, base, "gw-agent")
 	if !strings.Contains(body, "final answer") {
 		t.Fatalf("gateway agent turn did not complete:\n%s", body)
 	}
-}
-
-func readAllBody(t *testing.T, resp *http.Response) string {
-	t.Helper()
-	defer resp.Body.Close()
-	var sb strings.Builder
-	buf := make([]byte, 4096)
-	for {
-		n, err := resp.Body.Read(buf)
-		sb.Write(buf[:n])
-		if err != nil {
-			break
-		}
-	}
-	return sb.String()
 }
