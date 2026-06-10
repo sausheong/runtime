@@ -29,7 +29,7 @@ type TokenConfig struct {
 }
 
 // GatewayServer is one upstream MCP server the gateway federates. Exactly one
-// of Command (stdio) or URL (Streamable HTTP) must be set. Header, Env, and
+// of Command (stdio) or URL (Streamable HTTP) must be set. Headers, Env, and
 // (in GatewayConfig) AgentKeys values support ${VAR} expansion from the
 // operator environment at load time so secrets stay out of the YAML file.
 type GatewayServer struct {
@@ -143,6 +143,8 @@ func (c *Config) Validate() error {
 // environment, in place. An unset (or empty) variable is a hard error — silent
 // empty-string expansion would send a malformed credential downstream. The
 // $VAR form (no braces) is also expanded, matching os.Expand semantics.
+// Values cannot contain a literal $ (os.Expand has no escape); operators
+// should put such values in an env var and reference it with ${VAR}.
 func expandEnvMap(m map[string]string, what string) error {
 	for k, v := range m {
 		var missing []string
@@ -154,7 +156,7 @@ func expandEnvMap(m map[string]string, what string) error {
 			return val
 		})
 		if len(missing) > 0 {
-			return fmt.Errorf("config: %s %q references unset env var(s) %v", what, k, missing)
+			return fmt.Errorf("config: %s %q references unset or empty env var(s) %v", what, k, missing)
 		}
 		m[k] = expanded
 	}
