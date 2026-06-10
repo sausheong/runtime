@@ -38,8 +38,17 @@ def create_app(adapter: AgentAdapter, store: Store, agent_id: str) -> FastAPI:
         except Exception as e:  # never crash the server
             terminal = ContractEvent(type="error", error=str(e))
         store.set_status(sid, "completed" if terminal.type == "done" else "error")
-        store.set_turn_count(sid, 1)
+        row = store.get_session(sid)
+        store.set_turn_count(sid, (row["turn_count"] if row else 0) + 1)
         await publish(sid, terminal)
+
+    def parse_images(body: dict) -> list[Image]:
+        images: list[Image] = []
+        b64 = body.get("image_b64")
+        if b64:
+            images.append(Image(mime=body.get("image_mime") or "image/jpeg",
+                                data=base64.b64decode(b64)))
+        return images
 
     @app.get("/healthz", response_class=PlainTextResponse)
     async def healthz() -> str:
@@ -52,14 +61,20 @@ def create_app(adapter: AgentAdapter, store: Store, agent_id: str) -> FastAPI:
     @app.post("/sessions")
     async def create_session(req: Request) -> JSONResponse:
         body = await req.json()
-        message = body.get("message", "")
-        images: list[Image] = []
-        b64 = body.get("image_b64")
-        if b64:
-            images.append(Image(mime=body.get("image_mime") or "image/jpeg",
-                                data=base64.b64decode(b64)))
         sid = store.create_session()
-        asyncio.create_task(run_session(sid, message, images))
+        asyncio.create_task(run_session(sid, body.get("message", ""), parse_images(body)))
+        return JSONResponse({"session_id": sid})
+
+    @app.post("/sessions/{sid}/messages")
+    async def post_message(sid: str, req: Request) -> JSONResponse:
+        # Follow-up turn on an EXISTING session: the adapter is re-invoked with
+        # the same session id, so adapters with per-session memory (SQLiteSession,
+        # SDK resume maps) continue the conversation. Additive to the v1 contract
+        # (conformance does not require it).
+        if not store.get_session(sid):
+            return JSONResponse({"error": "not found"}, status_code=404)
+        body = await req.json()
+        asyncio.create_task(run_session(sid, body.get("message", ""), parse_images(body)))
         return JSONResponse({"session_id": sid})
 
     @app.get("/sessions")
