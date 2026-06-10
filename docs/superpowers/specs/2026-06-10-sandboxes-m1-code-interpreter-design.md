@@ -76,7 +76,7 @@ internal/sandbox/
   manager.go              # Manager: sessions map, per-tenant caps, reaper, TTLs
   docker.go               # engine seam: the Docker API subset we use, as an
                           # interface (containerBackend) + real implementation
-  tools.go                # the 6 MCP tool definitions + handlers (strip
+  tools.go                # the 7 MCP tool definitions + handlers (strip
                           # __rt_tenant, validate, dispatch to Manager)
   paths.go                # /workspace path confinement (clean, reject escape)
 ```
@@ -135,9 +135,14 @@ image is missing — create_sandbox isError names the missing image).
 `write_file`/`read_file` paths resolve under `/workspace` only:
 relative paths joined to `/workspace`, absolute paths must have `/workspace/`
 prefix after `path.Clean`; anything escaping (`..`, absolute elsewhere,
-symlink tricks are moot — I/O goes through `docker exec cat`/shell-free tar
-copy, not host mounts) ⇒ isError "path outside /workspace". File I/O uses the
-Docker copy API (tar), not shell interpolation — no quoting bugs.
+symlink tricks are moot — I/O goes through argv-only execs, not host mounts)
+⇒ isError "path outside /workspace". File I/O uses exec-based transfers:
+`tee` with the content on stdin for writes, `head -c` for reads — argv-only,
+so neither content nor paths are ever shell-interpolated (no quoting bugs;
+`--` guards leading-dash names). The Docker archive/copy API is NOT usable
+on this container posture: the daemon rejects `CopyToContainer` on a
+read-only rootfs even when the target is a tmpfs, and `CopyFromContainer`
+cannot see tmpfs contents at all.
 
 ## 5. The gateway change: `forward_tenant`
 

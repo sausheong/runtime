@@ -175,7 +175,7 @@ func (h *Handler) serverFor(p identity.Principal, ok bool, mode viewMode) *sdk.S
 			Name:        t.Name(),
 			Description: t.Description(),
 			InputSchema: json.RawMessage(t.Parameters()),
-		}, h.toolHandler(key, t))
+		}, h.toolHandler(key, t, h.m.ForwardsTenant(t.Name())))
 	}
 	if mode == modeSearch {
 		srv.AddTool(searchToolDef(), h.searchHandler(key, tenant))
@@ -201,7 +201,7 @@ func (h *Handler) serverFor(p identity.Principal, ok bool, mode viewMode) *sdk.S
 // the tools/call, so a per-request identity middleware upstream of HTTP()
 // is honored here — confirmed by TestServerViewerCannotCall passing via
 // this ctx path (no serverFor-time fallback needed).
-func (h *Handler) toolHandler(builtFor string, t tool.Tool) sdk.ToolHandler {
+func (h *Handler) toolHandler(builtFor string, t tool.Tool, forwardTenant bool) sdk.ToolHandler {
 	return func(ctx context.Context, req *sdk.CallToolRequest) (*sdk.CallToolResult, error) {
 		p, ok := h.PrincipalFor(ctx)
 		callerBase, _ := principalView(p, ok)
@@ -212,7 +212,15 @@ func (h *Handler) toolHandler(builtFor string, t tool.Tool) sdk.ToolHandler {
 		if ok && !p.Superuser && p.Role == identity.RoleViewer {
 			return errResult("forbidden: role viewer cannot call tools (requires operator)"), nil
 		}
-		res, err := t.Execute(ctx, req.Params.Arguments)
+		args := req.Params.Arguments
+		if forwardTenant {
+			injected, err := injectTenant(args, p, ok)
+			if err != nil {
+				return errResult("invalid arguments: " + err.Error()), nil
+			}
+			args = injected
+		}
+		res, err := t.Execute(ctx, args)
 		if err != nil {
 			return errResult(err.Error()), nil
 		}
@@ -232,6 +240,30 @@ func (h *Handler) toolHandler(builtFor string, t tool.Tool) sdk.ToolHandler {
 		}
 		return out, nil
 	}
+}
+
+// injectTenant strips any caller-supplied __rt_tenant from raw JSON arguments
+// and sets the authenticated principal's tenant. Open mode and superusers
+// inject "" (the upstream maps it to its default-tenant rule). The agent can
+// therefore never choose its own tenant.
+func injectTenant(raw json.RawMessage, p identity.Principal, ok bool) (json.RawMessage, error) {
+	m := map[string]any{}
+	if len(raw) > 0 {
+		if err := json.Unmarshal(raw, &m); err != nil {
+			return nil, err
+		}
+	}
+	// Unmarshal of the legal payload `null` succeeds by setting m to nil;
+	// writing the tenant key into a nil map would panic.
+	if m == nil {
+		m = map[string]any{}
+	}
+	tenant := ""
+	if ok && !p.Superuser {
+		tenant = p.TenantID
+	}
+	m["__rt_tenant"] = tenant
+	return json.Marshal(m)
 }
 
 // searchToolDef describes the search_tools tool. The name cannot collide

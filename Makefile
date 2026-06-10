@@ -6,7 +6,7 @@
 # you actually run day to day.
 #
 # Quick start:
-#   make build           # build agentd, runtimed, runtimectl into ./bin
+#   make build           # build agentd, runtimed, runtimectl, sandboxd into ./bin
 #   make test            # hermetic unit tests
 #   make test-integration  # needs Postgres (make pg-up)
 #   make run             # build + run the control plane locally
@@ -19,7 +19,7 @@ CONFIG      ?= runtime.yaml
 COMPOSE     ?= docker compose -f deploy/docker-compose.yml
 GOFLAGS     ?=
 
-BINS := agentd runtimed runtimectl
+BINS := agentd runtimed runtimectl sandboxd
 
 .DEFAULT_GOAL := help
 
@@ -104,6 +104,11 @@ pg-up: ## Start a local Postgres (pgvector) for tests/dev
 .PHONY: pg-down
 pg-down: ## Stop the local Postgres
 	$(COMPOSE) down
+
+# ---- Sandbox image ----
+.PHONY: sandbox-image
+sandbox-image: ## Build the bundled sandbox image (runtime-sandbox:latest)
+	docker build -f deploy/sandbox.Dockerfile -t runtime-sandbox:latest deploy/
 
 # ---- Full stack (Postgres + control plane) ----
 .PHONY: compose-up

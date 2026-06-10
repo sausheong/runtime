@@ -640,6 +640,141 @@ func TestPipeTenantSessionNotReplayable(t *testing.T) {
 	}
 }
 
+// captureTool is a fake tool.Tool that records the raw arguments of its last
+// Execute call. Name follows the adapter convention "mcp__<server>__<tool>".
+type captureTool struct {
+	name string
+	mu   sync.Mutex
+	got  json.RawMessage
+}
+
+func (c *captureTool) Name() string                           { return c.name }
+func (c *captureTool) Description() string                    { return "capture " + c.name }
+func (c *captureTool) Parameters() json.RawMessage            { return json.RawMessage(`{"type":"object"}`) }
+func (c *captureTool) IsConcurrencySafe(json.RawMessage) bool { return false }
+func (c *captureTool) Execute(_ context.Context, args json.RawMessage) (tool.ToolResult, error) {
+	c.mu.Lock()
+	c.got = append(json.RawMessage(nil), args...)
+	c.mu.Unlock()
+	return tool.ToolResult{Output: "ok"}, nil
+}
+
+func (c *captureTool) captured() json.RawMessage {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.got
+}
+
+// startCaptureGateway wires a single upstream named "sbx" (forward_tenant per
+// the flag) serving sbx__run, and returns the handler plus the capture tool.
+func startCaptureGateway(t *testing.T, forward bool) (*Handler, *captureTool) {
+	t.Helper()
+	ct := &captureTool{name: "mcp__sbx__run"}
+	conns := map[string]*fakeConn{"sbx": {tools: []tool.Tool{ct}}}
+	m := startManager(t, []config.GatewayServer{
+		{Name: "sbx", Command: "x", ForwardTenant: forward},
+	}, conns)
+	return NewHandler(m), ct
+}
+
+func TestForwardTenantInjectsAndStrips(t *testing.T) {
+	h, ct := startCaptureGateway(t, true)
+	sess := dialGateway(t, h, &identity.Principal{TenantID: "acme", Role: identity.RoleOperator})
+	res, err := sess.CallTool(context.Background(), &sdk.CallToolParams{
+		Name: "sbx__run", Arguments: json.RawMessage(`{"x":1,"__rt_tenant":"evil"}`),
+	})
+	if err != nil || res.IsError {
+		t.Fatalf("call failed: %v %+v", err, res)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(ct.captured(), &got); err != nil {
+		t.Fatalf("captured args not JSON: %v (%s)", err, ct.captured())
+	}
+	want := map[string]any{"x": float64(1), "__rt_tenant": "acme"}
+	if len(got) != len(want) || got["x"] != want["x"] || got["__rt_tenant"] != want["__rt_tenant"] {
+		t.Fatalf("want %v, got %v", want, got)
+	}
+}
+
+func TestForwardTenantOpenModeInjectsEmpty(t *testing.T) {
+	h, ct := startCaptureGateway(t, true)
+	sess := dialGateway(t, h, nil) // open mode
+	res, err := sess.CallTool(context.Background(), &sdk.CallToolParams{
+		Name: "sbx__run", Arguments: json.RawMessage(`{"x":1}`),
+	})
+	if err != nil || res.IsError {
+		t.Fatalf("call failed: %v %+v", err, res)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(ct.captured(), &got); err != nil {
+		t.Fatalf("captured args not JSON: %v (%s)", err, ct.captured())
+	}
+	want := map[string]any{"x": float64(1), "__rt_tenant": ""}
+	if len(got) != len(want) || got["x"] != want["x"] || got["__rt_tenant"] != want["__rt_tenant"] {
+		t.Fatalf("want %v, got %v", want, got)
+	}
+}
+
+// TestForwardTenantNullArguments: `"arguments": null` is a legal tools/call
+// payload. json.Unmarshal of `null` into a map SUCCEEDS by setting the map to
+// nil; before the guard in injectTenant, the subsequent tenant-key write
+// panicked and killed the gateway.
+func TestForwardTenantNullArguments(t *testing.T) {
+	h, ct := startCaptureGateway(t, true)
+	sess := dialGateway(t, h, &identity.Principal{TenantID: "acme", Role: identity.RoleOperator})
+	res, err := sess.CallTool(context.Background(), &sdk.CallToolParams{
+		Name: "sbx__run", Arguments: json.RawMessage(`null`),
+	})
+	if err != nil || res.IsError {
+		t.Fatalf("call failed: %v %+v", err, res)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(ct.captured(), &got); err != nil {
+		t.Fatalf("captured args not JSON: %v (%s)", err, ct.captured())
+	}
+	if len(got) != 1 || got["__rt_tenant"] != "acme" {
+		t.Fatalf(`want {"__rt_tenant":"acme"}, got %v`, got)
+	}
+}
+
+// TestForwardTenantSuperuserInjectsEmpty: a SUPERUSER principal with a
+// non-empty TenantID must still inject "" — the `ok && !p.Superuser`
+// condition in injectTenant is load-bearing (the upstream maps "" to its
+// default-tenant rule).
+func TestForwardTenantSuperuserInjectsEmpty(t *testing.T) {
+	h, ct := startCaptureGateway(t, true)
+	sess := dialGateway(t, h, &identity.Principal{TenantID: "default", Role: identity.RoleAdmin, Superuser: true})
+	res, err := sess.CallTool(context.Background(), &sdk.CallToolParams{
+		Name: "sbx__run", Arguments: json.RawMessage(`{"x":1}`),
+	})
+	if err != nil || res.IsError {
+		t.Fatalf("call failed: %v %+v", err, res)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(ct.captured(), &got); err != nil {
+		t.Fatalf("captured args not JSON: %v (%s)", err, ct.captured())
+	}
+	want := map[string]any{"x": float64(1), "__rt_tenant": ""}
+	if len(got) != len(want) || got["x"] != want["x"] || got["__rt_tenant"] != want["__rt_tenant"] {
+		t.Fatalf("want %v, got %v", want, got)
+	}
+}
+
+func TestNonForwardingUpstreamArgsUntouched(t *testing.T) {
+	h, ct := startCaptureGateway(t, false)
+	sess := dialGateway(t, h, &identity.Principal{TenantID: "acme", Role: identity.RoleOperator})
+	in := `{"x":1,"__rt_tenant":"evil"}`
+	res, err := sess.CallTool(context.Background(), &sdk.CallToolParams{
+		Name: "sbx__run", Arguments: json.RawMessage(in),
+	})
+	if err != nil || res.IsError {
+		t.Fatalf("call failed: %v %+v", err, res)
+	}
+	if string(ct.captured()) != in {
+		t.Fatalf("args modified for non-forwarding upstream:\n in: %s\ngot: %s", in, ct.captured())
+	}
+}
+
 func TestSearchModeCrossPrincipalRejected(t *testing.T) {
 	m := startManager(t, gwServers(), gwConns())
 	h := NewHandler(m)
