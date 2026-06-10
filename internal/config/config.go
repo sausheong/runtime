@@ -83,6 +83,13 @@ type GatewayServer struct {
 	URL     string            `yaml:"url"`     // Streamable HTTP transport
 	Headers map[string]string `yaml:"headers"` // static headers (auth) for HTTP
 	Tenants []string          `yaml:"tenants"` // nil/empty ⇒ visible to ALL tenants
+
+	// ForwardTenant makes the gateway inject the calling principal's tenant
+	// into forwarded tool-call arguments as the reserved "__rt_tenant" key
+	// (stripping any caller-supplied value first). Only valid for stdio
+	// (command:) upstreams: the trust argument is that a stdio child is
+	// reachable ONLY through the gateway.
+	ForwardTenant bool `yaml:"forward_tenant"`
 }
 
 // GatewayConfig is the optional top-level gateway: section.
@@ -168,6 +175,9 @@ func (c *Config) Validate() error {
 		names[s.Name] = true
 		if (s.Command == "") == (s.URL == "") {
 			return fmt.Errorf("config: gateway server %q requires exactly one of command or url", s.Name)
+		}
+		if s.ForwardTenant && s.URL != "" {
+			return fmt.Errorf("config: gateway server %q: forward_tenant requires a stdio (command:) upstream", s.Name)
 		}
 		if err := expandEnvMap(s.Headers, "gateway server "+s.Name+" headers"); err != nil {
 			return err

@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -451,6 +452,44 @@ func TestGatewayModeYAML(t *testing.T) {
 			t.Fatal("expected load error for invalid gateway mode")
 		}
 	})
+}
+
+func TestGatewayForwardTenantParsesAndValidates(t *testing.T) {
+	p := writeTmp(t, `
+agents:
+  - {id: a, name: A, model: m, listen_addr: 127.0.0.1:8101}
+gateway:
+  servers:
+    - {name: sandbox, command: sandboxd, forward_tenant: true}
+    - {name: fs, command: npx}
+`)
+	cfg, err := Load(p)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !cfg.Gateway.Servers[0].ForwardTenant {
+		t.Error("sandbox: forward_tenant: true should parse as ForwardTenant == true")
+	}
+	if cfg.Gateway.Servers[1].ForwardTenant {
+		t.Error("fs: absent forward_tenant should default to false")
+	}
+}
+
+func TestGatewayForwardTenantRejectsHTTPUpstream(t *testing.T) {
+	p := writeTmp(t, `
+agents:
+  - {id: a, name: A, model: m, listen_addr: 127.0.0.1:8101}
+gateway:
+  servers:
+    - {name: web, url: "https://example.com/mcp", forward_tenant: true}
+`)
+	_, err := Load(p)
+	if err == nil {
+		t.Fatal("expected error: forward_tenant on an HTTP (url:) upstream")
+	}
+	if !strings.Contains(err.Error(), "forward_tenant") {
+		t.Fatalf("error should mention forward_tenant, got: %v", err)
+	}
 }
 
 func TestGatewayAgentRequiresServers(t *testing.T) {
