@@ -1,6 +1,6 @@
 # Runtime — Roadmap & Backlog
 
-**Checkpoint date:** 2026-06-10 (C1 M2 — Claude Agent SDK adapter)
+**Checkpoint date:** 2026-06-11 (Sandboxes M1 — code interpreter behind the gateway)
 **Current state:** Runtime spine complete (Milestones 1–3 merged to `master`);
 polyglot agent hosting (C1) first two milestones complete — two foreign
 frameworks (OpenAI Agents SDK + Claude Agent SDK) hosted via the one Python
@@ -23,7 +23,11 @@ upstream MCP servers, tenant-filtered via Identity service keys, consumed by
 agents via a `gateway: true` opt-in) and M2 semantic tool search (a search-first
 `?mode=search` consumption mode: one listed `search_tools` tool,
 embedding-ranked discovery over the federated catalog, callable-but-unlisted
-tools), merged to `master` (see §B1).
+tools), merged to `master` (see §B1);
+Sandboxes (B4) first milestone complete — M1 code interpreter (a `cmd/sandboxd`
+MCP server giving every gateway-enabled agent an isolated, stateful,
+Docker-backed Python+shell sandbox with tenant-scoped ownership), merged to
+`master` (see §B4).
 **Goal:** an on-prem, open-source equivalent of AWS Bedrock AgentCore.
 
 This file is the parking lot for everything *not yet built*. Each item below is a
@@ -257,6 +261,55 @@ exposing the platform broadly.
    Integrate gVisor/Firecracker for isolation; chromedp for browser. The
    conformance suite (M3) already validates the agent contract that sandboxed
    tools would run behind.
+   **First milestone DONE (merged to `master`, 2026-06-11):** code interpreter
+   behind the gateway. A new `cmd/sandboxd` binary (package `internal/sandbox`)
+   is an MCP stdio server federated as an ordinary gateway upstream — agents
+   opt in with the existing `gateway: true`/`search` and see
+   `mcp__gateway__sandbox__<tool>` with zero agent-side changes. Seven tools
+   (create_sandbox, execute_code, run_command, write_file, read_file,
+   list_sandboxes, close_sandbox) over one locked-down Docker container per
+   stateful session: `network=none` always, read-only rootfs, tmpfs
+   `/workspace` (files persist across calls; Python variables don't — each
+   exec is a fresh process, kernel-mode persistence is the designated M2
+   upgrade), CapDrop ALL, no-new-privileges, non-root uid 1000, CPU/mem/pids
+   limits, optional gVisor via `RUNTIME_SANDBOX_RUNTIME=runsc`. Exec wraps
+   argv in coreutils `timeout` (clamped 30s default/120s max) so a runaway
+   process dies without killing the session; idle-TTL (10m) + max-lifetime
+   (1h) reaper plus reap-on-start (label `runtime.sandbox=1`) bound runaway
+   sessions; per-tenant cap (5) with slot reservation under lock. Tenancy
+   rides the milestone's only gateway change: `forward_tenant: true` on a
+   stdio upstream makes the gateway strip any caller-supplied `__rt_tenant`
+   argument and inject the authenticated principal's tenant (spoof-proof;
+   `__` is now reserved in gateway server names to keep the name→upstream
+   lookup sound); sandboxd fails closed when the key is absent
+   (`RUNTIME_SANDBOX_ALLOW_DIRECT=1` opts out for single-tenant direct use)
+   and hides cross-tenant existence (foreign id ⇒ same "no such sandbox" as a
+   missing id). Bundled image `deploy/sandbox.Dockerfile` (`make
+   sandbox-image`: python:3.12-slim + numpy/pandas/matplotlib/requests —
+   requests included deliberately so network-isolation failures are
+   meaningful). NOTEWORTHY FINDINGS (final review + live proof): (1) the
+   Docker archive API is unusable under the spec's own posture — the daemon
+   rejects CopyToContainer on a read-only rootfs and CopyFromContainer can't
+   see tmpfs contents — so file I/O is exec-based (`dd of=` stdin /
+   `head -c`), argv-only, never a shell string; (2) the exec-stdin plumbing
+   initially had a structural backpressure deadlock (stdin written before the
+   output drainer started — invisible on Docker Desktop's large vsock
+   buffers, a permanent hang on Linux unix sockets past ~1 MiB), fixed by
+   drainer-first ordering and pinned by an 8 MiB live-gated regression test
+   (`go test -tags live`). Proven by hermetic unit tests (fake backend), a
+   through-serve e2e with identity enforced (two tenants; spoofed
+   `__rt_tenant` overridden; cross-tenant invisible —
+   `test/gateway_sandbox_e2e_test.go`), live-gated Docker tests, and a live
+   smoke on real Docker: CSV → pandas → result round-trip, `requests.get`
+   blocked, 5s timeout kill with session surviving, 10s-TTL reaper observed
+   removing the container, and an end-to-end agent turn (real LLM via the
+   proxy) where the nutrition agent used `sandbox__execute_code` to compute
+   sugar-per-can (43.875g, 87.75% of the WHO limit) inside its verdict.
+   Remaining B4: browser sandbox (M2 candidate), kernel-mode variable
+   persistence, network egress policy / pip-install, per-user scoping,
+   console panel, instance-scoped reap labels (today: exactly one sandboxd
+   per host/DOCKER_HOST). Spec/plan:
+   `docs/superpowers/{specs,plans}/2026-06-10-sandboxes-m1-code-interpreter*`.
 5. **Observability** — tracing, metrics, dashboards. The structured `slog` from
    M3 is the lightweight precursor; this is the full version (OpenTelemetry +
    Grafana, or similar). (Absorbs A8.)
