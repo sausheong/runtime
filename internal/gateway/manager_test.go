@@ -189,6 +189,76 @@ func TestManagerGenerationBumpsOnReconnect(t *testing.T) {
 	waitFor(t, 5*time.Second, func() bool { return m.Generation() > g0 })
 }
 
+func TestManagerMarkDownTriggersRedial(t *testing.T) {
+	fc := &fakeConn{tools: []tool.Tool{fakeTool{name: "mcp__fs__read", out: "d"}}}
+	// First dial yields fc; redials yield a fresh conn each time, matching
+	// real dialers (a recycled pointer would defeat the conn-identity check
+	// that distinguishes a stale failure report from a current one).
+	var dials atomic.Int32
+	dial := func(_ context.Context, _ config.GatewayServer) (upstreamConn, error) {
+		if dials.Add(1) == 1 {
+			return fc, nil
+		}
+		return &fakeConn{tools: fc.tools}, nil
+	}
+	m := NewManager([]config.GatewayServer{{Name: "fs", Command: "x"}},
+		WithDial(dial),
+		WithBackoff(10*time.Millisecond, 50*time.Millisecond))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	m.Start(ctx)
+	waitFor(t, 2*time.Second, func() bool { return len(m.AllTools()) == 1 })
+
+	u := m.ups[0]
+	u.mu.Lock()
+	observed := u.conn
+	u.mu.Unlock()
+	gBefore := m.Generation()
+
+	m.markDown(u, observed, errors.New("session died"))
+	if !fc.closed.Load() {
+		t.Fatal("markDown did not close the observed conn")
+	}
+	if len(m.AllTools()) != 0 {
+		t.Fatal("tools not cleared after markDown")
+	}
+	if m.Generation() <= gBefore {
+		t.Fatal("generation not bumped on markDown")
+	}
+	// Supervise loop notices and redials (scriptDial keeps succeeding).
+	waitFor(t, 5*time.Second, func() bool { return len(m.AllTools()) == 1 })
+
+	// Stale report: marking down with the OLD conn must NOT touch the new one.
+	gAfter := m.Generation()
+	m.markDown(u, observed, errors.New("stale"))
+	if len(m.AllTools()) != 1 {
+		t.Fatal("stale markDown cleared a healthy connection")
+	}
+	if m.Generation() != gAfter {
+		t.Fatal("stale markDown bumped generation")
+	}
+}
+
+func TestManagerCloseWithoutCancel(t *testing.T) {
+	fc := &fakeConn{tools: []tool.Tool{fakeTool{name: "mcp__fs__read", out: "d"}}}
+	m := NewManager([]config.GatewayServer{{Name: "fs", Command: "x"}},
+		WithDial(scriptDial(map[string]*fakeConn{"fs": fc}, nil)),
+		WithBackoff(10*time.Millisecond, 50*time.Millisecond))
+	m.Start(context.Background()) // caller never cancels
+	waitFor(t, 2*time.Second, func() bool { return len(m.AllTools()) == 1 })
+
+	done := make(chan struct{})
+	go func() { m.Close(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Close deadlocked without external cancel")
+	}
+	if !fc.closed.Load() {
+		t.Fatal("conn not closed")
+	}
+}
+
 func TestManagerCloseClosesUpstreams(t *testing.T) {
 	fc := &fakeConn{tools: []tool.Tool{fakeTool{name: "mcp__fs__read", out: "d"}}}
 	m := NewManager([]config.GatewayServer{{Name: "fs", Command: "x"}},

@@ -46,6 +46,7 @@ type Manager struct {
 
 	generation atomic.Uint64
 	wg         sync.WaitGroup
+	cancel     context.CancelFunc // set by Start; called by Close
 }
 
 // Option configures a Manager.
@@ -73,7 +74,10 @@ func NewManager(servers []config.GatewayServer, opts ...Option) *Manager {
 }
 
 // Start launches the supervision loops. Non-blocking; safe to call once.
+// The loops run until the given context is cancelled or Close is called
+// (Start derives its own cancellable context so Close never deadlocks).
 func (m *Manager) Start(ctx context.Context) {
+	ctx, m.cancel = context.WithCancel(ctx)
 	for _, u := range m.ups {
 		m.wg.Add(1)
 		go m.supervise(ctx, u)
@@ -128,30 +132,41 @@ func (m *Manager) supervise(ctx context.Context, u *upstream) {
 	}
 }
 
-// markDown records a mid-flight failure: closes and clears the connection so
-// the supervision loop redials. Called by the server layer on session errors.
-func (m *Manager) markDown(u *upstream, err error) {
+// markDown records a mid-flight failure observed on a specific connection:
+// it closes and clears the connection so the supervision loop redials — but
+// only if that connection is still the current one. A stale report (the
+// supervise loop already replaced the conn) is a no-op, so one upstream
+// outage cannot cascade into closing its healthy replacement.
+func (m *Manager) markDown(u *upstream, observed upstreamConn, err error) {
 	u.mu.Lock()
-	if u.conn != nil {
-		_ = u.conn.Close()
+	if u.conn == nil || u.conn != observed {
+		u.mu.Unlock()
+		return
 	}
+	conn := u.conn
 	u.conn, u.tools, u.lastErr = nil, nil, err
 	u.mu.Unlock()
+	_ = conn.Close() // outside the lock: Close may block on I/O
 	m.generation.Add(1)
 	slog.Warn("gateway: upstream marked down", "server", u.cfg.Name, "err", err)
 }
 
-// Close waits for supervision loops to stop and tears down all connections.
-// Call after the context passed to Start is cancelled.
+// Close stops the supervision loops (cancelling the context derived in
+// Start) and tears down all connections. Safe to call whether or not the
+// caller has cancelled the Start context; safe when Start was never called.
 func (m *Manager) Close() {
+	if m.cancel != nil {
+		m.cancel()
+	}
 	m.wg.Wait()
 	for _, u := range m.ups {
 		u.mu.Lock()
-		if u.conn != nil {
-			_ = u.conn.Close()
-			u.conn = nil
-		}
+		conn := u.conn
+		u.conn = nil
 		u.mu.Unlock()
+		if conn != nil {
+			_ = conn.Close() // outside the lock: Close may block on I/O
+		}
 	}
 }
 
