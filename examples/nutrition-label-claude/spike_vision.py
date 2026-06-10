@@ -54,8 +54,9 @@ def opts(resume: str | None = None) -> ClaudeAgentOptions:
     return ClaudeAgentOptions(
         model=os.environ["ANTHROPIC_MODEL"],
         mcp_servers={"spike": SERVER},
+        tools=[],  # primary control: [] disables ALL built-ins (SDK 0.2.95)
         allowed_tools=["mcp__spike__ping_tool"],
-        disallowed_tools=BUILTINS_OFF,
+        disallowed_tools=BUILTINS_OFF,  # backup deny-list
         permission_mode="dontAsk",
         cwd=str(HERE),
         env={"CLAUDE_CONFIG_DIR": str(CONFIG_DIR), "CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1"},

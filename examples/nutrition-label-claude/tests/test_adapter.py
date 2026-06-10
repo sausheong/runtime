@@ -94,3 +94,41 @@ async def test_exception_becomes_single_error_event(adp, monkeypatch):
     monkeypatch.setattr(adapter_mod, "query", fake_query(raise_exc=RuntimeError("boom")))
     events = await collect(adp.run("ses-1", "go", [], []))
     assert len(events) == 1 and events[0].type == "error" and "boom" in events[0].error
+
+
+class FakeTextBlock:
+    def __init__(self, text):
+        self.text = text
+
+
+class FakeAssistantMessage:
+    def __init__(self, *texts):
+        self.content = [FakeTextBlock(t) for t in texts]
+
+
+async def test_accumulated_text_fallback(adp, monkeypatch):
+    # No verdict, no ResultMessage.result: fallback = accumulated assistant text.
+    def fq():
+        async def _gen(prompt=None, options=None):
+            yield FakeAssistantMessage("part one. ", "part two.")
+            yield FakeResult(result=None)
+        return _gen
+    monkeypatch.setattr(adapter_mod, "query", fq())
+    monkeypatch.setattr(adapter_mod, "AssistantMessage", FakeAssistantMessage)
+    monkeypatch.setattr(adapter_mod, "TextBlock", FakeTextBlock)
+    events = await collect(adp.run("ses-1", "go", [], []))
+    assert events[0].type == "text" and "part one. part two." in events[0].text
+
+
+async def test_image_prompt_block_shape(adp, monkeypatch):
+    cap = {}
+    monkeypatch.setattr(adapter_mod, "query", fake_query(capture=cap))
+    img = Image(mime="image/png", data=b"fakepng")
+    await collect(adp.run("ses-1", "look", [img], []))
+    msgs = [m async for m in cap["prompt"]]
+    assert len(msgs) == 1
+    content = msgs[0]["message"]["content"]
+    assert content[0]["type"] == "text"
+    assert content[1]["type"] == "image"
+    assert content[1]["source"]["media_type"] == "image/png"
+    assert content[1]["source"]["type"] == "base64"

@@ -33,14 +33,18 @@ from tools import VerdictHolder, build_nutrition_server, TOOL_NAMES
 
 HERE = Path(__file__).resolve().parent
 
-# Built-ins stripped from a network-facing agent; the spike (spike_vision.py)
-# verified this combination leaves only the nutrition MCP tools callable.
+# Built-ins stripped from a network-facing agent. tools=[] in _options() is
+# the primary control (SDK 0.2.95: empty list disables ALL built-ins); this
+# deny-list is the belt-and-braces backup. The spike (spike_vision.py)
+# verified the combination leaves only the nutrition MCP tools callable.
 BUILTINS_OFF = [
     "Bash", "Read", "Write", "Edit", "Glob", "Grep",
     "WebFetch", "WebSearch", "NotebookEdit", "TodoWrite", "Task",
 ]
 
 # Test seam: tests fake query() and need the current turn's holder.
+# Write-only in production; read only by tests. Concurrent runs overwrite
+# it — harmless outside tests.
 _test_last_holder: VerdictHolder | None = None
 
 
@@ -60,8 +64,9 @@ class NutritionClaudeAdapter:
             resume=resume,
             system_prompt=agent.INSTRUCTIONS,
             mcp_servers={"nutrition": build_nutrition_server(holder)},
+            tools=[],  # primary control: [] disables ALL built-ins (SDK 0.2.95)
             allowed_tools=list(TOOL_NAMES),
-            disallowed_tools=list(BUILTINS_OFF),
+            disallowed_tools=list(BUILTINS_OFF),  # backup deny-list
             permission_mode="dontAsk",
             cwd=str(HERE),
             env={
@@ -74,6 +79,7 @@ class NutritionClaudeAdapter:
 
     @staticmethod
     def _prompt(message: str, images: Sequence[Image]):
+        # Only images[0] is sent — parity with the OpenAI adapter's behavior.
         if not images:
             return message or "Investigate this nutrition label."
         img = images[0]
