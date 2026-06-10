@@ -3,7 +3,9 @@ package gateway
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
+	"strings"
 	"sync"
 
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
@@ -29,8 +31,12 @@ type Handler struct {
 	m            *Manager
 	PrincipalFor func(ctx context.Context) (identity.Principal, bool)
 
+	// Index enables search mode (?mode=search): nil ⇒ search mode is
+	// unavailable and requests for it are rejected with 400.
+	Index *Index
+
 	mu sync.Mutex
-	// cache maps tenant view key → server, rebuilt when the Manager's
+	// cache maps mode-qualified view key → server, rebuilt when the Manager's
 	// generation moves. Replacement semantics: existing MCP sessions keep
 	// the old server (and thus the old view) until they reconnect; stale
 	// tools on the old server fail per-call with IsError. Replaced servers
@@ -59,13 +65,34 @@ func NewHandler(m *Manager) *Handler {
 	}
 }
 
-// viewKey computes the cache key and tenant filter for a principal.
-// Unscoped ("") for open mode and superusers. A non-superuser principal
-// with an empty TenantID gets an impossible view (sees nothing) rather
-// than falling through to the unscoped view — "" doubles as the
+// viewMode is the consumption mode of a gateway session.
+type viewMode string
+
+const (
+	modeFull   viewMode = "full"
+	modeSearch viewMode = "search"
+)
+
+// modeFromRequest parses ?mode=; absent/empty ⇒ full. Unknown values are an
+// error (HTTP 400 at the edge, before session creation).
+func modeFromRequest(r *http.Request) (viewMode, error) {
+	switch r.URL.Query().Get("mode") {
+	case "", "full":
+		return modeFull, nil
+	case "search":
+		return modeSearch, nil
+	default:
+		return "", fmt.Errorf("unknown mode %q (want full|search)", r.URL.Query().Get("mode"))
+	}
+}
+
+// principalView computes the principal-view base key and tenant filter for a
+// principal. Unscoped ("") for open mode and superusers. A non-superuser
+// principal with an empty TenantID gets an impossible view (sees nothing)
+// rather than falling through to the unscoped view — "" doubles as the
 // see-everything filter in Manager.ToolsFor, and no legitimate principal
 // has an empty tenant (only the bootstrap superuser does).
-func viewKey(p identity.Principal, ok bool) (key, tenant string) {
+func principalView(p identity.Principal, ok bool) (key, tenant string) {
 	if !ok || p.Superuser {
 		return "*", ""
 	}
@@ -78,6 +105,15 @@ func viewKey(p identity.Principal, ok bool) (key, tenant string) {
 	return "t:" + p.TenantID, p.TenantID
 }
 
+// viewKey is the mode-qualified cache key: principal-view base + "|" + mode.
+// The same principal may hold full and search sessions concurrently; only
+// the base part identifies the principal's view (per-call re-checks compare
+// the base, not the mode).
+func viewKey(p identity.Principal, ok bool, mode viewMode) (key, tenant string) {
+	base, tenant := principalView(p, ok)
+	return base + "|" + string(mode), tenant
+}
+
 // HTTP returns the Streamable HTTP handler for /gateway/mcp. Call it once
 // and mount the result; each call creates an independent session namespace
 // (sessions established against one handler are unknown to another).
@@ -87,34 +123,51 @@ func viewKey(p identity.Principal, ok bool) (key, tenant string) {
 func (h *Handler) HTTP() http.Handler {
 	mcp := sdk.NewStreamableHTTPHandler(func(r *http.Request) *sdk.Server {
 		p, ok := h.PrincipalFor(r.Context())
-		return h.serverFor(p, ok)
+		mode, _ := modeFromRequest(r) // junk already rejected in the wrapper
+		return h.serverFor(p, ok, mode)
 	}, nil)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if h.PrincipalFor == nil {
 			http.Error(w, "gateway not wired", http.StatusServiceUnavailable)
 			return
 		}
+		mode, err := modeFromRequest(r)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if mode == modeSearch && h.Index == nil {
+			http.Error(w, "search mode requires embeddings (RUNTIME_EMBED_MODEL)", http.StatusBadRequest)
+			return
+		}
 		mcp.ServeHTTP(w, r)
 	})
 }
 
-// serverFor returns the cached SDK server for the principal's view,
-// rebuilding when the manager generation has moved.
-func (h *Handler) serverFor(p identity.Principal, ok bool) *sdk.Server {
-	key, tenant := viewKey(p, ok)
+// serverFor returns the cached SDK server for the principal's mode-qualified
+// view, rebuilding when the manager generation has moved. Both modes register
+// the full visible catalog as callable tools; search mode additionally adds
+// search_tools and a list-filtering middleware so tools/list exposes only
+// search_tools (the catalog stays callable but unlisted).
+func (h *Handler) serverFor(p identity.Principal, ok bool, mode viewMode) *sdk.Server {
+	key, tenant := viewKey(p, ok, mode)
 	gen := h.m.Generation()
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if c, hit := h.cache[key]; hit && c.gen == gen {
 		return c.srv
 	}
-	srv := sdk.NewServer(&sdk.Implementation{Name: "runtime-gateway", Version: "m1"}, nil)
+	srv := sdk.NewServer(&sdk.Implementation{Name: "runtime-gateway", Version: "m2"}, nil)
 	for _, t := range h.m.ToolsFor(tenant) {
 		srv.AddTool(&sdk.Tool{
 			Name:        t.Name(),
 			Description: t.Description(),
 			InputSchema: json.RawMessage(t.Parameters()),
 		}, h.toolHandler(key, t))
+	}
+	if mode == modeSearch {
+		srv.AddTool(searchToolDef(), h.searchHandler(key, tenant))
+		srv.AddReceivingMiddleware(listOnlySearchTools)
 	}
 	h.cache[key] = &cachedServer{gen: gen, srv: srv}
 	return srv
@@ -124,8 +177,11 @@ func (h *Handler) serverFor(p identity.Principal, ok bool) *sdk.Server {
 // per-call gates run on the live request principal (MCP sessions are not
 // principal-bound: later POSTs bypass getServer, so a session ID replayed
 // by a different principal would otherwise inherit the creator's view):
-//  1. view check — the caller's view key must match the view this server
-//     was built for;
+//  1. view check — the caller's PRINCIPAL VIEW (base part of the
+//     mode-qualified key, before "|") must match the view this server was
+//     built for. The mode is deliberately excluded: it belongs to the
+//     session's server, and the same principal may use full and search
+//     sessions concurrently;
 //  2. role gate — viewers cannot call tools (requires ≥ operator).
 //
 // The gates read the principal from the tool handler's ctx. With Streamable
@@ -136,7 +192,9 @@ func (h *Handler) serverFor(p identity.Principal, ok bool) *sdk.Server {
 func (h *Handler) toolHandler(builtFor string, t tool.Tool) sdk.ToolHandler {
 	return func(ctx context.Context, req *sdk.CallToolRequest) (*sdk.CallToolResult, error) {
 		p, ok := h.PrincipalFor(ctx)
-		if key, _ := viewKey(p, ok); key != builtFor {
+		callerBase, _ := principalView(p, ok)
+		builtBase, _, _ := strings.Cut(builtFor, "|")
+		if callerBase != builtBase {
 			return errResult("forbidden: session does not belong to this principal's view"), nil
 		}
 		if ok && !p.Superuser && p.Role == identity.RoleViewer {
@@ -164,6 +222,88 @@ func (h *Handler) toolHandler(builtFor string, t tool.Tool) sdk.ToolHandler {
 	}
 }
 
+// searchToolDef describes the search_tools tool. The name cannot collide
+// with upstream tools: their names always contain "__" (server__tool).
+func searchToolDef() *sdk.Tool {
+	return &sdk.Tool{
+		Name: "search_tools",
+		Description: "Search the tool catalog by describing what you want to do. " +
+			"Returns matching tools (name, description, input schema) ranked by relevance; " +
+			"call any returned tool directly by name.",
+		InputSchema: json.RawMessage(`{
+			"type": "object",
+			"properties": {
+				"query": {"type": "string", "description": "natural-language description of the capability you need"},
+				"k": {"type": "integer", "description": "max results (default 5, cap 20)"}
+			},
+			"required": ["query"]
+		}`),
+	}
+}
+
+// searchHandler serves search_tools for one view. Viewers MAY search
+// (search is a read, like tools/list); the call gate still protects the
+// result tools themselves. Principal-view re-check matches toolHandler's.
+func (h *Handler) searchHandler(builtFor, tenant string) sdk.ToolHandler {
+	return func(ctx context.Context, req *sdk.CallToolRequest) (*sdk.CallToolResult, error) {
+		p, ok := h.PrincipalFor(ctx)
+		callerBase, _ := principalView(p, ok)
+		builtBase, _, _ := strings.Cut(builtFor, "|")
+		if callerBase != builtBase {
+			return errResult("forbidden: session does not belong to this principal's view"), nil
+		}
+		if h.Index == nil {
+			// Unreachable via HTTP() (search mode 400s without an Index);
+			// cheap insurance for any future direct serverFor caller.
+			return errResult("search unavailable: no embedding index configured"), nil
+		}
+		var in struct {
+			Query string `json:"query"`
+			K     int    `json:"k"`
+		}
+		if err := json.Unmarshal(req.Params.Arguments, &in); err != nil || in.Query == "" {
+			return errResult(`search_tools requires {"query": string}`), nil
+		}
+		ms, err := h.Index.Search(ctx, h.m.ToolsFor(tenant), in.Query, in.K)
+		if err != nil {
+			return errResult("search temporarily unavailable: " + err.Error()), nil
+		}
+		if ms == nil {
+			ms = []Match{}
+		}
+		b, _ := json.Marshal(ms)
+		text := string(b)
+		if len(ms) == 0 {
+			text += "\nNo tools matched; try a broader query."
+		}
+		return &sdk.CallToolResult{Content: []sdk.Content{&sdk.TextContent{Text: text}}}, nil
+	}
+}
+
+// listOnlySearchTools is receiving middleware that rewrites tools/list
+// results to expose only search_tools — the catalog stays callable but
+// unlisted (the point of search mode). Locked by unit test so an SDK
+// upgrade that changes the method name or result type fails loudly.
+func listOnlySearchTools(next sdk.MethodHandler) sdk.MethodHandler {
+	return func(ctx context.Context, method string, req sdk.Request) (sdk.Result, error) {
+		res, err := next(ctx, method, req)
+		if err != nil || method != "tools/list" {
+			return res, err
+		}
+		lt, ok := res.(*sdk.ListToolsResult)
+		if !ok {
+			return res, err
+		}
+		filtered := &sdk.ListToolsResult{Tools: []*sdk.Tool{}}
+		for _, t := range lt.Tools {
+			if t.Name == "search_tools" {
+				filtered.Tools = append(filtered.Tools, t)
+			}
+		}
+		return filtered, nil
+	}
+}
+
 func errResult(msg string) *sdk.CallToolResult {
 	return &sdk.CallToolResult{
 		IsError: true,
@@ -185,7 +325,7 @@ func (h *Handler) Status(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "forbidden", http.StatusForbidden)
 			return
 		}
-		_, tenant = viewKey(p, ok)
+		_, tenant = principalView(p, ok)
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(h.m.Status(tenant))
