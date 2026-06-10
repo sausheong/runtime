@@ -238,6 +238,22 @@ func (m *Manager) ToolsFor(tenant string) []tool.Tool {
 // AllTools is the unscoped view (open mode / superuser).
 func (m *Manager) AllTools() []tool.Tool { return m.ToolsFor("") }
 
+// ForwardsTenant reports whether the upstream serving the given gateway tool
+// name (<server>__<tool>) has forward_tenant configured. Names without the
+// "__" separator (e.g. search_tools) never forward.
+func (m *Manager) ForwardsTenant(toolName string) bool {
+	srv, _, ok := strings.Cut(toolName, "__")
+	if !ok {
+		return false
+	}
+	for _, u := range m.ups {
+		if u.cfg.Name == srv {
+			return u.cfg.ForwardTenant
+		}
+	}
+	return false
+}
+
 // Status returns per-upstream state. tenant=="" ⇒ unscoped (all upstreams);
 // otherwise only upstreams visible to that tenant.
 func (m *Manager) Status(tenant string) []UpstreamStatus {
