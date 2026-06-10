@@ -141,12 +141,15 @@ func TestBuildEnv_InjectsTenantAndMemory(t *testing.T) {
 func TestBuildEnv_NoMemoryFlagWhenDisabled(t *testing.T) {
 	ap := AgentProcess{AgentID: "a1", Addr: "127.0.0.1:9111", PGDSN: "dsn", Tenant: "alpha"}
 	env, _ := ap.buildEnv(context.Background())
-	joined := strings.Join(env, "\n")
-	if strings.Contains(joined, "RUNTIME_AGENT_MEMORY") {
-		t.Fatalf("memory flag must be absent when disabled:\n%s", joined)
+	// Memory off is shadowed with an explicit empty entry (exec.Cmd takes the
+	// last duplicate; agentd requires "1") so an inherited operator var can't
+	// enable the feature. Assert the LAST entry is the empty shadow.
+	idx := lastIndexWithPrefix(env, "RUNTIME_AGENT_MEMORY=")
+	if idx < 0 || env[idx] != "RUNTIME_AGENT_MEMORY=" {
+		t.Fatalf("memory flag must be shadowed empty when disabled: idx=%d env=%v", idx, env)
 	}
-	if !strings.Contains(joined, "RUNTIME_AGENT_TENANT=alpha") {
-		t.Fatalf("tenant must always be present:\n%s", joined)
+	if !strings.Contains(strings.Join(env, "\n"), "RUNTIME_AGENT_TENANT=alpha") {
+		t.Fatalf("tenant must always be present:\n%s", strings.Join(env, "\n"))
 	}
 }
 
@@ -166,7 +169,11 @@ func TestBuildEnvGateway(t *testing.T) {
 		assertHasEnv(t, env, "RUNTIME_GATEWAY_KEY=svk-test")
 	})
 
-	t.Run("gateway on, no key (open mode): url only", func(t *testing.T) {
+	// The off/no-key paths inject explicit EMPTY-value entries rather than
+	// omitting the vars: exec.Cmd uses the last duplicate env entry, so the
+	// empty shadow neutralizes any same-named var inherited from the operator
+	// environment (agentd treats empty as unset).
+	t.Run("gateway on, no key (open mode): url set, key shadowed empty", func(t *testing.T) {
 		a := AgentProcess{
 			AgentID: "x", Addr: "127.0.0.1:1", BinPath: "bin", PGDSN: "dsn",
 			Tenant: "default", GatewayOn: true,
@@ -177,18 +184,31 @@ func TestBuildEnvGateway(t *testing.T) {
 			t.Fatal(err)
 		}
 		assertHasEnv(t, env, "RUNTIME_GATEWAY_URL=http://127.0.0.1:8080/gateway/mcp")
-		assertNoEnvPrefix(t, env, "RUNTIME_GATEWAY_KEY=")
+		assertLastEnvEmpty(t, env, "RUNTIME_GATEWAY_KEY")
 	})
 
-	t.Run("gateway off: neither injected", func(t *testing.T) {
+	t.Run("gateway off: both shadowed empty", func(t *testing.T) {
 		a := AgentProcess{AgentID: "x", Addr: "127.0.0.1:1", BinPath: "bin", PGDSN: "dsn", Tenant: "t"}
 		env, err := a.buildEnv(context.Background())
 		if err != nil {
 			t.Fatal(err)
 		}
-		assertNoEnvPrefix(t, env, "RUNTIME_GATEWAY_URL=")
-		assertNoEnvPrefix(t, env, "RUNTIME_GATEWAY_KEY=")
+		assertLastEnvEmpty(t, env, "RUNTIME_GATEWAY_URL")
+		assertLastEnvEmpty(t, env, "RUNTIME_GATEWAY_KEY")
 	})
+}
+
+// assertLastEnvEmpty asserts the LAST entry for name is the empty shadow
+// "name=" — present (so it overrides any inherited value) and valueless.
+func assertLastEnvEmpty(t *testing.T, env []string, name string) {
+	t.Helper()
+	idx := lastIndexWithPrefix(env, name+"=")
+	if idx < 0 {
+		t.Fatalf("env missing empty shadow %q=", name)
+	}
+	if env[idx] != name+"=" {
+		t.Fatalf("last %s entry = %q, want empty shadow %q", name, env[idx], name+"=")
+	}
 }
 
 func assertHasEnv(t *testing.T, env []string, want string) {
@@ -199,15 +219,6 @@ func assertHasEnv(t *testing.T, env []string, want string) {
 		}
 	}
 	t.Fatalf("env missing %q", want)
-}
-
-func assertNoEnvPrefix(t *testing.T, env []string, prefix string) {
-	t.Helper()
-	for _, e := range env {
-		if strings.HasPrefix(e, prefix) {
-			t.Fatalf("env unexpectedly has %q", e)
-		}
-	}
 }
 
 var errBrokerTest = errors.New("broker boom")

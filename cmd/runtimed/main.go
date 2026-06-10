@@ -5,9 +5,11 @@ import (
 	"database/sql"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -16,6 +18,7 @@ import (
 	"github.com/sausheong/runtime/console"
 	"github.com/sausheong/runtime/controlplane"
 	"github.com/sausheong/runtime/internal/config"
+	"github.com/sausheong/runtime/internal/gateway"
 	"github.com/sausheong/runtime/internal/identity"
 	"golang.org/x/oauth2"
 )
@@ -37,6 +40,20 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+
+	// Gateway (B1 M1): build the upstream manager when configured. PrincipalFor
+	// is wired below once we know whether identity is on (open vs enforced).
+	var gwHandler *gateway.Handler
+	var gwManager *gateway.Manager
+	if cfg.Gateway.Enabled() {
+		gwURL := gatewaySelfURL(cfg.Gateway.SelfURL, ctlAddr)
+		reg.SetGateway(gwURL, cfg.Gateway.AgentKeys)
+		gwManager = gateway.NewManager(cfg.Gateway.Servers)
+		gwManager.Start(ctx)
+		defer gwManager.Close()
+		gwHandler = gateway.NewHandler(gwManager)
+		slog.Info("gateway enabled", "upstreams", len(cfg.Gateway.Servers), "url", gwURL)
+	}
 
 	// Identity layer (M1). Operator config via env:
 	//   RUNTIME_OIDC_ISSUER / RUNTIME_OIDC_CLIENT_ID — enable OIDC human login.
@@ -92,6 +109,19 @@ func main() {
 	}
 	identityOn := configured || oidcIssuer != "" || bootstrapKey != "" || len(legacyTokens) > 0
 
+	// Fail-closed: identity on + a gateway:true agent whose tenant has no
+	// agent key would spawn an agent that can never authenticate to the
+	// gateway. Refuse to start instead.
+	if identityOn && cfg.Gateway.Enabled() {
+		for _, a := range cfg.Agents {
+			if a.Gateway && cfg.Gateway.AgentKeys[a.Tenant] == "" {
+				slog.Error("gateway agent has no agent_key for its tenant (identity is on)",
+					"agent", a.ID, "tenant", a.Tenant)
+				os.Exit(1)
+			}
+		}
+	}
+
 	if !identityOn {
 		slog.Warn("no identity configured — control plane is running OPEN (unauthenticated)")
 		if secretBroker != nil {
@@ -100,7 +130,10 @@ func main() {
 			// no secret can be created — warn rather than silently mislead.
 			slog.Warn("a secrets key is set (RUNTIME_SECRETS_KEYS/RUNTIME_SECRETS_KEY) but identity is open/unconfigured — /admin/secrets is unavailable and no secrets can be set; configure identity (OIDC, a service key, or RUNTIME_ADMIN_BOOTSTRAP) to manage secrets")
 		}
-		handler = accessLog(buildRoot(reg, nil, console.OIDCConfig{}, secretAdmin)) // no /admin in open mode
+		if gwHandler != nil {
+			gwHandler.PrincipalFor = gateway.OpenMode
+		}
+		handler = accessLog(buildRoot(reg, nil, console.OIDCConfig{}, secretAdmin, gwHandler)) // no /admin in open mode
 	} else {
 		oidcVerifier, verr := identity.NewOIDCVerifier(ctx, oidcIssuer, oidcClientID)
 		if verr != nil {
@@ -138,10 +171,20 @@ func main() {
 		}
 		authr := identity.NewAuthenticator(idStore, oidcVerifier, bootstrapKey, legacyTokens)
 		azr := identity.NewAuthorizer(reg.AgentTenants())
-		root := buildRoot(reg, idStore, consoleOIDC, secretAdmin) // mounts /admin since the store is non-nil
+		if gwHandler != nil {
+			gwHandler.PrincipalFor = controlplane.PrincipalFromContext
+		}
+		root := buildRoot(reg, idStore, consoleOIDC, secretAdmin, gwHandler) // mounts /admin since the store is non-nil
 		handler = controlplane.IdentityMiddleware(accessLog(root), authr, azr)
 		slog.Info("identity enabled", "oidc", oidcIssuer != "", "bootstrap", bootstrapKey != "", "legacy_tokens", len(legacyTokens))
 	}
+
+	// Server starts before agents so gateway-enabled agents can connect to
+	// /gateway/mcp on first spawn.
+	srv := &http.Server{Addr: ctlAddr, Handler: handler}
+	serveErr := make(chan error, 1)
+	go func() { serveErr <- srv.ListenAndServe() }()
+	slog.Info("control plane listening", "addr", ctlAddr, "agents", len(reg.List()), "identity", identityOn)
 
 	// Start agents sequentially with a readiness gate (M2: DBOS first-run
 	// schema init is not safe to run concurrently).
@@ -154,11 +197,6 @@ func main() {
 			slog.Warn("agent not healthy yet; continuing", "agent", ap.AgentID, "err", err)
 		}
 	}
-
-	srv := &http.Server{Addr: ctlAddr, Handler: handler}
-	serveErr := make(chan error, 1)
-	go func() { serveErr <- srv.ListenAndServe() }()
-	slog.Info("control plane listening", "addr", ctlAddr, "agents", len(reg.List()), "identity", identityOn)
 
 	select {
 	case <-ctx.Done():
@@ -211,11 +249,16 @@ func accessLog(next http.Handler) http.Handler {
 // buildRoot assembles the root mux: console at /ui, control-plane API at /, and
 // (when adminS is non-nil) the admin API at /admin. The secret admin is mounted
 // alongside the admin API; a nil secretBroker makes /admin/secrets return 503.
-func buildRoot(reg *controlplane.Registry, adminS controlplane.AdminStore, consoleOIDC console.OIDCConfig, secretBroker controlplane.SecretAdmin) http.Handler {
+// A nil gw leaves /gateway/* unmounted (stdlib mux → 404).
+func buildRoot(reg *controlplane.Registry, adminS controlplane.AdminStore, consoleOIDC console.OIDCConfig, secretBroker controlplane.SecretAdmin, gw *gateway.Handler) http.Handler {
 	apiMux := controlplane.NewAPI(reg)
 	if adminS != nil {
 		controlplane.RegisterAdmin(apiMux, adminS)
 		controlplane.RegisterSecretAdmin(apiMux, adminS, secretBroker)
+	}
+	if gw != nil {
+		apiMux.Handle("/gateway/mcp", gw.HTTP())
+		apiMux.HandleFunc("GET /gateway/status", gw.Status)
 	}
 	consoleH := console.Handler(reg, consoleOIDC)
 	root := http.NewServeMux()
@@ -258,6 +301,24 @@ func waitAgentHealthy(ctx context.Context, addr string, timeout time.Duration) e
 		}
 	}
 	return fmt.Errorf("timed out after %s", timeout)
+}
+
+// gatewaySelfURL derives the URL agents use to reach the gateway. An explicit
+// self_url wins; otherwise it comes from the control-plane listen address with
+// a wildcard/empty host rewritten to loopback (agents are local subprocesses).
+func gatewaySelfURL(selfURL, ctlAddr string) string {
+	if selfURL != "" {
+		return strings.TrimRight(selfURL, "/") + "/gateway/mcp"
+	}
+	host, port, err := net.SplitHostPort(ctlAddr)
+	if err != nil {
+		// Malformed listen addr; fall back to loopback + raw addr (best effort).
+		return "http://127.0.0.1" + ctlAddr + "/gateway/mcp"
+	}
+	if host == "" || host == "0.0.0.0" || host == "::" {
+		host = "127.0.0.1"
+	}
+	return "http://" + net.JoinHostPort(host, port) + "/gateway/mcp"
 }
 
 func envOr(k, d string) string {

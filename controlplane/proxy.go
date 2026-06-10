@@ -46,14 +46,24 @@ func (a AgentProcess) buildEnv(ctx context.Context) ([]string, error) {
 		"RUNTIME_AGENT_KIND="+a.Kind,
 		"RUNTIME_AGENT_TENANT="+a.Tenant,
 	)
+	// Agents that did NOT opt in get explicit empty-value entries so an
+	// inherited operator var (e.g. a leaked RUNTIME_GATEWAY_URL) can't enable
+	// the feature: exec.Cmd uses the LAST duplicate env entry, and agentd
+	// treats empty as unset (memory requires "1", gateway requires a URL).
 	if a.Memory {
 		env = append(env, "RUNTIME_AGENT_MEMORY=1")
+	} else {
+		env = append(env, "RUNTIME_AGENT_MEMORY=")
 	}
 	if a.GatewayOn {
 		env = append(env, "RUNTIME_GATEWAY_URL="+a.GatewayURL)
 		if a.GatewayKey != "" {
 			env = append(env, "RUNTIME_GATEWAY_KEY="+a.GatewayKey)
+		} else {
+			env = append(env, "RUNTIME_GATEWAY_KEY=")
 		}
+	} else {
+		env = append(env, "RUNTIME_GATEWAY_URL=", "RUNTIME_GATEWAY_KEY=")
 	}
 	if a.broker != nil {
 		secrets, err := a.broker.SecretsFor(ctx, a.Tenant)
