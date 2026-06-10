@@ -18,14 +18,57 @@ type AgentConfig struct {
 	Command    []string `yaml:"command"` // optional; when set, the supervisor execs this instead of the agentd binary (polyglot/foreign agents). argv form.
 	WorkDir    string   `yaml:"workdir"` // optional working directory for Command (e.g. a Python shim project root).
 	Tenant     string   `yaml:"tenant"`  // optional; "" ⇒ "default" tenant. Owns this agent for access control.
-	Memory     bool     `yaml:"memory"`  // optional; opt-in to the per-tenant Postgres memory tool. Default false.
-	Gateway    bool     `yaml:"gateway"` // optional; opt-in to the platform MCP gateway (env-injected URL+key). Default false.
+	Memory     bool     `yaml:"memory"` // optional; opt-in to the per-tenant Postgres memory tool. Default false.
+
+	// Gateway opts the agent into the platform MCP gateway (env-injected
+	// URL+key). Optional; off (default) | full (true) | search.
+	Gateway GatewayMode `yaml:"gateway"`
 }
 
 // TokenConfig is one control-plane API token. Label is for log attribution.
 type TokenConfig struct {
 	Token string `yaml:"token"`
 	Label string `yaml:"label"`
+}
+
+// GatewayMode is the per-agent gateway opt-in. YAML accepts a bool
+// (true ⇒ full, false ⇒ off) or a string ("full" | "search"); anything
+// else is a load error. The zero value is off.
+type GatewayMode string
+
+const (
+	GatewayOff    GatewayMode = ""       // not opted in
+	GatewayFull   GatewayMode = "full"   // M1 behavior: full federated tools/list
+	GatewaySearch GatewayMode = "search" // M2: list only search_tools; catalog via search
+)
+
+// Enabled reports whether the agent consumes the gateway at all.
+func (g GatewayMode) Enabled() bool { return g == GatewayFull || g == GatewaySearch }
+
+// UnmarshalYAML implements the bool-or-string union (yaml.v3 node form).
+func (g *GatewayMode) UnmarshalYAML(value *yaml.Node) error {
+	var b bool
+	if err := value.Decode(&b); err == nil {
+		if b {
+			*g = GatewayFull
+		} else {
+			*g = GatewayOff
+		}
+		return nil
+	}
+	var s string
+	if err := value.Decode(&s); err != nil {
+		return fmt.Errorf("config: invalid gateway mode (want true|false|full|search)")
+	}
+	switch s {
+	case "full":
+		*g = GatewayFull
+	case "search":
+		*g = GatewaySearch
+	default:
+		return fmt.Errorf("config: invalid gateway mode %q (want true|false|full|search)", s)
+	}
+	return nil
 }
 
 // GatewayServer is one upstream MCP server the gateway federates. Exactly one

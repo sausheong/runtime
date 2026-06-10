@@ -16,7 +16,7 @@ func TestValidateGatewayKeys(t *testing.T) {
 		{
 			name: "missing key errors naming agent and tenant",
 			cfg: &config.Config{
-				Agents:  []config.AgentConfig{{ID: "a1", Tenant: "acme", Gateway: true}},
+				Agents:  []config.AgentConfig{{ID: "a1", Tenant: "acme", Gateway: config.GatewayFull}},
 				Gateway: config.GatewayConfig{AgentKeys: map[string]string{}},
 			},
 			wantErr: `"a1"`,
@@ -24,14 +24,14 @@ func TestValidateGatewayKeys(t *testing.T) {
 		{
 			name: "key present is fine",
 			cfg: &config.Config{
-				Agents:  []config.AgentConfig{{ID: "a1", Tenant: "acme", Gateway: true}},
+				Agents:  []config.AgentConfig{{ID: "a1", Tenant: "acme", Gateway: config.GatewayFull}},
 				Gateway: config.GatewayConfig{AgentKeys: map[string]string{"acme": "sk-key"}},
 			},
 		},
 		{
 			name: "non-gateway agent without key is fine",
 			cfg: &config.Config{
-				Agents:  []config.AgentConfig{{ID: "a1", Tenant: "acme", Gateway: false}},
+				Agents:  []config.AgentConfig{{ID: "a1", Tenant: "acme", Gateway: config.GatewayOff}},
 				Gateway: config.GatewayConfig{AgentKeys: map[string]string{}},
 			},
 		},
@@ -40,14 +40,14 @@ func TestValidateGatewayKeys(t *testing.T) {
 			// config.Load rewrites Tenant "" to "default" before validation, so
 			// the helper sees the post-default value.
 			cfg: &config.Config{
-				Agents:  []config.AgentConfig{{ID: "a1", Tenant: "default", Gateway: true}},
+				Agents:  []config.AgentConfig{{ID: "a1", Tenant: "default", Gateway: config.GatewayFull}},
 				Gateway: config.GatewayConfig{AgentKeys: map[string]string{"default": "sk-key"}},
 			},
 		},
 		{
 			name: "defaulted tenant without key errors",
 			cfg: &config.Config{
-				Agents:  []config.AgentConfig{{ID: "a2", Tenant: "default", Gateway: true}},
+				Agents:  []config.AgentConfig{{ID: "a2", Tenant: "default", Gateway: config.GatewayFull}},
 				Gateway: config.GatewayConfig{AgentKeys: nil},
 			},
 			wantErr: `"default"`,
@@ -56,8 +56,8 @@ func TestValidateGatewayKeys(t *testing.T) {
 			name: "first offender is named",
 			cfg: &config.Config{
 				Agents: []config.AgentConfig{
-					{ID: "ok", Tenant: "acme", Gateway: true},
-					{ID: "bad", Tenant: "globex", Gateway: true},
+					{ID: "ok", Tenant: "acme", Gateway: config.GatewayFull},
+					{ID: "bad", Tenant: "globex", Gateway: config.GatewayFull},
 				},
 				Gateway: config.GatewayConfig{AgentKeys: map[string]string{"acme": "sk"}},
 			},
@@ -84,7 +84,7 @@ func TestValidateGatewayKeys(t *testing.T) {
 
 	// The error must name both the agent and its tenant.
 	err := validateGatewayKeys(&config.Config{
-		Agents: []config.AgentConfig{{ID: "a1", Tenant: "acme", Gateway: true}},
+		Agents: []config.AgentConfig{{ID: "a1", Tenant: "acme", Gateway: config.GatewayFull}},
 	})
 	if err == nil || !strings.Contains(err.Error(), `"a1"`) || !strings.Contains(err.Error(), `"acme"`) {
 		t.Fatalf("error must name agent and tenant, got %v", err)

@@ -28,7 +28,7 @@ func TestRegistry_FromConfig(t *testing.T) {
 func TestRegistryThreadsGateway(t *testing.T) {
 	cfg := &config.Config{
 		Agents: []config.AgentConfig{
-			{ID: "g", Name: "G", Model: "m", ListenAddr: "127.0.0.1:1", Tenant: "acme", Gateway: true},
+			{ID: "g", Name: "G", Model: "m", ListenAddr: "127.0.0.1:1", Tenant: "acme", Gateway: config.GatewayFull},
 			{ID: "p", Name: "P", Model: "m", ListenAddr: "127.0.0.1:2"},
 		},
 		Gateway: config.GatewayConfig{

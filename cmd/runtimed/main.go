@@ -313,7 +313,7 @@ func waitAgentHealthy(ctx context.Context, addr string, timeout time.Duration) e
 // whose tenant has no agent key. Only meaningful when identity is enforced.
 func validateGatewayKeys(cfg *config.Config) error {
 	for _, a := range cfg.Agents {
-		if a.Gateway && cfg.Gateway.AgentKeys[a.Tenant] == "" {
+		if a.Gateway.Enabled() && cfg.Gateway.AgentKeys[a.Tenant] == "" {
 			return fmt.Errorf("gateway agent %q has no agent_key for tenant %q", a.ID, a.Tenant)
 		}
 	}
