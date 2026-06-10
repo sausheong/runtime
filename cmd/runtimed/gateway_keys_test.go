@@ -90,3 +90,29 @@ func TestValidateGatewayKeys(t *testing.T) {
 		t.Fatalf("error must name agent and tenant, got %v", err)
 	}
 }
+
+func TestValidateGatewaySearch(t *testing.T) {
+	mk := func(mode config.GatewayMode) *config.Config {
+		return &config.Config{
+			Agents: []config.AgentConfig{
+				{ID: "a", Name: "A", Model: "m", ListenAddr: "127.0.0.1:1", Gateway: mode, Tenant: "default"},
+			},
+			Gateway: config.GatewayConfig{Servers: []config.GatewayServer{{Name: "fs", Command: "x"}}},
+		}
+	}
+	t.Run("search agent without embeddings is an error", func(t *testing.T) {
+		if err := validateGatewaySearch(mk(config.GatewaySearch), false); err == nil {
+			t.Fatal("want error")
+		}
+	})
+	t.Run("search agent with embeddings ok", func(t *testing.T) {
+		if err := validateGatewaySearch(mk(config.GatewaySearch), true); err != nil {
+			t.Fatal(err)
+		}
+	})
+	t.Run("full agent without embeddings ok", func(t *testing.T) {
+		if err := validateGatewaySearch(mk(config.GatewayFull), false); err != nil {
+			t.Fatal(err)
+		}
+	})
+}

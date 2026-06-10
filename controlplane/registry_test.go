@@ -82,3 +82,25 @@ func TestRegistry_GetInjectsBroker(t *testing.T) {
 		t.Fatalf("brokered secret not in env: %v", env)
 	}
 }
+
+func TestRegistryThreadsGatewaySearch(t *testing.T) {
+	cfg := &config.Config{
+		Agents: []config.AgentConfig{
+			{ID: "s", Name: "S", Model: "m", ListenAddr: "127.0.0.1:1", Gateway: config.GatewaySearch},
+			{ID: "f", Name: "F", Model: "m", ListenAddr: "127.0.0.1:2", Gateway: config.GatewayFull},
+		},
+		Gateway: config.GatewayConfig{Servers: []config.GatewayServer{{Name: "fs", Command: "x"}}},
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	r := NewRegistry(cfg, "bin", "dsn")
+	s, _ := r.Get("s")
+	if !s.GatewayOn || !s.GatewaySearch {
+		t.Fatalf("search agent not threaded: %+v", s)
+	}
+	f, _ := r.Get("f")
+	if !f.GatewayOn || f.GatewaySearch {
+		t.Fatalf("full agent wrong: %+v", f)
+	}
+}
