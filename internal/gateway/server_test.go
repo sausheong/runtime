@@ -306,8 +306,8 @@ func TestServerCacheHitSameInstance(t *testing.T) {
 	m := startManager(t, gwServers(), gwConns())
 	h := NewHandler(m)
 	p := identity.Principal{TenantID: "acme", Role: identity.RoleOperator}
-	s1 := h.serverFor(p, true)
-	s2 := h.serverFor(p, true)
+	s1 := h.serverFor(p, true, modeFull)
+	s2 := h.serverFor(p, true, modeFull)
 	if s1 != s2 {
 		t.Fatal("same generation must return the same cached server")
 	}
@@ -359,9 +359,307 @@ func TestServerEmptyTenantStatusSeesNothing(t *testing.T) {
 func TestServerSentinelKeyNoCollisionWithRealTenant(t *testing.T) {
 	// A real tenant literally named "!none" must not share a cache view with
 	// the empty-tenant sentinel.
-	kEmpty, _ := viewKey(identity.Principal{TenantID: "", Role: identity.RoleOperator}, true)
-	kBang, _ := viewKey(identity.Principal{TenantID: "!none", Role: identity.RoleOperator}, true)
+	kEmpty, _ := viewKey(identity.Principal{TenantID: "", Role: identity.RoleOperator}, true, modeFull)
+	kBang, _ := viewKey(identity.Principal{TenantID: "!none", Role: identity.RoleOperator}, true, modeFull)
 	if kEmpty == kBang {
 		t.Fatalf("sentinel cache key collides with real tenant: %q", kEmpty)
+	}
+}
+
+// dialGatewayMode is dialGateway with an explicit mode query param.
+func dialGatewayMode(t *testing.T, h *Handler, p *identity.Principal, mode string) *sdk.ClientSession {
+	t.Helper()
+	h.PrincipalFor = func(_ context.Context) (identity.Principal, bool) {
+		if p == nil {
+			return identity.Principal{}, false
+		}
+		return *p, true
+	}
+	srv := httptest.NewServer(h.HTTP())
+	t.Cleanup(srv.Close)
+	url := srv.URL
+	if mode != "" {
+		url += "?mode=" + mode
+	}
+	cli := sdk.NewClient(&sdk.Implementation{Name: "test", Version: "v0"}, nil)
+	sess, err := cli.Connect(context.Background(),
+		&sdk.StreamableClientTransport{Endpoint: url}, nil)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	t.Cleanup(func() { _ = sess.Close() })
+	return sess
+}
+
+// searchIndexForGw builds an Index whose fake embedder makes "read a file"
+// match open__echo strongly and scoped__secret weakly.
+func searchIndexForGw() *Index {
+	emb := &fakeEmbedder{vecs: map[string][]float32{
+		"read a file":                                    {1, 0, 0},
+		tt("open__echo", "fake mcp__open__echo"):         {0.9, 0.1, 0},
+		tt("scoped__secret", "fake mcp__scoped__secret"): {0, 1, 0},
+	}}
+	return NewIndex(emb, 0.3, 5)
+}
+
+func TestSearchModeListsOnlySearchTools(t *testing.T) {
+	m := startManager(t, gwServers(), gwConns())
+	h := NewHandler(m)
+	h.Index = searchIndexForGw()
+	sess := dialGatewayMode(t, h, &identity.Principal{TenantID: "acme", Role: identity.RoleOperator}, "search")
+	names := listNames(t, sess)
+	if len(names) != 1 || names[0] != "search_tools" {
+		t.Fatalf("search mode must list exactly [search_tools], got %v", names)
+	}
+}
+
+func TestSearchModeFullListUnchanged(t *testing.T) {
+	m := startManager(t, gwServers(), gwConns())
+	h := NewHandler(m)
+	h.Index = searchIndexForGw()
+	sess := dialGatewayMode(t, h, &identity.Principal{TenantID: "acme", Role: identity.RoleOperator}, "")
+	if names := listNames(t, sess); len(names) != 2 {
+		t.Fatalf("full mode changed: %v", names)
+	}
+}
+
+func TestSearchToolsReturnsMatches(t *testing.T) {
+	m := startManager(t, gwServers(), gwConns())
+	h := NewHandler(m)
+	h.Index = searchIndexForGw()
+	sess := dialGatewayMode(t, h, &identity.Principal{TenantID: "acme", Role: identity.RoleOperator}, "search")
+	res, err := sess.CallTool(context.Background(), &sdk.CallToolParams{
+		Name: "search_tools", Arguments: map[string]any{"query": "read a file"},
+	})
+	if err != nil {
+		t.Fatalf("call: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("isError: %+v", res.Content)
+	}
+	txt := res.Content[0].(*sdk.TextContent).Text
+	var ms []Match
+	if err := json.Unmarshal([]byte(txt), &ms); err != nil {
+		t.Fatalf("result not JSON matches: %v\n%s", err, txt)
+	}
+	if len(ms) != 1 || ms[0].Name != "open__echo" {
+		t.Fatalf("want [open__echo], got %+v", ms)
+	}
+	if len(ms[0].InputSchema) == 0 {
+		t.Fatal("schema missing from match")
+	}
+}
+
+func TestSearchModeUnlistedToolStillCallable(t *testing.T) {
+	m := startManager(t, gwServers(), gwConns())
+	h := NewHandler(m)
+	h.Index = searchIndexForGw()
+	sess := dialGatewayMode(t, h, &identity.Principal{TenantID: "acme", Role: identity.RoleOperator}, "search")
+	res, err := sess.CallTool(context.Background(), &sdk.CallToolParams{Name: "open__echo"})
+	if err != nil {
+		t.Fatalf("unlisted tool not callable: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("unlisted tool call errored: %+v", res.Content)
+	}
+}
+
+func TestSearchModeTenancyHolds(t *testing.T) {
+	m := startManager(t, gwServers(), gwConns())
+	h := NewHandler(m)
+	h.Index = searchIndexForGw()
+	emb := h.Index.emb.(*fakeEmbedder)
+	emb.vecs["secret stuff"] = []float32{0, 1, 0}
+	sess := dialGatewayMode(t, h, &identity.Principal{TenantID: "globex", Role: identity.RoleOperator}, "search")
+	res, err := sess.CallTool(context.Background(), &sdk.CallToolParams{
+		Name: "search_tools", Arguments: map[string]any{"query": "secret stuff"},
+	})
+	if err != nil || res.IsError {
+		t.Fatalf("search failed: %v %+v", err, res)
+	}
+	txt := res.Content[0].(*sdk.TextContent).Text
+	if strings.Contains(txt, "scoped__secret") {
+		t.Fatalf("cross-tenant tool leaked into search results: %s", txt)
+	}
+	if _, err := sess.CallTool(context.Background(), &sdk.CallToolParams{Name: "scoped__secret"}); err == nil {
+		t.Fatal("cross-tenant tool callable in search mode")
+	}
+}
+
+func TestSearchModeViewerCanSearchNotCall(t *testing.T) {
+	m := startManager(t, gwServers(), gwConns())
+	h := NewHandler(m)
+	h.Index = searchIndexForGw()
+	sess := dialGatewayMode(t, h, &identity.Principal{TenantID: "acme", Role: identity.RoleViewer}, "search")
+	res, err := sess.CallTool(context.Background(), &sdk.CallToolParams{
+		Name: "search_tools", Arguments: map[string]any{"query": "read a file"},
+	})
+	if err != nil || res.IsError {
+		t.Fatalf("viewer search should succeed: %v %+v", err, res)
+	}
+	res, err = sess.CallTool(context.Background(), &sdk.CallToolParams{Name: "open__echo"})
+	if err != nil {
+		t.Fatalf("want isError, got transport error: %v", err)
+	}
+	if !res.IsError {
+		t.Fatal("viewer must not call catalog tools")
+	}
+}
+
+func TestSearchToolsZeroMatchesHint(t *testing.T) {
+	m := startManager(t, gwServers(), gwConns())
+	h := NewHandler(m)
+	h.Index = searchIndexForGw()
+	sess := dialGatewayMode(t, h, &identity.Principal{TenantID: "acme", Role: identity.RoleOperator}, "search")
+	res, err := sess.CallTool(context.Background(), &sdk.CallToolParams{
+		Name: "search_tools", Arguments: map[string]any{"query": "completely unrelated"},
+	})
+	if err != nil || res.IsError {
+		t.Fatalf("zero matches must be success: %v %+v", err, res)
+	}
+	txt := res.Content[0].(*sdk.TextContent).Text
+	if !strings.Contains(txt, "[]") || !strings.Contains(txt, "broader") {
+		t.Fatalf("missing empty array + broaden hint: %s", txt)
+	}
+}
+
+func TestSearchToolsQueryEmbedFailure(t *testing.T) {
+	m := startManager(t, gwServers(), gwConns())
+	h := NewHandler(m)
+	emb := &fakeEmbedder{failFor: map[string]bool{"q": true}}
+	h.Index = NewIndex(emb, 0.3, 5)
+	sess := dialGatewayMode(t, h, &identity.Principal{TenantID: "acme", Role: identity.RoleOperator}, "search")
+	res, err := sess.CallTool(context.Background(), &sdk.CallToolParams{
+		Name: "search_tools", Arguments: map[string]any{"query": "q"},
+	})
+	if err != nil {
+		t.Fatalf("want isError, got transport error: %v", err)
+	}
+	if !res.IsError {
+		t.Fatal("query embed failure must be isError")
+	}
+	if txt := res.Content[0].(*sdk.TextContent).Text; !strings.Contains(txt, "unavailable") {
+		t.Fatalf("unhelpful error text: %s", txt)
+	}
+}
+
+func TestSearchModeWithoutIndex400(t *testing.T) {
+	m := startManager(t, gwServers(), gwConns())
+	h := NewHandler(m) // no Index
+	h.PrincipalFor = OpenMode
+	srv := httptest.NewServer(h.HTTP())
+	t.Cleanup(srv.Close)
+	resp, err := http.Post(srv.URL+"?mode=search", "application/json", strings.NewReader(`{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("want 400, got %d", resp.StatusCode)
+	}
+}
+
+func TestJunkMode400(t *testing.T) {
+	m := startManager(t, gwServers(), gwConns())
+	h := NewHandler(m)
+	h.Index = searchIndexForGw()
+	h.PrincipalFor = OpenMode
+	srv := httptest.NewServer(h.HTTP())
+	t.Cleanup(srv.Close)
+	resp, err := http.Post(srv.URL+"?mode=banana", "application/json", strings.NewReader(`{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("want 400, got %d", resp.StatusCode)
+	}
+}
+
+func TestSearchVectorCacheSurvivesGenerationBump(t *testing.T) {
+	// Tool vectors are cached by content hash, so an upstream reconnect
+	// (generation bump → per-view server rebuild) must NOT re-embed
+	// unchanged tool texts; only the new query embeds.
+	conns := gwConns()
+	m := startManager(t, gwServers(), conns)
+	h := NewHandler(m)
+	h.Index = searchIndexForGw()
+	emb := h.Index.emb.(*fakeEmbedder)
+	sess := dialGatewayMode(t, h, &identity.Principal{TenantID: "acme", Role: identity.RoleOperator}, "search")
+	if res, err := sess.CallTool(context.Background(), &sdk.CallToolParams{
+		Name: "search_tools", Arguments: map[string]any{"query": "read a file"},
+	}); err != nil || res.IsError {
+		t.Fatalf("first search: %v %+v", err, res)
+	}
+	afterFirst := emb.calls.Load()
+
+	// Bump the generation: mark the "scoped" upstream down (its conn identity
+	// captured under the lock, mirroring TestServerRebuildsOnGenerationChange).
+	// Marking down "scoped" keeps "open__echo" searchable for acme.
+	u := m.ups[1]
+	u.mu.Lock()
+	observed := u.conn
+	u.mu.Unlock()
+	m.markDown(u, observed, context.DeadlineExceeded)
+
+	// New session (rebuilt server at the new generation), same query.
+	sess2 := dialGatewayMode(t, h, &identity.Principal{TenantID: "acme", Role: identity.RoleOperator}, "search")
+	if res, err := sess2.CallTool(context.Background(), &sdk.CallToolParams{
+		Name: "search_tools", Arguments: map[string]any{"query": "read a file"},
+	}); err != nil || res.IsError {
+		t.Fatalf("second search: %v %+v", err, res)
+	}
+	// Only the query re-embedded (+1); surviving tools' vectors came from cache.
+	if got := emb.calls.Load(); got != afterFirst+1 {
+		t.Fatalf("tool vectors re-embedded across generation bump: calls %d → %d", afterFirst, got)
+	}
+}
+
+func TestPipeTenantSessionNotReplayable(t *testing.T) {
+	// A tenant ID containing "|" must not let its sessions be replayed by
+	// the tenant whose ID is the pre-pipe prefix (first-pipe-cut regression).
+	m := startManager(t, gwServers(), gwConns())
+	h := NewHandler(m)
+	h.Index = searchIndexForGw()
+	weird := identity.Principal{TenantID: "acme|full", Role: identity.RoleOperator}
+	sess := dialGatewayMode(t, h, &weird, "full")
+	// Session works for its own principal.
+	if _, err := sess.ListTools(context.Background(), &sdk.ListToolsParams{}); err != nil {
+		t.Fatalf("setup list: %v", err)
+	}
+	// Now the plain "acme" tenant presents this session's ID.
+	h.PrincipalFor = func(_ context.Context) (identity.Principal, bool) {
+		return identity.Principal{TenantID: "acme", Role: identity.RoleOperator}, true
+	}
+	res, err := sess.CallTool(context.Background(), &sdk.CallToolParams{Name: "open__echo"})
+	if err != nil {
+		t.Fatalf("want isError result, got transport error: %v", err)
+	}
+	if !res.IsError {
+		t.Fatal("cross-tenant replay accepted: pipe-tenant session executed by prefix tenant")
+	}
+}
+
+func TestSearchModeCrossPrincipalRejected(t *testing.T) {
+	m := startManager(t, gwServers(), gwConns())
+	h := NewHandler(m)
+	h.Index = searchIndexForGw()
+	sess := dialGatewayMode(t, h, &identity.Principal{TenantID: "acme", Role: identity.RoleOperator}, "search")
+	if names := listNames(t, sess); len(names) != 1 {
+		t.Fatalf("setup: %v", names)
+	}
+	res, err := sess.CallTool(context.Background(), &sdk.CallToolParams{Name: "open__echo"})
+	if err != nil || res.IsError {
+		t.Fatalf("same-mode call should pass: %v %+v", err, res)
+	}
+	h.PrincipalFor = func(_ context.Context) (identity.Principal, bool) {
+		return identity.Principal{TenantID: "globex", Role: identity.RoleOperator}, true
+	}
+	res, err = sess.CallTool(context.Background(), &sdk.CallToolParams{Name: "open__echo"})
+	if err != nil {
+		t.Fatalf("want isError: %v", err)
+	}
+	if !res.IsError {
+		t.Fatal("cross-principal call must be rejected in search mode too")
 	}
 }

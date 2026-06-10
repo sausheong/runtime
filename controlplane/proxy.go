@@ -31,6 +31,8 @@ type AgentProcess struct {
 	GatewayURL string // full URL of the platform gateway MCP endpoint.
 	GatewayKey string // tenant service key for the gateway; "" in open mode.
 
+	GatewaySearch bool // search-mode opt-in: appends ?mode=search to the injected gateway URL.
+
 	broker SecretBroker // optional; injected by the Registry. nil ⇒ no secret brokering.
 }
 
@@ -56,7 +58,11 @@ func (a AgentProcess) buildEnv(ctx context.Context) ([]string, error) {
 		env = append(env, "RUNTIME_AGENT_MEMORY=")
 	}
 	if a.GatewayOn {
-		env = append(env, "RUNTIME_GATEWAY_URL="+a.GatewayURL)
+		u := a.GatewayURL
+		if a.GatewaySearch {
+			u += "?mode=search"
+		}
+		env = append(env, "RUNTIME_GATEWAY_URL="+u)
 		if a.GatewayKey != "" {
 			env = append(env, "RUNTIME_GATEWAY_KEY="+a.GatewayKey)
 		} else {

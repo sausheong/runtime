@@ -233,3 +233,18 @@ func lastIndexWithPrefix(env []string, prefix string) int {
 	}
 	return idx
 }
+
+func TestBuildEnvGatewaySearchMode(t *testing.T) {
+	a := AgentProcess{
+		AgentID: "x", Addr: "127.0.0.1:1", BinPath: "bin", PGDSN: "dsn",
+		Tenant: "acme", GatewayOn: true, GatewaySearch: true,
+		GatewayURL: "http://127.0.0.1:8080/gateway/mcp",
+		GatewayKey: "svk-test",
+	}
+	env, err := a.buildEnv(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertHasEnv(t, env, "RUNTIME_GATEWAY_URL=http://127.0.0.1:8080/gateway/mcp?mode=search")
+	assertHasEnv(t, env, "RUNTIME_GATEWAY_KEY=svk-test")
+}

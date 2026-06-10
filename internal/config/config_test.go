@@ -358,13 +358,110 @@ func TestGatewayEnvExpansion(t *testing.T) {
 }
 
 func TestAgentConfigGatewayFlag(t *testing.T) {
-	c := &Config{Agents: []AgentConfig{
-		{ID: "a", Name: "A", Model: "m", ListenAddr: "127.0.0.1:1", Gateway: true},
-	}}
+	c := &Config{
+		Agents: []AgentConfig{
+			{ID: "a", Name: "A", Model: "m", ListenAddr: "127.0.0.1:1", Gateway: GatewayFull},
+		},
+		Gateway: GatewayConfig{Servers: []GatewayServer{{Name: "fs", Command: "x"}}},
+	}
 	if err := c.Validate(); err != nil {
 		t.Fatalf("expected valid, got %v", err)
 	}
-	if !c.Agents[0].Gateway {
+	if c.Agents[0].Gateway != GatewayFull {
 		t.Fatal("gateway flag lost")
+	}
+}
+
+func TestGatewayModeYAML(t *testing.T) {
+	load := func(t *testing.T, gatewayVal string) (*Config, error) {
+		t.Helper()
+		dir := t.TempDir()
+		p := dir + "/runtime.yaml"
+		// A servers entry is present so gateway-enabled agents pass the
+		// agents-require-servers validation; it is inert for the off cases.
+		y := "agents:\n  - {id: a, name: A, model: m, listen_addr: 127.0.0.1:1" + gatewayVal + "}\n" +
+			"gateway:\n  servers:\n    - {name: fs, command: x}\n"
+		if err := os.WriteFile(p, []byte(y), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return Load(p)
+	}
+
+	t.Run("absent means off", func(t *testing.T) {
+		c, err := load(t, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if c.Agents[0].Gateway != GatewayOff {
+			t.Fatalf("want off, got %v", c.Agents[0].Gateway)
+		}
+		if c.Agents[0].Gateway.Enabled() {
+			t.Fatal("off must not be enabled")
+		}
+	})
+
+	t.Run("true means full", func(t *testing.T) {
+		c, err := load(t, ", gateway: true")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if c.Agents[0].Gateway != GatewayFull {
+			t.Fatalf("want full, got %v", c.Agents[0].Gateway)
+		}
+		if !c.Agents[0].Gateway.Enabled() {
+			t.Fatal("full must be enabled")
+		}
+	})
+
+	t.Run("false means off", func(t *testing.T) {
+		c, err := load(t, ", gateway: false")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if c.Agents[0].Gateway != GatewayOff {
+			t.Fatalf("want off, got %v", c.Agents[0].Gateway)
+		}
+	})
+
+	t.Run("search string", func(t *testing.T) {
+		c, err := load(t, ", gateway: search")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if c.Agents[0].Gateway != GatewaySearch {
+			t.Fatalf("want search, got %v", c.Agents[0].Gateway)
+		}
+		if !c.Agents[0].Gateway.Enabled() {
+			t.Fatal("search must be enabled")
+		}
+	})
+
+	t.Run("full string", func(t *testing.T) {
+		c, err := load(t, ", gateway: full")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if c.Agents[0].Gateway != GatewayFull {
+			t.Fatalf("want full, got %v", c.Agents[0].Gateway)
+		}
+	})
+
+	t.Run("invalid string rejected at load", func(t *testing.T) {
+		if _, err := load(t, ", gateway: banana"); err == nil {
+			t.Fatal("expected load error for invalid gateway mode")
+		}
+	})
+}
+
+func TestGatewayAgentRequiresServers(t *testing.T) {
+	c := &Config{Agents: []AgentConfig{
+		{ID: "a", Name: "A", Model: "m", ListenAddr: "127.0.0.1:1", Gateway: GatewayFull},
+	}}
+	if err := c.Validate(); err == nil {
+		t.Fatal("expected error: gateway agent without gateway.servers")
+	}
+	c.Gateway = GatewayConfig{Servers: []GatewayServer{{Name: "fs", Command: "x"}}}
+	if err := c.Validate(); err != nil {
+		t.Fatalf("with servers should validate: %v", err)
 	}
 }

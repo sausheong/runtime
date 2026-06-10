@@ -28,7 +28,7 @@ func TestRegistry_FromConfig(t *testing.T) {
 func TestRegistryThreadsGateway(t *testing.T) {
 	cfg := &config.Config{
 		Agents: []config.AgentConfig{
-			{ID: "g", Name: "G", Model: "m", ListenAddr: "127.0.0.1:1", Tenant: "acme", Gateway: true},
+			{ID: "g", Name: "G", Model: "m", ListenAddr: "127.0.0.1:1", Tenant: "acme", Gateway: config.GatewayFull},
 			{ID: "p", Name: "P", Model: "m", ListenAddr: "127.0.0.1:2"},
 		},
 		Gateway: config.GatewayConfig{
@@ -80,5 +80,27 @@ func TestRegistry_GetInjectsBroker(t *testing.T) {
 	}
 	if lastIndexWithPrefix(env, "K=v") < 0 {
 		t.Fatalf("brokered secret not in env: %v", env)
+	}
+}
+
+func TestRegistryThreadsGatewaySearch(t *testing.T) {
+	cfg := &config.Config{
+		Agents: []config.AgentConfig{
+			{ID: "s", Name: "S", Model: "m", ListenAddr: "127.0.0.1:1", Gateway: config.GatewaySearch},
+			{ID: "f", Name: "F", Model: "m", ListenAddr: "127.0.0.1:2", Gateway: config.GatewayFull},
+		},
+		Gateway: config.GatewayConfig{Servers: []config.GatewayServer{{Name: "fs", Command: "x"}}},
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	r := NewRegistry(cfg, "bin", "dsn")
+	s, _ := r.Get("s")
+	if !s.GatewayOn || !s.GatewaySearch {
+		t.Fatalf("search agent not threaded: %+v", s)
+	}
+	f, _ := r.Get("f")
+	if !f.GatewayOn || f.GatewaySearch {
+		t.Fatalf("full agent wrong: %+v", f)
 	}
 }

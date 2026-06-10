@@ -556,6 +556,57 @@ identity is on and a `gateway: true` agent's tenant has no `agent_keys` entry,
 `runtimed` refuses to start rather than spawn an agent that cannot
 authenticate.
 
+### Search mode
+
+When the federated catalog is large, listing every tool in every agent prompt
+gets expensive. In **search mode** a consumer's `tools/list` contains exactly
+one tool — `search_tools`. The agent describes what it needs ("read a file's
+contents") and gets back the matching tools — name, description, full input
+schema, and a relevance score — ranked by embedding cosine similarity. Any
+returned tool is callable directly by name: the whole (tenant-scoped) catalog
+stays callable, it's just unlisted.
+
+Enable it per agent with `gateway: search` in `runtime.yaml`:
+
+```yaml
+agents:
+  - id: assistant
+    gateway: search     # list only search_tools; discover the rest by query
+```
+
+The platform appends `?mode=search` to the injected `RUNTIME_GATEWAY_URL`.
+External MCP clients opt in the same way: connect to `/gateway/mcp?mode=search`.
+
+**Requirements.** Search mode needs platform embeddings — the same envs as
+Memory: `RUNTIME_EMBED_MODEL`/`RUNTIME_EMBED_DIM` plus
+`OPENAI_BASE_URL`/`OPENAI_API_KEY`. This is fail-fast: `runtimed` refuses to
+start if any `gateway: search` agent exists without embeddings configured,
+and a session requesting `?mode=search` on a gateway without embeddings gets
+HTTP 400.
+
+**`search_tools` contract.** Input: `{"query": string}` (required) and
+optional `k` (default 5, capped at 20). Output: a JSON array of matches; zero
+matches returns an empty array plus a "try a broader query" hint.
+
+**Tunables.**
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `RUNTIME_GATEWAY_SEARCH_FLOOR` | `0.2` | minimum cosine similarity for a match |
+| `RUNTIME_GATEWAY_SEARCH_K` | `5` | default result count when `k` is omitted |
+
+The floor is low on purpose: question↔description cosine similarity runs
+around 0.25–0.40 on OpenAI-family embeddings — the same calibration lesson as
+the memory recall floor.
+
+**Notes.** Viewers can search (it's a read, like `tools/list`) but still
+cannot call tools. Tool embeddings are computed lazily on the first search
+after an upstream (re)connects — one embed call per distinct tool text per
+process. Embed failures degrade rather than break: a tool whose embedding
+fails is skipped from search results but remains callable by name, and a
+query-embed failure returns an `isError` "search temporarily unavailable"
+result.
+
 ### Failure model
 
 Startup never blocks on upstreams: `runtimed` comes up immediately and each
@@ -564,14 +615,12 @@ backoff) owning its lifecycle. A call against a down upstream returns an MCP
 `isError` result rather than breaking the gateway session. `GET
 /gateway/status` shows the live per-upstream state.
 
-### Gateway M1 limitations
+### Limitations
 
 - **Static config only** — upstreams come from `runtime.yaml` at startup; no
   dynamic registration.
 - **Tools only** — no resources or prompts federation yet.
 - **No REST adapters** — upstreams must speak MCP (stdio or Streamable HTTP).
-- **No semantic tool search** — `tools/list` returns the full (tenant-scoped)
-  set.
 - **Operator-managed agent keys** — `agent_keys` maps tenants to service keys
   by hand; no automatic key minting for `gateway: true` agents.
 - **`${VAR}` expansion required for values containing `$`** — there is no

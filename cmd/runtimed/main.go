@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -20,6 +21,7 @@ import (
 	"github.com/sausheong/runtime/internal/config"
 	"github.com/sausheong/runtime/internal/gateway"
 	"github.com/sausheong/runtime/internal/identity"
+	"github.com/sausheong/runtime/internal/memory"
 	"golang.org/x/oauth2"
 )
 
@@ -54,6 +56,26 @@ func main() {
 		gwManager = gateway.NewManager(cfg.Gateway.Servers)
 		gwHandler = gateway.NewHandler(gwManager)
 		slog.Info("gateway enabled", "upstreams", len(cfg.Gateway.Servers), "url", gwURL)
+
+		// Gateway search (M2): assemble the Index from the Memory embedder env
+		// and fail fast when a search-mode agent exists without embeddings.
+		// Safe to os.Exit here: gwManager.Start runs later, so no stdio upstream
+		// children have been spawned yet.
+		emb, _, embOn, eerr := memory.NewEmbedderFromEnv()
+		if eerr != nil {
+			slog.Error("gateway: embeddings config invalid", "err", eerr)
+			os.Exit(1)
+		}
+		if embOn {
+			floor := envFloatOr("RUNTIME_GATEWAY_SEARCH_FLOOR", 0.2)
+			k := envIntOr("RUNTIME_GATEWAY_SEARCH_K", 5)
+			gwHandler.Index = gateway.NewIndex(emb, floor, k)
+			slog.Info("gateway search enabled", "floor", floor, "k", k)
+		}
+		if err := validateGatewaySearch(cfg, embOn); err != nil {
+			slog.Error("gateway search misconfigured", "err", err)
+			os.Exit(1)
+		}
 	}
 
 	// Identity layer (M1). Operator config via env:
@@ -313,8 +335,24 @@ func waitAgentHealthy(ctx context.Context, addr string, timeout time.Duration) e
 // whose tenant has no agent key. Only meaningful when identity is enforced.
 func validateGatewayKeys(cfg *config.Config) error {
 	for _, a := range cfg.Agents {
-		if a.Gateway && cfg.Gateway.AgentKeys[a.Tenant] == "" {
+		if a.Gateway.Enabled() && cfg.Gateway.AgentKeys[a.Tenant] == "" {
 			return fmt.Errorf("gateway agent %q has no agent_key for tenant %q", a.ID, a.Tenant)
+		}
+	}
+	return nil
+}
+
+// validateGatewaySearch returns an error naming the first agent that opted
+// into gateway search mode while embeddings are not configured — search mode
+// cannot work without an embedder, so refuse to start (fail-fast, like
+// validateGatewayKeys).
+func validateGatewaySearch(cfg *config.Config, embeddingsOn bool) error {
+	if embeddingsOn {
+		return nil
+	}
+	for _, a := range cfg.Agents {
+		if a.Gateway == config.GatewaySearch {
+			return fmt.Errorf("agent %q has gateway: search but embeddings are not configured (RUNTIME_EMBED_MODEL)", a.ID)
 		}
 	}
 	return nil
@@ -343,6 +381,34 @@ func envOr(k, d string) string {
 		return v
 	}
 	return d
+}
+
+// envFloatOr reads a float env var with a default (malformed ⇒ default + warn).
+func envFloatOr(key string, def float64) float64 {
+	v := os.Getenv(key)
+	if v == "" {
+		return def
+	}
+	f, err := strconv.ParseFloat(v, 64)
+	if err != nil {
+		slog.Warn("ignoring malformed env float", "key", key, "value", v, "default", def)
+		return def
+	}
+	return f
+}
+
+// envIntOr reads an int env var with a default (malformed ⇒ default + warn).
+func envIntOr(key string, def int) int {
+	v := os.Getenv(key)
+	if v == "" {
+		return def
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil {
+		slog.Warn("ignoring malformed env int", "key", key, "value", v, "default", def)
+		return def
+	}
+	return n
 }
 
 // buildSecretBroker constructs a secret broker from the keyring env vars over the
