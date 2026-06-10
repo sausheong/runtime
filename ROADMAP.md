@@ -1,6 +1,6 @@
 # Runtime — Roadmap & Backlog
 
-**Checkpoint date:** 2026-06-10 (Gateway M1 — MCP federation core)
+**Checkpoint date:** 2026-06-10 (Gateway M2 — semantic tool search)
 **Current state:** Runtime spine complete (Milestones 1–3 merged to `master`);
 polyglot agent hosting (C1) first milestone complete — Level-1 OpenAI Agents SDK
 shim merged to `master`, hosting a full foreign agent end-to-end (see §C1);
@@ -15,10 +15,13 @@ the prompt), and M3 auto-ingestion (background LLM fact extraction + semantic
 dedup), all merged to `master` — plus the KG→RunTurn wiring that makes recall and
 ingest actually fire on the production turn path, and a recall-floor recalibration
 for OpenAI-family embeddings (see §B2);
-Gateway (B1) first milestone complete — MCP federation core (a central
+Gateway (B1) first two milestones complete — M1 MCP federation core (a central
 `/gateway/mcp` Streamable HTTP endpoint federating static-YAML-configured
 upstream MCP servers, tenant-filtered via Identity service keys, consumed by
-agents via a `gateway: true` opt-in), merged to `master` (see §B1).
+agents via a `gateway: true` opt-in) and M2 semantic tool search (a search-first
+`?mode=search` consumption mode: one listed `search_tools` tool,
+embedding-ranked discovery over the federated catalog, callable-but-unlisted
+tools), merged to `master` (see §B1).
 **Goal:** an on-prem, open-source equivalent of AWS Bedrock AgentCore.
 
 This file is the parking lot for everything *not yet built*. Each item below is a
@@ -108,12 +111,44 @@ exposing the platform broadly.
    (`test/gateway_e2e_test.go`) plus a live smoke against the reference
    filesystem MCP server (stdio via npx: 14 tools federated, an external MCP
    client doing list+call through the gateway, and a gateway-enabled agent turn
-   completing with its MCP connects on the access log). Remaining B1:
-   REST/OpenAPI→tool adapters, semantic tool search (reuse Memory M2 embedding
-   plumbing), dynamic upstream registration + per-tenant self-service,
-   resources/prompts passthrough (tools only today), console panel, auto-minted
-   per-tenant agent keys, and rate limits/quotas. Spec/plan:
+   completing with its MCP connects on the access log). Spec/plan:
    `docs/superpowers/{specs,plans}/2026-06-10-gateway-m1-mcp-federation*`.
+
+   **Second milestone DONE (merged to `master`, 2026-06-10):** semantic tool
+   search. A search-first consumption mode for the federated catalog: an agent
+   sets `gateway: search` in `runtime.yaml` (`GatewayMode` is a string-or-bool
+   union, so `gateway: true` keeps its M1 meaning; the platform appends
+   `?mode=search` to the injected gateway URL) — or an external MCP client hits
+   `/gateway/mcp?mode=search` directly — and tools/list returns exactly one
+   tool, `search_tools`, while the principal's full visible catalog stays
+   CALLABLE but unlisted (an SDK `AddReceivingMiddleware` list filter over the
+   same per-tenant view; the per-view server cache is mode-qualified).
+   `search_tools(query, k)` returns JSON matches (name, description, full input
+   schema, score) ranked by embedding cosine over an in-memory Index with a
+   content-hash vector cache — each distinct tool text embeds once per process;
+   lazy, no schema or persistence — with floor `RUNTIME_GATEWAY_SEARCH_FLOOR`
+   (default 0.2) and k `RUNTIME_GATEWAY_SEARCH_K` (default 5, cap 20);
+   embeddings reuse the Memory `RUNTIME_EMBED_*` config. Posture: fail-fast
+   where config is wrong (a search-mode agent without embeddings configured
+   refuses startup; `?mode=search` without an Index ⇒ 400; a gateway-enabled
+   agent with zero `gateway.servers` is now a config load error),
+   degrade-don't-fail where upstreams are (a tool-embed failure skips that tool
+   from search but it stays callable; a query-embed failure returns an MCP
+   isError "search temporarily unavailable"); viewers may search but not call,
+   and principal-bound sessions are preserved across modes. Proven by a
+   through-serve e2e (`test/gateway_search_e2e_test.go`, fake embeddings
+   server) plus a live smoke against the reference filesystem MCP server over
+   the real LiteLLM proxy (`azure/text-embedding-3-small-eastus`):
+   `search_tools("read a file's contents")` ranked `fs__read_text_file` top-1
+   at cosine 0.586 (next non-read tool 0.396; floor 0.2), and a discovered-tool
+   call round-tripped. NOTE: tool-description↔query cosines run HIGHER
+   (~0.4–0.6) than the declarative-memory↔question range (~0.25–0.40) on the
+   same model — tool descriptions are task-phrased like queries — so the 0.2
+   floor is comfortable. Remaining B1: REST/OpenAPI→tool adapters, dynamic
+   upstream registration + per-tenant self-service, resources/prompts
+   passthrough (tools only today), console panel, auto-minted per-tenant agent
+   keys, and rate limits/quotas. Spec/plan:
+   `docs/superpowers/{specs,plans}/2026-06-10-gateway-m2-semantic-tool-search*`.
 2. **Memory** — managed multi-tenant memory. Short + long term, semantic
    retrieval across sessions, per-tenant isolation. Builds on harness
    `tool/memory` + Postgres/pgvector (pgvector is already provisioned in the
