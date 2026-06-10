@@ -576,7 +576,71 @@ func TestJunkMode400(t *testing.T) {
 	}
 }
 
-func TestCrossModeSessionRejected(t *testing.T) {
+func TestSearchVectorCacheSurvivesGenerationBump(t *testing.T) {
+	// Tool vectors are cached by content hash, so an upstream reconnect
+	// (generation bump → per-view server rebuild) must NOT re-embed
+	// unchanged tool texts; only the new query embeds.
+	conns := gwConns()
+	m := startManager(t, gwServers(), conns)
+	h := NewHandler(m)
+	h.Index = searchIndexForGw()
+	emb := h.Index.emb.(*fakeEmbedder)
+	sess := dialGatewayMode(t, h, &identity.Principal{TenantID: "acme", Role: identity.RoleOperator}, "search")
+	if res, err := sess.CallTool(context.Background(), &sdk.CallToolParams{
+		Name: "search_tools", Arguments: map[string]any{"query": "read a file"},
+	}); err != nil || res.IsError {
+		t.Fatalf("first search: %v %+v", err, res)
+	}
+	afterFirst := emb.calls.Load()
+
+	// Bump the generation: mark the "scoped" upstream down (its conn identity
+	// captured under the lock, mirroring TestServerRebuildsOnGenerationChange).
+	// Marking down "scoped" keeps "open__echo" searchable for acme.
+	u := m.ups[1]
+	u.mu.Lock()
+	observed := u.conn
+	u.mu.Unlock()
+	m.markDown(u, observed, context.DeadlineExceeded)
+
+	// New session (rebuilt server at the new generation), same query.
+	sess2 := dialGatewayMode(t, h, &identity.Principal{TenantID: "acme", Role: identity.RoleOperator}, "search")
+	if res, err := sess2.CallTool(context.Background(), &sdk.CallToolParams{
+		Name: "search_tools", Arguments: map[string]any{"query": "read a file"},
+	}); err != nil || res.IsError {
+		t.Fatalf("second search: %v %+v", err, res)
+	}
+	// Only the query re-embedded (+1); surviving tools' vectors came from cache.
+	if got := emb.calls.Load(); got != afterFirst+1 {
+		t.Fatalf("tool vectors re-embedded across generation bump: calls %d → %d", afterFirst, got)
+	}
+}
+
+func TestPipeTenantSessionNotReplayable(t *testing.T) {
+	// A tenant ID containing "|" must not let its sessions be replayed by
+	// the tenant whose ID is the pre-pipe prefix (first-pipe-cut regression).
+	m := startManager(t, gwServers(), gwConns())
+	h := NewHandler(m)
+	h.Index = searchIndexForGw()
+	weird := identity.Principal{TenantID: "acme|full", Role: identity.RoleOperator}
+	sess := dialGatewayMode(t, h, &weird, "full")
+	// Session works for its own principal.
+	if _, err := sess.ListTools(context.Background(), &sdk.ListToolsParams{}); err != nil {
+		t.Fatalf("setup list: %v", err)
+	}
+	// Now the plain "acme" tenant presents this session's ID.
+	h.PrincipalFor = func(_ context.Context) (identity.Principal, bool) {
+		return identity.Principal{TenantID: "acme", Role: identity.RoleOperator}, true
+	}
+	res, err := sess.CallTool(context.Background(), &sdk.CallToolParams{Name: "open__echo"})
+	if err != nil {
+		t.Fatalf("want isError result, got transport error: %v", err)
+	}
+	if !res.IsError {
+		t.Fatal("cross-tenant replay accepted: pipe-tenant session executed by prefix tenant")
+	}
+}
+
+func TestSearchModeCrossPrincipalRejected(t *testing.T) {
 	m := startManager(t, gwServers(), gwConns())
 	h := NewHandler(m)
 	h.Index = searchIndexForGw()

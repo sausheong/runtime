@@ -114,6 +114,18 @@ func viewKey(p identity.Principal, ok bool, mode viewMode) (key, tenant string) 
 	return base + "|" + string(mode), tenant
 }
 
+// viewBase strips the trailing "|<mode>" from a mode-qualified view key.
+// The mode is always the LAST pipe-delimited segment ("full" or "search");
+// the base may itself contain pipes (tenant IDs are free strings), so a
+// first-pipe cut would truncate it — see the cross-tenant replay regression
+// test.
+func viewBase(key string) string {
+	if i := strings.LastIndex(key, "|"); i >= 0 {
+		return key[:i]
+	}
+	return key
+}
+
 // HTTP returns the Streamable HTTP handler for /gateway/mcp. Call it once
 // and mount the result; each call creates an independent session namespace
 // (sessions established against one handler are unknown to another).
@@ -193,7 +205,7 @@ func (h *Handler) toolHandler(builtFor string, t tool.Tool) sdk.ToolHandler {
 	return func(ctx context.Context, req *sdk.CallToolRequest) (*sdk.CallToolResult, error) {
 		p, ok := h.PrincipalFor(ctx)
 		callerBase, _ := principalView(p, ok)
-		builtBase, _, _ := strings.Cut(builtFor, "|")
+		builtBase := viewBase(builtFor)
 		if callerBase != builtBase {
 			return errResult("forbidden: session does not belong to this principal's view"), nil
 		}
@@ -248,7 +260,7 @@ func (h *Handler) searchHandler(builtFor, tenant string) sdk.ToolHandler {
 	return func(ctx context.Context, req *sdk.CallToolRequest) (*sdk.CallToolResult, error) {
 		p, ok := h.PrincipalFor(ctx)
 		callerBase, _ := principalView(p, ok)
-		builtBase, _, _ := strings.Cut(builtFor, "|")
+		builtBase := viewBase(builtFor)
 		if callerBase != builtBase {
 			return errResult("forbidden: session does not belong to this principal's view"), nil
 		}

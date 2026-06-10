@@ -68,8 +68,12 @@ and embeddings are configured; nil Index ⇒ search mode unavailable.
 - **View key gains the mode:** cache key becomes e.g. `"t:acme|full"` /
   `"t:acme|search"` (and `"*|full"` / `"*|search"`). `viewKey` returns the
   mode-qualified key; the per-call view re-check in `toolHandler` compares
-  mode-qualified keys, so a session created in search mode cannot be replayed
-  into a full-mode view or vice versa (same principal-binding posture as M1).
+  the principal-view BASE (the key minus its trailing `|<mode>` segment, cut
+  at the LAST pipe — tenant IDs are free strings and may contain `|`), so a
+  session presented by a different principal is rejected. Mode is a session
+  property, not part of the principal check: the same principal may hold
+  full- and search-mode sessions concurrently (same principal-binding
+  posture as M1).
 - **Mode parsing:** `modeFromRequest(r)` reads `?mode=`; absent/empty ⇒ full;
   `search` ⇒ search; anything else ⇒ 400 before session creation. `?mode=search`
   when the Index is nil (embeddings unconfigured) ⇒ 400 "search mode requires
@@ -139,7 +143,7 @@ agent (gateway: search) → RUNTIME_GATEWAY_URL=…/gateway/mcp?mode=search
 | Zero matches above floor | Success, `[]` + broaden-query hint |
 | Viewer calls `search_tools` | Allowed (read) |
 | Viewer calls a result tool | `isError` forbidden (M1 rule unchanged) |
-| Session replay across modes | Rejected by mode-qualified view re-check |
+| Session replay across principals | Rejected by per-call principal-view re-check (mode is a session property: the same principal may hold full- and search-mode sessions concurrently) |
 
 ## 6. Testing & done criteria
 
