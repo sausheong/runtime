@@ -2,6 +2,7 @@ package sandbox
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -146,6 +147,70 @@ func TestPerTenantCapUnderConcurrency(t *testing.T) {
 	ids, _ := be.ListLeftovers(ctx)
 	if len(ids) != 2 {
 		t.Fatalf("backend has %d containers, want 2 (no leaks past the cap)", len(ids))
+	}
+}
+
+// blockingCreateBackend delegates to an inner Backend but parks Create until
+// release is closed, signaling entry on entered.
+type blockingCreateBackend struct {
+	Backend
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (b *blockingCreateBackend) Create(ctx context.Context, tenant string) (string, error) {
+	close(b.entered)
+	<-b.release
+	return b.Backend.Create(ctx, tenant)
+}
+
+// TestCloseDuringCreateDoesNotLeakContainer pins the lost-reservation path:
+// if the session is closed while be.Create is in flight, Create must remove
+// the freshly created container and report errNoSandbox.
+func TestCloseDuringCreateDoesNotLeakContainer(t *testing.T) {
+	ctx := context.Background()
+	be := &blockingCreateBackend{
+		Backend: NewFakeBackend(),
+		entered: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	m := NewManager(be, Config{
+		MaxPerTenant: 2,
+		IdleTTL:      10 * time.Minute,
+		MaxLifetime:  time.Hour,
+		ReadLimit:    1024,
+	})
+
+	errCh := make(chan error, 1)
+	go func() {
+		_, err := m.Create(ctx, "acme")
+		errCh <- err
+	}()
+
+	<-be.entered // be.Create is in flight; the reservation is visible
+
+	sessions := m.List("acme")
+	if len(sessions) != 1 {
+		t.Fatalf("expected 1 reserved session, got %d", len(sessions))
+	}
+	if err := m.Close(ctx, "acme", sessions[0].ID); err != nil {
+		t.Fatal(err)
+	}
+
+	close(be.release)
+	if err := <-errCh; !errors.Is(err, errNoSandbox) {
+		t.Fatalf("Create after lost reservation = %v, want errNoSandbox", err)
+	}
+
+	ids, err := be.ListLeftovers(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ids) != 0 {
+		t.Fatalf("container leaked: %v", ids)
+	}
+	if got := m.List("acme"); len(got) != 0 {
+		t.Fatalf("manager still tracks %d sessions", len(got))
 	}
 }
 

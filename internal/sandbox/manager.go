@@ -123,6 +123,17 @@ func (m *Manager) Create(ctx context.Context, tenant string) (*Session, error) {
 	}
 
 	m.mu.Lock()
+	if _, ok := m.sessions[s.ID]; !ok {
+		// The reservation vanished during be.Create (the tenant closed it or
+		// the reaper fired): nobody tracks this container, so remove it now
+		// rather than leaving it for the startup reap.
+		m.mu.Unlock()
+		if rmErr := m.be.Remove(ctx, containerID); rmErr != nil {
+			slog.Warn("sandbox create: container remove after lost reservation failed",
+				"sandbox_id", s.ID, "container_id", containerID, "err", rmErr)
+		}
+		return nil, errNoSandbox
+	}
 	s.ContainerID = containerID
 	m.mu.Unlock()
 	return s, nil
