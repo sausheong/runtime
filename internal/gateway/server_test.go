@@ -715,6 +715,51 @@ func TestForwardTenantOpenModeInjectsEmpty(t *testing.T) {
 	}
 }
 
+// TestForwardTenantNullArguments: `"arguments": null` is a legal tools/call
+// payload. json.Unmarshal of `null` into a map SUCCEEDS by setting the map to
+// nil; before the guard in injectTenant, the subsequent tenant-key write
+// panicked and killed the gateway.
+func TestForwardTenantNullArguments(t *testing.T) {
+	h, ct := startCaptureGateway(t, true)
+	sess := dialGateway(t, h, &identity.Principal{TenantID: "acme", Role: identity.RoleOperator})
+	res, err := sess.CallTool(context.Background(), &sdk.CallToolParams{
+		Name: "sbx__run", Arguments: json.RawMessage(`null`),
+	})
+	if err != nil || res.IsError {
+		t.Fatalf("call failed: %v %+v", err, res)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(ct.captured(), &got); err != nil {
+		t.Fatalf("captured args not JSON: %v (%s)", err, ct.captured())
+	}
+	if len(got) != 1 || got["__rt_tenant"] != "acme" {
+		t.Fatalf(`want {"__rt_tenant":"acme"}, got %v`, got)
+	}
+}
+
+// TestForwardTenantSuperuserInjectsEmpty: a SUPERUSER principal with a
+// non-empty TenantID must still inject "" — the `ok && !p.Superuser`
+// condition in injectTenant is load-bearing (the upstream maps "" to its
+// default-tenant rule).
+func TestForwardTenantSuperuserInjectsEmpty(t *testing.T) {
+	h, ct := startCaptureGateway(t, true)
+	sess := dialGateway(t, h, &identity.Principal{TenantID: "default", Role: identity.RoleAdmin, Superuser: true})
+	res, err := sess.CallTool(context.Background(), &sdk.CallToolParams{
+		Name: "sbx__run", Arguments: json.RawMessage(`{"x":1}`),
+	})
+	if err != nil || res.IsError {
+		t.Fatalf("call failed: %v %+v", err, res)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(ct.captured(), &got); err != nil {
+		t.Fatalf("captured args not JSON: %v (%s)", err, ct.captured())
+	}
+	want := map[string]any{"x": float64(1), "__rt_tenant": ""}
+	if len(got) != len(want) || got["x"] != want["x"] || got["__rt_tenant"] != want["__rt_tenant"] {
+		t.Fatalf("want %v, got %v", want, got)
+	}
+}
+
 func TestNonForwardingUpstreamArgsUntouched(t *testing.T) {
 	h, ct := startCaptureGateway(t, false)
 	sess := dialGateway(t, h, &identity.Principal{TenantID: "acme", Role: identity.RoleOperator})

@@ -253,6 +253,11 @@ func injectTenant(raw json.RawMessage, p identity.Principal, ok bool) (json.RawM
 			return nil, err
 		}
 	}
+	// Unmarshal of the legal payload `null` succeeds by setting m to nil;
+	// writing the tenant key into a nil map would panic.
+	if m == nil {
+		m = map[string]any{}
+	}
 	tenant := ""
 	if ok && !p.Superuser {
 		tenant = p.TenantID

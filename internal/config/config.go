@@ -4,6 +4,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -171,6 +172,13 @@ func (c *Config) Validate() error {
 		}
 		if names[s.Name] {
 			return fmt.Errorf("config: duplicate gateway server name %q", s.Name)
+		}
+		// "__" is the <server>__<tool> separator: the gateway resolves the
+		// owning server by cutting a tool name at the FIRST "__", so a name
+		// containing "__" would alias against another server and could
+		// silently disable tenant forwarding.
+		if strings.Contains(s.Name, "__") {
+			return fmt.Errorf("config: gateway server name %q must not contain \"__\" (reserved as the <server>__<tool> separator)", s.Name)
 		}
 		names[s.Name] = true
 		if (s.Command == "") == (s.URL == "") {

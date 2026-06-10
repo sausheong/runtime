@@ -492,6 +492,27 @@ gateway:
 	}
 }
 
+// TestGatewayServerNameRejectsDoubleUnderscore: tool names are
+// <server>__<tool> and the gateway resolves the owning server by cutting at
+// the FIRST "__". A server name containing "__" (e.g. "a__b") would alias
+// against server "a" and could silently disable tenant forwarding.
+func TestGatewayServerNameRejectsDoubleUnderscore(t *testing.T) {
+	p := writeTmp(t, `
+agents:
+  - {id: a, name: A, model: m, listen_addr: 127.0.0.1:8101}
+gateway:
+  servers:
+    - {name: a__b, command: x}
+`)
+	_, err := Load(p)
+	if err == nil {
+		t.Fatal("expected error: gateway server name containing \"__\"")
+	}
+	if !strings.Contains(err.Error(), "__") {
+		t.Fatalf("error should mention \"__\", got: %v", err)
+	}
+}
+
 func TestGatewayAgentRequiresServers(t *testing.T) {
 	c := &Config{Agents: []AgentConfig{
 		{ID: "a", Name: "A", Model: "m", ListenAddr: "127.0.0.1:1", Gateway: GatewayFull},
