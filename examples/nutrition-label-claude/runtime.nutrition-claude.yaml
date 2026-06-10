@@ -1,0 +1,13 @@
+# Host the Claude Agent SDK nutrition agent via the Python contract shim.
+# Driven by this directory's Makefile (`make run`), which runs runtimed from
+# the repo root, so `workdir` is repo-root-relative.
+#
+#   cp .env.example .env   # fill in your proxy key
+#   make run               # builds binaries, uv sync, runs the control plane
+agents:
+  - id: nutrition-claude
+    name: SG Nutrition Investigator (Claude Agent SDK)
+    model: claude-sonnet-4-6
+    listen_addr: 127.0.0.1:8303
+    workdir: ./examples/nutrition-label-claude
+    command: ["uv", "run", "python", "serve.py"]
