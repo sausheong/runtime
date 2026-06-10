@@ -1,0 +1,25 @@
+[project]
+name = "nutrition-label-claude"
+version = "0.1.0"
+description = "SG Nutrition Label Investigator — Claude Agent SDK example agent for runtime"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "claude-agent-sdk>=0.1.0",
+    "httpx>=0.28.1",
+    "pydantic>=2.13.4",
+    "python-dotenv>=1.2.2",
+    "fastapi>=0.115",
+    "uvicorn>=0.30",
+    "runtime-contract",
+]
+
+[dependency-groups]
+dev = ["pytest>=8", "pytest-asyncio>=0.24"]
+
+[tool.uv.sources]
+runtime-contract = { path = "../../contrib/shims/python", editable = true }
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"

@@ -43,6 +43,28 @@ def test_session_stream_to_done(tmp_path):
     assert any(r["id"] == sid for r in rows)
 
 
+def test_follow_up_message_same_session(tmp_path):
+    c, _ = make_client(tmp_path)
+    sid = c.post("/sessions", json={"message": "one"}).json()["session_id"]
+    first = c.get(f"/sessions/{sid}/stream?since=0").text
+    assert "hello one" in first and '"type":"done"' in first
+    # done seq for turn 1 = 3 (text, tool_result, done)
+    r = c.post(f"/sessions/{sid}/messages", json={"message": "two"})
+    assert r.status_code == 200 and r.json()["session_id"] == sid
+    second = c.get(f"/sessions/{sid}/stream?since=3").text
+    assert "hello two" in second and '"type":"done"' in second
+    assert "hello one" not in second
+    row = c.get(f"/sessions/{sid}").json()
+    assert row["status"] == "completed"
+    assert row["turn_count"] == 2
+
+
+def test_follow_up_unknown_session_404(tmp_path):
+    c, _ = make_client(tmp_path)
+    r = c.post("/sessions/ses-nope/messages", json={"message": "x"})
+    assert r.status_code == 404
+
+
 def test_replay_since(tmp_path):
     c, _ = make_client(tmp_path)
     sid = c.post("/sessions", json={"message": "x"}).json()["session_id"]
