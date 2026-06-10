@@ -19,6 +19,7 @@ type AgentConfig struct {
 	WorkDir    string   `yaml:"workdir"` // optional working directory for Command (e.g. a Python shim project root).
 	Tenant     string   `yaml:"tenant"`  // optional; "" ⇒ "default" tenant. Owns this agent for access control.
 	Memory     bool     `yaml:"memory"`  // optional; opt-in to the per-tenant Postgres memory tool. Default false.
+	Gateway    bool     `yaml:"gateway"` // optional; opt-in to the platform MCP gateway (env-injected URL+key). Default false.
 }
 
 // TokenConfig is one control-plane API token. Label is for log attribution.
@@ -27,10 +28,35 @@ type TokenConfig struct {
 	Label string `yaml:"label"`
 }
 
+// GatewayServer is one upstream MCP server the gateway federates. Exactly one
+// of Command (stdio) or URL (Streamable HTTP) must be set. Header, Env, and
+// (in GatewayConfig) AgentKeys values support ${VAR} expansion from the
+// operator environment at load time so secrets stay out of the YAML file.
+type GatewayServer struct {
+	Name    string            `yaml:"name"`    // required, unique; namespaces tools as <name>__<tool>
+	Command string            `yaml:"command"` // stdio transport: argv[0]
+	Args    []string          `yaml:"args"`
+	Env     map[string]string `yaml:"env"`     // extra env for the stdio child
+	URL     string            `yaml:"url"`     // Streamable HTTP transport
+	Headers map[string]string `yaml:"headers"` // static headers (auth) for HTTP
+	Tenants []string          `yaml:"tenants"` // nil/empty ⇒ visible to ALL tenants
+}
+
+// GatewayConfig is the optional top-level gateway: section.
+type GatewayConfig struct {
+	Servers   []GatewayServer   `yaml:"servers"`
+	AgentKeys map[string]string `yaml:"agent_keys"` // tenant → service key injected into gateway:true agents
+	SelfURL   string            `yaml:"self_url"`   // optional base URL agents use to reach the gateway
+}
+
+// Enabled reports whether any upstream is configured.
+func (g GatewayConfig) Enabled() bool { return len(g.Servers) > 0 }
+
 // Config is the parsed runtime.yaml.
 type Config struct {
-	Agents []AgentConfig `yaml:"agents"`
-	Tokens []TokenConfig `yaml:"tokens"`
+	Agents  []AgentConfig `yaml:"agents"`
+	Tokens  []TokenConfig `yaml:"tokens"`
+	Gateway GatewayConfig `yaml:"gateway"`
 }
 
 // Load reads and validates the config file at path.
@@ -50,8 +76,10 @@ func Load(path string) (*Config, error) {
 }
 
 // Validate checks required fields and uniqueness, and applies defaults for
-// empty optional fields (an absent tenant becomes "default"). It mutates
-// c.Agents in place, so callers see the defaulted values after Load.
+// empty optional fields (an absent tenant becomes "default"). It mutates the
+// config in place — c.Agents gets defaulted values, and gateway Headers, Env,
+// and AgentKeys get ${VAR} env expansion — so callers see the resolved values
+// after Load.
 func (c *Config) Validate() error {
 	if len(c.Agents) == 0 {
 		return fmt.Errorf("config: at least one agent is required")
@@ -84,6 +112,51 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("config: duplicate token at index %d", i)
 		}
 		seen[tk.Token] = true
+	}
+	names := map[string]bool{}
+	for i := range c.Gateway.Servers {
+		s := &c.Gateway.Servers[i]
+		if s.Name == "" {
+			return fmt.Errorf("config: gateway server[%d] requires name", i)
+		}
+		if names[s.Name] {
+			return fmt.Errorf("config: duplicate gateway server name %q", s.Name)
+		}
+		names[s.Name] = true
+		if (s.Command == "") == (s.URL == "") {
+			return fmt.Errorf("config: gateway server %q requires exactly one of command or url", s.Name)
+		}
+		if err := expandEnvMap(s.Headers, "gateway server "+s.Name+" headers"); err != nil {
+			return err
+		}
+		if err := expandEnvMap(s.Env, "gateway server "+s.Name+" env"); err != nil {
+			return err
+		}
+	}
+	if err := expandEnvMap(c.Gateway.AgentKeys, "gateway agent_keys"); err != nil {
+		return err
+	}
+	return nil
+}
+
+// expandEnvMap expands ${VAR} references in every value of m from the operator
+// environment, in place. An unset (or empty) variable is a hard error — silent
+// empty-string expansion would send a malformed credential downstream. The
+// $VAR form (no braces) is also expanded, matching os.Expand semantics.
+func expandEnvMap(m map[string]string, what string) error {
+	for k, v := range m {
+		var missing []string
+		expanded := os.Expand(v, func(name string) string {
+			val, ok := os.LookupEnv(name)
+			if !ok || val == "" {
+				missing = append(missing, name)
+			}
+			return val
+		})
+		if len(missing) > 0 {
+			return fmt.Errorf("config: %s %q references unset env var(s) %v", what, k, missing)
+		}
+		m[k] = expanded
 	}
 	return nil
 }
