@@ -1,6 +1,6 @@
 # Runtime — Roadmap & Backlog
 
-**Checkpoint date:** 2026-06-09 (Identity M2)
+**Checkpoint date:** 2026-06-10 (Memory M3 + KG→RunTurn wiring)
 **Current state:** Runtime spine complete (Milestones 1–3 merged to `master`);
 polyglot agent hosting (C1) first milestone complete — Level-1 OpenAI Agents SDK
 shim merged to `master`, hosting a full foreign agent end-to-end (see §C1);
@@ -9,9 +9,12 @@ access control (OIDC + service keys + per-agent RBAC), M2 per-tenant secrets
 brokering (AES-256-GCM provider credentials injected into agents at spawn), and
 M3 secrets key rotation (a multi-key keyring with self-describing, AAD-bound
 blobs + an explicit re-encrypt command), all merged to `master` (see §B3);
-Memory (B2) first milestone complete — multi-tenant durable MemoryStore, and M2
-semantic recall (pgvector embeddings + KnowledgeGraph recall into the prompt),
-merged to `master` (see §B2).
+Memory (B2) first three milestones complete — M1 multi-tenant durable
+MemoryStore, M2 semantic recall (pgvector embeddings + KnowledgeGraph recall into
+the prompt), and M3 auto-ingestion (background LLM fact extraction + semantic
+dedup), all merged to `master` — plus the KG→RunTurn wiring that makes recall and
+ingest actually fire on the production turn path, and a recall-floor recalibration
+for OpenAI-family embeddings (see §B2).
 **Goal:** an on-prem, open-source equivalent of AWS Bedrock AgentCore.
 
 This file is the parking lot for everything *not yet built*. Each item below is a
@@ -125,6 +128,16 @@ exposing the platform broadly.
    Harness `RunTurn` is owned code, so this was an in-scope change. A through-serve
    integration test (`test/kg_runturn_e2e_test.go`) now guards the path. Spec:
    `docs/superpowers/specs/2026-06-09-kg-runturn-wiring-design.md`.
+
+   **Recall-floor recalibration (2026-06-10):** a live smoke against a real
+   LiteLLM proxy (`text-embedding-3-small`) showed ingest working but recall
+   returning nothing — the default `RUNTIME_EMBED_RECALL_FLOOR=0.7` was far too
+   high for OpenAI-family embeddings, where a question scores only ~0.25–0.40
+   cosine against the declarative memory it should recall (unrelated text sits
+   near 0). Default lowered to **0.25**, with a per-embedding-model guidance table
+   in the README. The ingest dedup floor stays at 0.85 (fact↔fact similarities run
+   ~0.74 distinct / ~0.92 near-duplicate, so 0.85 separates them correctly —
+   verified by measurement).
 3. **Identity** — proper auth done right: agent identity, secrets brokering,
    OAuth, RBAC, per-user/multi-tenant. Supersedes M3's simple bearer tokens.
    **First milestone DONE (merged to `master`, 2026-06-09):** multi-tenant,

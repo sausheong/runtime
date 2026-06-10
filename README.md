@@ -1085,19 +1085,29 @@ path routing, per-agent supervision, session status, full CLI); **Milestone 3**
 added the operability layer (the read-only web console, structured logging, the
 contract conformance suite, bounded shutdown, 503-on-restart, per-agent health,
 full-stack Docker build). Since then: **polyglot agent hosting** (host foreign-SDK
-agents via the contract — see the Python shim) and the **Identity** first
-milestone (multi-tenant access control, below).
+agents via the contract — see the Python shim); the **Identity** sub-project
+(three milestones — multi-tenant access control, per-tenant secrets brokering, and
+secrets key rotation, below); and the **Memory** sub-project (three milestones —
+durable per-tenant store, semantic recall, and auto-ingestion, with recall and
+ingest wired into the live turn path — see [agent memory](#per-tenant-agent-memory)).
 
 **Deliberately not yet implemented** (each is planned, scoped to a later
 milestone or sub-project):
 
-- **Identity — first two milestones DONE** (see [Authentication & multi-tenancy](#authentication--multi-tenancy)):
+- **Identity — first three milestones DONE** (see [Authentication & multi-tenancy](#authentication--multi-tenancy)):
   M1 multi-tenant access control with OIDC human login, bcrypt-hashed service keys
   (constant-time verify), and per-agent admin/operator/viewer roles; M2 per-tenant
   **secrets brokering** (AES-256-GCM at rest, injected into the tenant's agents at
-  spawn). **Still to come:** secrets key rotation, fine-grained/custom RBAC,
-  cross-tenant users + self-service, an admin console UI, optional local password
-  accounts, and console CSRF (`state`/`nonce`) hardening.
+  spawn); M3 **secrets key rotation** (a multi-key keyring with self-describing,
+  AAD-bound blobs + an explicit re-encrypt command). **Still to come:**
+  fine-grained/custom RBAC, cross-tenant users + self-service, an admin console UI,
+  optional local password accounts, and console CSRF (`state`/`nonce`) hardening.
+- **Memory — first three milestones DONE** (see [agent memory](#per-tenant-agent-memory)):
+  M1 durable per-tenant `MemoryStore`, M2 semantic recall (pgvector), and M3
+  auto-ingestion (background LLM fact extraction + semantic dedup), with recall and
+  ingest wired into the live turn path. **Still to come:** compaction/TTL/GC of
+  dead rows, finer (per-agent/per-user) scoping, per-tenant embedding models,
+  refinement/merge dedup, and session-level synthesis.
 - **Observability dashboards** — M3 has structured `slog` logs; metrics,
   tracing, and dashboards are the Observability sub-project.
 - **Write actions from the console** — the console is read-only; deploy/stop/
@@ -1106,8 +1116,8 @@ milestone or sub-project):
   per-agent replicas or load-based scaling.
 - **Dynamic deploy** — agents come from `runtime.yaml` at startup; no runtime
   `POST /agents` registration or rollback yet (tokens are config-only too).
-- **Sandboxes** (isolated browser / code-interpreter tools), a **tool/MCP
-  gateway**, and **managed memory** — each its own sub-project.
+- **Sandboxes** (isolated browser / code-interpreter tools) and a **tool/MCP
+  gateway** — each its own sub-project.
 - **Containers / Kubernetes** — the agent contract is designed to admit
   containerized agents later (the conformance suite already validates them);
   today agents are local subprocesses.
