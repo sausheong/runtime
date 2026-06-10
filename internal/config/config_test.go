@@ -358,9 +358,12 @@ func TestGatewayEnvExpansion(t *testing.T) {
 }
 
 func TestAgentConfigGatewayFlag(t *testing.T) {
-	c := &Config{Agents: []AgentConfig{
-		{ID: "a", Name: "A", Model: "m", ListenAddr: "127.0.0.1:1", Gateway: GatewayFull},
-	}}
+	c := &Config{
+		Agents: []AgentConfig{
+			{ID: "a", Name: "A", Model: "m", ListenAddr: "127.0.0.1:1", Gateway: GatewayFull},
+		},
+		Gateway: GatewayConfig{Servers: []GatewayServer{{Name: "fs", Command: "x"}}},
+	}
 	if err := c.Validate(); err != nil {
 		t.Fatalf("expected valid, got %v", err)
 	}
@@ -374,7 +377,10 @@ func TestGatewayModeYAML(t *testing.T) {
 		t.Helper()
 		dir := t.TempDir()
 		p := dir + "/runtime.yaml"
-		y := "agents:\n  - {id: a, name: A, model: m, listen_addr: 127.0.0.1:1" + gatewayVal + "}\n"
+		// A servers entry is present so gateway-enabled agents pass the
+		// agents-require-servers validation; it is inert for the off cases.
+		y := "agents:\n  - {id: a, name: A, model: m, listen_addr: 127.0.0.1:1" + gatewayVal + "}\n" +
+			"gateway:\n  servers:\n    - {name: fs, command: x}\n"
 		if err := os.WriteFile(p, []byte(y), 0o644); err != nil {
 			t.Fatal(err)
 		}
@@ -445,4 +451,17 @@ func TestGatewayModeYAML(t *testing.T) {
 			t.Fatal("expected load error for invalid gateway mode")
 		}
 	})
+}
+
+func TestGatewayAgentRequiresServers(t *testing.T) {
+	c := &Config{Agents: []AgentConfig{
+		{ID: "a", Name: "A", Model: "m", ListenAddr: "127.0.0.1:1", Gateway: GatewayFull},
+	}}
+	if err := c.Validate(); err == nil {
+		t.Fatal("expected error: gateway agent without gateway.servers")
+	}
+	c.Gateway = GatewayConfig{Servers: []GatewayServer{{Name: "fs", Command: "x"}}}
+	if err := c.Validate(); err != nil {
+		t.Fatalf("with servers should validate: %v", err)
+	}
 }

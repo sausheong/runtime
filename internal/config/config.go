@@ -179,6 +179,11 @@ func (c *Config) Validate() error {
 	if err := expandEnvMap(c.Gateway.AgentKeys, "gateway agent_keys"); err != nil {
 		return err
 	}
+	for i := range c.Agents {
+		if c.Agents[i].Gateway.Enabled() && !c.Gateway.Enabled() {
+			return fmt.Errorf("config: agent %q has gateway: %s but no gateway.servers are configured", c.Agents[i].ID, c.Agents[i].Gateway)
+		}
+	}
 	return nil
 }
 
