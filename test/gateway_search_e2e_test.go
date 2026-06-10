@@ -176,8 +176,14 @@ func TestGatewaySearchE2E(t *testing.T) {
 			t.Fatalf("search call: %v", err)
 		}
 		if !res.IsError {
-			txt := res.Content[0].(*sdk.TextContent).Text
-			jsonPart, _, _ := strings.Cut(txt, "\n")
+			if len(res.Content) == 0 {
+				t.Fatal("search returned empty content")
+			}
+			tc, ok := res.Content[0].(*sdk.TextContent)
+			if !ok {
+				t.Fatalf("want *sdk.TextContent, got %T", res.Content[0])
+			}
+			jsonPart, _, _ := strings.Cut(tc.Text, "\n")
 			matches = matches[:0]
 			if err := json.Unmarshal([]byte(jsonPart), &matches); err == nil && len(matches) > 0 {
 				break
@@ -198,6 +204,7 @@ func TestGatewaySearchE2E(t *testing.T) {
 	// direct call below fails with tool-not-found on the first attempt.
 	res, err := sess.CallTool(context.Background(), &sdk.CallToolParams{Name: "fake__greet"})
 	if err != nil || res.IsError {
+		t.Logf("first call failed (err=%v isError=%v); retrying on fresh session", err, res != nil && res.IsError)
 		// Fresh session: the generation has bumped since ours was built.
 		sess2, cerr := cli.Connect(context.Background(),
 			&sdk.StreamableClientTransport{Endpoint: base + "/gateway/mcp?mode=search"}, nil)
@@ -213,8 +220,15 @@ func TestGatewaySearchE2E(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("discovered tool errored: %+v", res.Content)
 	}
-	if txt := res.Content[0].(*sdk.TextContent).Text; txt != "hello from upstream" {
-		t.Fatalf("wrong result: %q", txt)
+	if len(res.Content) == 0 {
+		t.Fatal("call returned empty content")
+	}
+	tc, ok := res.Content[0].(*sdk.TextContent)
+	if !ok {
+		t.Fatalf("want *sdk.TextContent, got %T", res.Content[0])
+	}
+	if tc.Text != "hello from upstream" {
+		t.Fatalf("wrong result: %q", tc.Text)
 	}
 
 	waitURL(t, base+"/agents/s-agent/healthz", 30*time.Second)

@@ -11,8 +11,11 @@ agents:
     listen_addr: 127.0.0.1:8102
 
 # Optional: MCP gateway — federate upstream MCP servers into one endpoint at
-# /gateway/mcp. Agents opt in with `gateway: true` (the platform injects
-# RUNTIME_GATEWAY_URL and, when identity is on, RUNTIME_GATEWAY_KEY).
+# /gateway/mcp. Agents opt in per mode (the platform injects
+# RUNTIME_GATEWAY_URL and, when identity is on, RUNTIME_GATEWAY_KEY):
+#   gateway: true      # full federated tool list (alias: gateway: full)
+#   gateway: search    # search mode — lists only search_tools; agents discover
+#                      # tools by natural-language query (requires RUNTIME_EMBED_*)
 # Note: header/env/agent_keys values may not contain a literal `$` — put such
 # values in an env var and reference them as ${VAR}.
 #
