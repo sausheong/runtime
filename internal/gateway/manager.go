@@ -174,10 +174,19 @@ func (m *Manager) Close() {
 // (connect, reconnect, down). Server caches key on it.
 func (m *Manager) Generation() uint64 { return m.generation.Load() }
 
+// noneTenant is the impossible tenant filter viewKey produces for a
+// non-superuser principal with an empty TenantID. It matches no upstream at
+// all — not even ones with an empty Tenants list, which are otherwise
+// visible to every real tenant.
+const noneTenant = "\x00none"
+
 // visibleTo reports whether an upstream is visible to tenant. Empty Tenants ⇒
 // visible to all. The empty tenant ("") means the unscoped view (superuser or
 // open mode) and sees everything.
 func visibleTo(s config.GatewayServer, tenant string) bool {
+	if tenant == noneTenant {
+		return false
+	}
 	if tenant == "" || len(s.Tenants) == 0 {
 		return true
 	}

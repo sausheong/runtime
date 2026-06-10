@@ -70,7 +70,10 @@ func viewKey(p identity.Principal, ok bool) (key, tenant string) {
 		return "*", ""
 	}
 	if p.TenantID == "" {
-		return "t:!none", "\x00none" // matches no configured tenant
+		// Prefix-free sentinel key: real tenant keys all start with "t:" and
+		// the unscoped key is "*", so "!none" cannot collide with any
+		// principal-derived key. The noneTenant filter matches no upstream.
+		return "!none", noneTenant
 	}
 	return "t:" + p.TenantID, p.TenantID
 }
@@ -182,9 +185,7 @@ func (h *Handler) Status(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "forbidden", http.StatusForbidden)
 			return
 		}
-		if !p.Superuser {
-			tenant = p.TenantID
-		}
+		_, tenant = viewKey(p, ok)
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(h.m.Status(tenant))

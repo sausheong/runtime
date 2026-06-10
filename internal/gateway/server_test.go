@@ -335,3 +335,33 @@ func TestStatusHandlerViewerForbidden(t *testing.T) {
 		t.Fatalf("viewer should get 403, got %d", rec.Code)
 	}
 }
+
+func TestServerEmptyTenantStatusSeesNothing(t *testing.T) {
+	m := startManager(t, gwServers(), gwConns())
+	h := NewHandler(m)
+	h.PrincipalFor = func(_ context.Context) (identity.Principal, bool) {
+		return identity.Principal{TenantID: "", Role: identity.RoleOperator}, true
+	}
+	rec := httptest.NewRecorder()
+	h.Status(rec, httptest.NewRequest("GET", "/gateway/status", nil))
+	if rec.Code != 200 {
+		t.Fatalf("status code %d", rec.Code)
+	}
+	var rows []UpstreamStatus
+	if err := json.Unmarshal(rec.Body.Bytes(), &rows); err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 0 {
+		t.Fatalf("empty-tenant principal must see no upstreams, got %+v", rows)
+	}
+}
+
+func TestServerSentinelKeyNoCollisionWithRealTenant(t *testing.T) {
+	// A real tenant literally named "!none" must not share a cache view with
+	// the empty-tenant sentinel.
+	kEmpty, _ := viewKey(identity.Principal{TenantID: "", Role: identity.RoleOperator}, true)
+	kBang, _ := viewKey(identity.Principal{TenantID: "!none", Role: identity.RoleOperator}, true)
+	if kEmpty == kBang {
+		t.Fatalf("sentinel cache key collides with real tenant: %q", kEmpty)
+	}
+}
