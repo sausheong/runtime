@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync"
@@ -241,6 +242,84 @@ func TestStatusHandler(t *testing.T) {
 	}
 	if len(rows) != 1 || rows[0].Name != "open" {
 		t.Fatalf("globex status rows wrong: %+v", rows)
+	}
+}
+
+func TestServerCrossPrincipalSessionRejected(t *testing.T) {
+	m := startManager(t, gwServers(), gwConns())
+	h := NewHandler(m)
+	// Session created under acme's view...
+	sess := dialGateway(t, h, &identity.Principal{TenantID: "acme", Role: identity.RoleOperator})
+	if names := listNames(t, sess); len(names) != 2 {
+		t.Fatalf("setup: want 2, got %v", names)
+	}
+	// ...but the live principal changes (same session ID, different caller):
+	// dialGateway set h.PrincipalFor; override it to simulate globex now
+	// presenting acme's session.
+	h.PrincipalFor = func(_ context.Context) (identity.Principal, bool) {
+		return identity.Principal{TenantID: "globex", Role: identity.RoleOperator}, true
+	}
+	res, err := sess.CallTool(context.Background(), &sdk.CallToolParams{Name: "scoped__secret"})
+	if err != nil {
+		t.Fatalf("want isError result, got transport error: %v", err)
+	}
+	if !res.IsError {
+		t.Fatal("cross-principal session call must be rejected")
+	}
+}
+
+func TestServerUnwiredReturns503(t *testing.T) {
+	m := startManager(t, gwServers(), gwConns())
+	h := NewHandler(m) // PrincipalFor never set
+	srv := httptest.NewServer(h.HTTP())
+	t.Cleanup(srv.Close)
+	resp, err := http.Post(srv.URL, "application/json", strings.NewReader(`{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("want 503, got %d", resp.StatusCode)
+	}
+	rec := httptest.NewRecorder()
+	h.Status(rec, httptest.NewRequest("GET", "/gateway/status", nil))
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status: want 503, got %d", rec.Code)
+	}
+}
+
+func TestServerEmptyTenantSeesNothing(t *testing.T) {
+	// Only a tenant-scoped server configured: an unscoped (buggy) view would
+	// see it; the impossible "\x00none" view must see zero tools.
+	conns := map[string]*fakeConn{
+		"scoped": {tools: []tool.Tool{fakeTool{name: "mcp__scoped__secret", out: "s3"}}},
+	}
+	m := startManager(t, []config.GatewayServer{{Name: "scoped", Command: "x", Tenants: []string{"acme"}}}, conns)
+	h := NewHandler(m)
+	sess := dialGateway(t, h, &identity.Principal{TenantID: "", Role: identity.RoleOperator})
+	if names := listNames(t, sess); len(names) != 0 {
+		t.Fatalf("empty-tenant non-superuser must list zero tools, got %v", names)
+	}
+}
+
+func TestServerCacheHitSameInstance(t *testing.T) {
+	m := startManager(t, gwServers(), gwConns())
+	h := NewHandler(m)
+	p := identity.Principal{TenantID: "acme", Role: identity.RoleOperator}
+	s1 := h.serverFor(p, true)
+	s2 := h.serverFor(p, true)
+	if s1 != s2 {
+		t.Fatal("same generation must return the same cached server")
+	}
+}
+
+func TestServerOpenModeCanCall(t *testing.T) {
+	m := startManager(t, gwServers(), gwConns())
+	h := NewHandler(m)
+	sess := dialGateway(t, h, nil) // open mode (ok=false)
+	res, err := sess.CallTool(context.Background(), &sdk.CallToolParams{Name: "open__echo"})
+	if err != nil || res.IsError {
+		t.Fatalf("open mode call should succeed: err=%v res=%+v", err, res)
 	}
 }
 
