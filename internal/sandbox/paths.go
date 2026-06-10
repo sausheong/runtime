@@ -15,7 +15,7 @@ const workspace = "/workspace"
 // Relative paths are joined to /workspace; absolute paths must already be
 // inside it. Anything escaping after cleaning (.., absolute elsewhere,
 // /workspaceX prefix tricks) is rejected. Path strings are never shell-
-// interpolated: file I/O goes through argv-only execs (tee/head), never a
+// interpolated: file I/O goes through argv-only execs (dd/head), never a
 // shell string.
 func confinePath(p string) (string, error) {
 	if p == "" {

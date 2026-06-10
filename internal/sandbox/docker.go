@@ -112,7 +112,7 @@ func (d *dockerBackend) Exec(ctx context.Context, containerID string, argv []str
 }
 
 // execStdin is Exec with bytes fed to the process's stdin (used for file
-// writes via `tee` — argv-only, content never touches a shell).
+// writes via `dd` — argv-only, content never touches a shell).
 func (d *dockerBackend) execStdin(ctx context.Context, containerID string, argv []string, stdin []byte, timeout time.Duration) (ExecResult, error) {
 	return d.runExec(ctx, containerID, argv, stdin, timeout)
 }
@@ -147,29 +147,46 @@ func (d *dockerBackend) runExec(ctx context.Context, containerID string, argv []
 	}
 	defer attach.Close()
 
-	if stdin != nil {
-		// Feed stdin, then half-close so the process sees EOF. Write errors
-		// surface as a non-zero exit / short file from the process side; the
-		// inspect below reports them.
-		if _, err := attach.Conn.Write(stdin); err != nil {
-			return ExecResult{}, fmt.Errorf("write exec stdin: %w", err)
-		}
-		if err := attach.CloseWrite(); err != nil {
-			return ExecResult{}, fmt.Errorf("close exec stdin: %w", err)
-		}
-	}
-
-	// The hijacked connection's read is NOT ctx-cancelable (ctx only governed
-	// the dial), so a process that setsid()-escapes the `timeout` process
-	// group while keeping fd 1/2 open would block StdCopy forever. Copy in a
-	// goroutine and race it against ctx; on expiry, Close() the attach to
-	// unblock the read.
+	// Drain output FIRST — before any stdin is written. Ordering, not just
+	// concurrency, is load-bearing: if the process emits output while we are
+	// still feeding stdin and nobody drains it, the pipe/socket buffers fill
+	// (~0.5-1.5 MiB of slack on Linux unix sockets), the process blocks on
+	// write(1)/write(2), stops reading stdin, and our Conn.Write blocks
+	// forever — it is not ctx-cancelable, so the deferred Close never runs.
+	//
+	// The hijacked connection's read is also NOT ctx-cancelable (ctx only
+	// governed the dial), so a process that setsid()-escapes the `timeout`
+	// process group while keeping fd 1/2 open would block StdCopy forever.
+	// Copy in a goroutine and race it against ctx; on expiry, Close() the
+	// attach — HijackedResponse.Close closes the underlying conn in both
+	// directions, unblocking the reader AND any blocked stdin writer.
 	var stdout, stderr bytes.Buffer
 	copyDone := make(chan error, 1)
 	go func() {
 		_, cpErr := stdcopy.StdCopy(&stdout, &stderr, attach.Reader)
 		copyDone <- cpErr
 	}()
+
+	// Feed stdin concurrently, then half-close so the process sees EOF. The
+	// chan is buffered so the goroutine can never leak: on every exit path
+	// the deferred attach.Close unblocks a wedged writer, which then parks
+	// its error in the buffer and exits.
+	stdinDone := make(chan error, 1)
+	if stdin != nil {
+		go func() {
+			if _, err := attach.Conn.Write(stdin); err != nil {
+				stdinDone <- fmt.Errorf("write exec stdin: %w", err)
+				return
+			}
+			if err := attach.CloseWrite(); err != nil {
+				stdinDone <- fmt.Errorf("close exec stdin: %w", err)
+				return
+			}
+			stdinDone <- nil
+		}()
+	} else {
+		stdinDone <- nil
+	}
 
 	ctxExpired := false
 	select {
@@ -181,6 +198,18 @@ func (d *dockerBackend) runExec(ctx context.Context, containerID string, argv []
 		ctxExpired = true
 		attach.Close()
 		<-copyDone // reap the copier; Close above unblocks its read
+	}
+
+	// Reap the stdin writer. On the normal path the copy saw EOF because the
+	// exec exited, so a writer still blocked in Write fails out promptly as
+	// the daemon tears the stream down; force-close as a backstop so this
+	// can never hang. (After ctx expiry the attach is already closed.)
+	var stdinErr error
+	select {
+	case stdinErr = <-stdinDone:
+	case <-time.After(5 * time.Second):
+		attach.Close()
+		stdinErr = <-stdinDone
 	}
 
 	// Inspect with a fresh short context: the exec ctx may already be
@@ -203,18 +232,31 @@ func (d *dockerBackend) runExec(ctx context.Context, containerID string, argv []
 	}
 	timedOut := ctxExpired ||
 		((inspect.ExitCode == 124 || inspect.ExitCode == 137) && elapsed >= timeout)
-	return ExecResult{
+	res := ExecResult{
 		Stdout:   stdout.String(),
 		Stderr:   stderr.String(),
 		ExitCode: inspect.ExitCode,
 		TimedOut: timedOut,
 		Duration: elapsed,
-	}, nil
+	}
+	// A stdin write error with exit 0 means the process consumed what it
+	// needed and succeeded anyway — ignore it. With a non-zero exit it is
+	// likely the cause (e.g. EPIPE after the process died); surface it in
+	// stderr so callers' error messages carry it.
+	if stdinErr != nil && res.ExitCode != 0 {
+		res.Stderr = strings.TrimSpace(res.Stderr + "\n" + stdinErr.Error())
+	}
+	return res, nil
 }
 
-// WriteFile writes one file into the container via an exec of `tee` with the
+// WriteFile writes one file into the container via an exec of `dd` with the
 // content on stdin (argv-only — no shell interpolation of content or path,
-// no size/quoting limits; "--" guards leading-dash paths). The Docker archive
+// no size/quoting limits). dd over tee: tee echoes stdin back to stdout,
+// doubling the bytes on the wire and creating needless stdout backpressure
+// for content we'd only discard; dd of= writes silently (status=none). The
+// of= operand takes the rest of the argument verbatim, and confinePath
+// guarantees an absolute /workspace/... path, so leading-dash filenames
+// (/workspace/-x.txt) and '=' in names are unambiguous. The Docker archive
 // API (CopyToContainer) is unusable here: the daemon rejects it outright on a
 // read-only rootfs ("container rootfs is marked read-only") even though the
 // target is a tmpfs. Parent directories under /workspace are created first
@@ -229,7 +271,7 @@ func (d *dockerBackend) WriteFile(ctx context.Context, containerID, p string, co
 			return fmt.Errorf("mkdir %s failed: %s", dir, res.Stderr)
 		}
 	}
-	res, err := d.execStdin(ctx, containerID, []string{"tee", "--", p}, content, 30*time.Second)
+	res, err := d.execStdin(ctx, containerID, []string{"dd", "of=" + p, "status=none"}, content, 30*time.Second)
 	if err != nil {
 		return err
 	}
