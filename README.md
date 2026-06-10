@@ -22,6 +22,7 @@ no lost work, no duplicated committed tool calls.
 - [Quick start](#quick-start)
 - [Configuring agents (`runtime.yaml`)](#configuring-agents-runtimeyaml)
 - [Authentication & multi-tenancy](#authentication--multi-tenancy)
+- [MCP Gateway](#mcp-gateway)
 - [The CLI (`runtimectl`)](#the-cli-runtimectl)
 - [Web console](#web-console)
 - [HTTP API reference](#http-api-reference)
@@ -469,6 +470,112 @@ embeddings — no new egress.
 > rest. Per-tenant secrets brokering and key rotation are implemented (see above).
 > Console session CSRF hardening (`state`/`nonce`) is tracked for later
 > Identity milestones (see `ROADMAP.md` §B3).
+
+---
+
+## MCP Gateway
+
+The platform can host a **central MCP endpoint** — `/gateway/mcp`, speaking
+Streamable HTTP — that **federates upstream MCP servers** behind one URL. An
+upstream is either a **stdio** server (a `command` the platform spawns) or a
+remote **Streamable HTTP** server (a `url`). Each upstream's tools are
+namespaced as `<server>__<tool>` on the gateway; an agent consuming them
+through the gateway sees them as `mcp__gateway__<server>__<tool>`. Operators
+configure tools once, centrally, instead of wiring the same MCP servers into
+every agent.
+
+### Configuration
+
+Add an optional top-level `gateway:` section to `runtime.yaml`:
+
+```yaml
+gateway:
+  self_url: http://127.0.0.1:8080      # base URL agents use; default derives from RUNTIME_CTL_ADDR
+  agent_keys:                          # tenant → service key for gateway:true agents (identity on)
+    default: ${GW_DEFAULT_KEY}
+  servers:
+    - name: fs                         # tools exposed as fs__<tool> (agents see mcp__gateway__fs__<tool>)
+      command: npx
+      args: ["-y", "@modelcontextprotocol/server-filesystem", "/data"]
+    - name: search
+      url: https://mcp.example.com/mcp
+      headers: {Authorization: "Bearer ${SEARCH_TOKEN}"}
+      tenants: [acme]                  # omit ⇒ visible to all tenants
+```
+
+Each server requires a unique `name` and **exactly one** of `command` (stdio;
+with optional `args` and `env`) or `url` (Streamable HTTP; with optional
+`headers` for auth). `headers`, `env`, and `agent_keys` values support
+`${VAR}` expansion from the operator environment at load time, so secrets stay
+out of the YAML file; referencing an unset/empty variable is a fatal config
+error. Values may not contain a literal `$` — put such values in an env var
+and reference them as `${VAR}`.
+
+### Authentication and tenancy
+
+When identity is configured, gateway callers authenticate like any other
+machine client: `Authorization: Bearer svk-…` (a platform service key). With
+no identity configured, the gateway — like the rest of the control plane —
+runs in **open mode**. MCP sessions are **principal-bound per call**: every
+`tools/call` is re-checked against the live request's principal, so a session
+id replayed by a different principal is rejected rather than inheriting the
+creator's view.
+
+Tenancy follows the platform model:
+
+- A per-upstream `tenants:` allowlist scopes that upstream's tools to those
+  tenants (absent ⇒ visible to all tenants). A non-visible upstream's tools
+  are **absent from `tools/list`**, and calling one returns the MCP
+  tool-not-found error — existence is hidden, mirroring the `404`-not-`403`
+  rule elsewhere.
+- **Role gate:** any authenticated principal can list tools; *calling* a tool
+  requires `operator` or `admin`.
+- `GET /gateway/status` reports per-upstream connection state, scoped to the
+  caller's tenant; a `viewer` gets `403`.
+
+### Agent opt-in (`gateway: true`)
+
+An agent consumes the gateway by setting `gateway: true` on its `runtime.yaml`
+entry:
+
+```yaml
+agents:
+  - id: assistant
+    name: Assistant
+    model: anthropic/claude-sonnet-4-6
+    listen_addr: 127.0.0.1:8081
+    tenant: acme
+    gateway: true       # opt in to the platform MCP gateway
+```
+
+The platform injects `RUNTIME_GATEWAY_URL` (and, when identity is on,
+`RUNTIME_GATEWAY_KEY` — the `agent_keys` entry for the agent's tenant) into
+the agent subprocess, which connects to the gateway like any other MCP server.
+Foreign (shim) agents get the same env vars. Startup is **fail-closed**: when
+identity is on and a `gateway: true` agent's tenant has no `agent_keys` entry,
+`runtimed` refuses to start rather than spawn an agent that cannot
+authenticate.
+
+### Failure model
+
+Startup never blocks on upstreams: `runtimed` comes up immediately and each
+upstream is dialed asynchronously, with a per-upstream reconnect loop (capped
+backoff) owning its lifecycle. A call against a down upstream returns an MCP
+`isError` result rather than breaking the gateway session. `GET
+/gateway/status` shows the live per-upstream state.
+
+### Gateway M1 limitations
+
+- **Static config only** — upstreams come from `runtime.yaml` at startup; no
+  dynamic registration.
+- **Tools only** — no resources or prompts federation yet.
+- **No REST adapters** — upstreams must speak MCP (stdio or Streamable HTTP).
+- **No semantic tool search** — `tools/list` returns the full (tenant-scoped)
+  set.
+- **Operator-managed agent keys** — `agent_keys` maps tenants to service keys
+  by hand; no automatic key minting for `gateway: true` agents.
+- **`${VAR}` expansion required for values containing `$`** — there is no
+  escape for a literal `$` in `headers`/`env`/`agent_keys` values.
 
 ---
 

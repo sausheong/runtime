@@ -11,7 +11,8 @@ type AgentInfo struct {
 }
 
 // Registry holds the agents the control plane hosts, built from config.
-// Read-only after construction except for the optional secret broker.
+// Read-only after construction except for the optional secret broker and the
+// gateway stamp (SetGateway); both must complete before serving starts.
 type Registry struct {
 	order  []string
 	agents map[string]AgentProcess
@@ -28,7 +29,7 @@ func NewRegistry(cfg *config.Config, binPath, dsn string) *Registry {
 		r.agents[a.ID] = AgentProcess{
 			AgentID: a.ID, Addr: a.ListenAddr, BinPath: binPath, PGDSN: dsn,
 			Kind: a.Kind, Command: a.Command, WorkDir: a.WorkDir, Tenant: a.Tenant,
-			Memory: a.Memory,
+			Memory: a.Memory, GatewayOn: a.Gateway,
 		}
 		r.infos[a.ID] = AgentInfo{ID: a.ID, Name: a.Name, Model: a.Model, Tenant: a.Tenant}
 	}
@@ -41,6 +42,20 @@ func NewRegistry(cfg *config.Config, binPath, dsn string) *Registry {
 // practice it is called once during startup, before either begins. nil ⇒ no
 // brokering.
 func (r *Registry) SetBroker(b SecretBroker) { r.broker = b }
+
+// SetGateway records the gateway endpoint URL and per-tenant agent keys,
+// stamped onto every gateway-enabled AgentProcess. Like SetBroker, it must
+// complete before the HTTP server and supervisor goroutines start.
+func (r *Registry) SetGateway(url string, keys map[string]string) {
+	for id, ap := range r.agents {
+		if !ap.GatewayOn {
+			continue
+		}
+		ap.GatewayURL = url
+		ap.GatewayKey = keys[ap.Tenant]
+		r.agents[id] = ap
+	}
+}
 
 // AgentTenants returns agentID→tenantID for all registered agents.
 func (r *Registry) AgentTenants() map[string]string {

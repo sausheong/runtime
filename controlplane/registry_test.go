@@ -25,6 +25,34 @@ func TestRegistry_FromConfig(t *testing.T) {
 	}
 }
 
+func TestRegistryThreadsGateway(t *testing.T) {
+	cfg := &config.Config{
+		Agents: []config.AgentConfig{
+			{ID: "g", Name: "G", Model: "m", ListenAddr: "127.0.0.1:1", Tenant: "acme", Gateway: true},
+			{ID: "p", Name: "P", Model: "m", ListenAddr: "127.0.0.1:2"},
+		},
+		Gateway: config.GatewayConfig{
+			Servers:   []config.GatewayServer{{Name: "fs", Command: "x"}},
+			AgentKeys: map[string]string{"acme": "svk-acme"},
+			SelfURL:   "http://127.0.0.1:9999",
+		},
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	r := NewRegistry(cfg, "bin", "dsn")
+	r.SetGateway("http://127.0.0.1:9999/gateway/mcp", cfg.Gateway.AgentKeys)
+
+	g, _ := r.Get("g")
+	if !g.GatewayOn || g.GatewayURL != "http://127.0.0.1:9999/gateway/mcp" || g.GatewayKey != "svk-acme" {
+		t.Fatalf("gateway agent not wired: %+v", g)
+	}
+	p, _ := r.Get("p")
+	if p.GatewayOn || p.GatewayURL != "" || p.GatewayKey != "" {
+		t.Fatalf("non-gateway agent leaked gateway env: %+v", p)
+	}
+}
+
 func TestRegistry_GetInjectsBroker(t *testing.T) {
 	cfg := &config.Config{Agents: []config.AgentConfig{
 		{ID: "a1", ListenAddr: "127.0.0.1:9001", Tenant: "alpha"},

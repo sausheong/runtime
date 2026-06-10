@@ -1,6 +1,6 @@
 # Runtime — Roadmap & Backlog
 
-**Checkpoint date:** 2026-06-10 (Memory M3 + KG→RunTurn wiring)
+**Checkpoint date:** 2026-06-10 (Gateway M1 — MCP federation core)
 **Current state:** Runtime spine complete (Milestones 1–3 merged to `master`);
 polyglot agent hosting (C1) first milestone complete — Level-1 OpenAI Agents SDK
 shim merged to `master`, hosting a full foreign agent end-to-end (see §C1);
@@ -14,7 +14,11 @@ MemoryStore, M2 semantic recall (pgvector embeddings + KnowledgeGraph recall int
 the prompt), and M3 auto-ingestion (background LLM fact extraction + semantic
 dedup), all merged to `master` — plus the KG→RunTurn wiring that makes recall and
 ingest actually fire on the production turn path, and a recall-floor recalibration
-for OpenAI-family embeddings (see §B2).
+for OpenAI-family embeddings (see §B2);
+Gateway (B1) first milestone complete — MCP federation core (a central
+`/gateway/mcp` Streamable HTTP endpoint federating static-YAML-configured
+upstream MCP servers, tenant-filtered via Identity service keys, consumed by
+agents via a `gateway: true` opt-in), merged to `master` (see §B1).
 **Goal:** an on-prem, open-source equivalent of AWS Bedrock AgentCore.
 
 This file is the parking lot for everything *not yet built*. Each item below is a
@@ -79,6 +83,37 @@ exposing the platform broadly.
 1. **Gateway** — tool / MCP federation. Turn APIs/services into agent-callable
    tools; a central MCP endpoint with discovery, auth, and semantic tool search.
    Builds on harness `tools/mcp`. Independently useful (any agent can point at it).
+   **First milestone DONE (merged to `master`, 2026-06-10):** MCP federation
+   core. A new `internal/gateway` package: a Manager supervises upstream MCP
+   servers declared in `runtime.yaml` (`gateway.servers:` — stdio `command:` or
+   Streamable HTTP `url:`, both via harness `tools/mcp`), connecting
+   asynchronously with capped-backoff reconnect — degrade-don't-fail: startup
+   never blocks on upstreams, calls against a down upstream return MCP `isError`
+   results, and a mid-flight failure marks down only the observed connection so
+   a stale report can't kill a healthy replacement. Upstream tools are
+   re-exposed namespaced `<server>__<tool>` on a central `/gateway/mcp`
+   Streamable HTTP endpoint serving per-tenant MCP server views behind the
+   identity middleware (service-key Bearer; per-upstream `tenants:` allowlist;
+   hidden tools are absent from tools/list and tool-not-found on call; sessions
+   are principal-bound per call; viewers can list but not call; an unwired
+   handler fails 503; open mode is an explicit sentinel). Agents opt in with
+   `gateway: true`: the platform injects `RUNTIME_GATEWAY_URL` (+
+   `RUNTIME_GATEWAY_KEY` from `gateway.agent_keys`) at spawn — fail-closed at
+   startup when identity is on and a tenant key is missing — and agentd appends
+   the gateway to `AgentSpec.MCPServers`, so agents see
+   `mcp__gateway__<server>__<tool>`; foreign shim agents get the same env, and
+   non-opted-in agents get empty-value shadows so an operator env can't leak the
+   feature in. `GET /gateway/status` (tenant-scoped, ≥ operator) reports
+   per-upstream state. Proven by a through-serve e2e
+   (`test/gateway_e2e_test.go`) plus a live smoke against the reference
+   filesystem MCP server (stdio via npx: 14 tools federated, an external MCP
+   client doing list+call through the gateway, and a gateway-enabled agent turn
+   completing with its MCP connects on the access log). Remaining B1:
+   REST/OpenAPI→tool adapters, semantic tool search (reuse Memory M2 embedding
+   plumbing), dynamic upstream registration + per-tenant self-service,
+   resources/prompts passthrough (tools only today), console panel, auto-minted
+   per-tenant agent keys, and rate limits/quotas. Spec/plan:
+   `docs/superpowers/{specs,plans}/2026-06-10-gateway-m1-mcp-federation*`.
 2. **Memory** — managed multi-tenant memory. Short + long term, semantic
    retrieval across sessions, per-tenant isolation. Builds on harness
    `tool/memory` + Postgres/pgvector (pgvector is already provisioned in the

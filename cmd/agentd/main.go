@@ -36,6 +36,8 @@ func main() {
 	kind := os.Getenv("RUNTIME_AGENT_KIND")     // "" ⇒ testagent
 	tenant := os.Getenv("RUNTIME_AGENT_TENANT") // "" ⇒ memory.NewStore defaults to "default"
 	memoryOn := os.Getenv("RUNTIME_AGENT_MEMORY") == "1"
+	gatewayURL := os.Getenv("RUNTIME_GATEWAY_URL")
+	gatewayKey := os.Getenv("RUNTIME_GATEWAY_KEY")
 
 	db, err := sql.Open("pgx", dsn)
 	if err != nil {
@@ -55,7 +57,10 @@ func main() {
 	if !ok {
 		log.Fatalf("agentd: unknown agent kind %q", kind)
 	}
-	cfg, err := build(agentkind.Deps{AgentID: agentID, DB: db, Tenant: tenant, Memory: memoryOn})
+	cfg, err := build(agentkind.Deps{
+		AgentID: agentID, DB: db, Tenant: tenant, Memory: memoryOn,
+		GatewayURL: gatewayURL, GatewayKey: gatewayKey,
+	})
 	if err != nil {
 		log.Fatalf("agentd: build agent kind %q: %v", kind, err)
 	}

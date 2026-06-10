@@ -128,6 +128,53 @@ func TestWireMemory_IngestDisabledUnaffected(t *testing.T) {
 	}
 }
 
+func TestWireGatewayAppendsMCPServer(t *testing.T) {
+	b, ok := Get("testagent")
+	if !ok {
+		t.Fatal("testagent builder missing")
+	}
+
+	t.Run("url set: gateway MCP server appended with auth header", func(t *testing.T) {
+		cfg, err := b(Deps{AgentID: "a", GatewayURL: "http://cp/gateway/mcp", GatewayKey: "svk-1"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(cfg.Spec.MCPServers) != 1 {
+			t.Fatalf("want 1 MCP server, got %d", len(cfg.Spec.MCPServers))
+		}
+		s := cfg.Spec.MCPServers[0]
+		if s.Name != "gateway" || s.URL != "http://cp/gateway/mcp" {
+			t.Fatalf("wrong server: %+v", s)
+		}
+		if s.Headers["Authorization"] != "Bearer svk-1" {
+			t.Fatalf("wrong auth header: %+v", s.Headers)
+		}
+	})
+
+	t.Run("url set, no key: no auth header (open mode)", func(t *testing.T) {
+		cfg, err := b(Deps{AgentID: "a", GatewayURL: "http://cp/gateway/mcp"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(cfg.Spec.MCPServers) != 1 {
+			t.Fatalf("want 1 MCP server, got %d", len(cfg.Spec.MCPServers))
+		}
+		if len(cfg.Spec.MCPServers[0].Headers) != 0 {
+			t.Fatalf("unexpected headers: %+v", cfg.Spec.MCPServers[0].Headers)
+		}
+	})
+
+	t.Run("no url: no MCP servers", func(t *testing.T) {
+		cfg, err := b(Deps{AgentID: "a"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(cfg.Spec.MCPServers) != 0 {
+			t.Fatalf("unexpected MCP servers: %+v", cfg.Spec.MCPServers)
+		}
+	})
+}
+
 func TestEnvBool(t *testing.T) {
 	for _, v := range []string{"1", "true", "TRUE", "yes", "on", " On "} {
 		t.Setenv("X_FLAG", v)
