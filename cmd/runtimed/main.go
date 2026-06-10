@@ -43,14 +43,15 @@ func main() {
 
 	// Gateway (B1 M1): build the upstream manager when configured. PrincipalFor
 	// is wired below once we know whether identity is on (open vs enforced).
+	// Start is deferred until after the identity block: its failure paths
+	// os.Exit(1), which skips deferred cleanup, and a started manager may have
+	// spawned stdio upstream children that would be orphaned.
 	var gwHandler *gateway.Handler
 	var gwManager *gateway.Manager
 	if cfg.Gateway.Enabled() {
 		gwURL := gatewaySelfURL(cfg.Gateway.SelfURL, ctlAddr)
 		reg.SetGateway(gwURL, cfg.Gateway.AgentKeys)
 		gwManager = gateway.NewManager(cfg.Gateway.Servers)
-		gwManager.Start(ctx)
-		defer gwManager.Close()
 		gwHandler = gateway.NewHandler(gwManager)
 		slog.Info("gateway enabled", "upstreams", len(cfg.Gateway.Servers), "url", gwURL)
 	}
@@ -177,6 +178,14 @@ func main() {
 		root := buildRoot(reg, idStore, consoleOIDC, secretAdmin, gwHandler) // mounts /admin since the store is non-nil
 		handler = controlplane.IdentityMiddleware(accessLog(root), authr, azr)
 		slog.Info("identity enabled", "oidc", oidcIssuer != "", "bootstrap", bootstrapKey != "", "legacy_tokens", len(legacyTokens))
+	}
+
+	// Start the gateway upstreams only now: every os.Exit(1) path above has
+	// passed, so the deferred Close is guaranteed to run and stdio upstream
+	// children can't be orphaned by a misconfig exit.
+	if gwManager != nil {
+		gwManager.Start(ctx)
+		defer gwManager.Close()
 	}
 
 	// Server starts before agents so gateway-enabled agents can connect to
