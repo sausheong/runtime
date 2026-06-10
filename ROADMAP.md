@@ -1,9 +1,11 @@
 # Runtime — Roadmap & Backlog
 
-**Checkpoint date:** 2026-06-10 (Gateway M2 — semantic tool search)
+**Checkpoint date:** 2026-06-10 (C1 M2 — Claude Agent SDK adapter)
 **Current state:** Runtime spine complete (Milestones 1–3 merged to `master`);
-polyglot agent hosting (C1) first milestone complete — Level-1 OpenAI Agents SDK
-shim merged to `master`, hosting a full foreign agent end-to-end (see §C1);
+polyglot agent hosting (C1) first two milestones complete — two foreign
+frameworks (OpenAI Agents SDK + Claude Agent SDK) hosted via the one Python
+contract shim, each running the full SG Nutrition Investigator end-to-end,
+merged to `master` (see §C1);
 Identity (B3) first three milestones complete — M1 multi-tenant, edge-enforced
 access control (OIDC + service keys + per-agent RBAC), M2 per-tenant secrets
 brokering (AES-256-GCM provider credentials injected into agents at spawn), and
@@ -287,8 +289,13 @@ carries connection details (a builder that tried wouldn't compile). Python —
 so an adapter author only writes `run()`. This is the reusable pattern the next
 language/framework should follow.
 
-**Remaining C1 work:** Level 2 (in-flight crash resume), a second framework/adapter
-to prove reuse, and a TS shim — all below.
+**Remaining C1 work:** the second framework adapter is DONE (Claude Agent SDK —
+see the second-milestone entry below). Remaining: Level 2 (in-flight crash
+resume), the TS shim, a PydanticAI adapter (M3 candidate), and reconciling the
+follow-up-messages endpoint into the Go contract + conformance suite (or
+spec'ing it as optional) — the Python shim now serves `POST
+/sessions/{id}/messages` (added in M2 for multi-turn-on-one-session) but the Go
+`agentruntime` contract does not.
 
 Host agents written in **any language / framework** (OpenAI Agents SDK, Claude
 Agent SDK, PydanticAI, CrewAI, LangGraph/LangChain, Google ADK, …), not just
@@ -303,11 +310,14 @@ framework."** A foreign agent just has to speak the 6 contract endpoints
 (`/healthz`, `/meta`, `POST /sessions`, `GET /sessions/{id}/stream?since=N`,
 `GET /sessions/{id}`, `GET /sessions`). Write the contract server once per language
 (~100 lines: endpoints + SSE framing + session bookkeeping + `?since=N` replay +
-a `serve()`-style entry point that reads the operator env), then a ~10-30 line
+a `serve()`-style entry point that reads the operator env), then a thin
 per-framework adapter maps that framework's run/stream API to the contract's
-`text`/`tool_result`/`done`/`error` events — the adapter author writes only the
-adapter, never deployment glue. One Python shim then covers OpenAI SDK, PydanticAI,
-CrewAI, LangGraph, LangChain, ADK; one TS shim covers the JS frameworks.
+`text`/`tool_result`/`done`/`error` events — measured at ~40–100 code lines in
+practice (OpenAI SDK adapter: 39 code / 67 total; Claude SDK adapter: 100 code /
+139 total — framework friction, not deployment glue, sets the size). The
+adapter author writes only the adapter, never deployment glue. One Python shim
+then covers OpenAI SDK, PydanticAI, CrewAI, LangGraph, LangChain, ADK; one TS
+shim covers the JS frameworks.
 
 **Two durability levels** (a foreign agent being *hosted* is separate from being
 *durable*):
@@ -342,9 +352,49 @@ gives `agentd`, instead of only launching the `agentd` binary.
 **First milestone — DONE (merged to `master`, 2026-06-08):** Level-1 contract
 shim for the OpenAI Agents SDK + the generalized spawn path, proven end-to-end by
 hosting the full `examples/nutrition-label-openai` agent (see Status note at the
-top of this section). **Next up in C1:** Level 2 (in-flight crash resume); a
-second framework adapter (e.g. PydanticAI or CrewAI) to prove the
-"one-file-per-framework" reuse claim; and the TS shim for the JS frameworks.
+top of this section).
+
+**Second milestone DONE (merged to `master`, 2026-06-10):** Claude Agent SDK
+adapter. The second framework adapter: the Claude Agent SDK (Python, pinned
+0.2.95) hosts the SG Nutrition Investigator — its THIRD implementation
+(Go/harness, OpenAI SDK, Claude SDK) — at full parity through the same
+`runtime_contract` shim: 5 in-process MCP tools (the 4 investigator tools +
+`submit_verdict` as the typed-output channel replacing the SDK's `output_type`),
+vision verdict on `milo.jpeg` live through the control-plane proxy, learned
+aliases, and Level-1 resume across a full platform restart via the SDK-native
+`resume=` (transcripts live under a pinned `CLAUDE_CONFIG_DIR`/cwd) plus a
+runtime→SDK session-id map in the shim SQLite. Security posture: built-ins
+disabled via `tools=[]` (primary) + a `disallowed_tools` deny-list (backup) +
+`permission_mode` dontAsk — the agent has ONLY the nutrition tools. Proxy
+wiring: `ANTHROPIC_BASE_URL` → LiteLLM with namespaced model ids
+(`claude-sonnet-4-6-asia-southeast1`); `spike_vision.py` stays in-repo as living
+documentation of the proven shapes. Live proof: `runtimectl conformance` PASSED
+(6 checks, via the `--agent` flag + `RUNTIME_CTL_URL`); a FizzPop text verdict
+with the E211+ascorbic-acid benzene interaction correctly connected; the MILO
+vision verdict; a restart-resume follow-up correctly recalling the Milo verdict;
+and the alias blorbium→E211 learned in one session, resolved hint-free in
+another. HONEST MEASUREMENTS — the milestone's purpose: (1) the adapter is **139
+total / 100 code lines**, NOT this section's former "~10-30 line" claim (the
+OpenAI adapter is 67/39); the CONTRACT seam held — one file drives the
+framework, no deployment glue — but "thin" is relative to framework friction:
+the Claude SDK needed the session-id map, builtin stripping, the tool-as-output
+pattern, and the streaming-input image form. The seam paragraph above now reads
+~40–100 lines. (2) **The shim did NOT survive unchanged**: commit `613f266`
+added `POST /sessions/{id}/messages` to `runtime_contract/app.py` because the v1
+contract had NO follow-up-message endpoint — `POST /sessions` always creates a
+new session, so multi-turn-on-one-session (the Level-1 resume proof) was
+impossible as specced. The addition is framework-agnostic and additive
+(conformance unaffected; benefits all adapters) — but the second-order finding
+is a CONTRACT DIVERGENCE: the Python shim now implements a 7th endpoint that the
+Go `agentruntime` contract does NOT have (verified: `agentruntime/server.go` has
+no `/messages` route; Go sessions are single-turn workflows). New backlog
+(listed in "Remaining C1 work" above): reconcile the follow-up-messages endpoint
+into the Go contract + conformance suite (or spec it as optional). (3) SDK
+quirks worth recording for the TS shim: a bundled CLI subprocess per session (no
+Node needed); resume is cwd+`CLAUDE_CONFIG_DIR`-keyed; `allowed_tools` is NOT a
+restriction (only auto-approval); and `options.env` merges (Python). Code:
+`examples/nutrition-label-claude/`. Spec/plan:
+`docs/superpowers/{specs,plans}/2026-06-10-claude-agent-sdk-adapter*`.
 
 ### C2. Containers / Kubernetes
 
