@@ -84,11 +84,26 @@ func newSandboxID() string {
 }
 
 // Create starts a new sandbox for tenant, enforcing the per-tenant cap.
+//
+// The slot is RESERVED under the lock before the backend call: the session
+// (with ID but no ContainerID yet) is inserted while holding mu so that N
+// concurrent Creates at cap-1 cannot all pass the count check during a slow
+// be.Create. The ID is generated before any backend work, so a crypto/rand
+// panic cannot leak a container.
 func (m *Manager) Create(ctx context.Context, tenant string) (*Session, error) {
+	now := m.now()
+	s := &Session{
+		ID:        newSandboxID(),
+		Tenant:    tenant,
+		CreatedAt: now,
+		LastUsed:  now,
+		ExpiresAt: now.Add(m.cfg.MaxLifetime),
+	}
+
 	m.mu.Lock()
 	count := 0
-	for _, s := range m.sessions {
-		if s.Tenant == tenant {
+	for _, other := range m.sessions {
+		if other.Tenant == tenant {
 			count++
 		}
 	}
@@ -96,24 +111,19 @@ func (m *Manager) Create(ctx context.Context, tenant string) (*Session, error) {
 		m.mu.Unlock()
 		return nil, fmt.Errorf("sandbox limit reached (%d per tenant): close one with close_sandbox", m.cfg.MaxPerTenant)
 	}
+	m.sessions[s.ID] = s // reservation: counts toward the cap from here on
 	m.mu.Unlock()
 
 	containerID, err := m.be.Create(ctx, tenant)
 	if err != nil {
+		m.mu.Lock()
+		delete(m.sessions, s.ID)
+		m.mu.Unlock()
 		return nil, fmt.Errorf("sandbox backend unavailable: %w", err)
 	}
 
-	now := m.now()
-	s := &Session{
-		ID:          newSandboxID(),
-		Tenant:      tenant,
-		ContainerID: containerID,
-		CreatedAt:   now,
-		LastUsed:    now,
-		ExpiresAt:   now.Add(m.cfg.MaxLifetime),
-	}
 	m.mu.Lock()
-	m.sessions[s.ID] = s
+	s.ContainerID = containerID
 	m.mu.Unlock()
 	return s, nil
 }
@@ -129,6 +139,23 @@ func (m *Manager) lookup(tenant, id string) (*Session, error) {
 	}
 	s.LastUsed = m.now()
 	return s, nil
+}
+
+// maskIfGone hides backend errors for sessions that vanished mid-call: if
+// the backend call failed and the session no longer exists (e.g. the reaper
+// removed it while the call was in flight), return errNoSandbox instead of
+// the raw backend error, which could leak container ids.
+func (m *Manager) maskIfGone(id string, err error) error {
+	if err == nil {
+		return nil
+	}
+	m.mu.Lock()
+	_, ok := m.sessions[id]
+	m.mu.Unlock()
+	if !ok {
+		return errNoSandbox
+	}
+	return err
 }
 
 // clampTimeout converts a caller-supplied timeout in seconds into a bounded
@@ -149,7 +176,8 @@ func (m *Manager) ExecCode(ctx context.Context, tenant, id, code string, timeout
 	if err != nil {
 		return ExecResult{}, err
 	}
-	return m.be.Exec(ctx, s.ContainerID, []string{"python3", "-c", code}, clampTimeout(timeoutSeconds))
+	res, err := m.be.Exec(ctx, s.ContainerID, []string{"python3", "-c", code}, clampTimeout(timeoutSeconds))
+	return res, m.maskIfGone(id, err)
 }
 
 // ExecCommand runs a shell command inside the sandbox.
@@ -158,7 +186,8 @@ func (m *Manager) ExecCommand(ctx context.Context, tenant, id, command string, t
 	if err != nil {
 		return ExecResult{}, err
 	}
-	return m.be.Exec(ctx, s.ContainerID, []string{"sh", "-c", command}, clampTimeout(timeoutSeconds))
+	res, err := m.be.Exec(ctx, s.ContainerID, []string{"sh", "-c", command}, clampTimeout(timeoutSeconds))
+	return res, m.maskIfGone(id, err)
 }
 
 // WriteFile writes content to a /workspace-confined path in the sandbox.
@@ -171,7 +200,7 @@ func (m *Manager) WriteFile(ctx context.Context, tenant, id, path string, conten
 	if err != nil {
 		return err
 	}
-	return m.be.WriteFile(ctx, s.ContainerID, confined, content)
+	return m.maskIfGone(id, m.be.WriteFile(ctx, s.ContainerID, confined, content))
 }
 
 // ReadFile reads a /workspace-confined path from the sandbox, capped at
@@ -185,7 +214,8 @@ func (m *Manager) ReadFile(ctx context.Context, tenant, id, path string) ([]byte
 	if err != nil {
 		return nil, false, err
 	}
-	return m.be.ReadFile(ctx, s.ContainerID, confined, m.cfg.ReadLimit)
+	content, truncated, err := m.be.ReadFile(ctx, s.ContainerID, confined, m.cfg.ReadLimit)
+	return content, truncated, m.maskIfGone(id, err)
 }
 
 // List returns copies of tenant's live sessions.

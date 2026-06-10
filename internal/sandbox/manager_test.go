@@ -3,6 +3,8 @@ package sandbox
 import (
 	"context"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -93,6 +95,60 @@ func TestPerTenantCap(t *testing.T) {
 	}
 }
 
+// slowCreateBackend delegates to an inner Backend but makes Create slow,
+// widening the window in which concurrent Creates could race past the cap.
+type slowCreateBackend struct {
+	Backend
+	delay time.Duration
+}
+
+func (b *slowCreateBackend) Create(ctx context.Context, tenant string) (string, error) {
+	time.Sleep(b.delay)
+	return b.Backend.Create(ctx, tenant)
+}
+
+func TestPerTenantCapUnderConcurrency(t *testing.T) {
+	ctx := context.Background()
+	be := &slowCreateBackend{Backend: NewFakeBackend(), delay: 50 * time.Millisecond}
+	m := NewManager(be, Config{
+		MaxPerTenant: 2,
+		IdleTTL:      10 * time.Minute,
+		MaxLifetime:  time.Hour,
+		ReadLimit:    1024,
+	})
+
+	const attempts = 6
+	var ok, limited atomic.Int64
+	var wg sync.WaitGroup
+	for i := 0; i < attempts; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, err := m.Create(ctx, "acme")
+			switch {
+			case err == nil:
+				ok.Add(1)
+			case strings.Contains(err.Error(), "limit"):
+				limited.Add(1)
+			default:
+				t.Errorf("unexpected error: %v", err)
+			}
+		}()
+	}
+	wg.Wait()
+
+	if ok.Load() != 2 || limited.Load() != 4 {
+		t.Fatalf("got %d successes / %d limit errors, want 2 / 4", ok.Load(), limited.Load())
+	}
+	if got := m.List("acme"); len(got) != 2 {
+		t.Fatalf("manager tracks %d sessions, want 2", len(got))
+	}
+	ids, _ := be.ListLeftovers(ctx)
+	if len(ids) != 2 {
+		t.Fatalf("backend has %d containers, want 2 (no leaks past the cap)", len(ids))
+	}
+}
+
 func TestClampTimeout(t *testing.T) {
 	if d := clampTimeout(0); d != 30*time.Second {
 		t.Fatalf("default = %v", d)
@@ -156,6 +212,33 @@ func TestReaperIdleAndMaxLifetime(t *testing.T) {
 	ids, _ := be.ListLeftovers(ctx)
 	if len(ids) != 0 {
 		t.Fatalf("backend still has %v", ids)
+	}
+}
+
+// TestReaperMaxLifetimeDespiteActivity pins the ExpiresAt branch on its own:
+// the session is touched every 5 minutes (idle never exceeds IdleTTL), so
+// only the hard max-lifetime clause can reap it.
+func TestReaperMaxLifetimeDespiteActivity(t *testing.T) {
+	ctx := context.Background()
+	m, _, now := testManager(t) // IdleTTL 10m, MaxLifetime 1h
+
+	s, err := m.Create(ctx, "acme")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var elapsed time.Duration
+	for elapsed <= time.Hour {
+		*now = now.Add(5 * time.Minute)
+		elapsed += 5 * time.Minute
+		if _, err := m.ExecCode(ctx, "acme", s.ID, "x", 0); err != nil {
+			t.Fatalf("exec at +%v: %v", elapsed, err)
+		}
+	}
+
+	m.ReapOnce(ctx)
+	if _, err := m.ExecCode(ctx, "acme", s.ID, "x", 0); err == nil {
+		t.Fatal("active sandbox past max lifetime must still be reaped")
 	}
 }
 
