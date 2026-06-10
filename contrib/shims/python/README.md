@@ -9,10 +9,12 @@ contract (the six HTTP/SSE endpoints) is the only interface Runtime cares about,
 so any process that speaks it can be supervised, routed, health-gated, and
 restarted like a native agent.
 
-> This is the reusable contract **library**. For a complete worked agent hosted
-> on it, see [`examples/nutrition-label-openai`](../../../examples/nutrition-label-openai)
-> (the SG Nutrition Investigator, OpenAI Agents SDK) — `make run` there boots it
-> under `runtimed`.
+> This is the reusable contract **library**. Two complete worked agents are
+> hosted on it — the same SG Nutrition Investigator on two frameworks:
+> [`examples/nutrition-label-openai`](../../../examples/nutrition-label-openai)
+> (OpenAI Agents SDK) and
+> [`examples/nutrition-label-claude`](../../../examples/nutrition-label-claude)
+> (Claude Agent SDK) — `make run` in either boots it under `runtimed`.
 
 Runtime hosts a library consumer through the generalized `command:`/`workdir:`
 config fields: when an agent entry sets `command`, `runtimed`'s supervisor execs
@@ -27,12 +29,15 @@ environment (so the framework's own credentials, e.g. `OPENAI_*`, flow through).
 The library is two layers:
 
 - **`runtime_contract/`** — a reusable, framework-agnostic library that serves
-  the contract. It is a FastAPI app exposing the six endpoints (`/healthz`,
-  `/meta`, `POST /sessions`, `GET /sessions/{id}/stream?since=N`,
-  `GET /sessions/{id}`, `GET /sessions`), frames events as SSE
-  (`id: <seq>\ndata: <compact-json>\n\n`), replays buffered events on
-  `?since=N`, and persists sessions + an append-only event log to a SQLite store
-  (`shim.db`) for Level-1 durability. It knows nothing about any agent framework.
+  the contract. It is a FastAPI app exposing the six contract endpoints
+  (`/healthz`, `/meta`, `POST /sessions`, `GET /sessions/{id}/stream?since=N`,
+  `GET /sessions/{id}`, `GET /sessions`) plus one shim extension —
+  `POST /sessions/{id}/messages` for follow-up turns on an existing session
+  (not yet in the Go agent contract; reconciliation tracked in the ROADMAP) —
+  frames events as SSE (`id: <seq>\ndata: <compact-json>\n\n`), replays
+  buffered events on `?since=N`, and persists sessions + an append-only event
+  log to a SQLite store (`shim.db`) for Level-1 durability. It knows nothing
+  about any agent framework.
 - **A thin per-framework adapter** — a small object implementing the
   `AgentAdapter` protocol that drives the actual SDK and translates its stream
   into contract events. The adapter lives with the consumer, not in this library;

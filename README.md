@@ -1012,24 +1012,36 @@ optional `RUNTIME_SHIM_DB`) itself, so the adapter author never handles
 deployment parameters — exactly the same separation as the Go SDK. Adding
 another framework is one new adapter file.
 
-The worked example is the SG Nutrition Investigator on the OpenAI Agents SDK
-(`examples/nutrition-label-openai/`), which boots under `runtimed` via its
-Makefile:
+TWO worked examples host the SG Nutrition Investigator on different foreign
+frameworks through the SAME shim — the reuse proof for the adapter seam:
+
+- `examples/nutrition-label-openai/` — OpenAI Agents SDK (adapter: 39 code lines).
+  Memory via the SDK's `SQLiteSession`; typed verdict via `output_type=`.
+- `examples/nutrition-label-claude/` — Claude Agent SDK (adapter: 100 code lines).
+  Memory via SDK-native `resume=` transcripts + a runtime→SDK session-id map;
+  typed verdict via a `submit_verdict` in-process MCP tool (tool-as-output);
+  all built-in tools disabled (`tools=[]` + deny-list + `dontAsk`).
+
+Both boot under `runtimed` via their Makefiles:
 
 ```bash
-cd examples/nutrition-label-openai
-cp .env.example .env          # fill in OPENAI_API_KEY / OPENAI_BASE_URL / OPENAI_MODEL
+cd examples/nutrition-label-claude   # or examples/nutrition-label-openai
+cp .env.example .env          # fill in the proxy key (ANTHROPIC_* / OPENAI_*)
 make run                      # builds binaries, uv sync, runs the control plane
 
 # in another shell — the same conformance gate that validates Go agents:
-make conformance              # runtimectl conformance --agent nutrition-openai
+make conformance              # runtimectl conformance --agent nutrition-claude
 make demo-image IMAGE=milo.jpeg   # base64 a label photo → POST → stream the verdict
 ```
 
 The shim provides **Level-1 durability** (sessions and their event logs persist
 in `shim.db`, so after a restart sessions are listable, replayable, and
 conversation memory continues) — but **not** Level-2 in-flight crash resume,
-which remains the Go agents' DBOS-backed advantage. See
+which remains the Go agents' DBOS-backed advantage. The shim also serves
+`POST /sessions/{id}/messages` for follow-up turns on an existing session —
+an extension the Go agent contract does not have yet (Go sessions are
+single-turn workflows); reconciling it into the Go contract + conformance
+suite is tracked in the ROADMAP. See
 [`contrib/shims/python/README.md`](contrib/shims/python/README.md) for the full
 walkthrough, the adapter seam, and standalone-dev instructions.
 
@@ -1240,12 +1252,16 @@ spine; **Milestone 2** added the multi-agent platform (config-driven registry,
 path routing, per-agent supervision, session status, full CLI); **Milestone 3**
 added the operability layer (the read-only web console, structured logging, the
 contract conformance suite, bounded shutdown, 503-on-restart, per-agent health,
-full-stack Docker build). Since then: **polyglot agent hosting** (host foreign-SDK
-agents via the contract — see the Python shim); the **Identity** sub-project
-(three milestones — multi-tenant access control, per-tenant secrets brokering, and
-secrets key rotation, below); and the **Memory** sub-project (three milestones —
-durable per-tenant store, semantic recall, and auto-ingestion, with recall and
-ingest wired into the live turn path — see [agent memory](#per-tenant-agent-memory)).
+full-stack Docker build). Since then: **polyglot agent hosting** (two milestones —
+the Python contract shim hosting the OpenAI Agents SDK and the Claude Agent SDK,
+each running the full nutrition investigator — see the Python shim section); the
+**Identity** sub-project (three milestones — multi-tenant access control,
+per-tenant secrets brokering, and secrets key rotation, below); the **Memory**
+sub-project (three milestones — durable per-tenant store, semantic recall, and
+auto-ingestion, with recall and ingest wired into the live turn path — see
+[agent memory](#per-tenant-agent-memory)); and the **Gateway** sub-project (two
+milestones — MCP federation core and semantic tool search — see
+[MCP Gateway](#mcp-gateway)).
 
 **Deliberately not yet implemented** (each is planned, scoped to a later
 milestone or sub-project):
@@ -1272,8 +1288,21 @@ milestone or sub-project):
   per-agent replicas or load-based scaling.
 - **Dynamic deploy** — agents come from `runtime.yaml` at startup; no runtime
   `POST /agents` registration or rollback yet (tokens are config-only too).
-- **Sandboxes** (isolated browser / code-interpreter tools) and a **tool/MCP
-  gateway** — each its own sub-project.
+- **Gateway — first two milestones DONE** (see [MCP Gateway](#mcp-gateway)):
+  M1 MCP federation core (one endpoint federating upstream MCP servers,
+  tenant-filtered via Identity service keys) and M2 semantic tool search
+  (`gateway: search` / `?mode=search` — one listed `search_tools` tool,
+  embedding-ranked discovery, callable-but-unlisted catalog). **Still to come:**
+  REST/OpenAPI→tool adapters, dynamic upstream registration, resources/prompts
+  passthrough, a console panel, auto-minted agent keys, and rate limits.
+- **Polyglot hosting — first two milestones DONE** (see
+  [the Python shim](#hosting-a-foreign-sdk-agent-python-shim)): the OpenAI
+  Agents SDK and Claude Agent SDK adapters, each hosting the full nutrition
+  investigator. **Still to come:** Level-2 in-flight crash resume, a TS shim,
+  further adapters (PydanticAI is the next candidate), and reconciling the
+  shim's follow-up-messages endpoint into the Go contract + conformance suite.
+- **Sandboxes** (isolated browser / code-interpreter tools) — its own
+  sub-project.
 - **Containers / Kubernetes** — the agent contract is designed to admit
   containerized agents later (the conformance suite already validates them);
   today agents are local subprocesses.
