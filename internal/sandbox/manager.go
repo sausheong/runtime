@@ -172,6 +172,10 @@ func (m *Manager) maskIfGone(id string, err error) error {
 	if !ok {
 		return errNoSandbox
 	}
+	// A missing file is user-actionable and leaks nothing — pass it through.
+	if errors.Is(err, ErrNoSuchFile) {
+		return err
+	}
 	slog.Warn("sandbox: backend error", "sandbox", id, "err", err)
 	return errors.New("sandbox execution failed (see sandboxd logs)")
 }

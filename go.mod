@@ -5,6 +5,7 @@ go 1.25.1
 replace github.com/sausheong/harness => ../harness
 
 require (
+	github.com/containerd/errdefs v1.0.0
 	github.com/coreos/go-oidc/v3 v3.18.0
 	github.com/dbos-inc/dbos-transact-golang v0.16.0
 	github.com/docker/docker v28.5.2+incompatible
@@ -23,7 +24,6 @@ require (
 	github.com/anthropics/anthropic-sdk-go v1.35.0 // indirect
 	github.com/cenkalti/backoff/v5 v5.0.3 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
-	github.com/containerd/errdefs v1.0.0 // indirect
 	github.com/containerd/errdefs/pkg v0.3.0 // indirect
 	github.com/distribution/reference v0.6.0 // indirect
 	github.com/docker/go-connections v0.6.0 // indirect

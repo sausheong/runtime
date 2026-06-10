@@ -259,3 +259,19 @@ func TestToolsMissingArgsIsError(t *testing.T) {
 		t.Fatalf("execute_code without code should be IsError")
 	}
 }
+
+func TestToolsReadFileMissingPathSaysNoSuchFile(t *testing.T) {
+	sess := startServer(t)
+	_, out := call(t, sess, "create_sandbox", map[string]any{"__rt_tenant": "acme"})
+	id := out["sandbox_id"].(string)
+
+	res, _ := call(t, sess, "read_file", map[string]any{
+		"__rt_tenant": "acme", "sandbox_id": id, "path": "missing.txt",
+	})
+	if !res.IsError {
+		t.Fatalf("read_file of missing path should be IsError")
+	}
+	if msg := text(t, res); !strings.Contains(msg, "no such file") {
+		t.Fatalf("missing-file error %q should contain %q, not the generic message", msg, "no such file")
+	}
+}

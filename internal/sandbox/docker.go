@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"time"
 
+	cerrdefs "github.com/containerd/errdefs"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/client"
@@ -134,17 +135,50 @@ func (d *dockerBackend) Exec(ctx context.Context, containerID string, argv []str
 	}
 	defer attach.Close()
 
+	// The hijacked connection's read is NOT ctx-cancelable (ctx only governed
+	// the dial), so a process that setsid()-escapes the `timeout` process
+	// group while keeping fd 1/2 open would block StdCopy forever. Copy in a
+	// goroutine and race it against ctx; on expiry, Close() the attach to
+	// unblock the read.
 	var stdout, stderr bytes.Buffer
-	if _, err := stdcopy.StdCopy(&stdout, &stderr, attach.Reader); err != nil && ctx.Err() == nil {
-		return ExecResult{}, err
+	copyDone := make(chan error, 1)
+	go func() {
+		_, cpErr := stdcopy.StdCopy(&stdout, &stderr, attach.Reader)
+		copyDone <- cpErr
+	}()
+
+	ctxExpired := false
+	select {
+	case cpErr := <-copyDone:
+		if cpErr != nil && ctx.Err() == nil {
+			return ExecResult{}, cpErr
+		}
+	case <-ctx.Done():
+		ctxExpired = true
+		attach.Close()
+		<-copyDone // reap the copier; Close above unblocks its read
 	}
 
-	inspect, err := d.cli.ContainerExecInspect(ctx, exec.ID)
+	// Inspect with a fresh short context: the exec ctx may already be
+	// expired, and exit-code/TimedOut reporting must survive that.
+	inspectCtx, cancelInspect := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancelInspect()
+	inspect, err := d.cli.ContainerExecInspect(inspectCtx, exec.ID)
+	elapsed := time.Since(start)
 	if err != nil {
+		if ctxExpired {
+			// A timeout is a result, not an error.
+			return ExecResult{
+				TimedOut: true,
+				ExitCode: -1,
+				Stderr:   "execution timed out and was force-disconnected",
+				Duration: elapsed,
+			}, nil
+		}
 		return ExecResult{}, err
 	}
-	elapsed := time.Since(start)
-	timedOut := (inspect.ExitCode == 124 || inspect.ExitCode == 137) && elapsed >= timeout
+	timedOut := ctxExpired ||
+		((inspect.ExitCode == 124 || inspect.ExitCode == 137) && elapsed >= timeout)
 	return ExecResult{
 		Stdout:   stdout.String(),
 		Stderr:   stderr.String(),
@@ -192,13 +226,23 @@ func (d *dockerBackend) WriteFile(ctx context.Context, containerID, p string, co
 func (d *dockerBackend) ReadFile(ctx context.Context, containerID, p string, limit int) ([]byte, bool, error) {
 	rc, _, err := d.cli.CopyFromContainer(ctx, containerID, p)
 	if err != nil {
-		return nil, false, fmt.Errorf("no such file %s", p)
+		// Only a typed engine not-found becomes ErrNoSuchFile; anything else
+		// (daemon down, permission, ...) passes through raw so maskIfGone can
+		// log it for the operator instead of misreporting it to the model.
+		if cerrdefs.IsNotFound(err) {
+			return nil, false, fmt.Errorf("%w: %s", ErrNoSuchFile, p)
+		}
+		return nil, false, err
 	}
 	defer rc.Close()
 
 	tr := tar.NewReader(rc)
-	if _, err := tr.Next(); err != nil {
-		return nil, false, fmt.Errorf("no such file %s", p)
+	hdr, err := tr.Next()
+	if err != nil {
+		return nil, false, fmt.Errorf("%w: %s", ErrNoSuchFile, p)
+	}
+	if hdr.Typeflag != tar.TypeReg {
+		return nil, false, fmt.Errorf("%s is not a regular file", p)
 	}
 	content, err := io.ReadAll(io.LimitReader(tr, int64(limit)+1))
 	if err != nil {

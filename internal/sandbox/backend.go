@@ -2,11 +2,17 @@ package sandbox
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
 	"time"
 )
+
+// ErrNoSuchFile marks a ReadFile miss on a path the user asked for. It is
+// user-actionable and leaks nothing, so maskIfGone passes it through to the
+// model unchanged instead of genericizing it.
+var ErrNoSuchFile = errors.New("no such file")
 
 // ExecResult is the outcome of one exec inside a sandbox container.
 type ExecResult struct {
@@ -90,7 +96,7 @@ func (f *fakeBackend) ReadFile(ctx context.Context, containerID, path string, li
 	}
 	content, ok := files[path]
 	if !ok {
-		return nil, false, fmt.Errorf("fake backend: no such file %q in container %q", path, containerID)
+		return nil, false, fmt.Errorf("%w: %s", ErrNoSuchFile, path)
 	}
 	if limit >= 0 && len(content) > limit {
 		return append([]byte(nil), content[:limit]...), true, nil

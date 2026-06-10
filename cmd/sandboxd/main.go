@@ -108,6 +108,8 @@ func main() {
 	}
 	m.StartReaper(ctx, time.Minute)
 
+	// No SIGTERM handler by design: if sandboxd dies without cleanup, the
+	// leftover labeled containers are recovered by reap-on-start above.
 	srv := sandbox.NewServer(m)
 	if err := srv.Run(ctx, &sdk.StdioTransport{}); err != nil {
 		slog.Error("sandboxd: server exited", "err", err)
