@@ -33,12 +33,22 @@ func (f fakeTool) Execute(context.Context, json.RawMessage) (tool.ToolResult, er
 }
 
 type fakeConn struct {
-	tools  []tool.Tool
-	closed atomic.Bool
+	tools   []tool.Tool
+	closed  atomic.Bool
+	pingErr atomic.Value // error; set via setPingErr
 }
 
 func (f *fakeConn) Tools() []tool.Tool { return f.tools }
 func (f *fakeConn) Close() error       { f.closed.Store(true); return nil }
+
+func (f *fakeConn) Ping(context.Context) error {
+	if err, ok := f.pingErr.Load().(error); ok {
+		return err
+	}
+	return nil
+}
+
+func (f *fakeConn) setPingErr(err error) { f.pingErr.Store(err) }
 
 // scriptDial returns a dialFunc that fails `failures[name]` times for each
 // named server before succeeding with the given conn.
@@ -124,12 +134,19 @@ func TestManagerTenantFiltering(t *testing.T) {
 }
 
 func TestManagerDegradeAndReconnect(t *testing.T) {
-	conns := map[string]*fakeConn{
-		"flaky": {tools: []tool.Tool{fakeTool{name: "mcp__flaky__t", out: "x"}}},
+	fc := &fakeConn{tools: []tool.Tool{fakeTool{name: "mcp__flaky__t", out: "x"}}}
+	// Dials fail until the gate opens. Gating (rather than a fixed failure
+	// count) makes the failing window unbounded, so the LastError assertion
+	// below cannot race with a successful reconnect.
+	var allowDial atomic.Bool
+	dial := func(_ context.Context, _ config.GatewayServer) (upstreamConn, error) {
+		if !allowDial.Load() {
+			return nil, errors.New("scripted dial failure")
+		}
+		return fc, nil
 	}
-	// First 2 dials fail, third succeeds.
 	m := NewManager([]config.GatewayServer{{Name: "flaky", Command: "x"}},
-		WithDial(scriptDial(conns, map[string]int{"flaky": 2})),
+		WithDial(dial),
 		WithBackoff(10*time.Millisecond, 50*time.Millisecond))
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -141,10 +158,20 @@ func TestManagerDegradeAndReconnect(t *testing.T) {
 		t.Fatalf("unexpected status: %+v", sts)
 	}
 
+	// While dials fail, status must surface the failure: down + LastError.
+	waitFor(t, 5*time.Second, func() bool {
+		s := m.Status("")
+		return len(s) == 1 && s[0].State == "down" && s[0].LastError != ""
+	})
+
+	allowDial.Store(true)
 	waitFor(t, 5*time.Second, func() bool { return len(m.ToolsFor("t")) == 1 })
 	sts = m.Status("")
 	if sts[0].State != "up" || sts[0].ToolCount != 1 {
 		t.Fatalf("want up/1, got %+v", sts[0])
+	}
+	if sts[0].LastError != "" {
+		t.Fatalf("LastError must clear on successful reconnect, got %q", sts[0].LastError)
 	}
 }
 
@@ -244,6 +271,54 @@ func TestManagerMarkDownTriggersRedial(t *testing.T) {
 	}
 	if m.Generation() != gAfter {
 		t.Fatal("stale markDown bumped generation")
+	}
+}
+
+func TestManagerPingFailureTriggersRedial(t *testing.T) {
+	// Mid-flight death: the supervise loop's health ping must notice a dead
+	// session (no markDown from the tool path needed) and redial. Fresh conn
+	// per redial, matching real dialers (see TestManagerMarkDownTriggersRedial).
+	connA := &fakeConn{tools: []tool.Tool{fakeTool{name: "mcp__fs__read", out: "d"}}}
+	connB := &fakeConn{tools: connA.tools}
+	var dials atomic.Int32
+	dial := func(_ context.Context, _ config.GatewayServer) (upstreamConn, error) {
+		if dials.Add(1) == 1 {
+			return connA, nil
+		}
+		return connB, nil
+	}
+	m := NewManager([]config.GatewayServer{{Name: "fs", Command: "x"}},
+		WithDial(dial),
+		WithBackoff(10*time.Millisecond, 50*time.Millisecond))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	m.Start(ctx)
+	waitFor(t, 2*time.Second, func() bool { return len(m.AllTools()) == 1 })
+	if sts := m.Status(""); sts[0].State != "up" {
+		t.Fatalf("want up, got %+v", sts[0])
+	}
+	gBefore := m.Generation()
+
+	// Kill conn A from the upstream's side: only the health ping can see it.
+	connA.setPingErr(errors.New("session died"))
+
+	// The loop pings every minBackoff, marks down, then redials to conn B.
+	waitFor(t, 5*time.Second, func() bool {
+		sts := m.Status("")
+		return sts[0].State == "up" && sts[0].ToolCount == 1 && connA.closed.Load()
+	})
+	if !connA.closed.Load() {
+		t.Fatal("dead conn A was not closed")
+	}
+	if len(m.AllTools()) != 1 {
+		t.Fatal("tools not restored after ping-triggered redial")
+	}
+	// Down + reconnect each bump the generation: at least +2 from before.
+	if g := m.Generation(); g < gBefore+2 {
+		t.Fatalf("generation not bumped through down+reconnect: before=%d after=%d", gBefore, g)
+	}
+	if got := dials.Load(); got < 2 {
+		t.Fatalf("expected a redial, got %d dials", got)
 	}
 }
 

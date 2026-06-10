@@ -84,9 +84,17 @@ func (m *Manager) Start(ctx context.Context) {
 	}
 }
 
+// pingTimeout bounds each supervise-loop health ping. 5s is generous for a
+// no-op MCP ping yet short enough that a hung upstream is detected within a
+// few poll cycles (the loop pings every minBackoff).
+const pingTimeout = 5 * time.Second
+
 // supervise keeps one upstream connected: dial with capped exponential
-// backoff, mark up, then poll for down-marking (markDown clears conn on a
-// mid-flight failure) and redial.
+// backoff, mark up, then health-check on a minBackoff cadence — a failed
+// ping (crashed stdio child, restarted HTTP upstream) calls markDown so
+// the next iteration redials. This loop is markDown's production caller;
+// any other markDown source (e.g. a future tool-path failure report) is
+// also picked up here because the loop redials whenever conn==nil.
 func (m *Manager) supervise(ctx context.Context, u *upstream) {
 	defer m.wg.Done()
 	backoff := m.minBackoff
@@ -122,12 +130,27 @@ func (m *Manager) supervise(ctx context.Context, u *upstream) {
 			slog.Info("gateway: upstream connected",
 				"server", u.cfg.Name, "transport", transportOf(u.cfg), "tools", len(renamed))
 		}
-		// Poll for down-marking. Cheap; avoids threading a notification
-		// channel through the tool execution path.
+		// Sleep, then health-check. The sleep doubles as the poll for
+		// markDown from the tool execution path (cheap; avoids threading a
+		// notification channel through it).
 		select {
 		case <-ctx.Done():
 			return
 		case <-time.After(m.minBackoff):
+		}
+		u.mu.Lock()
+		conn := u.conn
+		u.mu.Unlock()
+		if conn != nil {
+			// Ping OUTSIDE the lock: it does I/O and may block up to
+			// pingTimeout. markDown's conn-identity check makes a stale
+			// ping result harmless if the conn was replaced meanwhile.
+			pingCtx, cancel := context.WithTimeout(ctx, pingTimeout)
+			err := conn.Ping(pingCtx)
+			cancel()
+			if err != nil && ctx.Err() == nil {
+				m.markDown(u, conn, err)
+			}
 		}
 	}
 }

@@ -114,12 +114,9 @@ func main() {
 	// agent key would spawn an agent that can never authenticate to the
 	// gateway. Refuse to start instead.
 	if identityOn && cfg.Gateway.Enabled() {
-		for _, a := range cfg.Agents {
-			if a.Gateway && cfg.Gateway.AgentKeys[a.Tenant] == "" {
-				slog.Error("gateway agent has no agent_key for its tenant (identity is on)",
-					"agent", a.ID, "tenant", a.Tenant)
-				os.Exit(1)
-			}
+		if err := validateGatewayKeys(cfg); err != nil {
+			slog.Error("gateway agent has no agent_key for its tenant (identity is on)", "err", err)
+			os.Exit(1)
 		}
 	}
 
@@ -310,6 +307,17 @@ func waitAgentHealthy(ctx context.Context, addr string, timeout time.Duration) e
 		}
 	}
 	return fmt.Errorf("timed out after %s", timeout)
+}
+
+// validateGatewayKeys returns an error naming the first gateway-enabled agent
+// whose tenant has no agent key. Only meaningful when identity is enforced.
+func validateGatewayKeys(cfg *config.Config) error {
+	for _, a := range cfg.Agents {
+		if a.Gateway && cfg.Gateway.AgentKeys[a.Tenant] == "" {
+			return fmt.Errorf("gateway agent %q has no agent_key for tenant %q", a.ID, a.Tenant)
+		}
+	}
+	return nil
 }
 
 // gatewaySelfURL derives the URL agents use to reach the gateway. An explicit

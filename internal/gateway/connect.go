@@ -13,10 +13,14 @@ import (
 	"github.com/sausheong/runtime/internal/config"
 )
 
-// upstreamConn is the connected form of one upstream: its adapted tools and a
-// closer. Satisfied by *hmcp.Client in production and by fakes in tests.
+// upstreamConn is the connected form of one upstream: its adapted tools, a
+// liveness probe, and a closer. Satisfied by *hmcp.Client in production and
+// by fakes in tests.
 type upstreamConn interface {
 	Tools() []tool.Tool
+	// Ping verifies the session is still alive (MCP ping). A non-nil error
+	// means the connection is unusable and should be marked down.
+	Ping(ctx context.Context) error
 	Close() error
 }
 
