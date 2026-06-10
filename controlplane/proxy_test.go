@@ -150,6 +150,66 @@ func TestBuildEnv_NoMemoryFlagWhenDisabled(t *testing.T) {
 	}
 }
 
+func TestBuildEnvGateway(t *testing.T) {
+	t.Run("gateway on: url and key injected", func(t *testing.T) {
+		a := AgentProcess{
+			AgentID: "x", Addr: "127.0.0.1:1", BinPath: "bin", PGDSN: "dsn",
+			Tenant: "acme", GatewayOn: true,
+			GatewayURL: "http://127.0.0.1:8080/gateway/mcp",
+			GatewayKey: "svk-test",
+		}
+		env, err := a.buildEnv(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertHasEnv(t, env, "RUNTIME_GATEWAY_URL=http://127.0.0.1:8080/gateway/mcp")
+		assertHasEnv(t, env, "RUNTIME_GATEWAY_KEY=svk-test")
+	})
+
+	t.Run("gateway on, no key (open mode): url only", func(t *testing.T) {
+		a := AgentProcess{
+			AgentID: "x", Addr: "127.0.0.1:1", BinPath: "bin", PGDSN: "dsn",
+			Tenant: "default", GatewayOn: true,
+			GatewayURL: "http://127.0.0.1:8080/gateway/mcp",
+		}
+		env, err := a.buildEnv(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertHasEnv(t, env, "RUNTIME_GATEWAY_URL=http://127.0.0.1:8080/gateway/mcp")
+		assertNoEnvPrefix(t, env, "RUNTIME_GATEWAY_KEY=")
+	})
+
+	t.Run("gateway off: neither injected", func(t *testing.T) {
+		a := AgentProcess{AgentID: "x", Addr: "127.0.0.1:1", BinPath: "bin", PGDSN: "dsn", Tenant: "t"}
+		env, err := a.buildEnv(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertNoEnvPrefix(t, env, "RUNTIME_GATEWAY_URL=")
+		assertNoEnvPrefix(t, env, "RUNTIME_GATEWAY_KEY=")
+	})
+}
+
+func assertHasEnv(t *testing.T, env []string, want string) {
+	t.Helper()
+	for _, e := range env {
+		if e == want {
+			return
+		}
+	}
+	t.Fatalf("env missing %q", want)
+}
+
+func assertNoEnvPrefix(t *testing.T, env []string, prefix string) {
+	t.Helper()
+	for _, e := range env {
+		if strings.HasPrefix(e, prefix) {
+			t.Fatalf("env unexpectedly has %q", e)
+		}
+	}
+}
+
 var errBrokerTest = errors.New("broker boom")
 
 // lastIndexWithPrefix returns the index of the last env entry with the prefix.

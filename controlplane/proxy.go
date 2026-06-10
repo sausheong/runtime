@@ -27,6 +27,10 @@ type AgentProcess struct {
 	Tenant  string   // tenant that owns this agent (from runtime.yaml; "default" if unset)
 	Memory  bool     // opt-in: when true, the spawn env carries RUNTIME_AGENT_MEMORY=1 so agentd wires the memory tool.
 
+	GatewayOn  bool   // opt-in: when true, spawn env carries RUNTIME_GATEWAY_URL (+_KEY when set).
+	GatewayURL string // full URL of the platform gateway MCP endpoint.
+	GatewayKey string // tenant service key for the gateway; "" in open mode.
+
 	broker SecretBroker // optional; injected by the Registry. nil ⇒ no secret brokering.
 }
 
@@ -44,6 +48,12 @@ func (a AgentProcess) buildEnv(ctx context.Context) ([]string, error) {
 	)
 	if a.Memory {
 		env = append(env, "RUNTIME_AGENT_MEMORY=1")
+	}
+	if a.GatewayOn {
+		env = append(env, "RUNTIME_GATEWAY_URL="+a.GatewayURL)
+		if a.GatewayKey != "" {
+			env = append(env, "RUNTIME_GATEWAY_KEY="+a.GatewayKey)
+		}
 	}
 	if a.broker != nil {
 		secrets, err := a.broker.SecretsFor(ctx, a.Tenant)
