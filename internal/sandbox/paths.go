@@ -14,8 +14,9 @@ const workspace = "/workspace"
 // confinePath resolves a user-supplied path strictly under /workspace.
 // Relative paths are joined to /workspace; absolute paths must already be
 // inside it. Anything escaping after cleaning (.., absolute elsewhere,
-// /workspaceX prefix tricks) is rejected. Symlink tricks are moot: file I/O
-// goes through the Docker copy API, never a shell.
+// /workspaceX prefix tricks) is rejected. Path strings are never shell-
+// interpolated: file I/O goes through argv-only execs (tee/head), never a
+// shell string.
 func confinePath(p string) (string, error) {
 	if p == "" {
 		return "", fmt.Errorf("path is empty")

@@ -227,6 +227,13 @@ func TestClampTimeout(t *testing.T) {
 	if d := clampTimeout(-5); d != 30*time.Second {
 		t.Fatalf("negative = %v", d)
 	}
+	// Huge values must clamp, not overflow time.Duration into negative/zero.
+	if d := clampTimeout(10_000_000_000); d != maxExecTimeout {
+		t.Fatalf("10e9 seconds = %v, want %v", d, maxExecTimeout)
+	}
+	if d := clampTimeout(1 << 62); d != maxExecTimeout {
+		t.Fatalf("1<<62 seconds = %v, want %v", d, maxExecTimeout)
+	}
 }
 
 func TestFilesConfinedAndLimited(t *testing.T) {

@@ -11,11 +11,18 @@ import (
 )
 
 // startServer builds a Manager over the fake backend, wraps it in the MCP
-// server, and connects an in-memory client session to it.
+// server (gateway-only mode: allowDirect=false), and connects an in-memory
+// client session to it.
 func startServer(t *testing.T) *sdk.ClientSession {
 	t.Helper()
+	return startServerMode(t, false)
+}
+
+// startServerMode is startServer with an explicit allowDirect.
+func startServerMode(t *testing.T, allowDirect bool) *sdk.ClientSession {
+	t.Helper()
 	m := NewManager(NewFakeBackend(), Config{MaxPerTenant: 2})
-	srv := NewServer(m)
+	srv := NewServer(m, allowDirect)
 
 	ct, st := sdk.NewInMemoryTransports()
 	ss, err := srv.Connect(context.Background(), st, nil)
@@ -257,6 +264,56 @@ func TestToolsMissingArgsIsError(t *testing.T) {
 	})
 	if !res.IsError {
 		t.Fatalf("execute_code without code should be IsError")
+	}
+}
+
+// TestToolsAbsentTenantFailsClosed pins the misconfiguration guard: without
+// the gateway-injected __rt_tenant key (and without allowDirect), every tool
+// must refuse rather than silently merge callers into tenant "default".
+func TestToolsAbsentTenantFailsClosed(t *testing.T) {
+	sess := startServer(t) // allowDirect=false
+
+	res, _ := call(t, sess, "create_sandbox", map[string]any{})
+	if !res.IsError {
+		t.Fatal("create_sandbox without __rt_tenant should be IsError")
+	}
+	if msg := text(t, res); !strings.Contains(msg, "forward_tenant") {
+		t.Fatalf("absent-tenant error %q should mention forward_tenant", msg)
+	}
+
+	res, _ = call(t, sess, "list_sandboxes", nil)
+	if !res.IsError {
+		t.Fatal("list_sandboxes without __rt_tenant should be IsError")
+	}
+
+	// Present-but-empty stays tenant "default" (gateway open mode injects "").
+	res, _ = call(t, sess, "create_sandbox", map[string]any{"__rt_tenant": ""})
+	if res.IsError {
+		t.Fatalf("create_sandbox with empty __rt_tenant should succeed (open mode): %s", text(t, res))
+	}
+}
+
+// TestToolsAllowDirectAbsentTenantIsDefault pins the single-tenant escape
+// hatch: allowDirect=true maps an absent key to tenant "default".
+func TestToolsAllowDirectAbsentTenantIsDefault(t *testing.T) {
+	sess := startServerMode(t, true)
+
+	res, out := call(t, sess, "create_sandbox", map[string]any{})
+	if res.IsError {
+		t.Fatalf("create_sandbox (allowDirect, no tenant key) errored: %s", text(t, res))
+	}
+	id, _ := out["sandbox_id"].(string)
+	if !strings.HasPrefix(id, "sbx-") {
+		t.Fatalf("sandbox_id = %q, want sbx- prefix", id)
+	}
+
+	// Visible under tenant "default": the gateway open-mode form ("") lists it.
+	res, out = call(t, sess, "list_sandboxes", map[string]any{"__rt_tenant": ""})
+	if res.IsError {
+		t.Fatalf("list_sandboxes errored: %s", text(t, res))
+	}
+	if boxes, _ := out["sandboxes"].([]any); len(boxes) != 1 {
+		t.Fatalf("default tenant should see 1 sandbox, got %v", out["sandboxes"])
 	}
 }
 

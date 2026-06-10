@@ -1,16 +1,14 @@
 package sandbox
 
 import (
-	"archive/tar"
 	"bytes"
 	"context"
 	"fmt"
-	"io"
 	"path"
 	"strconv"
+	"strings"
 	"time"
 
-	cerrdefs "github.com/containerd/errdefs"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/client"
@@ -110,6 +108,19 @@ func (d *dockerBackend) Create(ctx context.Context, tenant string) (string, erro
 // process tree, never the container. Exit 124 (TERM) / 137 (KILL after
 // --kill-after) at or past the deadline reports TimedOut.
 func (d *dockerBackend) Exec(ctx context.Context, containerID string, argv []string, timeout time.Duration) (ExecResult, error) {
+	return d.runExec(ctx, containerID, argv, nil, timeout)
+}
+
+// execStdin is Exec with bytes fed to the process's stdin (used for file
+// writes via `tee` — argv-only, content never touches a shell).
+func (d *dockerBackend) execStdin(ctx context.Context, containerID string, argv []string, stdin []byte, timeout time.Duration) (ExecResult, error) {
+	return d.runExec(ctx, containerID, argv, stdin, timeout)
+}
+
+// runExec is the shared exec plumbing behind Exec and execStdin: timeout-wrap
+// argv with coreutils `timeout`, attach (optionally with stdin), copy output
+// in a goroutine raced against ctx, inspect with a fresh context.
+func (d *dockerBackend) runExec(ctx context.Context, containerID string, argv []string, stdin []byte, timeout time.Duration) (ExecResult, error) {
 	cmd := append([]string{
 		"timeout", "--kill-after=5", strconv.Itoa(int(timeout.Seconds())),
 	}, argv...)
@@ -123,6 +134,7 @@ func (d *dockerBackend) Exec(ctx context.Context, containerID string, argv []str
 	exec, err := d.cli.ContainerExecCreate(ctx, containerID, container.ExecOptions{
 		Cmd:          cmd,
 		WorkingDir:   workspace,
+		AttachStdin:  stdin != nil,
 		AttachStdout: true,
 		AttachStderr: true,
 	})
@@ -134,6 +146,18 @@ func (d *dockerBackend) Exec(ctx context.Context, containerID string, argv []str
 		return ExecResult{}, err
 	}
 	defer attach.Close()
+
+	if stdin != nil {
+		// Feed stdin, then half-close so the process sees EOF. Write errors
+		// surface as a non-zero exit / short file from the process side; the
+		// inspect below reports them.
+		if _, err := attach.Conn.Write(stdin); err != nil {
+			return ExecResult{}, fmt.Errorf("write exec stdin: %w", err)
+		}
+		if err := attach.CloseWrite(); err != nil {
+			return ExecResult{}, fmt.Errorf("close exec stdin: %w", err)
+		}
+	}
 
 	// The hijacked connection's read is NOT ctx-cancelable (ctx only governed
 	// the dial), so a process that setsid()-escapes the `timeout` process
@@ -188,9 +212,13 @@ func (d *dockerBackend) Exec(ctx context.Context, containerID string, argv []str
 	}, nil
 }
 
-// WriteFile copies one file into the container via the archive API (no shell
-// touches the content). Parent directories under /workspace are created
-// first when needed.
+// WriteFile writes one file into the container via an exec of `tee` with the
+// content on stdin (argv-only — no shell interpolation of content or path,
+// no size/quoting limits; "--" guards leading-dash paths). The Docker archive
+// API (CopyToContainer) is unusable here: the daemon rejects it outright on a
+// read-only rootfs ("container rootfs is marked read-only") even though the
+// target is a tmpfs. Parent directories under /workspace are created first
+// when needed.
 func (d *dockerBackend) WriteFile(ctx context.Context, containerID, p string, content []byte) error {
 	if dir := path.Dir(p); dir != workspace {
 		res, err := d.Exec(ctx, containerID, []string{"mkdir", "-p", dir}, 10*time.Second)
@@ -201,53 +229,37 @@ func (d *dockerBackend) WriteFile(ctx context.Context, containerID, p string, co
 			return fmt.Errorf("mkdir %s failed: %s", dir, res.Stderr)
 		}
 	}
-	var buf bytes.Buffer
-	tw := tar.NewWriter(&buf)
-	if err := tw.WriteHeader(&tar.Header{
-		Name:    p[1:], // relative to the extraction root "/"
-		Mode:    0o644,
-		Size:    int64(len(content)),
-		Uid:     sandboxUID,
-		Gid:     sandboxUID,
-		ModTime: time.Now(),
-	}); err != nil {
+	res, err := d.execStdin(ctx, containerID, []string{"tee", "--", p}, content, 30*time.Second)
+	if err != nil {
 		return err
 	}
-	if _, err := tw.Write(content); err != nil {
-		return err
+	if res.ExitCode != 0 {
+		return fmt.Errorf("write %s failed (exit %d): %s", p, res.ExitCode, res.Stderr)
 	}
-	if err := tw.Close(); err != nil {
-		return err
-	}
-	return d.cli.CopyToContainer(ctx, containerID, "/", &buf, container.CopyToContainerOptions{})
+	return nil
 }
 
-// ReadFile copies one file out via the archive API, capped at limit bytes.
+// ReadFile reads one file out via an exec of `head -c` (argv-only, binary-
+// safe through stdcopy), capped at limit bytes. The archive API
+// (CopyFromContainer) cannot see tmpfs contents on this posture — existing
+// files under the tmpfs /workspace report not-found — so file reads must go
+// through exec too.
 func (d *dockerBackend) ReadFile(ctx context.Context, containerID, p string, limit int) ([]byte, bool, error) {
-	rc, _, err := d.cli.CopyFromContainer(ctx, containerID, p)
+	res, err := d.Exec(ctx, containerID, []string{"head", "-c", strconv.Itoa(limit + 1), "--", p}, 30*time.Second)
 	if err != nil {
-		// Only a typed engine not-found becomes ErrNoSuchFile; anything else
-		// (daemon down, permission, ...) passes through raw so maskIfGone can
-		// log it for the operator instead of misreporting it to the model.
-		if cerrdefs.IsNotFound(err) {
+		return nil, false, err
+	}
+	if res.ExitCode != 0 {
+		switch {
+		case strings.Contains(res.Stderr, "No such file"):
 			return nil, false, fmt.Errorf("%w: %s", ErrNoSuchFile, p)
+		case strings.Contains(res.Stderr, "Is a directory"):
+			return nil, false, fmt.Errorf("%s is not a regular file", p)
+		default:
+			return nil, false, fmt.Errorf("read %s failed (exit %d): %s", p, res.ExitCode, res.Stderr)
 		}
-		return nil, false, err
 	}
-	defer rc.Close()
-
-	tr := tar.NewReader(rc)
-	hdr, err := tr.Next()
-	if err != nil {
-		return nil, false, fmt.Errorf("%w: %s", ErrNoSuchFile, p)
-	}
-	if hdr.Typeflag != tar.TypeReg {
-		return nil, false, fmt.Errorf("%s is not a regular file", p)
-	}
-	content, err := io.ReadAll(io.LimitReader(tr, int64(limit)+1))
-	if err != nil {
-		return nil, false, err
-	}
+	content := []byte(res.Stdout)
 	if len(content) > limit {
 		return content[:limit], true, nil
 	}

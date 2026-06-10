@@ -11,13 +11,17 @@ const tenantKey = "__rt_tenant"
 const defaultTenant = "default"
 
 // popTenant extracts and removes the reserved tenant key from raw JSON tool
-// arguments, returning the remaining arguments for normal decoding. An empty
-// or absent tenant maps to "default".
-func popTenant(raw json.RawMessage) (tenant string, rest json.RawMessage, err error) {
+// arguments, returning the remaining arguments for normal decoding. present
+// reports whether the key existed at all (any string value, including "").
+// A present-but-empty tenant maps to "default" (the gateway's open mode
+// injects ""); an ABSENT key means the call did not come through a
+// forward_tenant gateway upstream — NewServer fails closed on that unless
+// allowDirect is set.
+func popTenant(raw json.RawMessage) (tenant string, present bool, rest json.RawMessage, err error) {
 	m := map[string]any{}
 	if len(raw) > 0 {
 		if err := json.Unmarshal(raw, &m); err != nil {
-			return "", nil, err
+			return "", false, nil, err
 		}
 	}
 	if m == nil { // raw was JSON null
@@ -25,11 +29,12 @@ func popTenant(raw json.RawMessage) (tenant string, rest json.RawMessage, err er
 	}
 	if v, ok := m[tenantKey].(string); ok {
 		tenant = v
+		present = true
 	}
 	delete(m, tenantKey)
 	if tenant == "" {
 		tenant = defaultTenant
 	}
 	rest, err = json.Marshal(m)
-	return tenant, rest, err
+	return tenant, present, rest, err
 }

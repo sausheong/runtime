@@ -181,15 +181,17 @@ func (m *Manager) maskIfGone(id string, err error) error {
 }
 
 // clampTimeout converts a caller-supplied timeout in seconds into a bounded
-// duration: <=0 means the default, anything above the max is clamped.
+// duration: <=0 means the default, anything above the max is clamped. The
+// comparison happens in seconds BEFORE multiplying, so huge values cannot
+// overflow time.Duration into negative/zero.
 func clampTimeout(seconds int) time.Duration {
 	if seconds <= 0 {
 		return defaultExecTimeout
 	}
-	if d := time.Duration(seconds) * time.Second; d <= maxExecTimeout {
-		return d
+	if seconds > int(maxExecTimeout/time.Second) {
+		return maxExecTimeout
 	}
-	return maxExecTimeout
+	return time.Duration(seconds) * time.Second
 }
 
 // ExecCode runs Python code inside the sandbox.

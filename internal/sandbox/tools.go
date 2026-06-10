@@ -52,9 +52,19 @@ func execOut(res ExecResult) map[string]any {
 // NewServer builds the sandboxd MCP server: the 7 sandbox tools over m.
 // Tool names are unprefixed — the gateway namespaces them (sandbox__*).
 // Every handler first pops the reserved __rt_tenant argument the gateway
-// injects (absent/empty ⇒ "default"), so tenancy never appears in any
-// schema and the model can never choose its own tenant.
-func NewServer(m *Manager) *sdk.Server {
+// injects (present-but-empty ⇒ "default", the gateway's open mode), so
+// tenancy never appears in any schema and the model can never choose its
+// own tenant.
+//
+// When allowDirect is false, an ABSENT __rt_tenant key fails closed: the
+// gateway always injects the key for forward_tenant upstreams (open mode
+// injects ""), so absence means a non-forwarding upstream or a direct
+// caller — silently mapping everyone to "default" there would merge tenants.
+// Honest caveat: this guard catches misconfiguration loudly on the honest
+// path; an adversarial agent calling through a NON-forwarding upstream can
+// still set the key itself — forward_tenant: true at the gateway is the
+// actual security boundary (see the design spec).
+func NewServer(m *Manager, allowDirect bool) *sdk.Server {
 	srv := sdk.NewServer(&sdk.Implementation{Name: "runtime-sandbox", Version: "m1"}, nil)
 
 	add := func(name, desc, schema string, h func(ctx context.Context, tenant string, args json.RawMessage) (any, error)) {
@@ -63,9 +73,12 @@ func NewServer(m *Manager) *sdk.Server {
 			Description: desc,
 			InputSchema: json.RawMessage(schema),
 		}, func(ctx context.Context, req *sdk.CallToolRequest) (*sdk.CallToolResult, error) {
-			tenant, rest, err := popTenant(req.Params.Arguments)
+			tenant, present, rest, err := popTenant(req.Params.Arguments)
 			if err != nil {
 				return errResult("invalid arguments: " + err.Error()), nil
+			}
+			if !present && !allowDirect {
+				return errResult("missing gateway tenant: sandboxd must be served behind the platform gateway with forward_tenant: true (or set RUNTIME_SANDBOX_ALLOW_DIRECT=1 for single-tenant direct use)"), nil
 			}
 			out, err := h(ctx, tenant, rest)
 			if err != nil {

@@ -2,7 +2,13 @@
 // code interpreter (one locked-down Docker container per sandbox session)
 // exposed as MCP tools over stdio. It is designed to run as a gateway
 // upstream (gateway.servers: command: with forward_tenant: true) — the
-// gateway injects the calling principal's tenant as __rt_tenant.
+// gateway injects the calling principal's tenant as __rt_tenant. Calls
+// arriving WITHOUT that key (non-forwarding upstream, direct caller) fail
+// closed unless RUNTIME_SANDBOX_ALLOW_DIRECT=1.
+//
+// Run exactly one sandboxd per host (or per DOCKER_HOST): reap-on-start
+// removes ALL runtime.sandbox=1 containers on the engine, so a second
+// instance starting up would destroy the first instance's live sandboxes.
 //
 // Env:
 //
@@ -14,6 +20,9 @@
 //	RUNTIME_SANDBOX_MEM_MB          memory limit (default 512)
 //	RUNTIME_SANDBOX_CPUS            cpu limit (default 1.0)
 //	RUNTIME_SANDBOX_RUNTIME         engine runtime, e.g. runsc (default engine default)
+//	RUNTIME_SANDBOX_ALLOW_DIRECT    "1" ⇒ accept calls without the gateway's
+//	                                __rt_tenant key as tenant "default"
+//	                                (single-tenant direct use only)
 //	RUNTIME_SANDBOX_FAKE            "1" ⇒ in-memory fake backend (tests only)
 package main
 
@@ -110,7 +119,8 @@ func main() {
 
 	// No SIGTERM handler by design: if sandboxd dies without cleanup, the
 	// leftover labeled containers are recovered by reap-on-start above.
-	srv := sandbox.NewServer(m)
+	allowDirect := os.Getenv("RUNTIME_SANDBOX_ALLOW_DIRECT") == "1"
+	srv := sandbox.NewServer(m, allowDirect)
 	if err := srv.Run(ctx, &sdk.StdioTransport{}); err != nil {
 		slog.Error("sandboxd: server exited", "err", err)
 		os.Exit(1)
