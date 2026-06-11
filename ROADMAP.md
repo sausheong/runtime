@@ -207,8 +207,30 @@ exposing the platform broadly.
    `examples/rest-demo` (a stdlib orders API serving its own spec).
    Limitations recorded: JSON request bodies only, comma-joined arrays (no
    explode), shared credentials per upstream, OpenAPI 3.x only, no OAuth2
-   flow. Remaining B1: dynamic upstream registration + per-tenant
-   self-service, resources/prompts passthrough, OAuth2 upstream auth,
+   flow. LIVE PROOF (2026-06-12, all passed): the bundled
+   `examples/rest-demo` orders API on :9000 federated as upstream `orders`
+   (transport=openapi, 3 tools) — an external MCP client listed
+   `orders__listOrders`/`getOrder`/`createOrder` and called `listOrders`
+   with `{"status":"open"}` through `/gateway/mcp`, envelope status 200
+   with both open orders returned; a real-world spec we didn't write —
+   Open-Meteo's 1000+-line `forecast.yml` fetched from
+   raw.githubusercontent.com, `servers[]` absent so the configured
+   `base_url` was used — federated as `weather__get_v1_forecast` (1 tool)
+   and called through the gateway with
+   `current=["temperature_2m","weather_code"]` (the enum-array param fully
+   inlined into the tool schema): status 200, a live Singapore reading of
+   25.3°C returned through the envelope; an end-to-end agent turn — the
+   nutrition agent (`gateway: true`, real LLM via the proxy) used the
+   federated weather tool to fetch the current temperature at lat 1.35/lon
+   103.82 and folded 25.3°C into its hydration/sugar advice, the REST tool
+   call visible in the turn; and `gateway: search` discovery —
+   `/gateway/mcp?mode=search` with a `search_tools` query "get the weather
+   forecast for a location" returned `weather__get_v1_forecast` ranked
+   with its generated description + full inlined schema (embeddings via
+   the proxy: `RUNTIME_EMBED_MODEL=azure/text-embedding-3-small-eastus` —
+   NOTE the proxy serves embedding models under prefixed names, not bare
+   `text-embedding-3-small`). Remaining B1: dynamic upstream registration +
+   per-tenant self-service, resources/prompts passthrough, OAuth2 upstream auth,
    per-tenant upstream credentials (secrets-broker integration), console
    panel, auto-minted per-tenant agent keys, and rate limits/quotas.
    Spec/plan: `docs/superpowers/{specs,plans}/2026-06-12-gateway-m3-rest-adapters*`.
