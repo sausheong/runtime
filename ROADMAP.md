@@ -364,7 +364,26 @@ exposing the platform broadly.
    `route="auth_rejected"`. Proven by hermetic unit tests
    (`internal/obs/*_test.go`) and a through-serve e2e
    (`test/observability_e2e_test.go`): fan-out merge, route normalization,
-   request-id echo, auth-free `/metrics` with identity on. Remaining B5: OTel
+   request-id echo, auth-free `/metrics` with identity on. LIVE PROOF
+   (2026-06-11, all passed): the compose overlay up (`docker compose -f
+   deploy/docker-compose.yml -f deploy/docker-compose.obs.yml up -d`) with
+   the Prometheus target `host.docker.internal:8080` health "up", Grafana
+   13.0.2 healthy and serving the provisioned "Runtime Overview" dashboard
+   with all 12 panels, and PromQL through Prometheus returning real
+   per-agent turn counts (`sum by (agent)(agent_turns_total)`: support=8,
+   research=2); fan-out + merged exposition live — per-agent
+   `agent_turns_total`/`agent_tokens_total` series with correct agent
+   labels flowing through runtimed's single `/metrics`; a `kill -9` of the
+   support agentd, where the next scrape showed
+   `runtime_agent_up{agent="support"} 0` (research stayed 1) and after
+   supervisor recovery (~6s) up was back to 1 with
+   `runtime_agent_restarts_total{agent="support"} 1`; and request-id
+   correlation — `runtimectl invoke -v` printed
+   `req-3c31f600efcd5b8b43aaeb94ffaeb53d`, and ONE grep of that id hit 4
+   log lines spanning both processes (runtimed access log: POST /sessions
+   status=200; agentd http log: POST /sessions; and both turn lines:
+   turn=0 reason=continue, turn=1 reason=completed with the session id) —
+   the edge→proxy→agent→turn chain proven. Remaining B5: OTel
    tracing/OTLP push (request ids are the seed), sandboxd-internal metrics
    (visible today only as gateway series), per-tenant token accounting,
    alerting/recording rules, console `/ui` metrics panel, log shipping, and
