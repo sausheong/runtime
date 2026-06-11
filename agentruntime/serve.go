@@ -15,6 +15,7 @@ import (
 	"github.com/sausheong/harness/llm"
 	hrt "github.com/sausheong/harness/runtime"
 	"github.com/sausheong/harness/session"
+	"github.com/sausheong/runtime/internal/obs"
 	"github.com/sausheong/runtime/internal/store"
 )
 
@@ -24,6 +25,9 @@ type Manager struct {
 	cfg     Config
 	dbosCtx dbos.DBOSContext
 	st      store.Store
+	// metrics is this agent's Prometheus registry. Nil-safe: tests construct
+	// Manager without it and every obs method no-ops on a nil receiver.
+	metrics *obs.AgentMetrics
 
 	mu          sync.Mutex
 	subscribers map[string][]chan WireEvent // sessionID -> live SSE subscribers
@@ -80,6 +84,25 @@ func (m *Manager) subscribe(sessionID string) (<-chan WireEvent, func()) {
 				break
 			}
 		}
+	}
+}
+
+// observeTurn records one turn's metrics: outcome/duration/tokens plus one
+// tool-call increment per tool_call entry the turn produced. The tool name
+// lives inside the entry's Data payload (session.ToolCallData), not on the
+// entry itself. Nil-safe via the obs nil-receiver no-ops, so Managers built
+// without metrics are fine.
+func (m *Manager) observeTurn(outcome string, dur time.Duration, usage *llm.Usage, entries []session.SessionEntry) {
+	m.metrics.TurnObserved(outcome, dur, usage)
+	for _, e := range entries {
+		if e.Type != session.EntryTypeToolCall {
+			continue
+		}
+		var td session.ToolCallData
+		if err := json.Unmarshal(e.Data, &td); err != nil || td.Tool == "" {
+			continue
+		}
+		m.metrics.ToolCallObserved(td.Tool)
 	}
 }
 
@@ -156,10 +179,24 @@ func (m *Manager) sessionWorkflow(ctx dbos.DBOSContext, in turnInput) (string, e
 			if turn == 0 {
 				images = firstImages
 			}
+			// Metrics + the per-turn log line live INSIDE this closure on
+			// purpose: DBOS skips completed steps on crash-recovery replay
+			// (returning the checkpointed turnOutput without re-running this
+			// function), so everything here fires exactly once per real turn.
+			start := time.Now()
 			tr, terr := rt.RunTurn(stepCtx, userMsg, images, nil) // headless (emit=nil)
+			elapsed := time.Since(start)
 			if terr != nil {
+				m.observeTurn("error", elapsed, nil, nil)
 				return turnOutput{}, terr
 			}
+			m.observeTurn(tr.StopReason, elapsed, tr.Usage, tr.Entries)
+			slog.Info("turn",
+				"agent", m.agentID,
+				"session", wfID,
+				"turn", turn,
+				"reason", tr.StopReason,
+				"request_id", in.RequestID)
 			return turnOutput{Done: tr.Done, Reason: tr.StopReason, Entries: tr.Entries}, nil
 		})
 		if stepErr != nil {
@@ -192,13 +229,15 @@ func (m *Manager) sessionWorkflow(ctx dbos.DBOSContext, in turnInput) (string, e
 }
 
 // startSession creates a store session row and launches the durable workflow
-// with the session id as the stable DBOS workflow id.
-func (m *Manager) startSession(ctx context.Context, userMsg, imageB64, imageMime string) (string, error) {
+// with the session id as the stable DBOS workflow id. requestID is the
+// originating POST's X-Request-ID, carried into the checkpointed workflow
+// input for log correlation.
+func (m *Manager) startSession(ctx context.Context, userMsg, imageB64, imageMime, requestID string) (string, error) {
 	sessionID, err := m.st.CreateSession(ctx, m.agentID)
 	if err != nil {
 		return "", err
 	}
-	in := turnInput{UserMsg: userMsg, ImageB64: imageB64, ImageMime: imageMime}
+	in := turnInput{UserMsg: userMsg, ImageB64: imageB64, ImageMime: imageMime, RequestID: requestID}
 	if _, err := dbos.RunWorkflow(m.dbosCtx, m.sessionWorkflow, in, dbos.WithWorkflowID(sessionID)); err != nil {
 		return "", err
 	}
@@ -244,6 +283,7 @@ func Serve(ctx context.Context, cfg Config) error {
 		cfg:         cfg,
 		dbosCtx:     dctx,
 		st:          st,
+		metrics:     obs.NewAgentMetrics(cfg.Spec.ID),
 		subscribers: map[string][]chan WireEvent{},
 	}
 
@@ -254,7 +294,7 @@ func Serve(ctx context.Context, cfg Config) error {
 	}
 	defer dbos.Shutdown(dctx, 10*time.Second)
 
-	srv := &http.Server{Addr: listenAddr, Handler: m.newMux()}
+	srv := &http.Server{Addr: listenAddr, Handler: m.handler()}
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- srv.ListenAndServe() }()
 

@@ -2,9 +2,30 @@ package agentruntime
 
 import (
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"strconv"
+
+	"github.com/sausheong/runtime/internal/obs"
 )
+
+// handler is the full agentd HTTP stack: RequestID outermost (it mutates
+// r.Header, so nothing may observe the request first), then an access log for
+// every request except the probe-noise paths /healthz and /metrics, then the
+// route mux.
+func (m *Manager) handler() http.Handler {
+	mux := m.newMux()
+	logged := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/healthz" && r.URL.Path != "/metrics" {
+			slog.Info("http",
+				"method", r.Method,
+				"path", r.URL.Path,
+				"request_id", obs.RequestIDFromContext(r.Context()))
+		}
+		mux.ServeHTTP(w, r)
+	})
+	return obs.RequestID(logged)
+}
 
 func (m *Manager) newMux() *http.ServeMux {
 	mux := http.NewServeMux()
@@ -13,6 +34,7 @@ func (m *Manager) newMux() *http.ServeMux {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
 	})
+	mux.Handle("GET /metrics", m.metrics.Handler())
 	mux.HandleFunc("GET /meta", func(w http.ResponseWriter, _ *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]string{
 			"agent_id": m.agentID, "contract_version": "v1",
@@ -28,7 +50,7 @@ func (m *Manager) newMux() *http.ServeMux {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		id, err := m.startSession(r.Context(), body.Message, body.ImageB64, body.ImageMime)
+		id, err := m.startSession(r.Context(), body.Message, body.ImageB64, body.ImageMime, obs.RequestIDFromContext(r.Context()))
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
