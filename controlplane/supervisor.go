@@ -17,6 +17,9 @@ type Supervisor struct {
 	// grow the delay from Backoff up to MaxBackoff; a process that runs at least
 	// Backoff before exiting is treated as healthy and resets the delay.
 	MaxBackoff time.Duration
+	// OnRestart fires before each RESPAWN (not the first spawn). Used for
+	// restart metrics; nil ⇒ no-op.
+	OnRestart func()
 }
 
 // nextBackoff doubles cur, capped at max. Used to grow restart delay on repeated
@@ -44,10 +47,15 @@ func (s *Supervisor) Run(ctx context.Context) {
 		}
 	}
 	backoff := base
+	first := true
 	for {
 		if ctx.Err() != nil {
 			return
 		}
+		if !first && s.OnRestart != nil {
+			s.OnRestart()
+		}
+		first = false
 		start := time.Now()
 		wait := s.Spawn(ctx)
 		select {

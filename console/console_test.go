@@ -36,6 +36,7 @@ func TestConsole_OverviewFiltersByTenant(t *testing.T) {
 		Handler(testRegMulti(t), OIDCConfig{}),
 		stubAuth{p: identity.Principal{TenantID: "beta", Role: identity.RoleViewer}},
 		identity.NewAuthorizer(map[string]string{"a": "alpha", "b": "beta"}),
+		nil,
 	)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest("GET", "/ui", nil))
@@ -53,6 +54,7 @@ func TestConsole_AgentPageCrossTenant404(t *testing.T) {
 		Handler(testRegMulti(t), OIDCConfig{}),
 		stubAuth{p: identity.Principal{TenantID: "beta", Role: identity.RoleViewer}},
 		identity.NewAuthorizer(map[string]string{"a": "alpha", "b": "beta"}),
+		nil,
 	)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest("GET", "/ui/agents/a", nil)) // a is alpha's

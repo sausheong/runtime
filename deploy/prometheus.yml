@@ -1,0 +1,11 @@
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  - job_name: runtime
+    metrics_path: /metrics
+    static_configs:
+      # host.docker.internal: Prometheus runs in compose; runtimed typically on
+      # the host during dev. For full-stack compose (docker-compose.full.yml),
+      # override with the runtimed service name.
+      - targets: ["host.docker.internal:8080"]

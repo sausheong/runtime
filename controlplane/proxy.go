@@ -117,13 +117,24 @@ func (a AgentProcess) SpawnFunc() func(ctx context.Context) <-chan error {
 
 // reverseProxy builds a passthrough to the agent subprocess at addr.
 // FlushInterval = -1 ensures SSE/streaming responses are flushed immediately
-// so events pass through promptly.
-func reverseProxy(addr string) *httputil.ReverseProxy {
+// so events pass through promptly. onError (nil ⇒ no-op) fires before each
+// 503 served by the ErrorHandler — used for proxy-error metrics.
+func reverseProxy(addr string, onError func()) *httputil.ReverseProxy {
 	target, _ := url.Parse("http://" + addr)
 	rp := httputil.NewSingleHostReverseProxy(target)
 	rp.FlushInterval = -1
-	rp.ErrorHandler = func(w http.ResponseWriter, _ *http.Request, _ error) {
+	rp.ErrorHandler = func(w http.ResponseWriter, r *http.Request, _ error) {
+		// Client-initiated cancellation is not an agent failure; don't count it.
+		if onError != nil && r.Context().Err() == nil {
+			onError()
+		}
 		http.Error(w, "agent unavailable", http.StatusServiceUnavailable)
+	}
+	rp.ModifyResponse = func(resp *http.Response) error {
+		// runtimed's own echo of X-Request-Id is authoritative; drop the
+		// agent's duplicate (ReverseProxy copies backend headers with Add).
+		resp.Header.Del("X-Request-Id")
+		return nil
 	}
 	return rp
 }

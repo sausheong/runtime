@@ -26,10 +26,15 @@ func main() {
 		listAgents(base)
 	case "invoke":
 		msg := "hello"
-		if len(rest) > 0 {
-			msg = rest[0]
+		verbose := false
+		for _, a := range rest {
+			if a == "-v" {
+				verbose = true
+			} else {
+				msg = a
+			}
 		}
-		invoke(base, resolveAgent(base, agent), msg)
+		invoke(base, resolveAgent(base, agent), msg, verbose)
 	case "sessions":
 		listSessions(base, resolveAgent(base, agent))
 	case "logs":
@@ -48,7 +53,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: runtimectl <agents|invoke|sessions|logs|conformance|admin> [--agent <id>] [args]")
+	fmt.Fprintln(os.Stderr, "usage: runtimectl <agents|invoke [-v]|sessions|logs|conformance|admin> [--agent <id>] [args]")
 	os.Exit(2)
 }
 
@@ -142,10 +147,13 @@ func listAgents(base string) {
 	}
 }
 
-func invoke(base, agent, msg string) {
+func invoke(base, agent, msg string, verbose bool) {
 	body, _ := json.Marshal(map[string]string{"message": msg})
 	resp, err := authdPost(base+"/agents/"+agent+"/sessions", "application/json", bytes.NewReader(body))
 	check(err)
+	if verbose {
+		fmt.Fprintln(os.Stderr, "request-id:", resp.Header.Get("X-Request-ID"))
+	}
 	var out struct {
 		SessionID string `json:"session_id"`
 	}

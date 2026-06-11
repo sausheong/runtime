@@ -66,6 +66,33 @@ func TestNextBackoff_DoublesAndCaps(t *testing.T) {
 	}
 }
 
+func TestSupervisorOnRestartFires(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	restarts := 0
+	spawns := 0
+	s := &Supervisor{
+		Backoff:   time.Millisecond,
+		OnRestart: func() { restarts++ },
+		Spawn: func(ctx context.Context) <-chan error {
+			spawns++
+			ch := make(chan error, 1)
+			if spawns >= 3 {
+				cancel()
+			}
+			ch <- nil
+			return ch
+		},
+	}
+	s.Run(ctx)
+	if restarts != spawns-1 {
+		t.Fatalf("restarts = %d, want spawns-1 = %d (OnRestart must fire before every respawn but never the first spawn)", restarts, spawns-1)
+	}
+	if restarts < 2 {
+		t.Fatalf("restarts = %d, want >= 2 (spawns=%d)", restarts, spawns)
+	}
+}
+
 func TestSupervisor_FastFailuresGrowBackoff(t *testing.T) {
 	// A spawn that fails instantly (like buildEnv failing closed on a bad
 	// secret) must NOT respawn in a tight loop: backoff grows, so the number of

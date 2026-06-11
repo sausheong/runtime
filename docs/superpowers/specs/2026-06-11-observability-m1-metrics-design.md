@@ -220,7 +220,11 @@ endpoints sit on agent ports, which remain private-to-runtimed as today.
 agents + a fake gateway upstream; run turns via the control plane; assert
 `/metrics` shows `agent_turns_total` rising with correct labels for both
 agents, `runtime_agent_up` 1/1, a gateway call counted, and the same
-`X-Request-ID` appears in the invoke response header.
+`X-Request-ID` appears in the invoke response header — the gateway-call
+criterion (a gateway call appearing in `runtime_gateway_tool_calls_total`
+against a fake upstream) is implemented as unit coverage in
+`internal/gateway/metrics_test.go` rather than in the e2e (deviation recorded
+at planning; the e2e stays gateway-free to keep boot scope small).
 
 **Live proof (manual, recorded in the ROADMAP entry):**
 

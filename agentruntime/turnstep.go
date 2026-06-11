@@ -22,6 +22,10 @@ type turnInput struct {
 	UserMsg   string `json:"user_msg"`             // non-empty only on the first turn
 	ImageB64  string `json:"image_b64,omitempty"`  // optional base64 image, first turn only
 	ImageMime string `json:"image_mime,omitempty"` // defaults to image/jpeg when ImageB64 set
+	// RequestID is the X-Request-ID of the originating POST /sessions. Part of
+	// the checkpointed workflow input, so it is re-supplied identically on DBOS
+	// replay (replay-safe) and lets turn logs correlate back to the HTTP edge.
+	RequestID string `json:"request_id,omitempty"`
 }
 
 // turnOutput is the checkpointed return value of a single turn step. On replay

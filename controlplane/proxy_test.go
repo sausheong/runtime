@@ -18,7 +18,7 @@ import (
 // SSE-friendly immediate flushing stays enabled.
 func TestReverseProxy_503OnDeadBackend(t *testing.T) {
 	// 127.0.0.1:1 is a reserved port nothing listens on → dial fails.
-	rp := reverseProxy("127.0.0.1:1")
+	rp := reverseProxy("127.0.0.1:1", nil)
 	if rp.FlushInterval != -1 {
 		t.Fatalf("FlushInterval = %v, want -1 (immediate flush for SSE)", rp.FlushInterval)
 	}
@@ -27,6 +27,39 @@ func TestReverseProxy_503OnDeadBackend(t *testing.T) {
 	rp.ServeHTTP(rec, httptest.NewRequest("GET", "/sessions", nil))
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("dead backend: code = %d, want 503", rec.Code)
+	}
+}
+
+// TestReverseProxy_DedupesRequestIDEcho verifies ModifyResponse strips the
+// backend agent's X-Request-Id echo so the client sees exactly one value
+// (runtimed's own echo) — ReverseProxy copies backend headers with Add
+// semantics, which would otherwise duplicate the header.
+func TestReverseProxy_DedupesRequestIDEcho(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// agentd echoes the forwarded id on its own response.
+		w.Header().Set("X-Request-Id", "req-from-agent")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer backend.Close()
+
+	rp := reverseProxy(strings.TrimPrefix(backend.URL, "http://"), nil)
+	outer := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// runtimed's middleware echoes the id before proxying.
+		w.Header().Set("X-Request-Id", "req-from-runtimed")
+		rp.ServeHTTP(w, r)
+	})
+
+	rec := httptest.NewRecorder()
+	outer.ServeHTTP(rec, httptest.NewRequest("GET", "/sessions", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("code = %d, want 200", rec.Code)
+	}
+	got := rec.Header().Values("X-Request-Id")
+	if len(got) != 1 {
+		t.Fatalf("X-Request-Id values = %v, want exactly one", got)
+	}
+	if got[0] != "req-from-runtimed" {
+		t.Fatalf("X-Request-Id = %q, want runtimed's echo to win", got[0])
 	}
 }
 
