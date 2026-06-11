@@ -18,7 +18,7 @@ import (
 // UpstreamStatus is the operator-facing state of one upstream.
 type UpstreamStatus struct {
 	Name        string    `json:"name"`
-	Transport   string    `json:"transport"` // "stdio" | "http"
+	Transport   string    `json:"transport"` // "stdio" | "http" | "openapi"
 	State       string    `json:"state"`     // "up" | "down"
 	ToolCount   int       `json:"tool_count"`
 	LastError   string    `json:"last_error,omitempty"`
@@ -67,7 +67,7 @@ func WithBackoff(min, max time.Duration) Option {
 // NewManager builds a Manager for the configured servers. Call Start to begin
 // connecting.
 func NewManager(servers []config.GatewayServer, opts ...Option) *Manager {
-	m := &Manager{dial: dialHarness, minBackoff: time.Second, maxBackoff: time.Minute}
+	m := &Manager{dial: dialProduction, minBackoff: time.Second, maxBackoff: time.Minute}
 	for _, s := range servers {
 		m.ups = append(m.ups, &upstream{cfg: s})
 	}
@@ -298,17 +298,26 @@ func transportOf(s config.GatewayServer) string {
 	if s.Command != "" {
 		return "stdio"
 	}
+	if s.OpenAPI != "" {
+		return "openapi"
+	}
 	return "http"
 }
 
 // renameTools wraps each harness-adapted tool so its gateway-facing name is
 // "<server>__<tool>" instead of the adapter's "mcp__<server>__<tool>". The
 // consuming harness client prepends its own "mcp__gateway__", so stripping
-// here avoids a double prefix. Names not following the adapter convention
-// pass through unchanged (TrimPrefix is a no-op).
+// here avoids a double prefix.
 func renameTools(ts []tool.Tool) []tool.Tool {
 	out := make([]tool.Tool, 0, len(ts))
 	for _, t := range ts {
+		// REST tools are generated directly with gateway names
+		// (<server>__<op>) — no adapter prefix to strip. Type branch, not
+		// name pattern: a REST upstream named "mcp" must not be mangled.
+		if _, ok := t.(restTool); ok {
+			out = append(out, t)
+			continue
+		}
 		out = append(out, renamedTool{Tool: t, name: strings.TrimPrefix(t.Name(), "mcp__")})
 	}
 	return out

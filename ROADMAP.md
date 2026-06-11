@@ -1,6 +1,6 @@
 # Runtime — Roadmap & Backlog
 
-**Checkpoint date:** 2026-06-11 (Observability M1 — fleet metrics + request correlation)
+**Checkpoint date:** 2026-06-12 (Gateway M3 — REST/OpenAPI→tool adapters)
 **Current state:** Runtime spine complete (Milestones 1–3 merged to `master`);
 polyglot agent hosting (C1) first two milestones complete — two foreign
 frameworks (OpenAI Agents SDK + Claude Agent SDK) hosted via the one Python
@@ -17,13 +17,16 @@ the prompt), and M3 auto-ingestion (background LLM fact extraction + semantic
 dedup), all merged to `master` — plus the KG→RunTurn wiring that makes recall and
 ingest actually fire on the production turn path, and a recall-floor recalibration
 for OpenAI-family embeddings (see §B2);
-Gateway (B1) first two milestones complete — M1 MCP federation core (a central
+Gateway (B1) first three milestones complete — M1 MCP federation core (a central
 `/gateway/mcp` Streamable HTTP endpoint federating static-YAML-configured
 upstream MCP servers, tenant-filtered via Identity service keys, consumed by
-agents via a `gateway: true` opt-in) and M2 semantic tool search (a search-first
+agents via a `gateway: true` opt-in), M2 semantic tool search (a search-first
 `?mode=search` consumption mode: one listed `search_tools` tool,
 embedding-ranked discovery over the federated catalog, callable-but-unlisted
-tools), merged to `master` (see §B1);
+tools), and M3 REST/OpenAPI→tool adapters (`openapi:` as a third upstream
+transport — one generated, tenant-filtered, searchable gateway tool per
+selected spec operation, no MCP server required), all merged to `master`
+(see §B1);
 Sandboxes (B4) first milestone complete — M1 code interpreter (a `cmd/sandboxd`
 MCP server giving every gateway-enabled agent an isolated, stateful,
 Docker-backed Python+shell sandbox with tenant-scoped ownership), merged to
@@ -160,6 +163,77 @@ exposing the platform broadly.
    passthrough (tools only today), console panel, auto-minted per-tenant agent
    keys, and rate limits/quotas. Spec/plan:
    `docs/superpowers/{specs,plans}/2026-06-10-gateway-m2-semantic-tool-search*`.
+
+   **Third milestone DONE (merged to `master`, 2026-06-12):** REST/OpenAPI→tool
+   adapters. `openapi:` is a third gateway transport (exactly-one-of
+   `command`/`url`/`openapi`; optional `base_url:` override and `operations:`
+   allowlist of operationIds or `METHOD /glob` patterns; `${VAR}` header
+   expansion reused; `forward_tenant` stays stdio-only): `dialOpenAPI`
+   (`internal/gateway/openapi.go`) fetches the spec (file or URL, configured
+   headers, 8 MiB cap), parses it with kin-openapi, and generates one
+   `tool.Tool` per selected operation — name `<server>__<operationId>`
+   (method_path slug fallback, `__` collapsed to `_`, post-sanitization
+   collisions skip-with-WARN), description `"METHOD /path — summary"` (1024
+   cap), input schema merging path(required)/query/`header_`-prefixed/`body`
+   properties with op-level parameter overrides winning. `restConn` implements
+   `upstreamConn` so supervision, tenant views, principal binding, M2 search
+   indexing, and Obs-M1 metrics (`runtime_gateway_tool_calls_total`,
+   `upstream_up`, transport `"openapi"` in `/gateway/status`) all apply
+   unchanged; Ping is HEAD→GET-on-405 with ANY HTTP response = alive, and
+   reconnect re-fetches the spec (drift heals on redial). Execution returns a
+   JSON envelope `{status, headers:{content-type}, body, truncated}` — 4xx/5xx
+   are results the agent reasons about, not tool errors; 30s timeout, 1 MiB
+   response cap with truncated flag; traversal guard on path params
+   (`/`, `..`, encoded forms rejected); config headers inviolable
+   (case-insensitive, including undeclared `header_*` args and Content-Type);
+   GET/HEAD marked concurrency-safe. Two review-caught fixes worth recording:
+   (1) the original `$ref` handling string-matched the marshaled schema for
+   `"$ref"` and skipped any operation containing one — which would have zeroed
+   every real-world spec (component reuse is the norm); replaced by a
+   deep-inline walk (`inlineSchema`) emitting plain JSON Schema, where only
+   genuine cycles — ancestor-path repetition, not sibling reuse — skip the
+   operation with WARN (external cross-file `$ref`s fail at dial: security
+   posture); (2) the same-host-only redirect policy initially covered API
+   calls but not the spec fetch, which followed cross-host redirects with
+   configured auth headers attached — a credential leak; the exact-same-host
+   policy now applies to both. Degrade-don't-fail throughout: unfetchable spec
+   = down upstream with backoff re-fetch, zero-match filter = connected with 0
+   tools + WARN, unmappable operation = skip-with-WARN, required non-JSON body
+   = skip (optional non-JSON body drops `body`), >50 generated tools WARNs
+   toward `operations:`. Proven by a through-serve e2e
+   (`test/gateway_rest_e2e_test.go`: identity enforced, spec fetched over
+   HTTP, generated tools listed+called via `/gateway/mcp`, tenant-hidden from
+   the other tenant, metrics/status carry the openapi transport) plus
+   `examples/rest-demo` (a stdlib orders API serving its own spec).
+   Limitations recorded: JSON request bodies only, comma-joined arrays (no
+   explode), shared credentials per upstream, OpenAPI 3.x only, no OAuth2
+   flow. LIVE PROOF (2026-06-12, all passed): the bundled
+   `examples/rest-demo` orders API on :9000 federated as upstream `orders`
+   (transport=openapi, 3 tools) — an external MCP client listed
+   `orders__listOrders`/`getOrder`/`createOrder` and called `listOrders`
+   with `{"status":"open"}` through `/gateway/mcp`, envelope status 200
+   with both open orders returned; a real-world spec we didn't write —
+   Open-Meteo's 1000+-line `forecast.yml` fetched from
+   raw.githubusercontent.com, `servers[]` absent so the configured
+   `base_url` was used — federated as `weather__get_v1_forecast` (1 tool)
+   and called through the gateway with
+   `current=["temperature_2m","weather_code"]` (the enum-array param fully
+   inlined into the tool schema): status 200, a live Singapore reading of
+   25.3°C returned through the envelope; an end-to-end agent turn — the
+   nutrition agent (`gateway: true`, real LLM via the proxy) used the
+   federated weather tool to fetch the current temperature at lat 1.35/lon
+   103.82 and folded 25.3°C into its hydration/sugar advice, the REST tool
+   call visible in the turn; and `gateway: search` discovery —
+   `/gateway/mcp?mode=search` with a `search_tools` query "get the weather
+   forecast for a location" returned `weather__get_v1_forecast` ranked
+   with its generated description + full inlined schema (embeddings via
+   the proxy: `RUNTIME_EMBED_MODEL=azure/text-embedding-3-small-eastus` —
+   NOTE the proxy serves embedding models under prefixed names, not bare
+   `text-embedding-3-small`). Remaining B1: dynamic upstream registration +
+   per-tenant self-service, resources/prompts passthrough, OAuth2 upstream auth,
+   per-tenant upstream credentials (secrets-broker integration), console
+   panel, auto-minted per-tenant agent keys, and rate limits/quotas.
+   Spec/plan: `docs/superpowers/{specs,plans}/2026-06-12-gateway-m3-rest-adapters*`.
 2. **Memory** — managed multi-tenant memory. Short + long term, semantic
    retrieval across sessions, per-tenant isolation. Builds on harness
    `tool/memory` + Postgres/pgvector (pgvector is already provisioned in the

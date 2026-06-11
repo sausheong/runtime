@@ -1,0 +1,115 @@
+openapi: 3.0.3
+info:
+  title: Orders Demo API
+  description: Tiny in-memory orders API bundled with runtime for gateway federation demos.
+  version: 1.0.0
+servers:
+  - url: http://localhost:9000
+paths:
+  /orders:
+    get:
+      operationId: listOrders
+      summary: List orders
+      description: Returns all orders, optionally filtered by status.
+      parameters:
+        - name: status
+          in: query
+          required: false
+          description: Filter orders by status (e.g. open, shipped).
+          schema:
+            type: string
+      responses:
+        "200":
+          description: A list of orders.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Order"
+    post:
+      operationId: createOrder
+      summary: Create an order
+      description: Creates a new order with status "open" and a generated id.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/NewOrder"
+      responses:
+        "201":
+          description: The created order.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Order"
+        "400":
+          description: Invalid request body.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /orders/{id}:
+    get:
+      operationId: getOrder
+      summary: Get an order by id
+      description: Returns a single order, or 404 if it does not exist.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Order id (e.g. o1).
+          schema:
+            type: string
+      responses:
+        "200":
+          description: The order.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Order"
+        "404":
+          description: No order with that id.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+components:
+  schemas:
+    Order:
+      type: object
+      description: A single order.
+      properties:
+        id:
+          type: string
+          description: Unique order id.
+        item:
+          type: string
+          description: Item name.
+        qty:
+          type: integer
+          description: Quantity ordered.
+        status:
+          type: string
+          description: Order status (open or shipped).
+      required: [id, item, qty, status]
+    NewOrder:
+      type: object
+      description: Payload for creating an order.
+      properties:
+        item:
+          type: string
+          description: Item name.
+        qty:
+          type: integer
+          description: Quantity to order.
+      required: [item, qty]
+    Error:
+      type: object
+      description: Error response.
+      properties:
+        error:
+          type: string
+          description: Human-readable error message.
+      required: [error]

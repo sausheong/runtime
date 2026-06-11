@@ -103,12 +103,23 @@ One tool per selected operation.
   - header parameters declared in the spec → properties prefixed `header_`;
   - `requestBody` (application/json media type) → inlined under a `body`
     property, required if the spec marks the body required.
-- `$ref`s are resolved by kin-openapi at parse time. An operation whose schema
-  fails to resolve (cyclic/external ref, unsupported construct) is SKIPPED
-  with one WARN naming the operation — never a dead upstream.
-- Operations with no `application/json` request body media type but a
-  non-empty body requirement: skipped with WARN (non-JSON bodies are out of
-  scope, §10).
+- `$ref`s are resolved by kin-openapi at parse time and then **deep-inlined**
+  into plain JSON Schema with no `$ref` emission (kin-openapi's `MarshalJSON`
+  re-emits any *nested* component reference as a literal `{"$ref": ...}` —
+  only the top level is expanded — which is useless in a tool input schema,
+  so generation recurses into the typed structure instead). Component reuse
+  is the norm in real specs and is fully supported: the cycle check tracks
+  the current ANCESTOR PATH only (marked on entry, unmarked on exit), so
+  sibling reuse of the same component is legal — only ancestor-path
+  repetition (e.g. `Node.children → Node`) is a genuine cycle. An operation
+  with a genuinely cyclic schema (or nesting beyond a depth-30 backstop) is
+  SKIPPED with one WARN naming the operation — never a dead upstream.
+  External $refs are disallowed (security posture): a spec using them fails
+  at dial, not per-operation.
+- Operations with a REQUIRED request body that has no `application/json`
+  media type: skipped with WARN (non-JSON bodies are out of scope, §10). An
+  OPTIONAL non-JSON body just drops the `body` property — the operation stays
+  usable bodyless.
 
 ## 6. Execution semantics
 
@@ -160,7 +171,11 @@ Each generated tool's `Execute(ctx, input)`:
   upstreams today; `tenants:` still controls visibility. Per-tenant
   credentials deferred (needs secrets-broker integration).
 - **Spec fetch** uses the same configured headers (spec endpoints behind the
-  same auth work; public specs unaffected).
+  same auth work; public specs unaffected) — and therefore the same
+  exact-same-host redirect policy as API calls (review-caught: Go's default
+  client follows cross-host redirects, only stripping Authorization-class
+  headers, not custom auth headers or subdomain hops — a spec URL redirect
+  must not bounce gateway credentials elsewhere).
 - Secrets stay in env vars via existing `${VAR}` expansion.
 
 ## 8. Failure posture (degrade-don't-fail)
@@ -232,6 +247,7 @@ merged to master.
 - Swagger/OpenAPI 2.0 (kin-openapi targets 3.x; 2.0→3.x conversion deferred).
 - Dynamic upstream registration (separate backlog item).
 - Inline hand-written route definitions (YAML routes without a spec).
+- Form-style explode:true query arrays (repeated params) — arrays always serialize comma-joined in M3.
 
 ## 11. Risks & mitigations
 

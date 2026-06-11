@@ -4,6 +4,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"path"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -72,10 +73,11 @@ func (g *GatewayMode) UnmarshalYAML(value *yaml.Node) error {
 	return nil
 }
 
-// GatewayServer is one upstream MCP server the gateway federates. Exactly one
-// of Command (stdio) or URL (Streamable HTTP) must be set. Headers, Env, and
-// (in GatewayConfig) AgentKeys values support ${VAR} expansion from the
-// operator environment at load time so secrets stay out of the YAML file.
+// GatewayServer is one upstream server the gateway federates. Exactly one of
+// Command (stdio MCP), URL (Streamable HTTP MCP), or OpenAPI (REST adapter)
+// must be set. Headers, Env, and (in GatewayConfig) AgentKeys values support
+// ${VAR} expansion from the operator environment at load time so secrets stay
+// out of the YAML file.
 type GatewayServer struct {
 	Name    string            `yaml:"name"`    // required, unique; namespaces tools as <name>__<tool>
 	Command string            `yaml:"command"` // stdio transport: argv[0]
@@ -91,6 +93,19 @@ type GatewayServer struct {
 	// (command:) upstreams: the trust argument is that a stdio child is
 	// reachable ONLY through the gateway.
 	ForwardTenant bool `yaml:"forward_tenant"`
+
+	// OpenAPI declares a REST upstream: a path or URL to an OpenAPI 3.x
+	// document whose operations become gateway tools (third transport,
+	// mutually exclusive with Command and URL).
+	OpenAPI string `yaml:"openapi"`
+	// BaseURL overrides the spec's servers[0] entry as the request base.
+	// Only valid with OpenAPI. Required at dial time if the spec declares
+	// no usable server entry.
+	BaseURL string `yaml:"base_url"`
+	// Operations is an optional allowlist: operationIds or "METHOD /glob"
+	// patterns (path.Match syntax). Empty ⇒ all operations. Only valid
+	// with OpenAPI.
+	Operations []string `yaml:"operations"`
 }
 
 // GatewayConfig is the optional top-level gateway: section.
@@ -181,16 +196,39 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("config: gateway server name %q must not contain \"__\" (reserved as the <server>__<tool> separator)", s.Name)
 		}
 		names[s.Name] = true
-		if (s.Command == "") == (s.URL == "") {
-			return fmt.Errorf("config: gateway server %q requires exactly one of command or url", s.Name)
+		transports := 0
+		for _, v := range []string{s.Command, s.URL, s.OpenAPI} {
+			if v != "" {
+				transports++
+			}
 		}
-		if s.ForwardTenant && s.URL != "" {
+		if transports != 1 {
+			return fmt.Errorf("config: gateway server %q requires exactly one of command, url, or openapi", s.Name)
+		}
+		if s.ForwardTenant && s.Command == "" {
 			return fmt.Errorf("config: gateway server %q: forward_tenant requires a stdio (command:) upstream", s.Name)
+		}
+		if s.BaseURL != "" && s.OpenAPI == "" {
+			return fmt.Errorf("config: gateway server %q: base_url is only valid with openapi", s.Name)
+		}
+		if len(s.Operations) > 0 && s.OpenAPI == "" {
+			return fmt.Errorf("config: gateway server %q: operations is only valid with openapi", s.Name)
+		}
+		for _, p := range s.Operations {
+			if err := validateOperationPattern(p); err != nil {
+				return fmt.Errorf("config: gateway server %q: %w", s.Name, err)
+			}
 		}
 		if err := expandEnvMap(s.Headers, "gateway server "+s.Name+" headers"); err != nil {
 			return err
 		}
 		if err := expandEnvMap(s.Env, "gateway server "+s.Name+" env"); err != nil {
+			return err
+		}
+		if err := expandEnvScalar(&s.OpenAPI, "gateway server "+s.Name+" openapi"); err != nil {
+			return err
+		}
+		if err := expandEnvScalar(&s.BaseURL, "gateway server "+s.Name+" base_url"); err != nil {
 			return err
 		}
 	}
@@ -205,6 +243,31 @@ func (c *Config) Validate() error {
 	return nil
 }
 
+// validateOperationPattern accepts a bare operationId (no space) or
+// "METHOD /glob" where METHOD is an uppercase HTTP verb and glob is
+// path.Match syntax.
+func validateOperationPattern(p string) error {
+	if p == "" {
+		return fmt.Errorf("operations entry must not be empty")
+	}
+	method, rest, found := strings.Cut(p, " ")
+	if !found {
+		return nil // bare operationId
+	}
+	switch method {
+	case "GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS":
+	default:
+		return fmt.Errorf("operations entry %q: method must be an uppercase HTTP verb", p)
+	}
+	if !strings.HasPrefix(rest, "/") {
+		return fmt.Errorf("operations entry %q: path must start with /", p)
+	}
+	if _, err := path.Match(rest, "/probe"); err != nil {
+		return fmt.Errorf("operations entry %q: bad glob: %w", p, err)
+	}
+	return nil
+}
+
 // expandEnvMap expands ${VAR} references in every value of m from the operator
 // environment, in place. An unset (or empty) variable is a hard error — silent
 // empty-string expansion would send a malformed credential downstream. The
@@ -213,20 +276,38 @@ func (c *Config) Validate() error {
 // should put such values in an env var and reference it with ${VAR}.
 func expandEnvMap(m map[string]string, what string) error {
 	for k, v := range m {
-		var missing []string
-		expanded := os.Expand(v, func(name string) string {
-			val, ok := os.LookupEnv(name)
-			if !ok || val == "" {
-				missing = append(missing, name)
-			}
-			return val
-		})
+		expanded, missing := expandEnvValue(v)
 		if len(missing) > 0 {
 			return fmt.Errorf("config: %s %q references unset or empty env var(s) %v", what, k, missing)
 		}
 		m[k] = expanded
 	}
 	return nil
+}
+
+// expandEnvScalar is expandEnvMap for a single string field, with identical
+// semantics: ${VAR}/$VAR expansion, unset-or-empty variable is a hard error,
+// no escape for a literal $.
+func expandEnvScalar(s *string, what string) error {
+	expanded, missing := expandEnvValue(*s)
+	if len(missing) > 0 {
+		return fmt.Errorf("config: %s references unset or empty env var(s) %v", what, missing)
+	}
+	*s = expanded
+	return nil
+}
+
+// expandEnvValue expands ${VAR}/$VAR references in v from the operator
+// environment, collecting the names of unset-or-empty variables.
+func expandEnvValue(v string) (expanded string, missing []string) {
+	expanded = os.Expand(v, func(name string) string {
+		val, ok := os.LookupEnv(name)
+		if !ok || val == "" {
+			missing = append(missing, name)
+		}
+		return val
+	})
+	return expanded, missing
 }
 
 // TokenMap returns token→label for all configured tokens. Empty when none.
