@@ -24,6 +24,7 @@ no lost work, no duplicated committed tool calls.
 - [Authentication & multi-tenancy](#authentication--multi-tenancy)
 - [MCP Gateway](#mcp-gateway)
 - [Code-interpreter sandbox](#code-interpreter-sandbox)
+- [Observability](#observability)
 - [The CLI (`runtimectl`)](#the-cli-runtimectl)
 - [Web console](#web-console)
 - [HTTP API reference](#http-api-reference)
@@ -57,6 +58,7 @@ no lost work, no duplicated committed tool calls.
 | **Structured logging** | `slog` everywhere (text or JSON via `RUNTIME_LOG_FORMAT`), with agent/session fields. |
 | **BYO agent** | Link the `agentruntime` SDK, hand it a harness `AgentSpec` + provider + tools, and get the durable contract for free — zero durability or HTTP code. |
 | **Code-interpreter sandbox** | An isolated, stateful Python + shell execution environment per session — one locked-down Docker container (no network, read-only rootfs, resource limits), tenant-scoped, delivered to every agent through the MCP gateway. |
+| **Observability** | One Prometheus `/metrics` endpoint for the whole fleet (control plane + every agent, merged), `X-Request-ID` correlation end-to-end through proxy, logs, and durable workflow, and a bundled Prometheus + Grafana compose overlay with a provisioned dashboard. |
 | **On-prem & self-contained** | Go binaries + Postgres. No cloud, no Kubernetes required, air-gap friendly. Full-stack `docker compose` included. |
 
 ---
@@ -742,6 +744,104 @@ reaping clears orphans.
 
 ---
 
+## Observability
+
+The platform exposes **one Prometheus endpoint for the whole fleet**: scrape
+`runtimed`'s `/metrics` and you get the control plane's own series plus every
+supervised agent's series, merged into a single valid exposition.
+
+```bash
+curl -s localhost:8080/metrics | grep -E '^(runtime_|agent_)' | head
+# runtime_agent_up{agent="support"} 1
+# runtime_http_requests_total{method="POST",route="/agents/{id}/...",status="200"} 4
+# agent_turns_total{agent="support",outcome="completed"} 7
+# agent_tokens_total{agent="support",direction="input"} 18342
+```
+
+### Metrics inventory
+
+**Control-plane metrics** (owned by `runtimed`; the `runtime_*` namespace is
+reserved for it):
+
+| Metric | Labels | Meaning |
+|---|---|---|
+| `runtime_http_requests_total` | `route,method,status` | Control-plane HTTP requests, by **matched route pattern** (never raw paths). Requests rejected by the identity middleware count under `route="auth_rejected"`. |
+| `runtime_http_request_duration_seconds` | `route,method` | Control-plane HTTP latency histogram. |
+| `runtime_agent_up` | `agent` | 1 when the agent's `/metrics` was reachable on the last fan-out scrape (a 404 — no metrics endpoint — still counts as serving). |
+| `runtime_agent_restarts_total` | `agent` | Supervisor respawns per agent. |
+| `runtime_proxy_errors_total` | `agent` | Reverse-proxy failures (503s served). Client-initiated cancellations are not counted. |
+| `runtime_gateway_tool_calls_total` | `server,tool,outcome` | Federated gateway tool calls that reached the upstream (authz rejections are not counted). |
+| `runtime_gateway_tool_call_duration_seconds` | `server` | Gateway tool-call latency histogram. |
+| `runtime_gateway_upstream_up` | `server` | 1 when the gateway upstream connection is up. |
+| `runtime_metrics_scrape_skips_total` | `agent,reason` | Agents skipped during the fan-out scrape. Reasons: `timeout`, `unreachable`, `parse`, `no_metrics`, `status_<code>`, `reserved_name`, `type_conflict`. |
+
+**Agent metrics** (emitted per `agentd`, merged into `runtimed`'s exposition):
+
+| Metric | Labels | Meaning |
+|---|---|---|
+| `agent_turns_total` | `agent,outcome` | Turns by outcome (`completed`/`error`/`aborted`/`continue`). |
+| `agent_turn_duration_seconds` | `agent` | Turn wall time (buckets sized for LLM turns: 0.1s–120s). |
+| `agent_tokens_total` | `agent,direction` | LLM tokens by direction (`input`/`output`/`cache_creation`/`cache_read`). |
+| `agent_tool_calls_total` | `agent,tool` | Tool calls dispatched by the agent loop. |
+
+### Fan-out, auth, and cardinality
+
+`GET /metrics` is **auth-free**, like `/healthz` — it sits outside the identity
+middleware so a Prometheus scraper needs no service key. That is safe because
+every label value is an **operator-level identifier** (agent ids, gateway
+server names, tool names, route patterns) — never tenant, session, or user
+data. That is the **cardinality promise**: no per-tenant / per-session /
+per-user labels exist anywhere in the exposition, and adding one is a spec
+change, not a casual edit. On each scrape, `runtimed` fans out to every
+supervised agent's `/metrics` concurrently (500ms cap per agent), parses each
+exposition, and merges families by name with **server-enforced agent labels**:
+the registered agent id is injected/overwritten on every scraped series, so a
+lying agent cannot spoof another agent's series or inject `runtime_*` families
+(those are dropped as `reserved_name`). An agent's `/metrics` is **optional**
+— a foreign-SDK shim that doesn't serve it is skipped (reason `no_metrics`)
+without being marked down.
+
+### Request correlation (`X-Request-ID`)
+
+Every control-plane request gets a correlation id: a valid inbound
+`X-Request-ID` (chars `[A-Za-z0-9._-]`, ≤128 long) is accepted, anything else
+is replaced with a generated `req-<32 hex>`. The id is echoed on the response,
+forwarded through the reverse proxy to the agent, appears in the `slog` lines
+on **both** sides (control-plane access log, per-turn `turn` lines, and
+turn-failure warnings), and is checkpointed in the DBOS workflow input — so a
+resumed session logs the same id it started with (replay-safe). To capture it
+from the CLI:
+
+```bash
+runtimectl invoke -v --agent support "hello"
+# request-id: req-3f9c…        (stderr)
+```
+
+### Prometheus + Grafana overlay
+
+`deploy/docker-compose.obs.yml` adds Prometheus and Grafana (with a
+provisioned **Runtime Overview** dashboard — 12 panels covering fleet health,
+HTTP traffic, turns, tokens, tools, and the gateway) on top of the base
+compose file:
+
+```bash
+docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.obs.yml up -d
+# Grafana:    http://localhost:3000   (anonymous viewer enabled)
+# Prometheus: http://localhost:9090
+```
+
+### Limitations
+
+- **No tracing yet** — request ids are the correlation seed; OTel spans/OTLP
+  push are an Observability M2 candidate.
+- **sandboxd internals are not directly instrumented** — sandbox activity is
+  visible only as gateway tool-call series (`server="sandbox"`); per-container
+  detail belongs with Sandboxes M2.
+- **No per-tenant token accounting** — `agent_tokens_total` is per-agent; the
+  tenant dimension is deliberately excluded (see the cardinality promise).
+
+---
+
 ## The CLI (`runtimectl`)
 
 `runtimectl` talks to the control plane at `RUNTIME_CTL_URL` (default
@@ -799,6 +899,7 @@ layer — no build step, embedded in the binary.
 | Method & path | Description |
 |---|---|
 | `GET /healthz` | Control-plane liveness (always auth-exempt). |
+| `GET /metrics` | Prometheus exposition for the whole fleet (control plane + merged agent series; always auth-exempt — see [Observability](#observability)). |
 | `GET /agents` | JSON list of registered agents with a best-effort health probe: `[{id,name,model,healthy}]`. |
 | `ANY /agents/{id}/...` | Reverse-proxied to agent `{id}`'s subprocess, with the `/agents/{id}` prefix stripped. Unknown id → `404`; agent down/restarting → `503`. |
 | `GET /ui`, `/ui/...` | The read-only web console (see [Web console](#web-console)). |
@@ -816,6 +917,7 @@ them with `/agents/{id}`.
 |---|---|
 | `GET /healthz` | Agent liveness/readiness. |
 | `GET /meta` | `{agent_id, contract_version}`. The versioned agent contract. |
+| `GET /metrics` | *Optional.* Prometheus text exposition for this agent. An agent without it (e.g. a foreign-SDK shim) is skipped by the fan-out scrape (reason `no_metrics`) and is **not** marked down. |
 | `POST /sessions` | Body `{"message": "..."}`. Creates a session, starts the durable workflow, returns `{"session_id": "..."}`. |
 | `GET /sessions` | List this agent's sessions: `[{id,status,turn_count}]`. |
 | `GET /sessions/{id}` | One session's status snapshot: `{id,status,turn_count}`. |
@@ -1361,6 +1463,12 @@ Integration tests cover the platform's headline guarantees, including:
   (in-memory backend — no Docker needed): asserts the sandbox tools federate,
   a spoofed `__rt_tenant` argument is overridden by the gateway, and one
   tenant's sandbox is invisible and unusable to the other.
+- **`TestObservabilityE2E`** — boots `runtimed` with identity enforced and
+  asserts the metrics fan-out merges agent series into one valid exposition
+  (server-enforced `agent` labels), HTTP routes are recorded as patterns (no
+  raw-path cardinality), `X-Request-ID` is echoed/propagated, `/metrics` is
+  reachable without credentials, and auth-rejected requests land in the
+  `route="auth_rejected"` bucket.
 
 **Live-gated tests** exercise the real Docker backend (build the image first
 with `make sandbox-image`):
@@ -1393,9 +1501,12 @@ sub-project (three milestones — durable per-tenant store, semantic recall, and
 auto-ingestion, with recall and ingest wired into the live turn path — see
 [agent memory](#per-tenant-agent-memory)); the **Gateway** sub-project (two
 milestones — MCP federation core and semantic tool search — see
-[MCP Gateway](#mcp-gateway)); and the **Sandboxes** sub-project (first
+[MCP Gateway](#mcp-gateway)); the **Sandboxes** sub-project (first
 milestone — the Docker-backed code interpreter, delivered through the gateway
-— see [Code-interpreter sandbox](#code-interpreter-sandbox)).
+— see [Code-interpreter sandbox](#code-interpreter-sandbox)); and the
+**Observability** sub-project (first milestone — fleet-wide Prometheus
+metrics, request-id correlation, and the Grafana overlay — see
+[Observability](#observability)).
 
 **Deliberately not yet implemented** (each is planned, scoped to a later
 milestone or sub-project):
@@ -1414,8 +1525,14 @@ milestone or sub-project):
   ingest wired into the live turn path. **Still to come:** compaction/TTL/GC of
   dead rows, finer (per-agent/per-user) scoping, per-tenant embedding models,
   refinement/merge dedup, and session-level synthesis.
-- **Observability dashboards** — M3 has structured `slog` logs; metrics,
-  tracing, and dashboards are the Observability sub-project.
+- **Observability — first milestone DONE** (see [Observability](#observability)):
+  M1 Prometheus metrics (control-plane + per-agent series merged behind one
+  auth-free `/metrics` via a hardened fan-out scrape), `X-Request-ID`
+  correlation end-to-end (edge → proxy → agent logs → DBOS workflow input),
+  and the Prometheus + Grafana compose overlay with a provisioned dashboard.
+  **Still to come:** OTel tracing/OTLP push, sandboxd-internal metrics,
+  per-tenant token accounting, alerting/recording rules, a console `/ui`
+  metrics panel, log shipping, and DBOS-internal metrics.
 - **Write actions from the console** — the console is read-only; deploy/stop/
   invoke from the UI is future work.
 - **Subprocess pools / autoscaling** — one subprocess per agent today; no

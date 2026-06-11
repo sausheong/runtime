@@ -1,6 +1,12 @@
 // Package conformance verifies that an agent satisfies the runtime HTTP/SSE
 // agent contract. It runs under `go test` (via *testing.T) and from the CLI
 // (via a small adapter), exercising any agent reachable at a base URL.
+//
+// Optional endpoints (not checked here): an agent MAY expose GET /metrics
+// serving Prometheus text-format exposition. The platform's fan-out scrape
+// merges it into runtimed's /metrics; an agent without it (e.g. a foreign-SDK
+// shim) is simply skipped (skip reason "no_metrics") — this is NOT an error
+// and does not mark the agent down.
 package conformance
 
 import (

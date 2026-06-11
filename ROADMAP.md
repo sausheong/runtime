@@ -1,6 +1,6 @@
 # Runtime — Roadmap & Backlog
 
-**Checkpoint date:** 2026-06-11 (Sandboxes M1 — code interpreter behind the gateway)
+**Checkpoint date:** 2026-06-11 (Observability M1 — fleet metrics + request correlation)
 **Current state:** Runtime spine complete (Milestones 1–3 merged to `master`);
 polyglot agent hosting (C1) first two milestones complete — two foreign
 frameworks (OpenAI Agents SDK + Claude Agent SDK) hosted via the one Python
@@ -27,7 +27,11 @@ tools), merged to `master` (see §B1);
 Sandboxes (B4) first milestone complete — M1 code interpreter (a `cmd/sandboxd`
 MCP server giving every gateway-enabled agent an isolated, stateful,
 Docker-backed Python+shell sandbox with tenant-scoped ownership), merged to
-`master` (see §B4).
+`master` (see §B4);
+Observability (B5) first milestone complete — M1 fleet-wide Prometheus metrics
+(control-plane + per-agent series merged behind one auth-free `/metrics` via a
+hardened fan-out scrape), `X-Request-ID` correlation end-to-end, and a
+Prometheus + Grafana compose overlay with a provisioned dashboard (see §B5).
 **Goal:** an on-prem, open-source equivalent of AWS Bedrock AgentCore.
 
 This file is the parking lot for everything *not yet built*. Each item below is a
@@ -81,7 +85,8 @@ the use case demands. Recorded in the M3 README "Status, scope & limitations".
    fleet-wide view (and richer console health) is future console work.
 7. **Constant-time token compare + token hashing-at-rest** — M3 uses a plain map
    lookup; fine for static config tokens. Folds naturally into Identity (B3).
-8. **Access-log already wired** (M3) — but no metrics/tracing yet (see B5).
+8. **Access-log already wired** (M3) — metrics + request-id correlation landed
+   with Observability M1; tracing still pending (see B5).
 
 ### B. The other 5 sub-projects (from the original decomposition)
 
@@ -313,6 +318,58 @@ exposing the platform broadly.
 5. **Observability** — tracing, metrics, dashboards. The structured `slog` from
    M3 is the lightweight precursor; this is the full version (OpenTelemetry +
    Grafana, or similar). (Absorbs A8.)
+   **First milestone DONE (2026-06-11):** fleet metrics + request correlation.
+   A new `internal/obs` package owns every Prometheus metric in the module
+   (sole importer of client_golang; all helpers nil-receiver-safe no-ops, so
+   instrumented code never nil-checks). Control-plane registry:
+   `runtime_http_requests_total{route,method,status}` +
+   `runtime_http_request_duration_seconds` (matched mux patterns only, never
+   raw paths — cardinality-safe by construction; identity rejections counted
+   under `route="auth_rejected"`), `runtime_agent_up`,
+   `runtime_agent_restarts_total`, `runtime_proxy_errors_total`
+   (client-initiated cancellations excluded), gateway series
+   (`runtime_gateway_tool_calls_total{server,tool,outcome}` — only calls
+   reaching the upstream; authz rejections not counted — plus duration
+   histogram and `runtime_gateway_upstream_up`), and
+   `runtime_metrics_scrape_skips_total{agent,reason}`. Agent registry (per
+   agentd): `agent_turns_total{agent,outcome}`,
+   `agent_turn_duration_seconds` (LLM-sized buckets to 120s),
+   `agent_tokens_total{agent,direction}` (input/output/cache_creation/
+   cache_read), `agent_tool_calls_total{agent,tool}`. runtimed's
+   `GET /metrics` is auth-free (like `/healthz` — every label value is an
+   operator-level identifier; the cardinality promise: NO tenant/session/user
+   labels, adding one is a spec change) and FANS OUT: concurrent sub-scrapes
+   of every supervised agent's `/metrics` (500ms cap), expfmt parse, merge by
+   family name, re-encode one valid exposition. Agent `/metrics` is OPTIONAL
+   — a foreign shim's 404 is skipped as `no_metrics` (DEBUG, not an error)
+   and does NOT mark the agent down. `X-Request-ID` is accepted at the edge
+   ([A-Za-z0-9._-], ≤128; else regenerated `req-<32hex>`), echoed, forwarded
+   through the reverse proxy, present in slog on both sides (access log +
+   per-turn lines + failure warnings), and checkpointed in the DBOS workflow
+   input (replay-safe); `runtimectl invoke -v` prints it.
+   `deploy/docker-compose.obs.yml` overlays Prometheus (:9090) + Grafana
+   (:3000, anonymous viewer) with a provisioned 12-panel "Runtime Overview"
+   dashboard. KEY REVIEW FINDINGS worth recording: (1) fan-out merge
+   hardening — the review found one lying agent could kill the whole scrape
+   (and that agents could label-spoof each other), so the merge now enforces
+   server-side `agent` labels (the registered target id overwrites whatever
+   the agent claimed — series disjoint by construction), drops agent families
+   colliding with control families or any `runtime_*` name
+   (`reserved_name` — the control plane owns that namespace), drops
+   cross-agent TYPE conflicts (`type_conflict`), and encodes each family into
+   a buffer first so one bad family is skipped instead of truncating the
+   response mid-stream; (2) auth-rejected visibility — requests rejected by
+   the identity middleware never reached the instrumented handler and were
+   invisible, fixed by an onReject hook recording them under
+   `route="auth_rejected"`. Proven by hermetic unit tests
+   (`internal/obs/*_test.go`) and a through-serve e2e
+   (`test/observability_e2e_test.go`): fan-out merge, route normalization,
+   request-id echo, auth-free `/metrics` with identity on. Remaining B5: OTel
+   tracing/OTLP push (request ids are the seed), sandboxd-internal metrics
+   (visible today only as gateway series), per-tenant token accounting,
+   alerting/recording rules, console `/ui` metrics panel, log shipping, and
+   DBOS-internal metrics. Spec/plan:
+   `docs/superpowers/{specs,plans}/2026-06-11-observability-m1-metrics*`.
 
 ### C. Cross-cutting / platform-level (later)
 
