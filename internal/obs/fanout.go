@@ -1,6 +1,7 @@
 package obs
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -26,12 +27,30 @@ type ScrapeTarget struct {
 // the merged scrape (spec §3.4).
 const perAgentTimeout = 500 * time.Millisecond
 
+// agentLabel is injected (server-side) into every metric scraped from an
+// agent, overwriting whatever the agent claimed. Agents are NOT trusted to
+// label themselves: the registered target identity is authoritative, which
+// makes series disjoint across agents by construction.
+const agentLabel = "agent"
+
 // FanoutHandler serves the merged exposition: the control registry's own
 // families plus every healthy agent's families, merged by name (NOT text
 // concatenation — duplicate TYPE/HELP blocks are invalid). Sub-scrapes run
 // concurrently; skip rules: timeout/unreachable/non-200/parse ⇒ agent omitted
 // this scrape + skip counter + up=0. A 404 means the process serves HTTP but
 // has no /metrics (foreign shim) ⇒ reason no_metrics, up STAYS 1.
+//
+// Merge hardening (agents are untrusted):
+//   - every agent metric gets agent=<registered id> injected/overwritten
+//     server-side (label-lying is impossible);
+//   - agent families colliding with control families (or any runtime_* name —
+//     the control plane owns that namespace) are dropped, reason
+//     reserved_name;
+//   - agent families colliding with another agent's family of a different
+//     TYPE are dropped, reason type_conflict (same-type collisions are safe:
+//     the injected agent label keeps series disjoint);
+//   - each family is encoded into a buffer first, so a single bad family is
+//     skipped instead of truncating the whole response mid-stream.
 func FanoutHandler(c *ControlMetrics, targets func() []ScrapeTarget) http.Handler {
 	client := &http.Client{}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -63,16 +82,34 @@ func FanoutHandler(c *ControlMetrics, targets func() []ScrapeTarget) http.Handle
 		wg.Wait()
 
 		// Merge: own registry families first, then each agent's, by name.
+		// Control families are authoritative — agents may not contribute to
+		// them. Note Gather() omits vecs with zero series, hence the extra
+		// runtime_* prefix guard below.
 		merged := map[string]*dto.MetricFamily{}
+		reserved := map[string]struct{}{}
 		own, err := c.reg.Gather()
 		if err == nil {
 			for _, mf := range own {
 				merged[mf.GetName()] = mf
+				reserved[mf.GetName()] = struct{}{}
 			}
 		}
 		for _, res := range results {
 			for name, mf := range res.families {
+				if _, isReserved := reserved[name]; isReserved || strings.HasPrefix(name, "runtime_") {
+					c.ScrapeSkip(res.agent, "reserved_name")
+					slog.Warn("metrics fan-out: dropped reserved control family",
+						"agent", res.agent, "family", name)
+					continue
+				}
+				injectAgentLabel(mf, res.agent)
 				if exist, ok := merged[name]; ok {
+					if exist.GetType() != mf.GetType() {
+						c.ScrapeSkip(res.agent, "type_conflict")
+						slog.Warn("metrics fan-out: dropped type-conflicting family",
+							"agent", res.agent, "family", name)
+						continue
+					}
 					exist.Metric = append(exist.Metric, mf.Metric...)
 				} else {
 					merged[name] = mf
@@ -85,12 +122,46 @@ func FanoutHandler(c *ControlMetrics, targets func() []ScrapeTarget) http.Handle
 		}
 		sort.Strings(names)
 		w.Header().Set("Content-Type", string(expfmt.NewFormat(expfmt.TypeTextPlain)))
+		var buf bytes.Buffer
 		for _, n := range names {
-			if _, err := expfmt.MetricFamilyToText(w, merged[n]); err != nil {
+			buf.Reset()
+			if _, err := expfmt.MetricFamilyToText(&buf, merged[n]); err != nil {
+				// Data error in ONE family must not truncate the response:
+				// a half-written exposition is rejected by Prometheus
+				// wholesale. Skip just this family.
+				slog.Warn("metrics fan-out: family failed to encode; dropped",
+					"family", n, "err", err)
+				continue
+			}
+			if _, err := w.Write(buf.Bytes()); err != nil {
 				return // client gone; nothing useful to do
 			}
 		}
 	})
+}
+
+// injectAgentLabel overwrites (or appends) agent=<agent> on every metric in
+// the family, then re-sorts each label set by name for deterministic output
+// and Prometheus-friendly dedup semantics.
+func injectAgentLabel(mf *dto.MetricFamily, agent string) {
+	name := agentLabel
+	for _, m := range mf.Metric {
+		replaced := false
+		for _, lp := range m.Label {
+			if lp.GetName() == agentLabel {
+				v := agent
+				lp.Value = &v
+				replaced = true
+			}
+		}
+		if !replaced {
+			v := agent
+			m.Label = append(m.Label, &dto.LabelPair{Name: &name, Value: &v})
+		}
+		sort.Slice(m.Label, func(i, j int) bool {
+			return m.Label[i].GetName() < m.Label[j].GetName()
+		})
+	}
 }
 
 // scrapeOne fetches and parses one agent's exposition.
@@ -116,12 +187,8 @@ func scrapeOne(ctx context.Context, client *http.Client, tgt ScrapeTarget) (map[
 	case resp.StatusCode != http.StatusOK:
 		return nil, false, fmt.Sprintf("status_%d", resp.StatusCode)
 	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
-	if err != nil {
-		return nil, false, "error"
-	}
 	parser := expfmt.NewTextParser(model.UTF8Validation)
-	fams, err := parser.TextToMetricFamilies(strings.NewReader(string(body)))
+	fams, err := parser.TextToMetricFamilies(io.LimitReader(resp.Body, 4<<20))
 	if err != nil {
 		return nil, false, "parse"
 	}
