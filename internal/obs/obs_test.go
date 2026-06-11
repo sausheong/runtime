@@ -97,6 +97,15 @@ func TestAgentMetricsHandlerServesExposition(t *testing.T) {
 	}
 }
 
+func TestNilAgentMetricsHandlerIs404(t *testing.T) {
+	var a *AgentMetrics
+	rec := httptest.NewRecorder()
+	a.Handler().ServeHTTP(rec, httptest.NewRequest("GET", "/metrics", nil))
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("nil handler status = %d, want 404", rec.Code)
+	}
+}
+
 func scrapeHandler(t *testing.T, h http.Handler) string {
 	t.Helper()
 	rec := httptest.NewRecorder()

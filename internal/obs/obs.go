@@ -15,6 +15,12 @@ import (
 	"github.com/sausheong/harness/llm"
 )
 
+// Outcome label values for GatewayCall.
+const (
+	OutcomeOK    = "ok"
+	OutcomeError = "error"
+)
+
 // turnBuckets cover LLM-turn and gateway-call durations: seconds to minutes.
 // Prometheus default buckets top out at 10s, far too short for agent turns.
 var turnBuckets = []float64{0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60, 120}
@@ -35,6 +41,9 @@ type ControlMetrics struct {
 }
 
 func NewControlMetrics() *ControlMetrics {
+	// Deliberately no Go runtime/process collectors: unlabeled go_*/process_*
+	// families from multiple agent registries would collide in the fan-out
+	// merge; do not add collectors.NewGoCollector().
 	c := &ControlMetrics{reg: prometheus.NewRegistry()}
 	c.httpRequests = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "runtime_http_requests_total",
@@ -79,6 +88,9 @@ func NewControlMetrics() *ControlMetrics {
 	return c
 }
 
+// HTTPObserved records one control-plane HTTP request. route must be the
+// matched mux pattern (e.g. /agents/{id}/sessions), never the raw URL path —
+// raw paths explode label cardinality.
 func (c *ControlMetrics) HTTPObserved(route, method string, status int, dur time.Duration) {
 	if c == nil {
 		return
@@ -150,6 +162,9 @@ type AgentMetrics struct {
 }
 
 func NewAgentMetrics(agentID string) *AgentMetrics {
+	// Deliberately no Go runtime/process collectors: unlabeled go_*/process_*
+	// families from multiple agent registries would collide in the fan-out
+	// merge; do not add collectors.NewGoCollector().
 	a := &AgentMetrics{agentID: agentID, reg: prometheus.NewRegistry()}
 	a.turns = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "agent_turns_total",
@@ -172,6 +187,9 @@ func NewAgentMetrics(agentID string) *AgentMetrics {
 	return a
 }
 
+// TurnObserved records one agent turn. outcome is the harness
+// TurnResult.StopReason vocabulary ("completed", "error", "aborted",
+// "continue") — an upstream contract, so no constants are defined here.
 func (a *AgentMetrics) TurnObserved(outcome string, dur time.Duration, usage *llm.Usage) {
 	if a == nil {
 		return
