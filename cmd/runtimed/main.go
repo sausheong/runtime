@@ -207,6 +207,19 @@ func main() {
 		slog.Info("identity enabled", "oidc", oidcIssuer != "", "bootstrap", bootstrapKey != "", "legacy_tokens", len(legacyTokens))
 	}
 
+	// Mounted OUTSIDE the identity/access-log chain (like /healthz — standard
+	// Prometheus practice; spec §5: label values are operator-level identifiers,
+	// never tenant/user data). Scrape probes get no request-id/access-log
+	// treatment by design (probe noise).
+	handler = mountMetrics(handler, cm, func() []obs.ScrapeTarget {
+		var ts []obs.ScrapeTarget
+		for _, info := range reg.List() {
+			ap, _ := reg.Get(info.ID)
+			ts = append(ts, obs.ScrapeTarget{Agent: ap.AgentID, Addr: ap.Addr})
+		}
+		return ts
+	})
+
 	// Start the gateway upstreams only now: every os.Exit(1) path above has
 	// passed, so the deferred Close is guaranteed to run and stdio upstream
 	// children can't be orphaned by a misconfig exit.
@@ -300,6 +313,22 @@ func accessLog(next http.Handler, cm *obs.ControlMetrics) http.Handler {
 			"status", rec.status, "subject", subject, "tenant", tenant, "remote", r.RemoteAddr,
 			"request_id", obs.RequestIDFromContext(r.Context()))
 	})
+}
+
+// mountMetrics overlays GET /metrics OUTSIDE the identity/access-log chain
+// (like /healthz — standard Prometheus practice; spec §5: label values are
+// operator-level identifiers, never tenant/user data). Everything else falls
+// through to the wrapped handler chain.
+//
+// r.Pattern note: this outer mux sets r.Pattern ("/") on fall-through, but the
+// inner root mux overwrites it on match, and accessLog reads r.Pattern only
+// AFTER next.ServeHTTP returns — so route normalization in the metrics/access
+// log is unaffected.
+func mountMetrics(inner http.Handler, cm *obs.ControlMetrics, targets func() []obs.ScrapeTarget) http.Handler {
+	mux := http.NewServeMux()
+	mux.Handle("GET /metrics", obs.FanoutHandler(cm, targets))
+	mux.Handle("/", inner)
+	return mux
 }
 
 // buildRoot assembles the root mux: console at /ui, control-plane API at /, and
