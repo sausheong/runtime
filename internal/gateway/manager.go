@@ -175,15 +175,20 @@ func (m *Manager) markDown(u *upstream, observed upstreamConn, err error) {
 	conn := u.conn
 	u.conn, u.tools, u.lastErr = nil, nil, err
 	u.mu.Unlock()
+	// Gauge BEFORE conn.Close(): Close may block on I/O, and a delayed Set(0)
+	// from a concurrent caller could otherwise land after the supervise loop
+	// has already reconnected and Set(1), wedging the gauge at 0 while up.
+	m.Metrics.GatewayUpstreamUp(u.cfg.Name, false)
 	_ = conn.Close() // outside the lock: Close may block on I/O
 	m.generation.Add(1)
-	m.Metrics.GatewayUpstreamUp(u.cfg.Name, false)
 	slog.Warn("gateway: upstream marked down", "server", u.cfg.Name, "err", err)
 }
 
 // Close stops the supervision loops (cancelling the context derived in
 // Start) and tears down all connections. Safe to call whether or not the
 // caller has cancelled the Start context; safe when Start was never called.
+// The upstream-up gauge is deliberately left untouched here: the process is
+// exiting and scrapes have already stopped.
 func (m *Manager) Close() {
 	if m.cancel != nil {
 		m.cancel()

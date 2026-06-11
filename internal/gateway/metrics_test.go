@@ -116,12 +116,17 @@ func TestUpstreamUpGaugeTransitions(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	m.Start(ctx)
+	// Gates the markDown step below: u.conn must be live before we can
+	// capture its identity.
 	waitFor(t, 2*time.Second, func() bool { return len(m.AllTools()) == 1 })
 
+	// Gauge readiness is the scrape body itself: the supervise loop publishes
+	// tools before Set(1), so gating only on AllTools leaves a scrape-before-
+	// set window.
 	upSeries := `runtime_gateway_upstream_up{server="fs"} 1`
-	if body := scrapeControlRegistry(t, cm); !strings.Contains(body, upSeries) {
-		t.Fatalf("missing %q after connect:\n%s", upSeries, body)
-	}
+	waitFor(t, 2*time.Second, func() bool {
+		return strings.Contains(scrapeControlRegistry(t, cm), upSeries)
+	})
 
 	// Force the down transition the way TestServerRebuildsOnGenerationChange
 	// does: markDown with the conn identity captured under the lock.
@@ -151,13 +156,11 @@ func TestUpstreamUpGaugeZeroOnFirstFailedDial(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	m.Start(ctx)
-	waitFor(t, 2*time.Second, func() bool {
-		s := m.Status("")
-		return len(s) == 1 && s[0].LastError != ""
-	})
-
+	// Gauge readiness is the scrape body itself: the supervise loop records
+	// lastErr (what Status reports) before Set(0), so gating on Status alone
+	// leaves a scrape-before-set window.
 	downSeries := `runtime_gateway_upstream_up{server="fs"} 0`
-	if body := scrapeControlRegistry(t, cm); !strings.Contains(body, downSeries) {
-		t.Fatalf("missing %q after failed dial:\n%s", downSeries, body)
-	}
+	waitFor(t, 2*time.Second, func() bool {
+		return strings.Contains(scrapeControlRegistry(t, cm), downSeries)
+	})
 }
