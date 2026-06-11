@@ -125,5 +125,11 @@ func reverseProxy(addr string) *httputil.ReverseProxy {
 	rp.ErrorHandler = func(w http.ResponseWriter, _ *http.Request, _ error) {
 		http.Error(w, "agent unavailable", http.StatusServiceUnavailable)
 	}
+	rp.ModifyResponse = func(resp *http.Response) error {
+		// runtimed's own echo of X-Request-Id is authoritative; drop the
+		// agent's duplicate (ReverseProxy copies backend headers with Add).
+		resp.Header.Del("X-Request-Id")
+		return nil
+	}
 	return rp
 }
