@@ -6,11 +6,14 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/sausheong/runtime/internal/obs"
 )
 
 // NewAPI returns the control-plane HTTP handler routing /agents/{id}/... to
-// each agent's subprocess, plus GET /agents and GET /healthz.
-func NewAPI(reg *Registry) *http.ServeMux {
+// each agent's subprocess, plus GET /agents and GET /healthz. m records
+// proxy-error metrics; nil ⇒ no-op (obs methods are nil-receiver-safe).
+func NewAPI(reg *Registry, m *obs.ControlMetrics) *http.ServeMux {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
@@ -77,7 +80,7 @@ func NewAPI(reg *Registry) *http.ServeMux {
 			r.URL.Path = "/"
 		}
 		r.URL.RawPath = "" // avoid stale encoded-path mismatches after rewrite
-		reverseProxy(ap.Addr).ServeHTTP(w, r)
+		reverseProxy(ap.Addr, func() { m.ProxyError(ap.AgentID) }).ServeHTTP(w, r)
 	})
 
 	return mux

@@ -117,12 +117,16 @@ func (a AgentProcess) SpawnFunc() func(ctx context.Context) <-chan error {
 
 // reverseProxy builds a passthrough to the agent subprocess at addr.
 // FlushInterval = -1 ensures SSE/streaming responses are flushed immediately
-// so events pass through promptly.
-func reverseProxy(addr string) *httputil.ReverseProxy {
+// so events pass through promptly. onError (nil ⇒ no-op) fires before each
+// 503 served by the ErrorHandler — used for proxy-error metrics.
+func reverseProxy(addr string, onError func()) *httputil.ReverseProxy {
 	target, _ := url.Parse("http://" + addr)
 	rp := httputil.NewSingleHostReverseProxy(target)
 	rp.FlushInterval = -1
 	rp.ErrorHandler = func(w http.ResponseWriter, _ *http.Request, _ error) {
+		if onError != nil {
+			onError()
+		}
 		http.Error(w, "agent unavailable", http.StatusServiceUnavailable)
 	}
 	rp.ModifyResponse = func(resp *http.Response) error {

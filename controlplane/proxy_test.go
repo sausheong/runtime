@@ -18,7 +18,7 @@ import (
 // SSE-friendly immediate flushing stays enabled.
 func TestReverseProxy_503OnDeadBackend(t *testing.T) {
 	// 127.0.0.1:1 is a reserved port nothing listens on → dial fails.
-	rp := reverseProxy("127.0.0.1:1")
+	rp := reverseProxy("127.0.0.1:1", nil)
 	if rp.FlushInterval != -1 {
 		t.Fatalf("FlushInterval = %v, want -1 (immediate flush for SSE)", rp.FlushInterval)
 	}
@@ -42,7 +42,7 @@ func TestReverseProxy_DedupesRequestIDEcho(t *testing.T) {
 	}))
 	defer backend.Close()
 
-	rp := reverseProxy(strings.TrimPrefix(backend.URL, "http://"))
+	rp := reverseProxy(strings.TrimPrefix(backend.URL, "http://"), nil)
 	outer := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// runtimed's middleware echoes the id before proxying.
 		w.Header().Set("X-Request-Id", "req-from-runtimed")

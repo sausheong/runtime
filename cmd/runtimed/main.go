@@ -22,6 +22,7 @@ import (
 	"github.com/sausheong/runtime/internal/gateway"
 	"github.com/sausheong/runtime/internal/identity"
 	"github.com/sausheong/runtime/internal/memory"
+	"github.com/sausheong/runtime/internal/obs"
 	"golang.org/x/oauth2"
 )
 
@@ -38,6 +39,11 @@ func main() {
 		slog.Error("config load failed", "err", err)
 		os.Exit(1)
 	}
+
+	// Control-plane metrics registry: created early so the gateway, edge
+	// middleware, supervisors, and proxy hooks below all share the one registry.
+	cm := obs.NewControlMetrics()
+
 	reg := controlplane.NewRegistry(cfg, agentBin, dsn)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -153,7 +159,7 @@ func main() {
 		if gwHandler != nil {
 			gwHandler.PrincipalFor = gateway.OpenMode
 		}
-		handler = accessLog(buildRoot(reg, nil, console.OIDCConfig{}, secretAdmin, gwHandler)) // no /admin in open mode
+		handler = obs.RequestID(accessLog(buildRoot(reg, nil, console.OIDCConfig{}, secretAdmin, gwHandler, cm), cm)) // no /admin in open mode
 	} else {
 		oidcVerifier, verr := identity.NewOIDCVerifier(ctx, oidcIssuer, oidcClientID)
 		if verr != nil {
@@ -194,8 +200,8 @@ func main() {
 		if gwHandler != nil {
 			gwHandler.PrincipalFor = controlplane.PrincipalFromContext
 		}
-		root := buildRoot(reg, idStore, consoleOIDC, secretAdmin, gwHandler) // mounts /admin since the store is non-nil
-		handler = controlplane.IdentityMiddleware(accessLog(root), authr, azr)
+		root := buildRoot(reg, idStore, consoleOIDC, secretAdmin, gwHandler, cm) // mounts /admin since the store is non-nil
+		handler = obs.RequestID(controlplane.IdentityMiddleware(accessLog(root, cm), authr, azr))
 		slog.Info("identity enabled", "oidc", oidcIssuer != "", "bootstrap", bootstrapKey != "", "legacy_tokens", len(legacyTokens))
 	}
 
@@ -218,7 +224,7 @@ func main() {
 	// schema init is not safe to run concurrently).
 	for _, info := range reg.List() {
 		ap, _ := reg.Get(info.ID)
-		sup := &controlplane.Supervisor{Spawn: ap.SpawnFunc(), Backoff: time.Second}
+		sup := &controlplane.Supervisor{Spawn: ap.SpawnFunc(), Backoff: time.Second, OnRestart: func() { cm.AgentRestart(ap.AgentID) }}
 		go sup.Run(ctx)
 		slog.Info("supervising agent", "agent", ap.AgentID, "addr", ap.Addr)
 		if err := waitAgentHealthy(ctx, ap.Addr, 30*time.Second); err != nil {
@@ -259,18 +265,33 @@ func (r *statusRecorder) Flush() {
 }
 
 // accessLog logs one structured line per request, including the authenticated
-// principal subject and tenant (empty in open mode) from the identity context.
-func accessLog(next http.Handler) http.Handler {
+// principal subject and tenant (empty in open mode) from the identity context,
+// and records the request in the control-plane HTTP metrics. The metrics route
+// label is the matched mux pattern (r.Pattern, Go 1.22+), never the raw path —
+// raw paths would explode label cardinality. Unmatched requests (404s, stdlib
+// redirects) share the "unmatched" bucket.
+func accessLog(next http.Handler, cm *obs.ControlMetrics) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
 		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
 		next.ServeHTTP(rec, r)
+		// r.Pattern is set by ServeMux on match, as "METHOD /path/{param}" (or
+		// just "/path/{param}" for method-less patterns); strip the method prefix.
+		route := r.Pattern
+		if route == "" {
+			route = "unmatched"
+		} else if i := strings.IndexByte(route, ' '); i >= 0 {
+			route = route[i+1:]
+		}
+		cm.HTTPObserved(route, r.Method, rec.status, time.Since(start))
 		var subject, tenant string
 		if p, ok := controlplane.PrincipalFromContext(r.Context()); ok {
 			subject, tenant = p.Subject, p.TenantID
 		}
 		slog.Info("request",
 			"method", r.Method, "path", r.URL.Path,
-			"status", rec.status, "subject", subject, "tenant", tenant, "remote", r.RemoteAddr)
+			"status", rec.status, "subject", subject, "tenant", tenant, "remote", r.RemoteAddr,
+			"request_id", obs.RequestIDFromContext(r.Context()))
 	})
 }
 
@@ -278,8 +299,8 @@ func accessLog(next http.Handler) http.Handler {
 // (when adminS is non-nil) the admin API at /admin. The secret admin is mounted
 // alongside the admin API; a nil secretBroker makes /admin/secrets return 503.
 // A nil gw leaves /gateway/* unmounted (stdlib mux → 404).
-func buildRoot(reg *controlplane.Registry, adminS controlplane.AdminStore, consoleOIDC console.OIDCConfig, secretBroker controlplane.SecretAdmin, gw *gateway.Handler) http.Handler {
-	apiMux := controlplane.NewAPI(reg)
+func buildRoot(reg *controlplane.Registry, adminS controlplane.AdminStore, consoleOIDC console.OIDCConfig, secretBroker controlplane.SecretAdmin, gw *gateway.Handler, cm *obs.ControlMetrics) http.Handler {
+	apiMux := controlplane.NewAPI(reg, cm)
 	if adminS != nil {
 		controlplane.RegisterAdmin(apiMux, adminS)
 		controlplane.RegisterSecretAdmin(apiMux, adminS, secretBroker)

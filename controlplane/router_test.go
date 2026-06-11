@@ -27,7 +27,7 @@ func TestRouter_DispatchAndList(t *testing.T) {
 	}}
 	reg := NewRegistry(cfg, "/bin/agentd", "dsn")
 
-	srv := httptest.NewServer(NewAPI(reg))
+	srv := httptest.NewServer(NewAPI(reg, nil))
 	defer srv.Close()
 
 	resp, err := http.Get(srv.URL + "/agents/a/sessions")
