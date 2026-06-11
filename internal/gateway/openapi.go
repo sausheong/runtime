@@ -19,6 +19,9 @@ const (
 	// largeSpecWarn nudges operators toward an operations: filter when one
 	// spec floods the catalog (spec §11).
 	largeSpecWarn = 50
+	// maxSchemaInlineDepth caps inlineSchema recursion as a backstop against
+	// pathological nesting; exceeding it is treated like a cycle.
+	maxSchemaInlineDepth = 30
 )
 
 // generateTools parses an OpenAPI 3.x document and returns one restTool per
@@ -248,11 +251,6 @@ func buildRestTool(server, name, method, specPath, baseURL string, item *openapi
 	if err != nil {
 		return restTool{}, err
 	}
-	// Cyclic refs survive kin-openapi resolution as dangling "$ref" markers in
-	// the marshaled schema; such an operation is unmappable (spec §5).
-	if strings.Contains(string(schemaBytes), `"$ref"`) {
-		return restTool{}, fmt.Errorf("schema contains unresolved $ref (cyclic reference)")
-	}
 
 	prose := strings.TrimSpace(strings.TrimSpace(op.Summary) + " " + strings.TrimSpace(op.Description))
 	desc := method + " " + specPath
@@ -272,12 +270,132 @@ func buildRestTool(server, name, method, specPath, baseURL string, item *openapi
 	}, nil
 }
 
-// schemaToJSON marshals a (resolved) schema ref; nil schema ⇒ permissive {}.
+// schemaToJSON deep-inlines a (resolved) schema ref into plain JSON Schema
+// with no "$ref" emission; nil schema ⇒ permissive {}.
 func schemaToJSON(ref *openapi3.SchemaRef) (json.RawMessage, error) {
-	if ref == nil || ref.Value == nil {
-		return json.RawMessage(`{}`), nil
+	v, err := inlineSchema(ref, map[*openapi3.Schema]bool{}, 0)
+	if err != nil {
+		return nil, err
 	}
-	return ref.Value.MarshalJSON()
+	return json.Marshal(v)
+}
+
+// inlineSchema walks the resolved openapi3.Schema graph and builds a
+// map[string]any bottom-up, fully inlining nested component schemas.
+// kin-openapi's MarshalJSON re-emits any nested component reference as a
+// literal {"$ref": ...} (only the top level is expanded), which is useless in
+// a tool input schema — so we never call MarshalJSON on ref-bearing fields and
+// instead recurse into the typed structure. visited tracks the current
+// ANCESTOR PATH only (marked on entry, unmarked on exit): sibling reuse of the
+// same component is legal and common; only ancestor-path repetition is a
+// genuine cycle and errors (the sole skip case, spec §5).
+func inlineSchema(ref *openapi3.SchemaRef, visited map[*openapi3.Schema]bool, depth int) (any, error) {
+	if ref == nil || ref.Value == nil {
+		return map[string]any{}, nil // permissive
+	}
+	s := ref.Value
+	if visited[s] {
+		return nil, fmt.Errorf("cyclic schema reference")
+	}
+	if depth > maxSchemaInlineDepth {
+		return nil, fmt.Errorf("schema nesting exceeds depth %d (treated as cyclic)", maxSchemaInlineDepth)
+	}
+	visited[s] = true
+	defer delete(visited, s)
+
+	out := map[string]any{}
+
+	// Scalar / metadata fields useful for tool input schemas. Everything else
+	// (discriminator, xml, externalDocs, example, readOnly, ...) is ignored.
+	if s.Type != nil && len(*s.Type) > 0 {
+		types := *s.Type
+		if len(types) == 1 {
+			out["type"] = types[0]
+		} else {
+			out["type"] = []string(types)
+		}
+	}
+	if s.Description != "" {
+		out["description"] = s.Description
+	}
+	if len(s.Enum) > 0 {
+		out["enum"] = s.Enum
+	}
+	if s.Format != "" {
+		out["format"] = s.Format
+	}
+	if len(s.Required) > 0 {
+		out["required"] = s.Required
+	}
+	if s.Nullable {
+		out["nullable"] = true
+	}
+	if s.Default != nil {
+		out["default"] = s.Default
+	}
+	if s.Min != nil {
+		out["minimum"] = *s.Min
+	}
+	if s.Max != nil {
+		out["maximum"] = *s.Max
+	}
+	if s.MinLength != 0 {
+		out["minLength"] = s.MinLength
+	}
+	if s.MaxLength != nil {
+		out["maxLength"] = *s.MaxLength
+	}
+	if s.Pattern != "" {
+		out["pattern"] = s.Pattern
+	}
+
+	// Ref-bearing fields: recurse.
+	if len(s.Properties) > 0 {
+		props := map[string]any{}
+		for name, pref := range s.Properties {
+			v, err := inlineSchema(pref, visited, depth+1)
+			if err != nil {
+				return nil, fmt.Errorf("property %q: %w", name, err)
+			}
+			props[name] = v
+		}
+		out["properties"] = props
+	}
+	if s.Items != nil {
+		v, err := inlineSchema(s.Items, visited, depth+1)
+		if err != nil {
+			return nil, fmt.Errorf("items: %w", err)
+		}
+		out["items"] = v
+	}
+	switch {
+	case s.AdditionalProperties.Schema != nil:
+		v, err := inlineSchema(s.AdditionalProperties.Schema, visited, depth+1)
+		if err != nil {
+			return nil, fmt.Errorf("additionalProperties: %w", err)
+		}
+		out["additionalProperties"] = v
+	case s.AdditionalProperties.Has != nil:
+		out["additionalProperties"] = *s.AdditionalProperties.Has
+	}
+	for key, refs := range map[string]openapi3.SchemaRefs{
+		"oneOf": s.OneOf, "anyOf": s.AnyOf, "allOf": s.AllOf,
+	} {
+		if len(refs) == 0 {
+			continue
+		}
+		list := make([]any, 0, len(refs))
+		for i, sub := range refs {
+			v, err := inlineSchema(sub, visited, depth+1)
+			if err != nil {
+				return nil, fmt.Errorf("%s[%d]: %w", key, i, err)
+			}
+			list = append(list, v)
+		}
+		out[key] = list
+	}
+
+	return out, nil
 }
 
 // restTool is one generated REST operation exposed as a gateway tool.

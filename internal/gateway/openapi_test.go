@@ -253,8 +253,8 @@ paths:
 	}
 }
 
-// FIX 3: an operation whose merged schema still contains a dangling $ref
-// (cyclic reference) is skipped; sibling operations survive.
+// FIX 3: only a GENUINE cycle (ancestor-path repetition, e.g. Node.children →
+// Node) skips an operation; sibling operations survive.
 func TestCyclicRefOperationSkipped(t *testing.T) {
 	const spec = `
 openapi: 3.0.3
@@ -264,7 +264,10 @@ components:
     Node:
       type: object
       properties:
-        child: {$ref: '#/components/schemas/Node'}
+        name: {type: string}
+        children:
+          type: array
+          items: {$ref: '#/components/schemas/Node'}
 paths:
   /nodes:
     post:
@@ -287,6 +290,210 @@ paths:
 	}
 	if !strings.Contains(names, "listPlain") {
 		t.Fatalf("sibling op must survive: %s", names)
+	}
+}
+
+// findTool returns the tool with the given full name, fatal if absent.
+func findTool(t *testing.T, ts []restTool, name string) restTool {
+	t.Helper()
+	for _, tt := range ts {
+		if tt.Name() == name {
+			return tt
+		}
+	}
+	t.Fatalf("tool %s missing: %v", name, toolNames(ts))
+	return restTool{}
+}
+
+// REF FIX 1: a non-cyclic nested component ref (the dominant real-world idiom)
+// must NOT be skipped — it is fully inlined, with no "$ref" keys emitted.
+func TestNestedRefInlined(t *testing.T) {
+	const spec = `
+openapi: 3.0.3
+info: {title: T, version: "1.0"}
+components:
+  schemas:
+    Customer:
+      type: object
+      properties:
+        name: {type: string}
+paths:
+  /orders:
+    post:
+      operationId: createOrder
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                item: {type: string}
+                customer: {$ref: '#/components/schemas/Customer'}
+      responses: {"201": {description: ok}}
+`
+	ts := genSpec(t, spec)
+	tool := findTool(t, ts, "srv__createOrder")
+	s := string(tool.Parameters())
+	if strings.Contains(s, `"$ref"`) {
+		t.Fatalf("nested component ref must be inlined, schema still has $ref: %s", s)
+	}
+	if !strings.Contains(s, `"name"`) {
+		t.Fatalf("Customer.name must be inlined into the body schema: %s", s)
+	}
+}
+
+// REF FIX 2: the SAME component referenced twice (sibling reuse) is not a
+// cycle — it is inlined at both sites.
+func TestSiblingRefReuseNotCyclic(t *testing.T) {
+	const spec = `
+openapi: 3.0.3
+info: {title: T, version: "1.0"}
+components:
+  schemas:
+    Customer:
+      type: object
+      properties:
+        name: {type: string}
+paths:
+  /transfers:
+    post:
+      operationId: createTransfer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                sender: {$ref: '#/components/schemas/Customer'}
+                receiver: {$ref: '#/components/schemas/Customer'}
+      responses: {"201": {description: ok}}
+`
+	ts := genSpec(t, spec)
+	tool := findTool(t, ts, "srv__createTransfer")
+	var schema struct {
+		Properties map[string]struct {
+			Properties map[string]struct {
+				Properties map[string]json.RawMessage `json:"properties"`
+			} `json:"properties"`
+		} `json:"properties"`
+	}
+	if err := json.Unmarshal(tool.Parameters(), &schema); err != nil {
+		t.Fatal(err)
+	}
+	body, ok := schema.Properties["body"]
+	if !ok {
+		t.Fatalf("body property missing: %s", tool.Parameters())
+	}
+	for _, side := range []string{"sender", "receiver"} {
+		p, ok := body.Properties[side]
+		if !ok {
+			t.Fatalf("%s missing: %s", side, tool.Parameters())
+		}
+		if _, ok := p.Properties["name"]; !ok {
+			t.Fatalf("%s.name not inlined: %s", side, tool.Parameters())
+		}
+	}
+	if strings.Contains(string(tool.Parameters()), `"$ref"`) {
+		t.Fatalf("sibling reuse must inline, not emit $ref: %s", tool.Parameters())
+	}
+}
+
+// REF FIX 3: a property literally NAMED "$ref" (a string field) is data, not
+// a reference — the op survives and the property is present.
+func TestPropertyNamedDollarRefSurvives(t *testing.T) {
+	const spec = `
+openapi: 3.0.3
+info: {title: T, version: "1.0"}
+paths:
+  /docs:
+    post:
+      operationId: createDoc
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                $ref: {type: string, description: a literal property named dollar-ref}
+      responses: {"201": {description: ok}}
+`
+	ts := genSpec(t, spec)
+	tool := findTool(t, ts, "srv__createDoc")
+	var schema struct {
+		Properties map[string]struct {
+			Properties map[string]json.RawMessage `json:"properties"`
+		} `json:"properties"`
+	}
+	if err := json.Unmarshal(tool.Parameters(), &schema); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := schema.Properties["body"].Properties["$ref"]; !ok {
+		t.Fatalf("literal $ref property must be present: %s", tool.Parameters())
+	}
+}
+
+// REF FIX 4: petstore-style sanity check — object ref (category) plus array of
+// refs (tags) plus enum/format scalars: tools generate, schemas are ref-free.
+func TestPetstoreShapeRefFree(t *testing.T) {
+	const spec = `
+openapi: 3.0.3
+info: {title: Petstore, version: "1.0"}
+components:
+  schemas:
+    Category:
+      type: object
+      properties:
+        id: {type: integer, format: int64}
+        name: {type: string}
+    Tag:
+      type: object
+      properties:
+        id: {type: integer, format: int64}
+        name: {type: string}
+    Pet:
+      type: object
+      required: [name]
+      properties:
+        id: {type: integer, format: int64}
+        name: {type: string}
+        category: {$ref: '#/components/schemas/Category'}
+        tags:
+          type: array
+          items: {$ref: '#/components/schemas/Tag'}
+        status: {type: string, enum: [available, pending, sold]}
+paths:
+  /pet:
+    post:
+      operationId: addPet
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/Pet'}
+      responses: {"200": {description: ok}}
+  /pet/{petId}:
+    get:
+      operationId: getPetById
+      parameters:
+        - {name: petId, in: path, required: true, schema: {type: integer, format: int64}}
+      responses: {"200": {description: ok}}
+`
+	ts := genSpec(t, spec)
+	if len(ts) != 2 {
+		t.Fatalf("petstore-style spec must generate both tools, got %v", toolNames(ts))
+	}
+	addPet := findTool(t, ts, "srv__addPet")
+	s := string(addPet.Parameters())
+	if strings.Contains(s, `"$ref"`) {
+		t.Fatalf("petstore schema must be ref-free: %s", s)
+	}
+	for _, want := range []string{`"category"`, `"tags"`, `"available"`, `"int64"`} {
+		if !strings.Contains(s, want) {
+			t.Fatalf("inlined petstore schema missing %s: %s", want, s)
+		}
 	}
 }
 
