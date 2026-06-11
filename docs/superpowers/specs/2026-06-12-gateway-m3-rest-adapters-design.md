@@ -104,11 +104,14 @@ One tool per selected operation.
   - `requestBody` (application/json media type) → inlined under a `body`
     property, required if the spec marks the body required.
 - `$ref`s are resolved by kin-openapi at parse time. An operation whose schema
-  fails to resolve (cyclic/external ref, unsupported construct) is SKIPPED
-  with one WARN naming the operation — never a dead upstream.
-- Operations with no `application/json` request body media type but a
-  non-empty body requirement: skipped with WARN (non-JSON bodies are out of
-  scope, §10).
+  fails to resolve (cyclic ref, unsupported construct) is SKIPPED
+  with one WARN naming the operation — never a dead upstream. External $refs
+  are disallowed (security posture): a spec using them fails at dial, not
+  per-operation.
+- Operations with a REQUIRED request body that has no `application/json`
+  media type: skipped with WARN (non-JSON bodies are out of scope, §10). An
+  OPTIONAL non-JSON body just drops the `body` property — the operation stays
+  usable bodyless.
 
 ## 6. Execution semantics
 

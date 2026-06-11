@@ -2,8 +2,10 @@ package gateway
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 const testSpec = `
@@ -169,6 +171,229 @@ func TestConcurrencySafety(t *testing.T) {
 		if safe != isGet {
 			t.Fatalf("%s (%s): safe=%v", tt.Name(), tt.method, safe)
 		}
+	}
+}
+
+func genSpec(t *testing.T, spec string) []restTool {
+	t.Helper()
+	tools, _, err := generateTools("srv", []byte(spec), "http://up:1", nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return tools
+}
+
+// FIX 1: op-level parameters OVERRIDE item-level by (name, in) — same param at
+// both levels appears once, op-level required:false undoes item-level
+// required:true; an item-only param is inherited.
+func TestParamOverrideMerge(t *testing.T) {
+	const spec = `
+openapi: 3.0.3
+info: {title: T, version: "1.0"}
+paths:
+  /things/{id}:
+    parameters:
+      - {name: id, in: path, required: true, schema: {type: string}}
+      - {name: verbose, in: query, required: true, schema: {type: boolean}}
+    get:
+      operationId: getThing
+      parameters:
+        - {name: verbose, in: query, required: false, schema: {type: boolean}}
+      responses: {"200": {description: ok}}
+`
+	ts := genSpec(t, spec)
+	if len(ts) != 1 {
+		t.Fatalf("want 1 tool, got %v", toolNames(ts))
+	}
+	var schema struct {
+		Properties map[string]json.RawMessage `json:"properties"`
+		Required   []string                   `json:"required"`
+	}
+	if err := json.Unmarshal(ts[0].Parameters(), &schema); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := schema.Properties["verbose"]; !ok {
+		t.Fatalf("verbose property missing: %v", schema.Properties)
+	}
+	if contains(schema.Required, "verbose") {
+		t.Fatalf("op-level required:false must override item-level required:true: %v", schema.Required)
+	}
+	// Item-only param inherited; required exactly once (no duplicate entries).
+	n := 0
+	for _, r := range schema.Required {
+		if r == "id" {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Fatalf("item-level id must be inherited exactly once in required, got %d: %v", n, schema.Required)
+	}
+}
+
+// FIX 2: an operationId that sanitizes to nothing falls back to the
+// method_path slug; if no name can be produced at all the op is skipped.
+func TestToolNameUnsanitizableFallback(t *testing.T) {
+	const spec = `
+openapi: 3.0.3
+info: {title: T, version: "1.0"}
+paths:
+  /orders:
+    get:
+      operationId: "!!!"
+      responses: {"200": {description: ok}}
+`
+	ts := genSpec(t, spec)
+	if len(ts) != 1 || ts[0].Name() != "srv__get_orders" {
+		t.Fatalf("want fallback srv__get_orders, got %v", toolNames(ts))
+	}
+	// No real spec can reach this (method is always alphanumeric), but the
+	// guard must hold: nothing sanitizable anywhere ⇒ empty ⇒ caller skips.
+	if got := toolNameFor("!!!", "", ""); got != "" {
+		t.Fatalf("fully unsanitizable name must be empty, got %q", got)
+	}
+}
+
+// FIX 3: an operation whose merged schema still contains a dangling $ref
+// (cyclic reference) is skipped; sibling operations survive.
+func TestCyclicRefOperationSkipped(t *testing.T) {
+	const spec = `
+openapi: 3.0.3
+info: {title: T, version: "1.0"}
+components:
+  schemas:
+    Node:
+      type: object
+      properties:
+        child: {$ref: '#/components/schemas/Node'}
+paths:
+  /nodes:
+    post:
+      operationId: createNode
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/Node'}
+      responses: {"201": {description: ok}}
+  /plain:
+    get:
+      operationId: listPlain
+      responses: {"200": {description: ok}}
+`
+	ts := genSpec(t, spec)
+	names := strings.Join(toolNames(ts), ",")
+	if strings.Contains(names, "createNode") {
+		t.Fatalf("cyclic-ref op must be skipped: %s", names)
+	}
+	if !strings.Contains(names, "listPlain") {
+		t.Fatalf("sibling op must survive: %s", names)
+	}
+}
+
+// FIX 4: invalid example values (endemic in third-party specs) must not kill
+// the upstream — examples/defaults validation is disabled.
+func TestInvalidExampleStillGenerates(t *testing.T) {
+	const spec = `
+openapi: 3.0.3
+info: {title: T, version: "1.0"}
+paths:
+  /orders:
+    get:
+      operationId: listOrders
+      parameters:
+        - name: limit
+          in: query
+          schema: {type: integer, example: "not-an-integer"}
+      responses: {"200": {description: ok}}
+`
+	ts := genSpec(t, spec)
+	if len(ts) != 1 || ts[0].Name() != "srv__listOrders" {
+		t.Fatalf("invalid example must not block generation: %v", toolNames(ts))
+	}
+}
+
+// FIX 5: a REQUIRED non-JSON body skips the op; an OPTIONAL non-JSON body
+// just drops the body property (op usable bodyless).
+func TestNonJSONBody(t *testing.T) {
+	const spec = `
+openapi: 3.0.3
+info: {title: T, version: "1.0"}
+paths:
+  /upload:
+    post:
+      operationId: uploadFile
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema: {type: string, format: binary}
+      responses: {"201": {description: ok}}
+  /ping:
+    post:
+      operationId: pingIt
+      requestBody:
+        content:
+          text/plain:
+            schema: {type: string}
+      responses: {"200": {description: ok}}
+`
+	ts := genSpec(t, spec)
+	names := strings.Join(toolNames(ts), ",")
+	if strings.Contains(names, "uploadFile") {
+		t.Fatalf("required non-JSON body op must be skipped: %s", names)
+	}
+	var ping *restTool
+	for i := range ts {
+		if ts[i].Name() == "srv__pingIt" {
+			ping = &ts[i]
+		}
+	}
+	if ping == nil {
+		t.Fatalf("optional non-JSON body op must be kept: %s", names)
+	}
+	if ping.hasBody {
+		t.Fatal("optional non-JSON body must be dropped (hasBody=false)")
+	}
+	var schema struct {
+		Properties map[string]json.RawMessage `json:"properties"`
+	}
+	if err := json.Unmarshal(ping.Parameters(), &schema); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := schema.Properties["body"]; ok {
+		t.Fatal("optional non-JSON body must not produce a body property")
+	}
+}
+
+// FIX 6: prose-less descriptions have no dangling " — "; truncation never
+// leaves an invalid UTF-8 tail.
+func TestDescriptionTrimAndUTF8(t *testing.T) {
+	for _, tt := range gen(t, "", nil) {
+		if tt.Name() == "srv__delete_orders_id" || tt.Name() == "orders__delete_orders_id" {
+			if got := tt.Description(); got != "DELETE /orders/{id}" {
+				t.Fatalf("prose-less description must be name-only: %q", got)
+			}
+		}
+	}
+	// Multibyte rune straddling the 1024-byte cut must be repaired.
+	prose := strings.Repeat("a", 1008) + strings.Repeat("€", 8) // € = 3 bytes
+	spec := fmt.Sprintf(`
+openapi: 3.0.3
+info: {title: T, version: "1.0"}
+paths:
+  /long:
+    get:
+      operationId: longDesc
+      summary: %q
+      responses: {"200": {description: ok}}
+`, prose)
+	ts := genSpec(t, spec)
+	d := ts[0].Description()
+	if len(d) > maxDescriptionLen {
+		t.Fatalf("description over limit: %d bytes", len(d))
+	}
+	if !utf8.ValidString(d) {
+		t.Fatalf("truncated description is invalid UTF-8: %q", d[len(d)-8:])
 	}
 }
 

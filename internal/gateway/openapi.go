@@ -35,7 +35,12 @@ func generateTools(server string, specBytes []byte, baseURL string, operations [
 	if vctx == nil {
 		vctx = context.Background()
 	}
-	if err := doc.Validate(vctx); err != nil {
+	// Examples/defaults validation is disabled: invalid `example` values are
+	// endemic in third-party specs and must not kill the whole upstream.
+	if err := doc.Validate(vctx,
+		openapi3.DisableExamplesValidation(),
+		openapi3.DisableSchemaDefaultsValidation(),
+	); err != nil {
 		return nil, "", fmt.Errorf("openapi validate: %w", err)
 	}
 	if baseURL == "" {
@@ -68,6 +73,11 @@ func generateTools(server string, specBytes []byte, baseURL string, operations [
 				continue
 			}
 			name := toolNameFor(op.OperationID, method, p)
+			if name == "" {
+				slog.Warn("gateway openapi: operation name unsanitizable; skipping",
+					"server", server, "operation", method+" "+p)
+				continue
+			}
 			if seen[name] {
 				slog.Warn("gateway openapi: duplicate tool name after sanitization; skipping",
 					"server", server, "operation", method+" "+p, "name", name)
@@ -120,11 +130,18 @@ func operationSelected(allow []string, opID, method, specPath string) bool {
 
 // toolNameFor is operationId, else a slug of "<method>_<path>". "__" is the
 // reserved gateway separator, so any run of underscores collapses to one.
+// An operationId that sanitizes to nothing (e.g. "!!!") falls back to the
+// method_path slug; if that is also empty the caller must skip the operation.
 func toolNameFor(opID, method, specPath string) string {
-	base := opID
-	if base == "" {
-		base = strings.ToLower(method) + "_" + specPath
+	if opID != "" {
+		if n := sanitizeToolName(opID); n != "" {
+			return n
+		}
 	}
+	return sanitizeToolName(strings.ToLower(method) + "_" + specPath)
+}
+
+func sanitizeToolName(base string) string {
 	var b strings.Builder
 	for _, r := range base {
 		switch {
@@ -151,13 +168,29 @@ func buildRestTool(server, name, method, specPath, baseURL string, item *openapi
 	headerParams := map[string]string{} // schema property → wire header name
 
 	// PathItem-level parameters apply to all its operations; operation-level
-	// parameters override by (name, in). Merge both.
-	all := append(append([]*openapi3.ParameterRef{}, item.Parameters...), op.Parameters...)
-	for _, pref := range all {
-		p := pref.Value
-		if p == nil {
+	// parameters OVERRIDE by (name, in) — not append. Merge into a map keyed
+	// by name+"\x00"+in, item-level first, op-level overwriting, then iterate
+	// in deterministic (sorted-key) order.
+	merged := map[string]*openapi3.ParameterRef{}
+	for _, pref := range item.Parameters {
+		if pref.Value == nil {
 			return restTool{}, fmt.Errorf("unresolved parameter ref")
 		}
+		merged[pref.Value.Name+"\x00"+pref.Value.In] = pref
+	}
+	for _, pref := range op.Parameters {
+		if pref.Value == nil {
+			return restTool{}, fmt.Errorf("unresolved parameter ref")
+		}
+		merged[pref.Value.Name+"\x00"+pref.Value.In] = pref
+	}
+	keys := make([]string, 0, len(merged))
+	for k := range merged {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		p := merged[k].Value
 		schemaJSON, err := schemaToJSON(p.Schema)
 		if err != nil {
 			return restTool{}, fmt.Errorf("parameter %s: %w", p.Name, err)
@@ -188,17 +221,22 @@ func buildRestTool(server, name, method, specPath, baseURL string, item *openapi
 	hasBody := false
 	if op.RequestBody != nil && op.RequestBody.Value != nil {
 		mt := op.RequestBody.Value.Content.Get("application/json")
-		if mt == nil {
-			return restTool{}, fmt.Errorf("request body has no application/json media type")
-		}
-		schemaJSON, err := schemaToJSON(mt.Schema)
-		if err != nil {
-			return restTool{}, fmt.Errorf("request body: %w", err)
-		}
-		props["body"] = schemaJSON
-		hasBody = true
-		if op.RequestBody.Value.Required {
-			required = append(required, "body")
+		switch {
+		case mt != nil:
+			schemaJSON, err := schemaToJSON(mt.Schema)
+			if err != nil {
+				return restTool{}, fmt.Errorf("request body: %w", err)
+			}
+			props["body"] = schemaJSON
+			hasBody = true
+			if op.RequestBody.Value.Required {
+				required = append(required, "body")
+			}
+		case op.RequestBody.Value.Required:
+			// Required non-JSON body: the operation is unusable without it.
+			return restTool{}, fmt.Errorf("required request body has no application/json media type")
+		default:
+			// Optional non-JSON body: drop the body property, op usable bodyless.
 		}
 	}
 
@@ -210,12 +248,19 @@ func buildRestTool(server, name, method, specPath, baseURL string, item *openapi
 	if err != nil {
 		return restTool{}, err
 	}
+	// Cyclic refs survive kin-openapi resolution as dangling "$ref" markers in
+	// the marshaled schema; such an operation is unmappable (spec §5).
+	if strings.Contains(string(schemaBytes), `"$ref"`) {
+		return restTool{}, fmt.Errorf("schema contains unresolved $ref (cyclic reference)")
+	}
 
-	desc := method + " " + specPath + " — "
 	prose := strings.TrimSpace(strings.TrimSpace(op.Summary) + " " + strings.TrimSpace(op.Description))
-	desc += prose
+	desc := method + " " + specPath
+	if prose != "" {
+		desc += " — " + prose
+	}
 	if len(desc) > maxDescriptionLen {
-		desc = desc[:maxDescriptionLen]
+		desc = strings.ToValidUTF8(desc[:maxDescriptionLen], "")
 	}
 
 	return restTool{
