@@ -11,7 +11,6 @@ import (
 	"strings"
 
 	"github.com/getkin/kin-openapi/openapi3"
-	"github.com/sausheong/harness/tool"
 )
 
 const (
@@ -415,8 +414,4 @@ func (r restTool) Description() string         { return r.description }
 func (r restTool) Parameters() json.RawMessage { return r.schema }
 func (r restTool) IsConcurrencySafe(json.RawMessage) bool {
 	return r.method == "GET" || r.method == "HEAD"
-}
-
-func (r restTool) Execute(ctx context.Context, input json.RawMessage) (tool.ToolResult, error) {
-	return tool.ToolResult{Error: "not wired"}, nil // Task 3
 }
