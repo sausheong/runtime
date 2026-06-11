@@ -27,7 +27,16 @@ type upstreamConn interface {
 // dialFunc connects one configured upstream. Swapped in tests.
 type dialFunc func(ctx context.Context, s config.GatewayServer) (upstreamConn, error)
 
-// dialHarness is the production dialFunc: it maps config.GatewayServer onto
+// dialProduction routes each transport: openapi: → REST adapter,
+// command:/url: → harness MCP.
+func dialProduction(ctx context.Context, s config.GatewayServer) (upstreamConn, error) {
+	if s.OpenAPI != "" {
+		return dialOpenAPI(ctx, s)
+	}
+	return dialHarness(ctx, s)
+}
+
+// dialHarness is the harness-MCP dialFunc: it maps config.GatewayServer onto
 // harness mcp.ServerConfig and Connects (stdio or Streamable HTTP).
 func dialHarness(ctx context.Context, s config.GatewayServer) (upstreamConn, error) {
 	return hmcp.Connect(ctx, hmcp.ServerConfig{

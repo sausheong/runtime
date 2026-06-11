@@ -18,7 +18,7 @@ import (
 // UpstreamStatus is the operator-facing state of one upstream.
 type UpstreamStatus struct {
 	Name        string    `json:"name"`
-	Transport   string    `json:"transport"` // "stdio" | "http"
+	Transport   string    `json:"transport"` // "stdio" | "http" | "openapi"
 	State       string    `json:"state"`     // "up" | "down"
 	ToolCount   int       `json:"tool_count"`
 	LastError   string    `json:"last_error,omitempty"`
@@ -67,7 +67,7 @@ func WithBackoff(min, max time.Duration) Option {
 // NewManager builds a Manager for the configured servers. Call Start to begin
 // connecting.
 func NewManager(servers []config.GatewayServer, opts ...Option) *Manager {
-	m := &Manager{dial: dialHarness, minBackoff: time.Second, maxBackoff: time.Minute}
+	m := &Manager{dial: dialProduction, minBackoff: time.Second, maxBackoff: time.Minute}
 	for _, s := range servers {
 		m.ups = append(m.ups, &upstream{cfg: s})
 	}
@@ -297,6 +297,9 @@ func (m *Manager) Status(tenant string) []UpstreamStatus {
 func transportOf(s config.GatewayServer) string {
 	if s.Command != "" {
 		return "stdio"
+	}
+	if s.OpenAPI != "" {
+		return "openapi"
 	}
 	return "http"
 }

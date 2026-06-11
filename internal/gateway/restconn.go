@@ -8,10 +8,13 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 
 	"github.com/sausheong/harness/tool"
+
+	"github.com/sausheong/runtime/internal/config"
 )
 
 const (
@@ -36,6 +39,94 @@ func newRestClient() *http.Client {
 			return nil
 		},
 	}
+}
+
+// restConn is the connected form of an OpenAPI upstream. Stateless: tools
+// carry their own client; Ping probes the API base URL.
+type restConn struct {
+	baseURL string
+	client  *http.Client
+	tools   []tool.Tool
+}
+
+func (c *restConn) Tools() []tool.Tool { return c.tools }
+
+// Ping: HEAD base_url, GET fallback on 405. ANY HTTP response = alive (REST
+// APIs have no standard health endpoint; a 404 still proves reachability).
+// Only transport errors mark the upstream down.
+func (c *restConn) Ping(ctx context.Context) error {
+	for _, method := range []string{http.MethodHead, http.MethodGet} {
+		req, err := http.NewRequestWithContext(ctx, method, c.baseURL, nil)
+		if err != nil {
+			return err
+		}
+		resp, err := c.client.Do(req)
+		if err != nil {
+			return err
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusMethodNotAllowed {
+			return nil
+		}
+	}
+	return nil // both answered (405 twice) — an answer is an answer; alive
+}
+
+func (c *restConn) Close() error { return nil }
+
+// dialOpenAPI is the production dialer branch for openapi: upstreams. Fetches
+// the spec (file or URL, with the configured headers), generates the tools,
+// and returns a stateless conn. A fetch/parse failure is a dial error — the
+// supervision loop retries with backoff, re-fetching each time (drift
+// handling for free).
+func dialOpenAPI(ctx context.Context, s config.GatewayServer) (upstreamConn, error) {
+	var specBytes []byte
+	var err error
+	if strings.HasPrefix(s.OpenAPI, "http://") || strings.HasPrefix(s.OpenAPI, "https://") {
+		specBytes, err = fetchSpec(ctx, s.OpenAPI, s.Headers)
+	} else {
+		specBytes, err = os.ReadFile(s.OpenAPI)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("openapi spec %s: %w", s.OpenAPI, err)
+	}
+	client := newRestClient()
+	tools, resolvedBase, err := generateTools(s.Name, specBytes, s.BaseURL, s.Operations, client)
+	if err != nil {
+		return nil, err
+	}
+	if resolvedBase == "" {
+		return nil, fmt.Errorf("openapi: no base_url resolvable for %s", s.Name)
+	}
+	ht := make([]tool.Tool, len(tools))
+	for i := range tools {
+		tools[i].staticHeaders = s.Headers
+		ht[i] = tools[i]
+	}
+	return &restConn{baseURL: resolvedBase, client: client, tools: ht}, nil
+}
+
+// fetchSpec GETs a spec URL with a bounded timeout and the upstream's
+// configured headers (spec endpoints behind the same auth work).
+func fetchSpec(ctx context.Context, url string, headers map[string]string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("spec fetch: HTTP %d", resp.StatusCode)
+	}
+	return io.ReadAll(io.LimitReader(resp.Body, 8<<20)) // 8 MiB spec cap
 }
 
 // Execute performs the HTTP request for one generated REST tool. HTTP 4xx/5xx

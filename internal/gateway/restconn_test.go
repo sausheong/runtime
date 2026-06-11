@@ -3,14 +3,21 @@ package gateway
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/sausheong/harness/tool"
+
+	"github.com/sausheong/runtime/internal/config"
 )
 
 // execTool finds a generated tool by short name and runs Execute.
@@ -302,5 +309,221 @@ func TestExecuteRedirectPolicy(t *testing.T) {
 	}
 	if res.Error == "" || !strings.Contains(res.Error, "redirect") {
 		t.Fatalf("cross-host redirect not refused: %+v", res)
+	}
+}
+
+// ---- dialOpenAPI / restConn (Task 4) ----
+
+// testSpecToolCount is the number of tools testSpec generates with no
+// operations filter (see TestGenerateAllOperations).
+const testSpecToolCount = 5
+
+// specAndAPIServer serves the given spec bytes at /openapi.yaml and acts as
+// the API itself (200 JSON for everything else). Spec content is swappable
+// under a mutex for drift tests.
+type specAndAPIServer struct {
+	mu   sync.Mutex
+	spec []byte
+	srv  *httptest.Server
+}
+
+func newSpecAndAPIServer(t *testing.T, spec string) *specAndAPIServer {
+	t.Helper()
+	s := &specAndAPIServer{spec: []byte(spec)}
+	s.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/openapi.yaml" {
+			s.mu.Lock()
+			b := s.spec
+			s.mu.Unlock()
+			w.Header().Set("Content-Type", "application/yaml")
+			w.Write(b)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, "{}")
+	}))
+	t.Cleanup(s.srv.Close)
+	return s
+}
+
+func (s *specAndAPIServer) setSpec(spec string) {
+	s.mu.Lock()
+	s.spec = []byte(spec)
+	s.mu.Unlock()
+}
+
+func TestDialOpenAPIFetchesAndGenerates(t *testing.T) {
+	s := newSpecAndAPIServer(t, testSpec)
+	conn, err := dialOpenAPI(context.Background(), config.GatewayServer{
+		Name: "orders", OpenAPI: s.srv.URL + "/openapi.yaml", BaseURL: s.srv.URL,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	if got := len(conn.Tools()); got != testSpecToolCount {
+		t.Fatalf("want %d tools, got %d", testSpecToolCount, got)
+	}
+	if err := conn.Ping(context.Background()); err != nil {
+		t.Fatalf("ping against live API: %v", err)
+	}
+}
+
+func TestDialOpenAPILocalFile(t *testing.T) {
+	s := newSpecAndAPIServer(t, testSpec)
+	specPath := filepath.Join(t.TempDir(), "orders.yaml")
+	if err := os.WriteFile(specPath, []byte(testSpec), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	conn, err := dialOpenAPI(context.Background(), config.GatewayServer{
+		Name: "orders", OpenAPI: specPath, BaseURL: s.srv.URL,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	if got := len(conn.Tools()); got != testSpecToolCount {
+		t.Fatalf("want %d tools, got %d", testSpecToolCount, got)
+	}
+}
+
+func TestDialOpenAPIBadSpecIsDialError(t *testing.T) {
+	s := newSpecAndAPIServer(t, "this is not an openapi document {{{")
+	_, err := dialOpenAPI(context.Background(), config.GatewayServer{
+		Name: "orders", OpenAPI: s.srv.URL + "/openapi.yaml", BaseURL: s.srv.URL,
+	})
+	if err == nil {
+		t.Fatal("garbage spec must be a dial error")
+	}
+}
+
+// Spec §8: an operations filter that matches nothing still connects, with an
+// empty tool set — it is NOT a dial error (the upstream is healthy; the
+// operator just filtered everything out).
+func TestDialOpenAPIZeroToolsStillConnects(t *testing.T) {
+	s := newSpecAndAPIServer(t, testSpec)
+	conn, err := dialOpenAPI(context.Background(), config.GatewayServer{
+		Name: "orders", OpenAPI: s.srv.URL + "/openapi.yaml", BaseURL: s.srv.URL,
+		Operations: []string{"noSuchOperationId"},
+	})
+	if err != nil {
+		t.Fatalf("zero tools must still connect: %v", err)
+	}
+	defer conn.Close()
+	if got := len(conn.Tools()); got != 0 {
+		t.Fatalf("want 0 tools, got %d", got)
+	}
+	if err := conn.Ping(context.Background()); err != nil {
+		t.Fatalf("ping: %v", err)
+	}
+}
+
+// Any HTTP response — 200, 404, 500 — proves reachability and means alive.
+// Only transport errors (connection refused) mark the upstream down.
+func TestPingSemantics(t *testing.T) {
+	for _, status := range []int{200, 404, 500} {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(status)
+		}))
+		c := &restConn{baseURL: srv.URL, client: srv.Client()}
+		if err := c.Ping(context.Background()); err != nil {
+			t.Fatalf("status %d must be alive, got %v", status, err)
+		}
+		srv.Close()
+	}
+
+	dead := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	c := &restConn{baseURL: dead.URL, client: dead.Client()}
+	dead.Close()
+	if err := c.Ping(context.Background()); err == nil {
+		t.Fatal("closed server must be a ping error")
+	}
+}
+
+func TestPingHEADFallsBackToGETOn405(t *testing.T) {
+	var sawGET atomic.Bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodHead:
+			w.WriteHeader(http.StatusMethodNotAllowed)
+		case http.MethodGet:
+			sawGET.Store(true)
+			w.WriteHeader(http.StatusOK)
+		}
+	}))
+	defer srv.Close()
+	c := &restConn{baseURL: srv.URL, client: srv.Client()}
+	if err := c.Ping(context.Background()); err != nil {
+		t.Fatalf("405-on-HEAD must fall back to GET and be alive: %v", err)
+	}
+	if !sawGET.Load() {
+		t.Fatal("GET fallback was not attempted after HEAD 405")
+	}
+}
+
+// oneOpSpec is the drift target: same API, only listOrders remains.
+const oneOpSpec = `
+openapi: 3.0.3
+info: {title: Orders, version: "2.0"}
+paths:
+  /orders:
+    get:
+      operationId: listOrders
+      responses: {"200": {description: ok}}
+`
+
+// Spec drift: a reconnect re-fetches the spec, so the tool set follows the
+// upstream's current document — no gateway restart needed.
+func TestManagerReconnectRefetchesSpec(t *testing.T) {
+	s := newSpecAndAPIServer(t, testSpec)
+	cfg := config.GatewayServer{
+		Name: "orders", OpenAPI: s.srv.URL + "/openapi.yaml", BaseURL: s.srv.URL,
+	}
+	m := NewManager([]config.GatewayServer{cfg},
+		WithDial(func(ctx context.Context, s config.GatewayServer) (upstreamConn, error) {
+			return dialOpenAPI(ctx, s)
+		}),
+		WithBackoff(10*time.Millisecond, 50*time.Millisecond))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	m.Start(ctx)
+	waitFor(t, 5*time.Second, func() bool { return len(m.AllTools()) == testSpecToolCount })
+
+	s.setSpec(oneOpSpec)
+
+	// Force a down/redial the same way the tool-execution path would: capture
+	// the live conn and report it failed. The supervise loop redials, which
+	// re-fetches the (now swapped) spec.
+	u := m.ups[0]
+	u.mu.Lock()
+	observed := u.conn
+	u.mu.Unlock()
+	m.markDown(u, observed, errors.New("forced for drift test"))
+
+	waitFor(t, 5*time.Second, func() bool { return len(m.AllTools()) == 1 })
+	if got := m.AllTools()[0].Name(); got != "orders__listOrders" {
+		t.Fatalf("post-drift tool: %q", got)
+	}
+}
+
+// REST tool names are already "<server>__<tool>" (no mcp__ prefix), so
+// renameTools must pass them through unchanged.
+func TestRenameToolsPassesRESTNamesThrough(t *testing.T) {
+	tools, _, err := generateTools("orders", []byte(testSpec), "http://up:1", nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	in := make([]tool.Tool, len(tools))
+	for i := range tools {
+		in[i] = tools[i]
+	}
+	out := renameTools(in)
+	if len(out) != len(in) {
+		t.Fatalf("len changed: %d -> %d", len(in), len(out))
+	}
+	for i := range in {
+		if out[i].Name() != in[i].Name() {
+			t.Fatalf("name changed: %q -> %q", in[i].Name(), out[i].Name())
+		}
 	}
 }
