@@ -12,6 +12,7 @@ import (
 	"github.com/sausheong/harness/tool"
 
 	"github.com/sausheong/runtime/internal/config"
+	"github.com/sausheong/runtime/internal/obs"
 )
 
 // UpstreamStatus is the operator-facing state of one upstream.
@@ -47,6 +48,9 @@ type Manager struct {
 	generation atomic.Uint64
 	wg         sync.WaitGroup
 	cancel     context.CancelFunc // set by Start; called by Close
+
+	// Metrics (nil-safe) tracks upstream connection state. Set before Start.
+	Metrics *obs.ControlMetrics
 }
 
 // Option configures a Manager.
@@ -111,6 +115,7 @@ func (m *Manager) supervise(ctx context.Context, u *upstream) {
 				u.mu.Lock()
 				u.lastErr = err
 				u.mu.Unlock()
+				m.Metrics.GatewayUpstreamUp(u.cfg.Name, false)
 				slog.Warn("gateway: upstream connect failed",
 					"server", u.cfg.Name, "transport", transportOf(u.cfg), "err", err)
 				select {
@@ -127,6 +132,7 @@ func (m *Manager) supervise(ctx context.Context, u *upstream) {
 			u.mu.Unlock()
 			m.generation.Add(1)
 			backoff = m.minBackoff
+			m.Metrics.GatewayUpstreamUp(u.cfg.Name, true)
 			slog.Info("gateway: upstream connected",
 				"server", u.cfg.Name, "transport", transportOf(u.cfg), "tools", len(renamed))
 		}
@@ -171,6 +177,7 @@ func (m *Manager) markDown(u *upstream, observed upstreamConn, err error) {
 	u.mu.Unlock()
 	_ = conn.Close() // outside the lock: Close may block on I/O
 	m.generation.Add(1)
+	m.Metrics.GatewayUpstreamUp(u.cfg.Name, false)
 	slog.Warn("gateway: upstream marked down", "server", u.cfg.Name, "err", err)
 }
 

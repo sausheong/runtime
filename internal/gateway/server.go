@@ -7,11 +7,13 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"time"
 
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/sausheong/harness/tool"
 
 	"github.com/sausheong/runtime/internal/identity"
+	"github.com/sausheong/runtime/internal/obs"
 )
 
 // Handler serves the federated tool set over MCP Streamable HTTP plus the
@@ -34,6 +36,9 @@ type Handler struct {
 	// Index enables search mode (?mode=search): nil ⇒ search mode is
 	// unavailable and requests for it are rejected with 400.
 	Index *Index
+
+	// Metrics (nil-safe) records federated tool calls. Set once before serving.
+	Metrics *obs.ControlMetrics
 
 	mu sync.Mutex
 	// cache maps mode-qualified view key → server, rebuilt when the Manager's
@@ -220,13 +225,19 @@ func (h *Handler) toolHandler(builtFor string, t tool.Tool, forwardTenant bool) 
 			}
 			args = injected
 		}
+		serverName, _, _ := strings.Cut(t.Name(), "__") // sound: "__" banned in server names
+		start := time.Now()
 		res, err := t.Execute(ctx, args)
+		dur := time.Since(start)
 		if err != nil {
+			h.Metrics.GatewayCall(serverName, t.Name(), obs.OutcomeError, dur)
 			return errResult(err.Error()), nil
 		}
 		if res.Error != "" {
+			h.Metrics.GatewayCall(serverName, t.Name(), obs.OutcomeError, dur)
 			return errResult(res.Error), nil
 		}
+		h.Metrics.GatewayCall(serverName, t.Name(), obs.OutcomeOK, dur)
 		out := &sdk.CallToolResult{}
 		// Emit the text part when there is output, or when there are no
 		// images either — Content must never be empty.

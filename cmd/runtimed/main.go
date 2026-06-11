@@ -61,6 +61,10 @@ func main() {
 		reg.SetGateway(gwURL, cfg.Gateway.AgentKeys)
 		gwManager = gateway.NewManager(cfg.Gateway.Servers)
 		gwHandler = gateway.NewHandler(gwManager)
+		// Metrics wiring must precede gwManager.Start (no race on the first
+		// connect transition).
+		gwManager.Metrics = cm
+		gwHandler.Metrics = cm
 		slog.Info("gateway enabled", "upstreams", len(cfg.Gateway.Servers), "url", gwURL)
 
 		// Gateway search (M2): assemble the Index from the Memory embedder env
