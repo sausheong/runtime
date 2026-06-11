@@ -57,6 +57,7 @@ no lost work, no duplicated committed tool calls.
 | **Contract conformance** | A reusable Go suite (and `runtimectl conformance`) that verifies any agent satisfies the HTTP/SSE contract — executable proof, CI-ready. |
 | **Structured logging** | `slog` everywhere (text or JSON via `RUNTIME_LOG_FORMAT`), with agent/session fields. |
 | **BYO agent** | Link the `agentruntime` SDK, hand it a harness `AgentSpec` + provider + tools, and get the durable contract for free — zero durability or HTTP code. |
+| **MCP gateway** | A central `/gateway/mcp` endpoint: MCP federation + semantic tool search + REST/OpenAPI adapters. Stdio, Streamable HTTP, and plain REST upstreams (one tool per OpenAPI operation), namespaced, tenant-filtered, discoverable by embedding-ranked search. |
 | **Code-interpreter sandbox** | An isolated, stateful Python + shell execution environment per session — one locked-down Docker container (no network, read-only rootfs, resource limits), tenant-scoped, delivered to every agent through the MCP gateway. |
 | **Observability** | One Prometheus `/metrics` endpoint for the whole fleet (control plane + every agent, merged), `X-Request-ID` correlation end-to-end through proxy, logs, and durable workflow, and a bundled Prometheus + Grafana compose overlay with a provisioned dashboard. |
 | **On-prem & self-contained** | Go binaries + Postgres. No cloud, no Kubernetes required, air-gap friendly. Full-stack `docker compose` included. |
@@ -481,9 +482,11 @@ embeddings — no new egress.
 
 The platform can host a **central MCP endpoint** — `/gateway/mcp`, speaking
 Streamable HTTP — that **federates upstream MCP servers** behind one URL. An
-upstream is either a **stdio** server (a `command` the platform spawns) or a
-remote **Streamable HTTP** server (a `url`). Each upstream's tools are
-namespaced as `<server>__<tool>` on the gateway; an agent consuming them
+upstream is a **stdio** server (a `command` the platform spawns), a remote
+**Streamable HTTP** server (a `url`), or a plain **REST API** described by an
+OpenAPI document (an `openapi:` spec — see
+[REST / OpenAPI upstreams](#rest--openapi-upstreams)). Each upstream's tools
+are namespaced as `<server>__<tool>` on the gateway; an agent consuming them
 through the gateway sees them as `mcp__gateway__<server>__<tool>`. Operators
 configure tools once, centrally, instead of wiring the same MCP servers into
 every agent.
@@ -508,8 +511,10 @@ gateway:
 ```
 
 Each server requires a unique `name` and **exactly one** of `command` (stdio;
-with optional `args` and `env`) or `url` (Streamable HTTP; with optional
-`headers` for auth). `headers`, `env`, and `agent_keys` values support
+with optional `args` and `env`), `url` (Streamable HTTP; with optional
+`headers` for auth), or `openapi` (a REST API described by an OpenAPI 3.x
+document — see [REST / OpenAPI upstreams](#rest--openapi-upstreams)).
+`headers`, `env`, and `agent_keys` values support
 `${VAR}` expansion from the operator environment at load time, so secrets stay
 out of the YAML file; referencing an unset/empty variable is a fatal config
 error. Values may not contain a literal `$` — put such values in an env var
@@ -611,6 +616,81 @@ fails is skipped from search results but remains callable by name, and a
 query-embed failure returns an `isError` "search temporarily unavailable"
 result.
 
+### REST / OpenAPI upstreams
+
+The gateway can also federate a **plain REST API** — no MCP server required.
+Point a server entry at an OpenAPI 3.x document and every selected operation
+becomes an ordinary federated tool: named, tenant-filtered, searchable
+(search mode indexes generated tools automatically), metered, and callable by
+any `gateway: true|search` agent with zero agent-side changes.
+
+```yaml
+gateway:
+  servers:
+    - name: orders
+      openapi: http://orders.internal:9000/openapi.yaml  # file path or URL
+      base_url: http://orders.internal:9000   # optional; default = first spec servers[] entry
+      headers: {Authorization: "Bearer ${ORDERS_TOKEN}"}  # ${VAR} expansion as usual
+      operations: ["listOrders", "GET /orders/*"]  # optional allowlist; omit ⇒ all
+      tenants: [acme]                          # tenancy works as for any upstream
+```
+
+`base_url` and `operations:` are valid only with `openapi:`; `operations:`
+entries are bare operationIds or `METHOD /path-glob` patterns.
+`forward_tenant: true` remains stdio-only.
+
+**Tool generation.** One tool per selected operation, named
+`<server>__<operationId>` (when an operation has no `operationId`, a
+`method_path` slug is used; `__` inside a name collapses to `_` — it is the
+reserved gateway separator). Descriptions are `"METHOD /path — summary"`
+(capped at 1024 chars). The input schema is one object merging path parameters
+(required), query parameters, spec-declared headers (prefixed `header_`), and
+the JSON request body under a `body` property. Component `$ref`s are
+**deep-inlined** into plain JSON Schema; an operation with a genuinely cyclic
+schema is skipped with a WARN, and a spec using external (cross-file) `$ref`s
+fails at dial — security posture. Operations whose *required* request body
+has no JSON media type are skipped (an optional non-JSON body is just
+dropped). A spec generating more than 50 tools logs a WARN nudging you toward
+`operations:`; a filter matching zero operations connects with 0 tools plus a
+WARN (an operator typo should be visible, not fatal).
+
+**Calling a tool.** Every HTTP exchange comes back as one JSON envelope —
+HTTP 4xx/5xx are *results* the agent can reason about, not tool errors:
+
+```json
+{"status": 404, "headers": {"content-type": "application/json"},
+ "body": {"error": "no such order"}, "truncated": false}
+```
+
+`body` is parsed JSON when the response is JSON, otherwise the raw string;
+responses are capped at 1 MiB with `"truncated": true` beyond that. Requests
+time out at 30s. Tool errors are reserved for input validation failures,
+traversal/header-override rejections, transport failures, and timeouts.
+
+**Security posture.**
+
+- The agent controls only parameter *values* — never host, scheme, or path
+  structure. Path-parameter values containing `/` or `..` (including encoded
+  forms) are rejected.
+- Configured headers are inviolable: a `header_*` argument that matches a
+  configured header (case-insensitive) is rejected — an agent can never
+  override `Authorization`.
+- Redirects are followed same-host only (max 3), for API calls **and** the
+  spec fetch — a compromised upstream cannot bounce gateway credentials to
+  another host.
+- Liveness: `HEAD base_url` (GET fallback on 405); *any* HTTP response means
+  alive — only transport errors mark the upstream down. Reconnect re-fetches
+  the spec, so spec drift heals on the next redial.
+
+**Limitations (this milestone):** JSON request bodies only (a required
+form/multipart body skips the operation); arrays serialize comma-joined (no
+`explode`); credentials are shared per upstream (per-tenant credentials need
+secrets-broker integration); OpenAPI 3.x only (no Swagger 2.0 conversion); no
+OAuth2 client-credentials flow.
+
+A runnable example lives in `examples/rest-demo/` — a tiny orders API that
+serves its own OpenAPI spec, with a README walking through federating it.
+
 ### Failure model
 
 Startup never blocks on upstreams: `runtimed` comes up immediately and each
@@ -624,7 +704,10 @@ backoff) owning its lifecycle. A call against a down upstream returns an MCP
 - **Static config only** — upstreams come from `runtime.yaml` at startup; no
   dynamic registration.
 - **Tools only** — no resources or prompts federation yet.
-- **No REST adapters** — upstreams must speak MCP (stdio or Streamable HTTP).
+- **REST upstreams: JSON bodies, shared credentials** — see
+  [REST / OpenAPI upstreams](#rest--openapi-upstreams) for the per-milestone
+  limitations (JSON-only request bodies, comma-joined arrays, per-upstream
+  shared credentials, OpenAPI 3.x only, no OAuth2 flow).
 - **Operator-managed agent keys** — `agent_keys` maps tenants to service keys
   by hand; no automatic key minting for `gateway: true` agents.
 - **`${VAR}` expansion required for values containing `$`** — there is no
@@ -1469,6 +1552,12 @@ Integration tests cover the platform's headline guarantees, including:
   (in-memory backend — no Docker needed): asserts the sandbox tools federate,
   a spoofed `__rt_tenant` argument is overridden by the gateway, and one
   tenant's sandbox is invisible and unusable to the other.
+- **`TestGatewayRESTE2E`** — boots `runtimed` with identity enforced and an
+  `openapi:` (REST) upstream scoped to one tenant: the spec is fetched over
+  HTTP, generated `orders__*` tools are listed and called through
+  `/gateway/mcp` (envelope JSON with the upstream status), the other tenant
+  sees and can call nothing, and the merged `/metrics` + `/gateway/status`
+  carry the `openapi` transport's series and state.
 - **`TestObservabilityE2E`** — boots `runtimed` with identity enforced and
   asserts the metrics fan-out merges agent series into one valid exposition
   (server-enforced `agent` labels), HTTP routes are recorded as patterns (no
@@ -1505,9 +1594,9 @@ each running the full nutrition investigator — see the Python shim section); t
 per-tenant secrets brokering, and secrets key rotation, below); the **Memory**
 sub-project (three milestones — durable per-tenant store, semantic recall, and
 auto-ingestion, with recall and ingest wired into the live turn path — see
-[agent memory](#per-tenant-agent-memory)); the **Gateway** sub-project (two
-milestones — MCP federation core and semantic tool search — see
-[MCP Gateway](#mcp-gateway)); the **Sandboxes** sub-project (first
+[agent memory](#per-tenant-agent-memory)); the **Gateway** sub-project (three
+milestones — MCP federation core, semantic tool search, and REST/OpenAPI→tool
+adapters — see [MCP Gateway](#mcp-gateway)); the **Sandboxes** sub-project (first
 milestone — the Docker-backed code interpreter, delivered through the gateway
 — see [Code-interpreter sandbox](#code-interpreter-sandbox)); and the
 **Observability** sub-project (first milestone — fleet-wide Prometheus
@@ -1545,13 +1634,16 @@ milestone or sub-project):
   per-agent replicas or load-based scaling.
 - **Dynamic deploy** — agents come from `runtime.yaml` at startup; no runtime
   `POST /agents` registration or rollback yet (tokens are config-only too).
-- **Gateway — first two milestones DONE** (see [MCP Gateway](#mcp-gateway)):
+- **Gateway — first three milestones DONE** (see [MCP Gateway](#mcp-gateway)):
   M1 MCP federation core (one endpoint federating upstream MCP servers,
-  tenant-filtered via Identity service keys) and M2 semantic tool search
+  tenant-filtered via Identity service keys), M2 semantic tool search
   (`gateway: search` / `?mode=search` — one listed `search_tools` tool,
-  embedding-ranked discovery, callable-but-unlisted catalog). **Still to come:**
-  REST/OpenAPI→tool adapters, dynamic upstream registration, resources/prompts
-  passthrough, a console panel, auto-minted agent keys, and rate limits.
+  embedding-ranked discovery, callable-but-unlisted catalog), and M3
+  REST/OpenAPI→tool adapters (`openapi:` upstreams — one generated tool per
+  spec operation, no MCP server required). **Still to come:**
+  dynamic upstream registration, resources/prompts passthrough, OAuth2
+  upstream auth, per-tenant upstream credentials, a console panel,
+  auto-minted agent keys, and rate limits.
 - **Polyglot hosting — first two milestones DONE** (see
   [the Python shim](#hosting-a-foreign-sdk-agent-python-shim)): the OpenAI
   Agents SDK and Claude Agent SDK adapters, each hosting the full nutrition
