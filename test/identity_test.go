@@ -99,7 +99,7 @@ func TestIdentityE2E_TwoTenants(t *testing.T) {
 		w.WriteHeader(200)
 		_, _ = w.Write([]byte("ok " + r.URL.Path))
 	})
-	mw := controlplane.IdentityMiddleware(backend, authr, az)
+	mw := controlplane.IdentityMiddleware(backend, authr, az, nil)
 	srv := httptest.NewServer(mw)
 	defer srv.Close()
 

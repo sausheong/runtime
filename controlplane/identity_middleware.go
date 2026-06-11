@@ -21,7 +21,16 @@ type authenticator interface {
 // the open-mode middleware: /healthz, /ui/login, /ui/static/*. Errors map to
 // 401 (unauthenticated), 403 (forbidden / not provisioned), 404 (cross-tenant or
 // unknown agent). For /ui paths, an auth failure redirects to /ui/login.
-func IdentityMiddleware(next http.Handler, a authenticator, az *identity.Authorizer) http.Handler {
+//
+// onReject (nil-safe) fires once with the status code at every rejection write
+// path — rejected requests never reach the inner handler chain, so this hook is
+// the only way edge metrics can observe them.
+func IdentityMiddleware(next http.Handler, a authenticator, az *identity.Authorizer, onReject func(status int)) http.Handler {
+	reject := func(status int) {
+		if onReject != nil {
+			onReject(status)
+		}
+	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Decide exemption and authorization on the cleaned path so an attacker
 		// cannot slip past an exempt prefix with ".." segments (the middleware
@@ -34,13 +43,16 @@ func IdentityMiddleware(next http.Handler, a authenticator, az *identity.Authori
 		p, err := a.Authenticate(r.Context(), r)
 		if err != nil {
 			if strings.HasPrefix(cleanPath, "/ui") {
+				reject(http.StatusSeeOther)
 				http.Redirect(w, r, "/ui/login", http.StatusSeeOther)
 				return
 			}
 			switch {
 			case errors.Is(err, identity.ErrNotProvisioned):
+				reject(http.StatusForbidden)
 				http.Error(w, "forbidden", http.StatusForbidden)
 			default:
+				reject(http.StatusUnauthorized)
 				http.Error(w, "unauthorized", http.StatusUnauthorized)
 			}
 			return
@@ -48,7 +60,9 @@ func IdentityMiddleware(next http.Handler, a authenticator, az *identity.Authori
 
 		if id := agentIDFromPath(cleanPath); id != "" {
 			if azErr := az.Authorize(p, id, actionForRequest(r.Method, cleanPath)); azErr != nil {
-				writeAuthzError(w, azErr)
+				status := authzStatus(azErr)
+				reject(status)
+				http.Error(w, authzMessage(status), status)
 				return
 			}
 		}
@@ -62,17 +76,21 @@ func isExempt(path string) bool {
 	return path == "/healthz" || path == "/ui/login" || strings.HasPrefix(path, "/ui/static/")
 }
 
-// writeAuthzError maps Authorizer errors to HTTP codes (404 hides cross-tenant
+// authzStatus maps Authorizer errors to HTTP codes (404 hides cross-tenant
 // existence; 403 is an in-tenant permission denial).
-func writeAuthzError(w http.ResponseWriter, err error) {
-	switch {
-	case errors.Is(err, identity.ErrNotFound):
-		http.Error(w, "not found", http.StatusNotFound)
-	case errors.Is(err, identity.ErrForbidden):
-		http.Error(w, "forbidden", http.StatusForbidden)
-	default:
-		http.Error(w, "forbidden", http.StatusForbidden)
+func authzStatus(err error) int {
+	if errors.Is(err, identity.ErrNotFound) {
+		return http.StatusNotFound
 	}
+	return http.StatusForbidden
+}
+
+// authzMessage is the response body matching an authzStatus code.
+func authzMessage(status int) string {
+	if status == http.StatusNotFound {
+		return "not found"
+	}
+	return "forbidden"
 }
 
 // agentIDFromPath extracts {id} from /agents/{id}/... ; "" for /agents or others.

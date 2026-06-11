@@ -201,7 +201,9 @@ func main() {
 			gwHandler.PrincipalFor = controlplane.PrincipalFromContext
 		}
 		root := buildRoot(reg, idStore, consoleOIDC, secretAdmin, gwHandler, cm) // mounts /admin since the store is non-nil
-		handler = obs.RequestID(controlplane.IdentityMiddleware(accessLog(root, cm), authr, azr))
+		handler = obs.RequestID(controlplane.IdentityMiddleware(accessLog(root, cm), authr, azr, func(status int) {
+			cm.HTTPObserved("auth_rejected", "", status, 0)
+		}))
 		slog.Info("identity enabled", "oidc", oidcIssuer != "", "bootstrap", bootstrapKey != "", "legacy_tokens", len(legacyTokens))
 	}
 
@@ -270,6 +272,11 @@ func (r *statusRecorder) Flush() {
 // label is the matched mux pattern (r.Pattern, Go 1.22+), never the raw path —
 // raw paths would explode label cardinality. Unmatched requests (404s, stdlib
 // redirects) share the "unmatched" bucket.
+//
+// In identity mode, requests rejected by IdentityMiddleware never reach this
+// handler: they are counted only under route="auth_rejected" (via the
+// middleware's onReject hook) — no per-route metric, no access-log line, and
+// no principal, by design.
 func accessLog(next http.Handler, cm *obs.ControlMetrics) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()

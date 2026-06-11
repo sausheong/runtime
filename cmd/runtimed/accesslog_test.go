@@ -10,10 +10,16 @@ import (
 )
 
 func TestAccessLogRouteNormalization(t *testing.T) {
+	// Mirror production topology (buildRoot): a root mux delegating "/" to an
+	// inner mux. r.Pattern must reflect the INNER mux's matched pattern (the
+	// inner ServeMux overwrites the root's "/" pattern), or every request
+	// would collapse into a single "/" series.
 	cm := obs.NewControlMetrics()
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /agents/{id}/sessions", func(w http.ResponseWriter, r *http.Request) {})
-	h := accessLog(mux, cm)
+	root := http.NewServeMux()
+	inner := http.NewServeMux()
+	inner.HandleFunc("GET /agents/{id}/sessions", func(w http.ResponseWriter, r *http.Request) {})
+	root.Handle("/", inner)
+	h := accessLog(root, cm)
 	for _, p := range []string{"/agents/support/sessions", "/agents/research/sessions"} {
 		h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("GET", p, nil))
 	}

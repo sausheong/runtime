@@ -32,7 +32,7 @@ func testAZ() *identity.Authorizer {
 }
 
 func TestIdentityMW_UnauthenticatedIs401(t *testing.T) {
-	mw := IdentityMiddleware(okPrincipalHandler(), stubAuthndr{err: identity.ErrUnauthenticated}, testAZ())
+	mw := IdentityMiddleware(okPrincipalHandler(), stubAuthndr{err: identity.ErrUnauthenticated}, testAZ(), nil)
 	rec := httptest.NewRecorder()
 	mw.ServeHTTP(rec, httptest.NewRequest("GET", "/agents/a1/sessions", nil))
 	if rec.Code != 401 {
@@ -41,7 +41,7 @@ func TestIdentityMW_UnauthenticatedIs401(t *testing.T) {
 }
 
 func TestIdentityMW_NotProvisionedIs403(t *testing.T) {
-	mw := IdentityMiddleware(okPrincipalHandler(), stubAuthndr{err: identity.ErrNotProvisioned}, testAZ())
+	mw := IdentityMiddleware(okPrincipalHandler(), stubAuthndr{err: identity.ErrNotProvisioned}, testAZ(), nil)
 	rec := httptest.NewRecorder()
 	mw.ServeHTTP(rec, httptest.NewRequest("GET", "/agents/a1/sessions", nil))
 	if rec.Code != 403 {
@@ -51,7 +51,7 @@ func TestIdentityMW_NotProvisionedIs403(t *testing.T) {
 
 func TestIdentityMW_CrossTenantIs404(t *testing.T) {
 	mw := IdentityMiddleware(okPrincipalHandler(),
-		stubAuthndr{p: identity.Principal{TenantID: "alpha", Role: identity.RoleOperator}}, testAZ())
+		stubAuthndr{p: identity.Principal{TenantID: "alpha", Role: identity.RoleOperator}}, testAZ(), nil)
 	rec := httptest.NewRecorder()
 	mw.ServeHTTP(rec, httptest.NewRequest("GET", "/agents/b1/sessions", nil))
 	if rec.Code != 404 {
@@ -61,7 +61,7 @@ func TestIdentityMW_CrossTenantIs404(t *testing.T) {
 
 func TestIdentityMW_ViewerInvokeIs403(t *testing.T) {
 	mw := IdentityMiddleware(okPrincipalHandler(),
-		stubAuthndr{p: identity.Principal{TenantID: "alpha", Role: identity.RoleViewer}}, testAZ())
+		stubAuthndr{p: identity.Principal{TenantID: "alpha", Role: identity.RoleViewer}}, testAZ(), nil)
 	rec := httptest.NewRecorder()
 	mw.ServeHTTP(rec, httptest.NewRequest("POST", "/agents/a1/sessions", nil))
 	if rec.Code != 403 {
@@ -71,7 +71,7 @@ func TestIdentityMW_ViewerInvokeIs403(t *testing.T) {
 
 func TestIdentityMW_OperatorInvokeOK(t *testing.T) {
 	mw := IdentityMiddleware(okPrincipalHandler(),
-		stubAuthndr{p: identity.Principal{TenantID: "alpha", Role: identity.RoleOperator}}, testAZ())
+		stubAuthndr{p: identity.Principal{TenantID: "alpha", Role: identity.RoleOperator}}, testAZ(), nil)
 	rec := httptest.NewRecorder()
 	mw.ServeHTTP(rec, httptest.NewRequest("POST", "/agents/a1/sessions", nil))
 	if rec.Code != 200 || rec.Header().Get("X-Tenant") != "alpha" {
@@ -80,7 +80,7 @@ func TestIdentityMW_OperatorInvokeOK(t *testing.T) {
 }
 
 func TestIdentityMW_HealthzExempt(t *testing.T) {
-	mw := IdentityMiddleware(okPrincipalHandler(), stubAuthndr{err: identity.ErrUnauthenticated}, testAZ())
+	mw := IdentityMiddleware(okPrincipalHandler(), stubAuthndr{err: identity.ErrUnauthenticated}, testAZ(), nil)
 	rec := httptest.NewRecorder()
 	mw.ServeHTTP(rec, httptest.NewRequest("GET", "/healthz", nil))
 	if rec.Code != 200 {
@@ -89,11 +89,25 @@ func TestIdentityMW_HealthzExempt(t *testing.T) {
 }
 
 func TestIdentityMW_UIRedirectsWhenUnauthenticated(t *testing.T) {
-	mw := IdentityMiddleware(okPrincipalHandler(), stubAuthndr{err: identity.ErrUnauthenticated}, testAZ())
+	mw := IdentityMiddleware(okPrincipalHandler(), stubAuthndr{err: identity.ErrUnauthenticated}, testAZ(), nil)
 	rec := httptest.NewRecorder()
 	mw.ServeHTTP(rec, httptest.NewRequest("GET", "/ui/agents/x", nil))
 	if rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != "/ui/login" {
 		t.Fatalf("ui redirect: code=%d loc=%q", rec.Code, rec.Header().Get("Location"))
+	}
+}
+
+func TestIdentityMW_OnRejectFiresForUnauthenticated(t *testing.T) {
+	var got []int
+	mw := IdentityMiddleware(okPrincipalHandler(), stubAuthndr{err: identity.ErrUnauthenticated}, testAZ(),
+		func(status int) { got = append(got, status) })
+	rec := httptest.NewRecorder()
+	mw.ServeHTTP(rec, httptest.NewRequest("GET", "/agents/a1/sessions", nil))
+	if rec.Code != 401 {
+		t.Fatalf("code=%d want 401", rec.Code)
+	}
+	if len(got) != 1 || got[0] != 401 {
+		t.Fatalf("onReject calls=%v want exactly one 401", got)
 	}
 }
 
@@ -126,7 +140,7 @@ func TestAgentIDFromPath(t *testing.T) {
 func TestIdentityMW_TraversalCannotBypassExemption(t *testing.T) {
 	// A ".."-laden path that prefix-matches /ui/static must NOT be treated as
 	// exempt: it cleans to an agent path and must be authenticated.
-	mw := IdentityMiddleware(okPrincipalHandler(), stubAuthndr{err: identity.ErrUnauthenticated}, testAZ())
+	mw := IdentityMiddleware(okPrincipalHandler(), stubAuthndr{err: identity.ErrUnauthenticated}, testAZ(), nil)
 	rec := httptest.NewRecorder()
 	mw.ServeHTTP(rec, httptest.NewRequest("GET", "/ui/static/../../agents/a1/sessions", nil))
 	// cleanPath = /agents/a1/sessions ; not /ui ; unauthenticated → 401 (not 200, not redirect).

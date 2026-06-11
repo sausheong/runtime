@@ -123,8 +123,9 @@ func reverseProxy(addr string, onError func()) *httputil.ReverseProxy {
 	target, _ := url.Parse("http://" + addr)
 	rp := httputil.NewSingleHostReverseProxy(target)
 	rp.FlushInterval = -1
-	rp.ErrorHandler = func(w http.ResponseWriter, _ *http.Request, _ error) {
-		if onError != nil {
+	rp.ErrorHandler = func(w http.ResponseWriter, r *http.Request, _ error) {
+		// Client-initiated cancellation is not an agent failure; don't count it.
+		if onError != nil && r.Context().Err() == nil {
 			onError()
 		}
 		http.Error(w, "agent unavailable", http.StatusServiceUnavailable)
