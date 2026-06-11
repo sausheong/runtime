@@ -225,6 +225,12 @@ func (c *Config) Validate() error {
 		if err := expandEnvMap(s.Env, "gateway server "+s.Name+" env"); err != nil {
 			return err
 		}
+		if err := expandEnvScalar(&s.OpenAPI, "gateway server "+s.Name+" openapi"); err != nil {
+			return err
+		}
+		if err := expandEnvScalar(&s.BaseURL, "gateway server "+s.Name+" base_url"); err != nil {
+			return err
+		}
 	}
 	if err := expandEnvMap(c.Gateway.AgentKeys, "gateway agent_keys"); err != nil {
 		return err
@@ -270,20 +276,38 @@ func validateOperationPattern(p string) error {
 // should put such values in an env var and reference it with ${VAR}.
 func expandEnvMap(m map[string]string, what string) error {
 	for k, v := range m {
-		var missing []string
-		expanded := os.Expand(v, func(name string) string {
-			val, ok := os.LookupEnv(name)
-			if !ok || val == "" {
-				missing = append(missing, name)
-			}
-			return val
-		})
+		expanded, missing := expandEnvValue(v)
 		if len(missing) > 0 {
 			return fmt.Errorf("config: %s %q references unset or empty env var(s) %v", what, k, missing)
 		}
 		m[k] = expanded
 	}
 	return nil
+}
+
+// expandEnvScalar is expandEnvMap for a single string field, with identical
+// semantics: ${VAR}/$VAR expansion, unset-or-empty variable is a hard error,
+// no escape for a literal $.
+func expandEnvScalar(s *string, what string) error {
+	expanded, missing := expandEnvValue(*s)
+	if len(missing) > 0 {
+		return fmt.Errorf("config: %s references unset or empty env var(s) %v", what, missing)
+	}
+	*s = expanded
+	return nil
+}
+
+// expandEnvValue expands ${VAR}/$VAR references in v from the operator
+// environment, collecting the names of unset-or-empty variables.
+func expandEnvValue(v string) (expanded string, missing []string) {
+	expanded = os.Expand(v, func(name string) string {
+		val, ok := os.LookupEnv(name)
+		if !ok || val == "" {
+			missing = append(missing, name)
+		}
+		return val
+	})
+	return expanded, missing
 }
 
 // TokenMap returns token→label for all configured tokens. Empty when none.

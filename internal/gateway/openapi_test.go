@@ -253,6 +253,50 @@ paths:
 	}
 }
 
+// Two operations that sanitize to the same tool name keep only the first in
+// deterministic (sorted-path, fixed-method-order) iteration; the later one is
+// skipped with a warning and every other operation is unaffected.
+func TestDuplicateSanitizedNamesSkipLater(t *testing.T) {
+	// Sorted paths: /orders < /other. GET /orders has no operationId and
+	// slugs to get_orders; POST /other declares operationId get_orders and
+	// collides, so it must be skipped. GET /other (listOther) survives.
+	const spec = `
+openapi: 3.0.3
+info: {title: T, version: "1.0"}
+paths:
+  /orders:
+    get:
+      responses: {"200": {description: ok}}
+  /other:
+    get:
+      operationId: listOther
+      responses: {"200": {description: ok}}
+    post:
+      operationId: get_orders
+      responses: {"200": {description: ok}}
+`
+	ts := genSpec(t, spec)
+	if len(ts) != 2 {
+		t.Fatalf("want 2 tools (collision skipped), got %v", toolNames(ts))
+	}
+	var dupes []restTool
+	for _, tt := range ts {
+		if tt.Name() == "srv__get_orders" {
+			dupes = append(dupes, tt)
+		}
+	}
+	if len(dupes) != 1 {
+		t.Fatalf("want exactly one srv__get_orders, got %d in %v", len(dupes), toolNames(ts))
+	}
+	// The survivor must be the sorted-iteration-first op: GET /orders.
+	if dupes[0].method != "GET" || dupes[0].specPath != "/orders" {
+		t.Fatalf("wrong collision winner: %s %s", dupes[0].method, dupes[0].specPath)
+	}
+	if !strings.Contains(strings.Join(toolNames(ts), ","), "srv__listOther") {
+		t.Fatalf("sibling op lost: %v", toolNames(ts))
+	}
+}
+
 // FIX 3: only a GENUINE cycle (ancestor-path repetition, e.g. Node.children →
 // Node) skips an operation; sibling operations survive.
 func TestCyclicRefOperationSkipped(t *testing.T) {

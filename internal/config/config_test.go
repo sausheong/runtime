@@ -341,6 +341,64 @@ func TestGatewayEnvExpansion(t *testing.T) {
 		}
 	})
 
+	t.Run("expands ${VAR} in openapi and base_url", func(t *testing.T) {
+		t.Setenv("SPEC_URL", "https://api.example.com/openapi.json")
+		t.Setenv("API_BASE", "https://api.example.com/v2")
+		c := &Config{
+			Agents: []AgentConfig{{ID: "a", Name: "A", Model: "m", ListenAddr: "127.0.0.1:1"}},
+			Gateway: GatewayConfig{Servers: []GatewayServer{{
+				Name:    "orders",
+				OpenAPI: "${SPEC_URL}",
+				BaseURL: "${API_BASE}",
+			}}},
+		}
+		if err := c.Validate(); err != nil {
+			t.Fatalf("expected valid, got %v", err)
+		}
+		if got := c.Gateway.Servers[0].OpenAPI; got != "https://api.example.com/openapi.json" {
+			t.Fatalf("openapi not expanded: %q", got)
+		}
+		if got := c.Gateway.Servers[0].BaseURL; got != "https://api.example.com/v2" {
+			t.Fatalf("base_url not expanded: %q", got)
+		}
+	})
+
+	t.Run("unset var in openapi is a load error", func(t *testing.T) {
+		c := &Config{
+			Agents: []AgentConfig{{ID: "a", Name: "A", Model: "m", ListenAddr: "127.0.0.1:1"}},
+			Gateway: GatewayConfig{Servers: []GatewayServer{{
+				Name:    "orders",
+				OpenAPI: "${GW_UNSET_VAR_XYZ}",
+			}}},
+		}
+		err := c.Validate()
+		if err == nil {
+			t.Fatal("expected error for unset env var in openapi")
+		}
+		if !strings.Contains(err.Error(), "GW_UNSET_VAR_XYZ") {
+			t.Fatalf("error should name the missing var: %v", err)
+		}
+	})
+
+	t.Run("unset var in base_url is a load error", func(t *testing.T) {
+		t.Setenv("SPEC_URL", "https://api.example.com/openapi.json")
+		c := &Config{
+			Agents: []AgentConfig{{ID: "a", Name: "A", Model: "m", ListenAddr: "127.0.0.1:1"}},
+			Gateway: GatewayConfig{Servers: []GatewayServer{{
+				Name:    "orders",
+				OpenAPI: "${SPEC_URL}",
+				BaseURL: "${GW_UNSET_VAR_XYZ}",
+			}}},
+		}
+		err := c.Validate()
+		if err == nil {
+			t.Fatal("expected error for unset env var in base_url")
+		}
+		if !strings.Contains(err.Error(), "GW_UNSET_VAR_XYZ") {
+			t.Fatalf("error should name the missing var: %v", err)
+		}
+	})
+
 	t.Run("literal values pass through", func(t *testing.T) {
 		c := &Config{
 			Agents: []AgentConfig{{ID: "a", Name: "A", Model: "m", ListenAddr: "127.0.0.1:1"}},

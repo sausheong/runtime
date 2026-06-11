@@ -514,7 +514,7 @@ Each server requires a unique `name` and **exactly one** of `command` (stdio;
 with optional `args` and `env`), `url` (Streamable HTTP; with optional
 `headers` for auth), or `openapi` (a REST API described by an OpenAPI 3.x
 document — see [REST / OpenAPI upstreams](#rest--openapi-upstreams)).
-`headers`, `env`, and `agent_keys` values support
+`headers`, `env`, `agent_keys`, `openapi`, and `base_url` values support
 `${VAR}` expansion from the operator environment at load time, so secrets stay
 out of the YAML file; referencing an unset/empty variable is a fatal config
 error. Values may not contain a literal `$` — put such values in an env var
@@ -711,7 +711,8 @@ backoff) owning its lifecycle. A call against a down upstream returns an MCP
 - **Operator-managed agent keys** — `agent_keys` maps tenants to service keys
   by hand; no automatic key minting for `gateway: true` agents.
 - **`${VAR}` expansion required for values containing `$`** — there is no
-  escape for a literal `$` in `headers`/`env`/`agent_keys` values.
+  escape for a literal `$` in `headers`/`env`/`agent_keys`/`openapi`/`base_url`
+  values.
 
 ---
 
