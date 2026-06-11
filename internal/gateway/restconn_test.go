@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/sausheong/harness/tool"
 )
@@ -172,6 +173,76 @@ func TestExecuteTruncation(t *testing.T) {
 	e := decodeEnv(t, execTool(t, srv, nil, "getOrder", `{"id":"x"}`))
 	if !e.Truncated {
 		t.Fatal("truncated flag not set")
+	}
+}
+
+func TestExecuteContextCancellation(t *testing.T) {
+	gate := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-gate:
+		case <-r.Context().Done():
+		}
+	}))
+	defer srv.Close()
+	t.Cleanup(func() { close(gate) })
+
+	tools, _, err := generateTools("orders", []byte(testSpec), srv.URL, nil, srv.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range tools {
+		if tools[i].Name() == "orders__getOrder" {
+			ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+			defer cancel()
+			res, err := tools[i].Execute(ctx, json.RawMessage(`{"id":"x"}`))
+			if err != nil {
+				t.Fatalf("want tool error, got transport error: %v", err)
+			}
+			if res.Error == "" || !strings.Contains(strings.ToLower(res.Error), "context") {
+				t.Fatalf("want tool error containing %q, got %q", "context", res.Error)
+			}
+			return
+		}
+	}
+	t.Fatal("tool getOrder not found")
+}
+
+func TestExecuteArrayQueryAndAbsentOptionals(t *testing.T) {
+	var gotQuery string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotQuery = r.URL.RawQuery
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, "{}")
+	}))
+	defer srv.Close()
+
+	// Array values serialize comma-joined (form style, explode=false).
+	decodeEnv(t, execTool(t, srv, nil, "listOrders", `{"limit":1,"status":["open","closed"]}`))
+	if !strings.Contains(gotQuery, "status=open%2Cclosed") {
+		t.Fatalf("array query not comma-joined: %s", gotQuery)
+	}
+
+	// Absent optionals are omitted entirely.
+	decodeEnv(t, execTool(t, srv, nil, "listOrders", `{"limit":1}`))
+	if strings.Contains(gotQuery, "status=") {
+		t.Fatalf("absent optional must be omitted: %s", gotQuery)
+	}
+}
+
+func TestExecuteStaticContentTypeWins(t *testing.T) {
+	var gotCT string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotCT = r.Header.Get("Content-Type")
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, "{}")
+	}))
+	defer srv.Close()
+
+	decodeEnv(t, execTool(t, srv, map[string]string{"Content-Type": "application/vnd.api+json"},
+		"createOrder", `{"body":{"item":"widget","qty":1}}`))
+	if gotCT != "application/vnd.api+json" {
+		t.Fatalf("static Content-Type clobbered: got %q", gotCT)
 	}
 }
 

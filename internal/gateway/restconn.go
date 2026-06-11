@@ -131,7 +131,10 @@ func (r restTool) Execute(ctx context.Context, input json.RawMessage) (tool.Tool
 		}
 	}
 	if bodyReader != nil {
-		req.Header.Set("Content-Type", "application/json")
+		// JSON default only — a configured static Content-Type wins.
+		if _, clash := headerClash(r.staticHeaders, "Content-Type"); !clash {
+			req.Header.Set("Content-Type", "application/json")
+		}
 	}
 
 	client := r.client

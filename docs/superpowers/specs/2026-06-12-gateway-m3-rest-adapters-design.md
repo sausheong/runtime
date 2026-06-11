@@ -235,6 +235,7 @@ merged to master.
 - Swagger/OpenAPI 2.0 (kin-openapi targets 3.x; 2.0→3.x conversion deferred).
 - Dynamic upstream registration (separate backlog item).
 - Inline hand-written route definitions (YAML routes without a spec).
+- Form-style explode:true query arrays (repeated params) — arrays always serialize comma-joined in M3.
 
 ## 11. Risks & mitigations
 
