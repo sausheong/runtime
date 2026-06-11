@@ -1,0 +1,135 @@
+{
+  "uid": "runtime-overview",
+  "title": "Runtime Overview",
+  "schemaVersion": 39,
+  "refresh": "15s",
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "timezone": "browser",
+  "editable": true,
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Agents up",
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+      },
+      "targets": [
+        { "expr": "runtime_agent_up", "refId": "A", "legendFormat": "{{agent}}" }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Agent restarts (1h)",
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 0 },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+      },
+      "targets": [
+        { "expr": "increase(runtime_agent_restarts_total[1h])", "refId": "A", "legendFormat": "{{agent}}" }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Gateway upstreams up",
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 0 },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+      },
+      "targets": [
+        { "expr": "runtime_gateway_upstream_up", "refId": "A", "legendFormat": "{{server}}" }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Turn rate by agent",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
+      "targets": [
+        { "expr": "sum by (agent) (rate(agent_turns_total[5m]))", "refId": "A", "legendFormat": "{{agent}}" }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Turn latency p50/p95",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "targets": [
+        { "expr": "histogram_quantile(0.50, sum by (le) (rate(agent_turn_duration_seconds_bucket[5m])))", "refId": "A", "legendFormat": "p50" },
+        { "expr": "histogram_quantile(0.95, sum by (le) (rate(agent_turn_duration_seconds_bucket[5m])))", "refId": "B", "legendFormat": "p95" }
+      ]
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Turn outcomes",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 12 },
+      "targets": [
+        { "expr": "sum by (outcome) (rate(agent_turns_total[5m]))", "refId": "A", "legendFormat": "{{outcome}}" }
+      ]
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "Token spend by agent",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 12 },
+      "targets": [
+        { "expr": "sum by (agent, direction) (rate(agent_tokens_total[5m]))", "refId": "A", "legendFormat": "{{agent}} {{direction}}" }
+      ]
+    },
+    {
+      "id": 8,
+      "type": "timeseries",
+      "title": "Tool calls by tool",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 20 },
+      "targets": [
+        { "expr": "sum by (tool) (rate(agent_tool_calls_total[5m]))", "refId": "A", "legendFormat": "{{tool}}" }
+      ]
+    },
+    {
+      "id": 9,
+      "type": "timeseries",
+      "title": "Gateway calls by upstream",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 20 },
+      "targets": [
+        { "expr": "sum by (server, outcome) (rate(runtime_gateway_tool_calls_total[5m]))", "refId": "A", "legendFormat": "{{server}} {{outcome}}" }
+      ]
+    },
+    {
+      "id": 10,
+      "type": "timeseries",
+      "title": "HTTP request rate",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 28 },
+      "targets": [
+        { "expr": "sum by (route, status) (rate(runtime_http_requests_total[5m]))", "refId": "A", "legendFormat": "{{route}} {{status}}" }
+      ]
+    },
+    {
+      "id": 11,
+      "type": "timeseries",
+      "title": "HTTP latency p95 by route",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 28 },
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "targets": [
+        { "expr": "histogram_quantile(0.95, sum by (le, route) (rate(runtime_http_request_duration_seconds_bucket[5m])))", "refId": "A", "legendFormat": "{{route}}" }
+      ]
+    },
+    {
+      "id": 12,
+      "type": "timeseries",
+      "title": "Proxy errors + scrape skips",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 36 },
+      "targets": [
+        { "expr": "sum by (agent) (rate(runtime_proxy_errors_total[5m]))", "refId": "A", "legendFormat": "proxy errors {{agent}}" },
+        { "expr": "sum by (agent, reason) (rate(runtime_metrics_scrape_skips_total[5m]))", "refId": "B", "legendFormat": "scrape skips {{agent}} {{reason}}" }
+      ]
+    }
+  ]
+}
