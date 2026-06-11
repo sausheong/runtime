@@ -456,6 +456,35 @@ restriction (only auto-approval); and `options.env` merges (Python). Code:
   "K8s later" half of the deploy decision). The conformance suite already validates
   any binary/container against the contract.
 
+### C3. Remote agents (attach instead of spawn)
+
+- **Remote agents** — let an agent run on a different host while runtimed still
+  manages it. The data plane is already location-agnostic: the control plane
+  reverse-proxies plain HTTP to `listen_addr` and health-checks via
+  `GET /healthz` (`controlplane/proxy.go`), so proxying, sessions, console,
+  and identity all work against any reachable address today. What's local-only
+  is the spawn/supervise step (`SpawnFunc` execs agentd or `command:` and
+  babysits the PID). The milestone: an `agents: - url:` (or `remote: true`)
+  config variant that **skips spawn** and attaches to an already-running
+  contract-conformant agent — keeping health checks, proxying, and status
+  reporting, and marking the agent `unreachable` (rather than restarting) when
+  health fails. Open design questions to settle in the brainstorm:
+  1. **Env/secrets delivery** — spawn-time env injection (PG DSN, tenant,
+     brokered secrets, gateway URL/key, memory opt-in) doesn't exist for a
+     process runtimed didn't start. Needs an attach-time handshake (agent pulls
+     config from the control plane with a registration token) or operator-side
+     provisioning, fail-closed either way.
+  2. **Trust & transport** — agent ports currently assume only runtimed can
+     reach them (no auth of their own); a remote agent needs mutual auth
+     (shared token at minimum, mTLS ideally) and the remote host needs reach to
+     Postgres (or the contract grows a way to avoid direct DB access).
+  3. **Lifecycle semantics** — no restart-on-exit for a process we don't own;
+     define what `runtimectl status` shows and how degrade-don't-fail applies.
+  Natural stepping stone to C2: K8s-scheduled agents are exactly "remote
+  agents whose lifecycle is owned by the orchestrator". (Backlogged 2026-06-11
+  after confirming the workaround — a placeholder `command:` plus a manually
+  started remote agentd — works but loses secrets brokering and supervision.)
+
 ---
 
 ## How to resume a piece
