@@ -513,6 +513,145 @@ gateway:
 	}
 }
 
+func TestGatewayOpenAPIServerParses(t *testing.T) {
+	p := writeTmp(t, `
+agents:
+  - {id: a, name: A, model: m, listen_addr: 127.0.0.1:8101}
+gateway:
+  servers:
+    - name: orders
+      openapi: ./specs/orders.yaml
+      base_url: https://orders.internal
+      operations:
+        - listOrders
+        - "GET /orders/*"
+`)
+	cfg, err := Load(p)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	s := cfg.Gateway.Servers[0]
+	if s.OpenAPI != "./specs/orders.yaml" {
+		t.Errorf("OpenAPI = %q, want ./specs/orders.yaml", s.OpenAPI)
+	}
+	if s.BaseURL != "https://orders.internal" {
+		t.Errorf("BaseURL = %q, want https://orders.internal", s.BaseURL)
+	}
+	if len(s.Operations) != 2 || s.Operations[0] != "listOrders" || s.Operations[1] != "GET /orders/*" {
+		t.Errorf("Operations = %v, want [listOrders, GET /orders/*]", s.Operations)
+	}
+}
+
+func TestGatewayTransportExactlyOne(t *testing.T) {
+	base := func(srv GatewayServer) *Config {
+		srv.Name = "s"
+		return &Config{
+			Agents:  []AgentConfig{{ID: "a", Name: "A", Model: "m", ListenAddr: "127.0.0.1:1"}},
+			Gateway: GatewayConfig{Servers: []GatewayServer{srv}},
+		}
+	}
+	cases := []struct {
+		name    string
+		srv     GatewayServer
+		wantErr bool
+	}{
+		{"openapi only", GatewayServer{OpenAPI: "spec.yaml"}, false},
+		{"command only", GatewayServer{Command: "npx"}, false},
+		{"url only", GatewayServer{URL: "https://x/mcp"}, false},
+		{"openapi and url", GatewayServer{OpenAPI: "spec.yaml", URL: "https://x/mcp"}, true},
+		{"openapi and command", GatewayServer{OpenAPI: "spec.yaml", Command: "npx"}, true},
+		{"none", GatewayServer{}, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := base(tc.srv).Validate()
+			if tc.wantErr && err == nil {
+				t.Fatal("expected error, got nil")
+			}
+			if !tc.wantErr && err != nil {
+				t.Fatalf("expected valid, got %v", err)
+			}
+			if tc.wantErr && !strings.Contains(err.Error(), "requires exactly one of command, url, or openapi") {
+				t.Fatalf("error should mention exactly-one-of rule, got: %v", err)
+			}
+		})
+	}
+}
+
+func TestGatewayOpenAPIFieldRules(t *testing.T) {
+	base := func(srv GatewayServer) *Config {
+		srv.Name = "s"
+		return &Config{
+			Agents:  []AgentConfig{{ID: "a", Name: "A", Model: "m", ListenAddr: "127.0.0.1:1"}},
+			Gateway: GatewayConfig{Servers: []GatewayServer{srv}},
+		}
+	}
+	cases := []struct {
+		name    string
+		srv     GatewayServer
+		errPart string // "" ⇒ expect valid
+	}{
+		{"forward_tenant with openapi rejected",
+			GatewayServer{OpenAPI: "spec.yaml", ForwardTenant: true}, "forward_tenant"},
+		{"base_url without openapi rejected",
+			GatewayServer{URL: "https://x/mcp", BaseURL: "https://api.example.com"}, "base_url"},
+		{"operations without openapi rejected",
+			GatewayServer{Command: "npx", Operations: []string{"listOrders"}}, "operations"},
+		{"lowercase method pattern rejected",
+			GatewayServer{OpenAPI: "spec.yaml", Operations: []string{"get /x"}}, "operations"},
+		{"forward_tenant with command still OK",
+			GatewayServer{Command: "sandboxd", ForwardTenant: true}, ""},
+		{"base_url and operations with openapi OK",
+			GatewayServer{OpenAPI: "spec.yaml", BaseURL: "https://api.example.com", Operations: []string{"GET /orders/*"}}, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := base(tc.srv).Validate()
+			if tc.errPart == "" {
+				if err != nil {
+					t.Fatalf("expected valid, got %v", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatal("expected error, got nil")
+			}
+			if !strings.Contains(err.Error(), tc.errPart) {
+				t.Fatalf("error should contain %q, got: %v", tc.errPart, err)
+			}
+		})
+	}
+}
+
+func TestValidateOperationPattern(t *testing.T) {
+	valid := []string{"listOrders", "GET /orders/*", "DELETE /a/{id}"}
+	for _, p := range valid {
+		if err := validateOperationPattern(p); err != nil {
+			t.Errorf("pattern %q should be valid, got: %v", p, err)
+		}
+	}
+	invalid := []string{"", "get /x", "GET orders", "GET /[x"}
+	for _, p := range invalid {
+		if err := validateOperationPattern(p); err == nil {
+			t.Errorf("pattern %q should be rejected", p)
+		}
+	}
+	// Bad glob through full config validation carries the server name.
+	c := &Config{
+		Agents: []AgentConfig{{ID: "a", Name: "A", Model: "m", ListenAddr: "127.0.0.1:1"}},
+		Gateway: GatewayConfig{Servers: []GatewayServer{
+			{Name: "orders", OpenAPI: "spec.yaml", Operations: []string{"GET /[x"}},
+		}},
+	}
+	err := c.Validate()
+	if err == nil {
+		t.Fatal("expected error for bad glob in operations")
+	}
+	if !strings.Contains(err.Error(), "orders") {
+		t.Fatalf("error should name the server, got: %v", err)
+	}
+}
+
 func TestGatewayAgentRequiresServers(t *testing.T) {
 	c := &Config{Agents: []AgentConfig{
 		{ID: "a", Name: "A", Model: "m", ListenAddr: "127.0.0.1:1", Gateway: GatewayFull},
