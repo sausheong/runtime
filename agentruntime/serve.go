@@ -182,12 +182,16 @@ func (m *Manager) sessionWorkflow(ctx dbos.DBOSContext, in turnInput) (string, e
 			// Metrics + the per-turn log line live INSIDE this closure on
 			// purpose: DBOS skips completed steps on crash-recovery replay
 			// (returning the checkpointed turnOutput without re-running this
-			// function), so everything here fires exactly once per real turn.
+			// function), so everything here executes once per real turn —
+			// at-least-once, duplicated only if a crash lands between RunTurn
+			// completing and the step checkpoint committing.
 			start := time.Now()
 			tr, terr := rt.RunTurn(stepCtx, userMsg, images, nil) // headless (emit=nil)
 			elapsed := time.Since(start)
 			if terr != nil {
 				m.observeTurn("error", elapsed, nil, nil)
+				slog.Warn("turn failed", "agent", m.agentID, "session", wfID,
+					"turn", turn, "request_id", in.RequestID, "err", terr)
 				return turnOutput{}, terr
 			}
 			m.observeTurn(tr.StopReason, elapsed, tr.Usage, tr.Entries)

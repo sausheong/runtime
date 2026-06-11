@@ -55,7 +55,10 @@ func TestControlMetricsAgentAndGateway(t *testing.T) {
 
 func TestAgentMetricsTurnObserved(t *testing.T) {
 	a := NewAgentMetrics("support")
-	a.TurnObserved("completed", 2*time.Second, &llm.Usage{InputTokens: 100, OutputTokens: 40})
+	a.TurnObserved("completed", 2*time.Second, &llm.Usage{
+		InputTokens: 100, OutputTokens: 40,
+		CacheCreationInputTokens: 7, CacheReadInputTokens: 9,
+	})
 	a.TurnObserved("error", time.Second, nil) // nil usage must not panic or count tokens
 	a.ToolCallObserved("bash")
 
@@ -68,8 +71,21 @@ func TestAgentMetricsTurnObserved(t *testing.T) {
 	if v := testutil.ToFloat64(a.tokens.WithLabelValues("support", "output")); v != 40 {
 		t.Fatalf("output tokens = %v, want 40", v)
 	}
-	if v := testutil.ToFloat64(a.toolCalls.WithLabelValues("support", "bash")); v != 1 {
-		t.Fatalf("tool calls = %v, want 1", v)
+	if v := testutil.ToFloat64(a.tokens.WithLabelValues("support", "cache_creation")); v != 7 {
+		t.Fatalf("cache_creation tokens = %v, want 7", v)
+	}
+	if v := testutil.ToFloat64(a.tokens.WithLabelValues("support", "cache_read")); v != 9 {
+		t.Fatalf("cache_read tokens = %v, want 9", v)
+	}
+}
+
+func TestAgentMetricsNoCacheSeriesWithoutCacheTokens(t *testing.T) {
+	// Usage without cache fields must NOT create cache_creation/cache_read
+	// series — only input and output.
+	a := NewAgentMetrics("support")
+	a.TurnObserved("completed", time.Second, &llm.Usage{InputTokens: 100, OutputTokens: 40})
+	if n := testutil.CollectAndCount(a.tokens); n != 2 {
+		t.Fatalf("token series = %d, want 2 (input/output only)", n)
 	}
 }
 

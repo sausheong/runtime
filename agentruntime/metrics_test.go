@@ -1,6 +1,7 @@
 package agentruntime
 
 import (
+	"encoding/json"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -48,6 +49,10 @@ func TestObserveTurnCountsToolCalls(t *testing.T) {
 		session.ToolCallEntry("c1", "bash", nil),
 		session.ToolCallEntry("c2", "bash", nil),
 		session.ToolCallEntry("c3", "web_fetch", nil),
+		// Malformed tool_call entries must not panic and must not count:
+		// truncated JSON payload and an empty tool name.
+		{Type: session.EntryTypeToolCall, Data: json.RawMessage(`{`)},
+		{Type: session.EntryTypeToolCall, Data: json.RawMessage(`{"tool":""}`)},
 	}
 	m.observeTurn("continue", 2*time.Second, &llm.Usage{InputTokens: 7, OutputTokens: 3}, entries)
 	rec := httptest.NewRecorder()
@@ -61,6 +66,9 @@ func TestObserveTurnCountsToolCalls(t *testing.T) {
 		if !strings.Contains(body, want) {
 			t.Fatalf("missing %q in:\n%s", want, body)
 		}
+	}
+	if strings.Contains(body, `tool=""`) {
+		t.Fatalf("malformed entries must not create an empty-tool series:\n%s", body)
 	}
 }
 

@@ -177,7 +177,7 @@ func NewAgentMetrics(agentID string) *AgentMetrics {
 	}, []string{"agent"})
 	a.tokens = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "agent_tokens_total",
-		Help: "LLM tokens consumed, by direction (input/output).",
+		Help: "LLM tokens consumed, by direction (input/output/cache_creation/cache_read).",
 	}, []string{"agent", "direction"})
 	a.toolCalls = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "agent_tool_calls_total",
@@ -199,6 +199,12 @@ func (a *AgentMetrics) TurnObserved(outcome string, dur time.Duration, usage *ll
 	if usage != nil {
 		a.tokens.WithLabelValues(a.agentID, "input").Add(float64(usage.InputTokens))
 		a.tokens.WithLabelValues(a.agentID, "output").Add(float64(usage.OutputTokens))
+		if usage.CacheCreationInputTokens > 0 {
+			a.tokens.WithLabelValues(a.agentID, "cache_creation").Add(float64(usage.CacheCreationInputTokens))
+		}
+		if usage.CacheReadInputTokens > 0 {
+			a.tokens.WithLabelValues(a.agentID, "cache_read").Add(float64(usage.CacheReadInputTokens))
+		}
 	}
 }
 
