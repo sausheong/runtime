@@ -506,6 +506,37 @@ func TestManagerReconnectRefetchesSpec(t *testing.T) {
 	}
 }
 
+// The spec fetch carries the upstream's configured credentials, so it must
+// get the same exact-same-host redirect policy as API calls. A spec URL that
+// 302s to another host is a dial error — the cross-host target (which would
+// happily serve a valid spec) must never see the request.
+func TestFetchSpecRefusesCrossHostRedirect(t *testing.T) {
+	other := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("cross-host redirect target must not be reached")
+		// Would serve a valid spec — if the redirect were followed, the dial
+		// would SUCCEED and the headers would have leaked cross-host.
+		w.Header().Set("Content-Type", "application/yaml")
+		fmt.Fprint(w, testSpec)
+	}))
+	defer other.Close()
+
+	bouncer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, other.URL+"/openapi.yaml", http.StatusFound)
+	}))
+	defer bouncer.Close()
+
+	_, err := dialOpenAPI(context.Background(), config.GatewayServer{
+		Name: "orders", OpenAPI: bouncer.URL + "/openapi.yaml", BaseURL: bouncer.URL,
+		Headers: map[string]string{"X-API-Key": "secret"},
+	})
+	if err == nil {
+		t.Fatal("cross-host spec redirect must be a dial error")
+	}
+	if !strings.Contains(err.Error(), "redirect") {
+		t.Fatalf("dial error must mention redirect, got: %v", err)
+	}
+}
+
 // REST tool names are already "<server>__<tool>" (no mcp__ prefix), so
 // renameTools must pass them through unchanged.
 func TestRenameToolsPassesRESTNamesThrough(t *testing.T) {
@@ -520,6 +551,39 @@ func TestRenameToolsPassesRESTNamesThrough(t *testing.T) {
 	out := renameTools(in)
 	if len(out) != len(in) {
 		t.Fatalf("len changed: %d -> %d", len(in), len(out))
+	}
+	for i := range in {
+		if out[i].Name() != in[i].Name() {
+			t.Fatalf("name changed: %q -> %q", in[i].Name(), out[i].Name())
+		}
+	}
+}
+
+// Regression: a REST upstream legally named "mcp" generates names like
+// "mcp__listOrders". renameTools must branch on the tool's TYPE, not the
+// "mcp__" name pattern — a pattern match would strip the server prefix and
+// break ForwardsTenant/first-"__"-cut resolution.
+func TestRenameToolsRESTServerNamedMCP(t *testing.T) {
+	tools, _, err := generateTools("mcp", []byte(testSpec), "http://up:1", nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	in := make([]tool.Tool, len(tools))
+	names := map[string]bool{}
+	for i := range tools {
+		in[i] = tools[i]
+		names[tools[i].Name()] = true
+	}
+	if !names["mcp__listOrders"] {
+		t.Fatalf("precondition: expected generated tool mcp__listOrders, got %v", names)
+	}
+	out := renameTools(in)
+	got := map[string]bool{}
+	for _, o := range out {
+		got[o.Name()] = true
+	}
+	if !got["mcp__listOrders"] {
+		t.Fatalf("renameTools mangled REST tool from server named mcp: got %v", got)
 	}
 	for i := range in {
 		if out[i].Name() != in[i].Name() {

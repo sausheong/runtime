@@ -107,7 +107,11 @@ func dialOpenAPI(ctx context.Context, s config.GatewayServer) (upstreamConn, err
 }
 
 // fetchSpec GETs a spec URL with a bounded timeout and the upstream's
-// configured headers (spec endpoints behind the same auth work).
+// configured headers (spec endpoints behind the same auth work). It uses
+// newRestClient, NOT http.DefaultClient: the fetch carries the upstream's
+// credentials, and the default client follows cross-host redirects (Go only
+// strips the six standard auth headers, and even Authorization still flows
+// to subdomains) — the same exact-same-host policy as API calls applies.
 func fetchSpec(ctx context.Context, url string, headers map[string]string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
@@ -118,7 +122,7 @@ func fetchSpec(ctx context.Context, url string, headers map[string]string) ([]by
 	for k, v := range headers {
 		req.Header.Set(k, v)
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := newRestClient().Do(req)
 	if err != nil {
 		return nil, err
 	}

@@ -307,11 +307,17 @@ func transportOf(s config.GatewayServer) string {
 // renameTools wraps each harness-adapted tool so its gateway-facing name is
 // "<server>__<tool>" instead of the adapter's "mcp__<server>__<tool>". The
 // consuming harness client prepends its own "mcp__gateway__", so stripping
-// here avoids a double prefix. Names not following the adapter convention
-// pass through unchanged (TrimPrefix is a no-op).
+// here avoids a double prefix.
 func renameTools(ts []tool.Tool) []tool.Tool {
 	out := make([]tool.Tool, 0, len(ts))
 	for _, t := range ts {
+		// REST tools are generated directly with gateway names
+		// (<server>__<op>) — no adapter prefix to strip. Type branch, not
+		// name pattern: a REST upstream named "mcp" must not be mangled.
+		if _, ok := t.(restTool); ok {
+			out = append(out, t)
+			continue
+		}
 		out = append(out, renamedTool{Tool: t, name: strings.TrimPrefix(t.Name(), "mcp__")})
 	}
 	return out
