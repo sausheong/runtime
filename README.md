@@ -23,6 +23,7 @@ no lost work, no duplicated committed tool calls.
 - [Configuring agents (`runtime.yaml`)](#configuring-agents-runtimeyaml)
 - [Authentication & multi-tenancy](#authentication--multi-tenancy)
 - [MCP Gateway](#mcp-gateway)
+- [Code-interpreter sandbox](#code-interpreter-sandbox)
 - [The CLI (`runtimectl`)](#the-cli-runtimectl)
 - [Web console](#web-console)
 - [HTTP API reference](#http-api-reference)
@@ -55,6 +56,7 @@ no lost work, no duplicated committed tool calls.
 | **Contract conformance** | A reusable Go suite (and `runtimectl conformance`) that verifies any agent satisfies the HTTP/SSE contract — executable proof, CI-ready. |
 | **Structured logging** | `slog` everywhere (text or JSON via `RUNTIME_LOG_FORMAT`), with agent/session fields. |
 | **BYO agent** | Link the `agentruntime` SDK, hand it a harness `AgentSpec` + provider + tools, and get the durable contract for free — zero durability or HTTP code. |
+| **Code-interpreter sandbox** | An isolated, stateful Python + shell execution environment per session — one locked-down Docker container (no network, read-only rootfs, resource limits), tenant-scoped, delivered to every agent through the MCP gateway. |
 | **On-prem & self-contained** | Go binaries + Postgres. No cloud, no Kubernetes required, air-gap friendly. Full-stack `docker compose` included. |
 
 ---
@@ -628,6 +630,118 @@ backoff) owning its lifecycle. A call against a down upstream returns an MCP
 
 ---
 
+## Code-interpreter sandbox
+
+The platform ships an isolated **code interpreter** any agent can use: a
+`sandboxd` binary that manages one locked-down Docker container per sandbox
+session and exposes it as MCP tools. It is delivered **through the gateway** —
+declare it as an ordinary upstream and every gateway-enabled agent (Go or
+foreign-SDK shim, `gateway: true` or `search`) sees the tools as
+`mcp__gateway__sandbox__<tool>`, with **zero agent-side changes**.
+
+```yaml
+gateway:
+  servers:
+    - name: sandbox
+      command: bin/sandboxd
+      forward_tenant: true       # the gateway injects the caller's tenant (see below)
+      tenants: [acme]            # optional visibility filter, as for any upstream
+```
+
+Build the bundled container image once (`python:3.12-slim` + numpy / pandas /
+matplotlib / requests, non-root user):
+
+```bash
+make sandbox-image     # builds runtime-sandbox:latest (override: RUNTIME_SANDBOX_IMAGE)
+```
+
+### The tools
+
+| Tool | What it does |
+|---|---|
+| `create_sandbox` | Start an isolated session → `{sandbox_id, expires_at}` |
+| `execute_code` | Run Python (`python3 -c`) in `/workspace` → stdout/stderr/exit code |
+| `run_command` | Run a shell command (`sh -c`) — same limits |
+| `write_file` / `read_file` | Move text in and out of `/workspace` (reads capped at 256 KiB) |
+| `list_sandboxes` / `close_sandbox` | Lifecycle — list is tenant-scoped; close is idempotent |
+
+Sessions are **stateful**: files in `/workspace` persist across calls within a
+sandbox (write a CSV, then run pandas over it, then read the result), but
+**Python variables do not** — each execution is a fresh interpreter process.
+The tool descriptions tell the model this, so it writes intermediate results
+to files.
+
+### Isolation posture
+
+Every sandbox container runs with: **no network** (`network=none`, always — a
+`requests.get` inside the sandbox fails), read-only root filesystem, tmpfs
+`/workspace` (64 MiB default) and `/tmp`, all capabilities dropped,
+`no-new-privileges`, a non-root user, and CPU / memory / pid limits.
+Executions are wrapped in a wall-clock timeout (default 30s, max 120s) that
+kills the runaway process — never the session. On Linux hosts,
+`RUNTIME_SANDBOX_RUNTIME=runsc` runs sandboxes under gVisor with no other
+changes.
+
+Lifecycle is bounded: an idle reaper closes sandboxes unused past
+`RUNTIME_SANDBOX_IDLE_TTL` (default 10m) or older than
+`RUNTIME_SANDBOX_MAX_LIFETIME` (default 1h), each tenant is capped at
+`RUNTIME_SANDBOX_MAX_PER_TENANT` (default 5) concurrent sandboxes, and on
+startup `sandboxd` removes any containers left over from a previous run
+(label `runtime.sandbox=1`). Run exactly one `sandboxd` per host (or per
+`DOCKER_HOST`) — startup reaping removes *all* labeled containers.
+
+### Tenancy (`forward_tenant`)
+
+MCP carries no caller identity, so the gateway forwards it: with
+`forward_tenant: true` on a **stdio** upstream (config-validated — it is
+rejected on `url:` upstreams), the gateway strips any caller-supplied
+`__rt_tenant` argument and injects the authenticated principal's tenant into
+every forwarded call. An agent can never choose its own tenant. sandboxd then
+scopes everything by that tenant: another tenant's `sandbox_id` returns the
+same "no such sandbox" as a nonexistent one (existence hidden, like the
+cross-tenant `404` rule elsewhere), and `list_sandboxes` shows only the
+caller's.
+
+sandboxd **fails closed** when the tenant key is absent — every tool returns
+an error telling the operator to set `forward_tenant: true` — so forgetting
+the flag cannot silently collapse all tenants into one namespace. For
+single-tenant direct use (no gateway), set `RUNTIME_SANDBOX_ALLOW_DIRECT=1`.
+
+### Failure model
+
+Mirrors the gateway's degrade-don't-fail: if the Docker daemon is unreachable,
+sandboxd still serves MCP and `create_sandbox` returns a "backend unavailable"
+tool error (recovering as soon as the daemon appears); if a container dies
+mid-session, calls on that sandbox error and the agent creates a new one; if
+sandboxd itself crashes, the gateway's reconnect loop restarts it and startup
+reaping clears orphans.
+
+### Configuration reference
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `RUNTIME_SANDBOX_IMAGE` | `runtime-sandbox:latest` | container image |
+| `RUNTIME_SANDBOX_MAX_PER_TENANT` | `5` | concurrent sandboxes per tenant |
+| `RUNTIME_SANDBOX_IDLE_TTL` | `10m` | close after this long unused |
+| `RUNTIME_SANDBOX_MAX_LIFETIME` | `1h` | hard close after create |
+| `RUNTIME_SANDBOX_WORKSPACE_MB` | `64` | tmpfs `/workspace` size |
+| `RUNTIME_SANDBOX_MEM_MB` | `512` | memory limit |
+| `RUNTIME_SANDBOX_CPUS` | `1.0` | CPU limit |
+| `RUNTIME_SANDBOX_RUNTIME` | (engine default) | e.g. `runsc` for gVisor |
+| `RUNTIME_SANDBOX_ALLOW_DIRECT` | unset | `1` ⇒ serve without gateway tenant (single-tenant) |
+
+### Limitations
+
+- **Python variables don't persist across calls** — files do; a kernel-mode
+  backend (variables persist) is the planned upgrade, same tool surface.
+- **No network egress, ever** — `pip install` at runtime doesn't work; bake
+  packages into the image instead. An egress-policy milestone may relax this.
+- **Docker required** — the engine socket (or `DOCKER_HOST`) must be reachable
+  from `sandboxd`; gVisor is optional hardening on Linux.
+- **One sandboxd per host** — startup reaping is host-global by label.
+
+---
+
 ## The CLI (`runtimectl`)
 
 `runtimectl` talks to the control plane at `RUNTIME_CTL_URL` (default
@@ -1189,6 +1303,11 @@ unaffected.
 | `RUNTIME_SECRETS_KEYS` | runtimed | (unset) | Keyring: `id:base64key,id:base64key` (each 32 bytes). Enables multi-key rotation. Requires `RUNTIME_SECRETS_PRIMARY`. |
 | `RUNTIME_SECRETS_PRIMARY` | runtimed | (unset) | Keyring id new secrets are sealed under. Required when `RUNTIME_SECRETS_KEYS` is set. |
 | `RUNTIME_SECRETS_KEY` | runtimed | (unset) | Legacy/back-compat single key (base64 of 32 bytes). On its own ⇒ keyring `{v1:key}`. With `RUNTIME_SECRETS_KEYS` ⇒ names the legacy-decrypt key. Unset (and no keyring) ⇒ disabled; malformed ⇒ fatal. |
+| `RUNTIME_GATEWAY_URL` | agentd | (set by runtimed) | Gateway MCP endpoint injected into `gateway:`-enabled agents (`?mode=search` appended for `gateway: search`). |
+| `RUNTIME_GATEWAY_KEY` | agentd | (set by runtimed) | Bearer service key for the gateway, from `gateway.agent_keys` (identity on). |
+| `RUNTIME_GATEWAY_SEARCH_FLOOR` | runtimed | `0.2` | Minimum cosine similarity for a `search_tools` match. |
+| `RUNTIME_GATEWAY_SEARCH_K` | runtimed | `5` | Default `search_tools` result count (cap 20). |
+| `RUNTIME_SANDBOX_*` | sandboxd | (see [sandbox](#code-interpreter-sandbox)) | Code-interpreter sandbox tuning: image, per-tenant cap, TTLs, workspace/memory/CPU limits, gVisor runtime, direct mode. |
 | `RUNTIME_SHIM_DB` | (python shim) | `./shim.db` | SQLite path for the polyglot shim's Level-1 store (not used by runtimed). |
 
 `runtimed` injects `RUNTIME_LISTEN_ADDR` and `RUNTIME_AGENT_ID` into each agent
@@ -1199,8 +1318,9 @@ subprocess from `runtime.yaml`; you don't set them by hand.
 Applied automatically on startup (under an advisory lock so concurrent agents
 don't race): `agents`, `sessions` (with `agent_id`, `status`, `turn_count`,
 `workflow_id`), `session_events` (append-only), plus DBOS's own `dbos` schema.
-pgvector is provisioned (the Compose image) for a future managed-memory
-sub-project but unused here.
+pgvector backs [semantic recall](#semantic-recall) (the Compose image
+provisions it; on your own Postgres a superuser must `CREATE EXTENSION vector`
+once per database).
 
 ---
 
@@ -1236,6 +1356,18 @@ Integration tests cover the platform's headline guarantees, including:
   `OPENAI_API_KEY`, one with none), spawned via the `command:` path. Asserts each
   tenant's agent process sees its own secret value, no cross-tenant leak, and the
   no-secret tenant falls back to the inherited operator env.
+- **`TestGatewaySandboxE2E`** — boots `runtimed` with identity enforced, two
+  tenants, and `sandboxd` federated as a `forward_tenant` stdio upstream
+  (in-memory backend — no Docker needed): asserts the sandbox tools federate,
+  a spoofed `__rt_tenant` argument is overridden by the gateway, and one
+  tenant's sandbox is invisible and unusable to the other.
+
+**Live-gated tests** exercise the real Docker backend (build the image first
+with `make sandbox-image`):
+
+```bash
+go test -tags live ./internal/sandbox/ -v   # real containers: file round-trip, 8 MiB write
+```
 
 ---
 
@@ -1259,9 +1391,11 @@ each running the full nutrition investigator — see the Python shim section); t
 per-tenant secrets brokering, and secrets key rotation, below); the **Memory**
 sub-project (three milestones — durable per-tenant store, semantic recall, and
 auto-ingestion, with recall and ingest wired into the live turn path — see
-[agent memory](#per-tenant-agent-memory)); and the **Gateway** sub-project (two
+[agent memory](#per-tenant-agent-memory)); the **Gateway** sub-project (two
 milestones — MCP federation core and semantic tool search — see
-[MCP Gateway](#mcp-gateway)).
+[MCP Gateway](#mcp-gateway)); and the **Sandboxes** sub-project (first
+milestone — the Docker-backed code interpreter, delivered through the gateway
+— see [Code-interpreter sandbox](#code-interpreter-sandbox)).
 
 **Deliberately not yet implemented** (each is planned, scoped to a later
 milestone or sub-project):
@@ -1301,8 +1435,13 @@ milestone or sub-project):
   investigator. **Still to come:** Level-2 in-flight crash resume, a TS shim,
   further adapters (PydanticAI is the next candidate), and reconciling the
   shim's follow-up-messages endpoint into the Go contract + conformance suite.
-- **Sandboxes** (isolated browser / code-interpreter tools) — its own
-  sub-project.
+- **Sandboxes — first milestone DONE** (see
+  [Code-interpreter sandbox](#code-interpreter-sandbox)): the isolated,
+  stateful, Docker-backed code interpreter, federated behind the gateway with
+  tenant-scoped ownership. **Still to come:** the browser sandbox, kernel-mode
+  variable persistence (same tool surface, persistent interpreter), network
+  egress policy / runtime `pip install`, per-user scoping, and a console
+  panel.
 - **Containers / Kubernetes** — the agent contract is designed to admit
   containerized agents later (the conformance suite already validates them);
   today agents are local subprocesses.
