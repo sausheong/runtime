@@ -96,6 +96,9 @@ func FanoutHandler(c *ControlMetrics, targets func() []ScrapeTarget) http.Handle
 		}
 		for _, res := range results {
 			for name, mf := range res.families {
+				// Note: reserved_name/type_conflict skip increments below land in
+				// the NEXT exposition — the own registry was gathered above,
+				// before this merge loop.
 				if _, isReserved := reserved[name]; isReserved || strings.HasPrefix(name, "runtime_") {
 					c.ScrapeSkip(res.agent, "reserved_name")
 					slog.Warn("metrics fan-out: dropped reserved control family",

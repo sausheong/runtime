@@ -89,11 +89,66 @@ func TestAgentMetricsNoCacheSeriesWithoutCacheTokens(t *testing.T) {
 	}
 }
 
+func TestAuthRejectedCountsWithoutDurationSample(t *testing.T) {
+	c := NewControlMetrics()
+	c.AuthRejected(401)
+	c.AuthRejected(401)
+	c.AuthRejected(403)
+	want := `
+		# HELP runtime_http_requests_total Total HTTP requests handled by the control plane.
+		# TYPE runtime_http_requests_total counter
+		runtime_http_requests_total{method="",route="auth_rejected",status="401"} 2
+		runtime_http_requests_total{method="",route="auth_rejected",status="403"} 1
+	`
+	if err := testutil.CollectAndCompare(c.httpRequests, strings.NewReader(want)); err != nil {
+		t.Fatal(err)
+	}
+	// Rejections must NOT pollute the latency histogram with zero-second
+	// samples: no duration series may exist.
+	if n := testutil.CollectAndCount(c.httpDuration); n != 0 {
+		t.Fatalf("duration series after AuthRejected = %d, want 0", n)
+	}
+}
+
+func TestTurnDurationUsesTurnBucketsNotDefBuckets(t *testing.T) {
+	// Regression guard: agent_turn_duration_seconds must use the custom
+	// turnBuckets (0.1..120), not prometheus.DefBuckets (0.005..10) — agent
+	// turns routinely exceed 10s.
+	a := NewAgentMetrics("support")
+	a.TurnObserved("completed", 45*time.Second, nil)
+	body := scrapeHandler(t, a.Handler())
+	for _, want := range []string{`le="60"`, `le="120"`} {
+		if !strings.Contains(body, `agent_turn_duration_seconds_bucket{agent="support",`+want) {
+			t.Fatalf("exposition missing turnBuckets boundary %s:\n%s", want, body)
+		}
+	}
+	if strings.Contains(body, `agent_turn_duration_seconds_bucket{agent="support",le="0.005"`) {
+		t.Fatalf("turn duration histogram uses DefBuckets (le=0.005 present):\n%s", body)
+	}
+}
+
+func TestGatewayDurationUsesTurnBucketsNotDefBuckets(t *testing.T) {
+	// Same guard for runtime_gateway_tool_call_duration_seconds, scraped
+	// through the fan-out handler (no agent targets needed).
+	c := NewControlMetrics()
+	c.GatewayCall("sandbox", "execute_code", OutcomeOK, 45*time.Second)
+	body := scrapeHandler(t, FanoutHandler(c, func() []ScrapeTarget { return nil }))
+	for _, want := range []string{`le="60"`, `le="120"`} {
+		if !strings.Contains(body, `runtime_gateway_tool_call_duration_seconds_bucket{server="sandbox",`+want) {
+			t.Fatalf("exposition missing turnBuckets boundary %s:\n%s", want, body)
+		}
+	}
+	if strings.Contains(body, `runtime_gateway_tool_call_duration_seconds_bucket{server="sandbox",le="0.005"`) {
+		t.Fatalf("gateway duration histogram uses DefBuckets (le=0.005 present):\n%s", body)
+	}
+}
+
 func TestNilReceiversAreSafe(t *testing.T) {
 	var c *ControlMetrics
 	var a *AgentMetrics
 	// None of these may panic.
 	c.HTTPObserved("/x", "GET", 200, time.Millisecond)
+	c.AuthRejected(401)
 	c.AgentUp("a", true)
 	c.AgentRestart("a")
 	c.ProxyError("a")

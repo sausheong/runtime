@@ -206,7 +206,7 @@ func main() {
 		}
 		root := buildRoot(reg, idStore, consoleOIDC, secretAdmin, gwHandler, cm) // mounts /admin since the store is non-nil
 		handler = obs.RequestID(controlplane.IdentityMiddleware(accessLog(root, cm), authr, azr, func(status int) {
-			cm.HTTPObserved("auth_rejected", "", status, 0)
+			cm.AuthRejected(status)
 		}))
 		slog.Info("identity enabled", "oidc", oidcIssuer != "", "bootstrap", bootstrapKey != "", "legacy_tokens", len(legacyTokens))
 	}

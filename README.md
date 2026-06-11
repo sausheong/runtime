@@ -830,6 +830,12 @@ docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.obs.yml up 
 # Prometheus: http://localhost:9090
 ```
 
+The bundled `deploy/prometheus.yml` targets `host.docker.internal:8080`, which
+assumes `runtimed` runs on the host (the local-dev workflow). When using the
+full-stack compose (`deploy/docker-compose.full.yml`, `runtimed` in Docker),
+edit `deploy/prometheus.yml` to target the `runtimed` service name instead of
+`host.docker.internal`.
+
 ### Limitations
 
 - **No tracing yet** — request ids are the correlation seed; OTel spans/OTLP

@@ -99,6 +99,17 @@ func (c *ControlMetrics) HTTPObserved(route, method string, status int, dur time
 	c.httpDuration.WithLabelValues(route, method).Observe(dur.Seconds())
 }
 
+// AuthRejected counts an identity-middleware rejection (401/403/404/303)
+// under route="auth_rejected" WITHOUT recording a duration observation —
+// rejections aren't timed and would pollute the latency histogram with
+// zero-second samples.
+func (c *ControlMetrics) AuthRejected(status int) {
+	if c == nil {
+		return
+	}
+	c.httpRequests.WithLabelValues("auth_rejected", "", strconv.Itoa(status)).Inc()
+}
+
 func (c *ControlMetrics) AgentUp(agent string, up bool) {
 	if c == nil {
 		return

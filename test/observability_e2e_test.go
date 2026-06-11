@@ -221,9 +221,10 @@ func TestObservabilityE2E(t *testing.T) {
 	_ = getBody(t, baseB+"/agents", nil, 401)
 
 	// (e) The rejected request lands in the auth_rejected bucket: the identity
-	// middleware's onReject hook records HTTPObserved("auth_rejected", "", 401)
-	// — empty method by design (no per-route/per-method detail for rejected
-	// traffic). Labels render alphabetically in the exposition.
+	// middleware's onReject hook calls AuthRejected(401), which increments the
+	// counter under route="auth_rejected" with an empty method (no
+	// per-route/per-method detail for rejected traffic) and records NO
+	// duration sample. Labels render alphabetically in the exposition.
 	bodyB := getBody(t, baseB+"/metrics", nil, 200)
 	if !strings.Contains(bodyB, `runtime_http_requests_total{method="",route="auth_rejected",status="401"}`) {
 		t.Fatalf("auth_rejected counter missing from /metrics:\n%s", bodyB)
