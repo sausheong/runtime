@@ -18,6 +18,9 @@ CTL_ADDR    ?= :8080
 CONFIG      ?= runtime.yaml
 COMPOSE     ?= docker compose -f deploy/docker-compose.yml
 GOFLAGS     ?=
+VERSION     ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+REVISION    ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
+IMAGE       ?= runtime
 
 BINS := agentd runtimed runtimectl sandboxd
 
@@ -104,6 +107,13 @@ pg-up: ## Start a local Postgres (pgvector) for tests/dev
 .PHONY: pg-down
 pg-down: ## Stop the local Postgres
 	$(COMPOSE) down
+
+# ---- Container image (all binaries) ----
+.PHONY: docker-image
+docker-image: ## Build the all-binaries image (run from anywhere; context is the projects root)
+	docker build -f deploy/Dockerfile \
+		--build-arg VERSION=$(VERSION) --build-arg REVISION=$(REVISION) \
+		-t $(IMAGE):$(VERSION) -t $(IMAGE):latest ..
 
 # ---- Sandbox image ----
 .PHONY: sandbox-image
