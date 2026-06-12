@@ -21,7 +21,7 @@ type AgentConfig struct {
 	Command    []string `yaml:"command"` // optional; when set, the supervisor execs this instead of the agentd binary (polyglot/foreign agents). argv form.
 	WorkDir    string   `yaml:"workdir"` // optional working directory for Command (e.g. a Python shim project root).
 	Tenant     string   `yaml:"tenant"`  // optional; "" ⇒ "default" tenant. Owns this agent for access control.
-	Memory     bool     `yaml:"memory"` // optional; opt-in to the per-tenant Postgres memory tool. Default false.
+	Memory     bool     `yaml:"memory"`  // optional; opt-in to the per-tenant Postgres memory tool. Default false.
 
 	// URL marks a REMOTE agent: runtimed attaches (health-check + proxy +
 	// status) instead of spawning. Full base, e.g. "https://host:8443".
