@@ -18,6 +18,8 @@ func TestPolicyDecide(t *testing.T) {
 		{"allow-list match label", "allow-list", []string{"*.wikipedia.org"}, "en.wikipedia.org", false},
 		{"allow-list miss", "allow-list", []string{"*.wikipedia.org"}, "example.com", true},
 		{"allow-list exact", "allow-list", []string{"api.github.com"}, "api.github.com", false},
+		{"allow-list strips port", "allow-list", []string{"api.github.com"}, "api.github.com:443", false},
+		{"bare star matches nothing", "allow-list", []string{"*"}, "example.com", true},
 		{"allow-list no substring leak", "allow-list", []string{"*.x.org"}, "xx.org", true},
 		{"allow-list case-insensitive", "allow-list", []string{"*.X.ORG"}, "a.x.org", false},
 		{"allow-all-public allows", "allow-all-public", nil, "example.com", false},
@@ -65,5 +67,13 @@ func TestPolicyDNSRebindDefense(t *testing.T) {
 	pub, _ := NewPolicy(ModeAllowAllPublic, nil)
 	if err := pub.Decide("192.168.0.5"); err == nil {
 		t.Fatal("literal private IP must be denied in allow-all-public")
+	}
+	// IPv4-mapped IPv6 literal must not bypass the internal block.
+	if err := pub.Decide("::ffff:10.0.0.1"); err == nil {
+		t.Fatal("IPv4-mapped IPv6 of a private addr must be denied")
+	}
+	// A literal private IP carrying a port (CONNECT-style) must be denied.
+	if err := pub.Decide("10.0.0.1:443"); err == nil {
+		t.Fatal("private IP with port must be denied")
 	}
 }

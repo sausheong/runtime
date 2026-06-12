@@ -109,7 +109,8 @@ func (p *Policy) blockInternal(host string) error {
 		}
 		return nil
 	}
-	if host == "metadata" || host == "metadata.google.internal" {
+	name := strings.TrimSuffix(host, ".")
+	if name == "metadata" || name == "metadata.google.internal" {
 		return fmt.Errorf("egress denied: cloud metadata endpoint")
 	}
 	ips, err := p.lookup(host)
@@ -133,9 +134,11 @@ func init() {
 		"127.0.0.0/8", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16",
 		"169.254.0.0/16", "::1/128", "fc00::/7", "fe80::/10",
 	} {
-		if _, n, err := net.ParseCIDR(cidr); err == nil {
-			internalNets = append(internalNets, n)
+		_, n, err := net.ParseCIDR(cidr)
+		if err != nil {
+			panic(fmt.Sprintf("browser: bad internal CIDR %q: %v", cidr, err))
 		}
+		internalNets = append(internalNets, n)
 	}
 }
 
