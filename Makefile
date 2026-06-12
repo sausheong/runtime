@@ -18,6 +18,9 @@ CTL_ADDR    ?= :8080
 CONFIG      ?= runtime.yaml
 COMPOSE     ?= docker compose -f deploy/docker-compose.yml
 GOFLAGS     ?=
+VERSION     ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+REVISION    ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
+IMAGE       ?= runtime
 
 BINS := agentd runtimed runtimectl sandboxd
 
@@ -104,6 +107,40 @@ pg-up: ## Start a local Postgres (pgvector) for tests/dev
 .PHONY: pg-down
 pg-down: ## Stop the local Postgres
 	$(COMPOSE) down
+
+# ---- Container image (all binaries) ----
+# CHART_APPVERSION is the chart's appVersion; the chart's default image.tag falls
+# back to it, so we also tag the image with it — otherwise a default `helm install`
+# (image.tag unset ⇒ runtime:<appVersion>) would reference a tag we never built.
+CHART_APPVERSION ?= $(shell awk '/^appVersion:/{gsub(/"/,"",$$2); print $$2}' deploy/charts/runtime/Chart.yaml)
+.PHONY: docker-image
+docker-image: ## Build the all-binaries image (run from anywhere; context is the projects root)
+	docker build -f deploy/Dockerfile \
+		--build-arg VERSION=$(VERSION) --build-arg REVISION=$(REVISION) \
+		-t $(IMAGE):$(VERSION) -t $(IMAGE):$(CHART_APPVERSION) -t $(IMAGE):latest ..
+
+# ---- Helm chart ----
+CHART ?= deploy/charts/runtime
+
+.PHONY: helm-lint
+helm-lint: ## Lint the Helm chart
+	helm lint $(CHART) --set secrets.pgDsn=postgres://x:x@h:5432/d?sslmode=disable
+
+.PHONY: helm-template
+helm-template: ## Render the chart with a dummy DSN (quick check)
+	helm template r $(CHART) --set secrets.pgDsn=postgres://x:x@h:5432/d?sslmode=disable
+
+.PHONY: helm-deps
+helm-deps: ## Vendor + unpack chart dependencies (Postgres subchart)
+	helm dependency update $(CHART)
+	@# helm v4 requires the subchart UNPACKED as a dir, not just the .tgz, to
+	@# render/install (a vendored .tgz alone fails 'missing in charts/ directory').
+	cd $(CHART)/charts && for t in *.tgz; do [ -e "$$t" ] || continue; tar -xzf "$$t" && rm -f "$$t"; done
+
+.PHONY: helm-package
+helm-package: helm-deps ## Package the chart into dist/
+	mkdir -p dist
+	helm package $(CHART) -d dist
 
 # ---- Sandbox image ----
 .PHONY: sandbox-image

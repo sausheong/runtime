@@ -1,0 +1,135 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "runtime.fullname" . }}
+  labels:
+    {{- include "runtime.labels" . | nindent 4 }}
+spec:
+  replicas: 1   # supervisor is a single stateful process tree; see NOTES if you set replicaCount > 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "runtime.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ toYaml .Values.config | sha256sum }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      labels:
+        {{- include "runtime.selectorLabels" . | nindent 8 }}
+    spec:
+      {{- $unusedPg := include "runtime.requirePg" . }}
+      {{- $unusedAgents := include "runtime.requireAgents" . }}
+      serviceAccountName: {{ include "runtime.serviceAccountName" . }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: runtimed
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args: ["/app/runtimed"]
+          env:
+            - name: RUNTIME_CTL_ADDR
+              value: ":8080"
+            - name: RUNTIME_CONFIG
+              value: "/etc/runtime/runtime.yaml"
+            - name: RUNTIME_AGENTD_BIN
+              value: "/app/agentd"
+            - name: RUNTIME_PG_DSN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "runtime.secretName" . }}
+                  key: RUNTIME_PG_DSN
+            {{- if or .Values.secrets.secretsKeys .Values.secrets.existingSecret }}
+            - name: RUNTIME_SECRETS_KEYS
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "runtime.secretName" . }}
+                  key: RUNTIME_SECRETS_KEYS
+                  optional: true
+            {{- end }}
+            {{- if or .Values.secrets.secretsPrimary .Values.secrets.existingSecret }}
+            - name: RUNTIME_SECRETS_PRIMARY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "runtime.secretName" . }}
+                  key: RUNTIME_SECRETS_PRIMARY
+                  optional: true
+            {{- end }}
+            {{- if or .Values.secrets.adminBootstrap .Values.secrets.existingSecret }}
+            - name: RUNTIME_ADMIN_BOOTSTRAP
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "runtime.secretName" . }}
+                  key: RUNTIME_ADMIN_BOOTSTRAP
+                  optional: true
+            {{- end }}
+            {{- if .Values.identity.enabled }}
+            - name: RUNTIME_OIDC_ISSUER
+              value: {{ .Values.identity.oidcIssuer | quote }}
+            - name: RUNTIME_OIDC_CLIENT_ID
+              value: {{ .Values.identity.oidcClientID | quote }}
+            {{- if .Values.identity.oidcRedirectURL }}
+            - name: RUNTIME_OIDC_REDIRECT_URL
+              value: {{ .Values.identity.oidcRedirectURL | quote }}
+            {{- end }}
+            {{- end }}
+            {{- if .Values.features.dockerHost }}
+            - name: DOCKER_HOST
+              value: {{ .Values.features.dockerHost | quote }}
+            {{- end }}
+          ports:
+            - name: http
+              containerPort: 8080
+          readinessProbe:
+            httpGet: { path: /healthz, port: http }
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: config
+              mountPath: /etc/runtime
+              readOnly: true
+            - name: scratch
+              mountPath: /tmp
+            {{- with .Values.extraVolumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+        {{- with .Values.extraContainers }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "runtime.fullname" . }}
+        - name: scratch
+          emptyDir: {}
+        {{- with .Values.extraVolumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

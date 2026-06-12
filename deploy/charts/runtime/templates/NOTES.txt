@@ -1,0 +1,28 @@
+runtime {{ .Chart.AppVersion }} deployed as {{ include "runtime.fullname" . }}.
+
+{{- if gt (int .Values.replicaCount) 1 }}
+
+WARNING: replicaCount is {{ .Values.replicaCount }}, but runtime runs a single
+stateful supervisor process tree. The chart pins the Deployment to 1 replica;
+your replicaCount value is ignored. Running two supervisors against one Postgres
+is unsupported.
+{{- end }}
+
+Reach the control plane:
+  kubectl port-forward svc/{{ include "runtime.fullname" . }} 8080:{{ .Values.service.port }}
+  curl http://127.0.0.1:8080/healthz
+
+{{- if not .Values.postgresql.enabled }}
+
+Postgres: bring-your-own (postgresql.enabled=false). Ensure RUNTIME_PG_DSN points
+at a reachable database with the pgvector extension pre-created by a superuser.
+{{- else }}
+
+Postgres: the bundled subchart is enabled. NOTE: semantic memory needs the
+pgvector extension; the Bitnami image does not create it. For memory features,
+use an image/init that provides `CREATE EXTENSION vector` or set
+postgresql.enabled=false and point RUNTIME_PG_DSN at a pgvector-enabled database.
+{{- end }}
+
+Sandbox/browser features are OFF (features.dockerHost unset) — a plain pod has no
+Docker daemon. See the chart README for the DinD opt-in.

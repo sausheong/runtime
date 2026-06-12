@@ -659,6 +659,61 @@ restriction (only auto-approval); and `options.env` merges (Python). Code:
 
 ### C2. Containers / Kubernetes
 
+**First milestone DONE (merged to `master`, 2026-06-13):** container image + Helm
+chart. The monolith-pod packaging, faithful to the current single-node supervisor
+(runtimed `exec`-spawns agentd children in its own process tree — NOT decomposed
+services). Two artifacts: (1) a **single all-binaries image** (`deploy/Dockerfile`
+extended to build + ship `runtimed`+`agentd`+`sandboxd`+`browserd`+`runtimectl`),
+non-root uid 10001, OCI labels, `make docker-image` (build context is the PARENT of
+`runtime/`+`harness/` per the `replace` directive); (2) a **Helm chart** at
+`deploy/charts/runtime/` — Deployment (hard-pinned `replicas: 1`, `Recreate`
+strategy: a single-writer DBOS supervisor must never double against one Postgres),
+Service, ConfigMap (`runtime.yaml`, with a `checksum/config` pod annotation that
+auto-rolls on `helm upgrade`), Secret (only set keys; suppressed when
+`existingSecret` is used, with `optional:true` refs), ServiceAccount, and toggle-
+gated Ingress / NetworkPolicy / obs (ServiceMonitor + a `grafana_dashboard`-labeled
+ConfigMap packaging the obs-M1 dashboard). Postgres is an optional Bitnami subchart
+(`postgresql.enabled`); secure-by-default pod posture (runAsNonRoot, fsGroup,
+`readOnlyRootFilesystem` with only a `/tmp` emptyDir — verified: agentd does no disk
+writes, DBOS is Postgres-backed); two fail-closed render guards (no DSN source; no
+agents). Make targets `helm-lint`/`helm-template`/`helm-deps`/`helm-package`; no CI
+(build-locally, manual push). Docker-dependent sandbox/browser ship in the image but
+are OFF by default (a plain pod has no Docker daemon), surfaced via a `DOCKER_HOST`
+knob + a documented `extraContainers` DinD opt-in (privileged sidecar, single-node
+only). Per-agent-pod scheduling is explicitly deferred to C3; an operator/CRDs to a
+later C2 milestone. THE FINAL HOLISTIC REVIEW (pre-live-proof) EARNED ITS KEEP
+AGAIN — it caught FOUR integration bugs invisible to per-task render checks, each an
+independent live-install failure: (1) the bundled Postgres image 404'd — Bitnami's
+2025 catalog migration moved the pinned `docker.io/bitnami/postgresql:<x>-rN` tags
+to `bitnamilegacy/postgresql` (verified: bitnami 404, bitnamilegacy 200); re-pointed
+the subchart image. (2) the synthesized DSN host used `runtime.fullname-postgresql`
+but the Bitnami subchart names its Service `<release>-postgresql` — a mismatch on
+ANY release not literally named "runtime" ⇒ DNS failure ⇒ CrashLoop, and the test
+harness masked it by using release "r"; fixed to derive the host from `.Release.Name`
++ added a regression guard. (3) the default `config.agents: []` rendered fine but
+runtimed fatal-exits on a zero-agent registry ⇒ CrashLoop; added a `requireAgents`
+render guard + fail-closed test. (4) the README quick-start sample used a nonexistent
+`script:` field and omitted required `id`/`listen_addr`; rewritten to the real schema.
+Plus an IMPORTANT foot-gun: the chart's default `image.tag` resolves to appVersion
+`0.1.0` which `make docker-image` never built — now also tagged. LIVE PROOF (real
+kind cluster + bundled Postgres, 2026-06-13, all passed): `make docker-image` →
+`kind load` → `helm install` with `postgresql.enabled=true` and two scripted agents
+→ the pod reached **1/1 Running** (3 self-healed restarts during the initial
+DB-not-ready race — the readiness gate + Recreate doing their job), runtimed
+connected to `runtime-postgresql:5432` (DSN-host-matches-Service proven live),
+launched DBOS for both agents, and served `/healthz` 200; **`runtimectl conformance`
+PASSED all 6 checks** against the in-cluster Service (create session + stream + get +
+list — the exec-spawn supervisor model working inside a pod, end to end); a
+`helm upgrade` adding a third agent flipped the `checksum/config` annotation
+(`41f277bd…`→`0a27ce92…`), rolled a new ReplicaSet to 1/1, and `/agents` then
+reported all THREE agents healthy; clean `helm uninstall` + `kind delete`. Hermetic
+gate green (7-permutation `test.sh`, `go build`/`go vet`). Remaining C2: per-agent-pod
+scheduling (needs C3 + spine A1), a Kubernetes operator/CRDs, multi-arch image
+publish + CI, a pgvector-capable bundled Postgres (the Bitnami image lacks the
+extension, so bundled-PG can't do semantic memory), and HPA/autoscaling (blocked on
+the single-replica supervisor model). Spec/plan:
+`docs/superpowers/{specs,plans}/2026-06-12-c2-packaging*`.
+
 - **Containers / Kubernetes** — once C1 makes foreign agents first-class, package
   them as containers and add Helm charts / an operator for orchestrated scale (the
   "K8s later" half of the deploy decision). The conformance suite already validates

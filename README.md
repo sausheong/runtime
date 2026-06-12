@@ -1515,6 +1515,35 @@ docker compose -f runtime/deploy/docker-compose.full.yml up --build
 `deploy/docker-compose.yml` (Postgres only) remains for the local-dev workflow
 where you run the Go binaries directly.
 
+### Kubernetes / Helm
+
+`deploy/charts/runtime/` is a Helm v4 chart that runs the control plane
+(`runtimed` + `agentd`) from the single all-binaries image, secure-by-default,
+with optional bundled or BYO Postgres.
+
+Quick start with [kind](https://kind.sigs.k8s.io/) (scripted agents, no LLM key):
+
+```bash
+make docker-image
+kind create cluster --name runtime
+kind load docker-image runtime:$(git describe --tags --always --dirty) --name runtime
+helm dependency update deploy/charts/runtime    # or: make helm-deps (helm v4 needs the subchart unpacked)
+helm install runtime deploy/charts/runtime \
+  --set postgresql.enabled=true \
+  --set image.pullPolicy=Never \
+  --set image.tag=$(git describe --tags --always --dirty)
+kubectl port-forward svc/runtime 8080:8080 && curl http://127.0.0.1:8080/healthz
+```
+
+The chart is **secure-by-default** (non-root uid 10001, read-only root FS, all
+caps dropped, `/tmp`-only writable) and pinned to **a single replica** with a
+`Recreate` strategy — the supervisor is a single-writer DBOS process tree, so two
+replicas against one Postgres is unsupported.
+
+See [`deploy/charts/runtime/README.md`](deploy/charts/runtime/README.md) for the
+canonical reference: the three deploy modes (BYO / bundled / dev), secrets,
+observability, ingress, the sandbox/browser DinD opt-in, and the full values table.
+
 ### Notes on multi-agent startup
 
 `runtimed` starts agents **sequentially with a readiness gate** (it waits for
