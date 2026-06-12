@@ -112,7 +112,7 @@ sandbox-image: ## Build the bundled sandbox image (runtime-sandbox:latest)
 
 .PHONY: browser-image
 browser-image: ## Build the bundled browser image (runtime-browser:latest)
-	docker build -f deploy/browser.Dockerfile -t runtime-browser:latest .
+	docker build -f deploy/browser.Dockerfile -t runtime-browser:latest deploy/
 
 # ---- Full stack (Postgres + control plane) ----
 .PHONY: compose-up

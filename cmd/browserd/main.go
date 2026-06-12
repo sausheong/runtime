@@ -110,6 +110,11 @@ func main() {
 		slog.Error("browserd: egress proxy listen failed", "addr", proxyAddr, "err", err)
 		os.Exit(1)
 	}
+	// The egress proxy runs for the life of the process. If it ever exits, we
+	// log but keep serving MCP: with no proxy, every container's egress fails
+	// closed (deny), which is safe — degrade-don't-crash, like sandboxd's
+	// per-call backend degradation. A loopback TCP listener dying mid-run is
+	// near-impossible in practice.
 	proxy := browser.NewProxy(policy)
 	go func() {
 		if err := http.Serve(ln, proxy); err != nil {
@@ -150,6 +155,9 @@ func main() {
 	}
 	m.StartReaper(ctx, time.Minute)
 
+	// No SIGTERM handler by design: if browserd dies without cleanup, the
+	// leftover runtime.browser=1 containers are recovered by reap-on-start
+	// above (same rationale as sandboxd).
 	allowDirect := os.Getenv("RUNTIME_BROWSER_ALLOW_DIRECT") == "1"
 	srv := browser.NewServer(m, allowDirect)
 	if err := srv.Run(ctx, &sdk.StdioTransport{}); err != nil {
