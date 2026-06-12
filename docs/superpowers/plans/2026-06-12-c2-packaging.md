@@ -17,6 +17,28 @@
 
 **Conventions:** `go` CLI is ground truth (ignore IDE/LSP). Docker build context is the **parent** of `runtime/` and `harness/`. Commit after each task.
 
+**Helm dependency prerequisite (IMPORTANT — helm v4 quirk, discovered during
+execution):** the chart declares a `postgresql` subchart dependency in
+`Chart.yaml`, and Helm refuses to render (`helm template`) until that dependency
+is vendored into `charts/`. **CRITICAL:** with helm v4.2.1, a vendored
+`charts/postgresql-*.tgz` ALONE is NOT enough — even after `helm dependency
+build`/`update` and with a matching `Chart.lock`, `helm template` still errors
+`found in Chart.yaml, but missing in charts/ directory: postgresql`. The
+dependency tarball must be **unpacked into a directory** (`charts/postgresql/`).
+Render, `helm install --dry-run`, and `helm package` all work once the unpacked
+dir is present (`helm package` includes exactly one copy of the subchart). The
+canonical vendoring step is therefore:
+```
+helm dependency build deploy/charts/runtime
+tar -xzf deploy/charts/runtime/charts/postgresql-*.tgz -C deploy/charts/runtime/charts/
+rm -f deploy/charts/runtime/charts/postgresql-*.tgz   # keep only the unpacked dir
+```
+The orchestrator has already done this (after Task 2), so
+`deploy/charts/runtime/charts/postgresql/` exists locally for Tasks 3/4/6's
+render assertions. The entire `charts/` subdir + `Chart.lock` are gitignored in
+Task 5 — do NOT `git add` them. If a render errors with "missing in charts/
+directory: postgresql", re-run the three commands above.
+
 ---
 
 ### Task 1: Extend the image to all five binaries, non-root, OCI labels
@@ -813,8 +835,11 @@ helm-template: ## Render the chart with a dummy DSN (quick check)
 	helm template r $(CHART) --set secrets.pgDsn=postgres://x:x@h:5432/d?sslmode=disable
 
 .PHONY: helm-deps
-helm-deps: ## Vendor chart dependencies (Postgres subchart)
+helm-deps: ## Vendor + unpack chart dependencies (Postgres subchart)
 	helm dependency update $(CHART)
+	@# helm v4 requires the subchart UNPACKED as a dir, not just the .tgz, to
+	@# render/install (a vendored .tgz alone fails 'missing in charts/ directory').
+	cd $(CHART)/charts && for t in *.tgz; do [ -e "$$t" ] || continue; tar -xzf "$$t" && rm -f "$$t"; done
 
 .PHONY: helm-package
 helm-package: helm-deps ## Package the chart into dist/
@@ -825,19 +850,20 @@ helm-package: helm-deps ## Package the chart into dist/
 - [ ] **Step 3: Vendor the dependency and confirm subchart wiring**
 
 Run: `make helm-deps`
-Expected: downloads `postgresql-16.x.x.tgz` into `deploy/charts/runtime/charts/`; creates `Chart.lock`. (Both gitignored.)
+Expected: downloads then UNPACKS the postgresql subchart into
+`deploy/charts/runtime/charts/postgresql/` (the loose `.tgz` is removed); creates
+`Chart.lock`. (All gitignored.) Verify with `ls deploy/charts/runtime/charts/`
+→ shows the `postgresql/` directory, no `.tgz`.
 
 - [ ] **Step 4: Assert Postgres-enabled rendering synthesizes the DSN and includes the subchart**
 
 Run:
 ```bash
-helm template r deploy/charts/runtime --set postgresql.enabled=true > /tmp/c2-pg.yaml
+helm template r deploy/charts/runtime --set postgresql.enabled=true > /tmp/c2-pg.yaml 2>/tmp/c2-pg.err; echo "render-exit=$?"
 grep -q 'r-runtime-postgresql:5432' /tmp/c2-pg.yaml && echo OK-dsn-synth
 grep -q 'app.kubernetes.io/name: postgresql' /tmp/c2-pg.yaml && echo OK-subchart
-# and no required-DSN failure even though secrets.pgDsn is unset:
-echo "exit=$?"
 ```
-Expected: `OK-dsn-synth` and `OK-subchart` print (no fail-closed error because postgresql.enabled supplies the DSN).
+Expected: `render-exit=0` (no fail-closed error because postgresql.enabled supplies the DSN) and both `OK-dsn-synth` and `OK-subchart` print.
 
 - [ ] **Step 5: Package the chart end-to-end**
 
