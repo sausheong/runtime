@@ -172,7 +172,7 @@ func NewServer(m *Manager, allowDirect bool) *sdk.Server {
 		})
 
 	add("get_text",
-		"Get the innerHTML of an element (defaults to body)."+sessionNote,
+		"Get the innerHTML of an element (defaults to body)."+sessionNote+selectorNote,
 		`{"type":"object","properties":{
 			"browser_id":{"type":"string"},"selector":{"type":"string"}
 		},"required":["browser_id"]}`,
@@ -199,7 +199,7 @@ func NewServer(m *Manager, allowDirect bool) *sdk.Server {
 		})
 
 	add("extract",
-		"Extract clean readable text from the current page (script/style/nav stripped). Prefer this over get_text for reading content."+sessionNote,
+		"Extract clean readable text from the current page (script/style/nav stripped). Prefer this over get_text for reading content."+sessionNote+selectorNote,
 		`{"type":"object","properties":{
 			"browser_id":{"type":"string"},"selector":{"type":"string"}
 		},"required":["browser_id"]}`,
