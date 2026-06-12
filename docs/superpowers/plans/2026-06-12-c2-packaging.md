@@ -913,8 +913,11 @@ grep -q 'app.kubernetes.io/name: postgresql' <<<"$out" || fail "subchart absent"
 ok "postgresql.enabled"
 
 # 3. Fail-closed: neither postgresql nor pgDsn nor existingSecret.
+# Capture combined output without pipefail aborting on helm's expected non-zero
+# exit (a `... | grep` pipeline would always fail under `set -o pipefail`).
 if helm template r "$CHART" >/dev/null 2>&1; then fail "expected fail-closed render"; fi
-helm template r "$CHART" 2>&1 | grep -q 'set postgresql.enabled' || fail "wrong fail-closed message"
+err=$(helm template r "$CHART" 2>&1 || true)
+grep -q 'set postgresql.enabled' <<<"$err" || fail "wrong fail-closed message"
 ok "fail-closed"
 
 # 4. existingSecret: no Secret emitted; env refs target it.
