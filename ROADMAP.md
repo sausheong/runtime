@@ -424,7 +424,24 @@ exposing the platform broadly.
    non-allowlisted host + real screenshot), and a through-serve e2e with
    identity enforced (`test/gateway_browser_e2e_test.go`: two tenants, spoofed
    `__rt_tenant` overridden, cross-tenant browser invisible). Build:
-   `make browser-image`. Live proof: (pending — see live-proof run). Spec/plan:
+   `make browser-image`. Live proof (real Docker + Chromium, 2026-06-12): the
+   live-gated `TestLiveBrowseAndEgress` drove a real container to browse
+   allow-listed `example.com` (extracted "Example Domain") while every
+   non-allowlisted host — `www.iana.org` plus Chrome's own background telemetry
+   to `accounts.google.com`/`clients2.google.com`/etc. — was denied by the
+   proxy; and an end-to-end agent turn (real LLM via the proxy, `gateway: true`
+   browser agent over a Docker-backed `browserd` upstream) created a browser,
+   navigated to `example.com` through the gateway, and returned the heading
+   "Example Domain" verbatim, while a second turn to non-allowlisted
+   `www.wikipedia.org` came back `ERR_TUNNEL_CONNECTION_FAILED` (the proxy's
+   CONNECT refusal) — `runtime_gateway_tool_calls_total{server="browser"}`
+   recorded `browser__navigate` ok=1/error=1, `create_browser`=2, `extract`=1,
+   `close_browser`=2. Two live bugs the hermetic suite could not see were
+   caught and fixed: Chromium ignores `--remote-debugging-address` and binds
+   CDP to container-loopback only (fixed with an in-image socat bridge from the
+   published port to `127.0.0.1`), and a dual-stack `0.0.0.0:0` proxy listener
+   reports `[::]:port` which the container-proxy-address rewrite must map to
+   `host.docker.internal` (fixed + regression-tested). Spec/plan:
    `docs/superpowers/{specs,plans}/2026-06-12-sandboxes-m2-browser*`.
    Remaining B4: kernel-mode variable persistence, pip-install, per-user
    scoping, console panel, instance-scoped reap labels (today: exactly one
