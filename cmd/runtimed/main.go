@@ -219,7 +219,7 @@ func main() {
 		var ts []obs.ScrapeTarget
 		for _, info := range reg.List() {
 			ap, _ := reg.Get(info.ID)
-			ts = append(ts, obs.ScrapeTarget{Agent: ap.AgentID, Addr: ap.Addr})
+			ts = append(ts, obs.ScrapeTarget{Agent: ap.AgentID, BaseURL: ap.DialBase(), Token: ap.AuthToken})
 		}
 		return ts
 	})

@@ -125,6 +125,10 @@ func (a AgentProcess) SpawnFunc() func(ctx context.Context) <-chan error {
 	}
 }
 
+// DialBase returns the agent's full dial base URL (exported for callers in
+// package main: runtimed's metrics target builder).
+func (a AgentProcess) DialBase() string { return a.baseURL() }
+
 // baseURL returns the full dial base for the agent. Local agents (set only via
 // Addr) fall back to http://Addr; remote agents carry an explicit BaseURL.
 func (a AgentProcess) baseURL() string {
