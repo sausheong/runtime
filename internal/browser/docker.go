@@ -82,29 +82,23 @@ func (d *dockerBackend) Create(ctx context.Context, tenant, proxyAddr string) (B
 	pids := int64(512)
 	port := nat.Port(cdpPort + "/tcp")
 	cp := containerProxyAddr(proxyAddr)
-	cmd := []string{
-		"chromium", "--headless=new", "--no-sandbox", "--disable-gpu",
-		"--remote-debugging-address=0.0.0.0",
-		"--remote-debugging-port=" + cdpPort,
-		"--proxy-server=http://" + cp,
-		"--disable-blink-features=AutomationControlled",
-		"--user-data-dir=/profile",
-		"--no-first-run", "--no-default-browser-check",
-		"about:blank",
-	}
 	created, err := d.cli.ContainerCreate(ctx,
 		&container.Config{
-			Image:        d.cfg.Image,
-			Cmd:          cmd,
-			User:         strconv.Itoa(browserUID),
-			Env:          []string{"HTTP_PROXY=http://" + cp, "HTTPS_PROXY=http://" + cp, "NO_PROXY="},
+			Image: d.cfg.Image,
+			User:  strconv.Itoa(browserUID),
+			Env: []string{
+				"RUNTIME_CHROME_PROXY=http://" + cp,
+				"HTTP_PROXY=http://" + cp,
+				"HTTPS_PROXY=http://" + cp,
+				"NO_PROXY=",
+			},
 			Labels:       map[string]string{browserLabel: "1", browserLabel + ".tenant": tenant},
 			ExposedPorts: nat.PortSet{port: struct{}{}},
 		},
 		&container.HostConfig{
 			ReadonlyRootfs:  true,
 			ExtraHosts:      []string{"host.docker.internal:host-gateway"},
-			Tmpfs:           map[string]string{"/profile": fmt.Sprintf("size=%dm,mode=1777", d.cfg.ProfileMB), "/tmp": "size=64m,mode=1777"},
+			Tmpfs:           map[string]string{"/profile": fmt.Sprintf("size=%dm,mode=1777", d.cfg.ProfileMB), "/tmp": "size=64m,mode=1777", "/home/browser": "size=64m,mode=1777"},
 			CapDrop:         []string{"ALL"},
 			SecurityOpt:     []string{"no-new-privileges"},
 			Runtime:         d.cfg.Runtime,

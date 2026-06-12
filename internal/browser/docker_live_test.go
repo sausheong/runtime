@@ -4,35 +4,22 @@ package browser
 
 import (
 	"context"
-	"io"
-	"net"
-	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 )
 
 // TestLiveBrowseAndEgress is the real-Chrome proof: a container browses an
-// allowed local server, extraction returns its text, and a denied host is
-// blocked by the egress proxy. Requires Docker + the runtime-browser image
-// (make browser-image) and runs only under -tags live.
-//
-// Requires Docker with a host-gateway route (Docker Desktop, or Linux with
-// ExtraHosts host-gateway). The host-side httptest server and proxy are reached
-// from the container via host.docker.internal.
+// allow-listed PUBLIC site through the egress proxy, a non-allowlisted host is
+// blocked, and a screenshot is captured. Requires Docker + the runtime-browser
+// image (make browser-image) + outbound network, and runs only under -tags live.
+// The host-run egress proxy is reached from the container via host.docker.internal
+// (Docker Desktop, or Linux with the ExtraHosts host-gateway mapping the backend adds).
 func TestLiveBrowseAndEgress(t *testing.T) {
-	site := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = io.WriteString(w, "<html><body><main><h1>Live OK</h1></main></body></html>")
-	}))
-	defer site.Close()
-
-	host := strings.TrimPrefix(site.URL, "http://")
-	hostOnly := host[:strings.IndexByte(host, ':')]
-	pol, err := NewPolicy(ModeAllowList, []string{hostOnly, "host.docker.internal"})
+	pol, err := NewPolicy(ModeAllowList, []string{"example.com", "www.example.com"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	pol.lookup = func(string) ([]net.IP, error) { return []net.IP{net.ParseIP("8.8.8.8")}, nil }
 	proxy := NewProxy(pol)
 	ps := httptest.NewServer(proxy)
 	defer ps.Close()
@@ -52,24 +39,28 @@ func TestLiveBrowseAndEgress(t *testing.T) {
 	}
 	defer m.Close(ctx, "acme", s.ID)
 
-	// The httptest server binds 127.0.0.1 on the host; the container reaches it
-	// via host.docker.internal (allow-listed above).
-	siteURL := site.URL // http://127.0.0.1:PORT
-	sitePort := siteURL[strings.LastIndexByte(siteURL, ':')+1:]
-	containerSiteURL := "http://host.docker.internal:" + sitePort
-	if _, err := Navigate(ctx, s, containerSiteURL, "h1", 0); err != nil {
-		t.Fatalf("navigate allowed: %v", err)
+	// Allowed public site loads.
+	title, err := Navigate(ctx, s, "https://example.com", "", 0)
+	if err != nil {
+		t.Fatalf("navigate allowed (example.com): %v", err)
 	}
-	txt, err := GetHTML(ctx, s, "body")
+	if !strings.Contains(title, "Example") {
+		t.Logf("unexpected title %q (continuing — egress is the assertion)", title)
+	}
+	html, err := GetHTML(ctx, s, "body")
 	if err != nil {
 		t.Fatalf("get_text: %v", err)
 	}
-	if !strings.Contains(ExtractText(txt), "Live OK") {
-		t.Fatalf("extract missing content: %q", txt)
+	if !strings.Contains(ExtractText(html), "Example Domain") {
+		t.Fatalf("extract missing expected content: %q", ExtractText(html))
 	}
-	if _, err := Navigate(ctx, s, "https://example.com", "", 0); err == nil {
+
+	// Non-allowlisted host is blocked by egress (navigation fails).
+	if _, err := Navigate(ctx, s, "https://www.iana.org", "", 0); err == nil {
 		t.Fatal("navigate to non-allowlisted host should fail (egress blocked)")
 	}
+
+	// Screenshot returns bytes.
 	shot, err := Screenshot(ctx, s)
 	if err != nil || len(shot) == 0 {
 		t.Fatalf("screenshot: err=%v len=%d", err, len(shot))
