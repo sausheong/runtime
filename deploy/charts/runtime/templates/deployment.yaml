@@ -21,7 +21,8 @@ spec:
       labels:
         {{- include "runtime.selectorLabels" . | nindent 8 }}
     spec:
-      {{- $unused := include "runtime.requirePg" . }}
+      {{- $unusedPg := include "runtime.requirePg" . }}
+      {{- $unusedAgents := include "runtime.requireAgents" . }}
       serviceAccountName: {{ include "runtime.serviceAccountName" . }}
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:

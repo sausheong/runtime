@@ -46,20 +46,23 @@ curl http://127.0.0.1:8080/healthz
 > **`make helm-deps` is required first.** Helm v4 needs the Bitnami `postgresql`
 > subchart vendored *and unpacked* under `charts/`; a loose `.tgz` will not load.
 
-Sample `my-values.yaml` with two scripted agents:
+Sample `my-values.yaml` with two scripted agents. Each agent requires `id`,
+`name`, `model`, and `listen_addr` (the loader rejects any agent missing these,
+and refuses to start with an empty registry). `model: test/scripted` selects the
+built-in scripted test agent — there is no `script:` field:
 
 ```yaml
 # my-values.yaml
 config:
   agents:
-    - name: echo
+    - id: support
+      name: Support Agent
       model: test/scripted
-      script:
-        - "Hello from the echo agent."
-    - name: ping
+      listen_addr: 127.0.0.1:8101
+    - id: research
+      name: Research Agent
       model: test/scripted
-      script:
-        - "pong"
+      listen_addr: 127.0.0.1:8102
 ```
 
 ---

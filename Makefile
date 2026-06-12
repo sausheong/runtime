@@ -109,11 +109,15 @@ pg-down: ## Stop the local Postgres
 	$(COMPOSE) down
 
 # ---- Container image (all binaries) ----
+# CHART_APPVERSION is the chart's appVersion; the chart's default image.tag falls
+# back to it, so we also tag the image with it — otherwise a default `helm install`
+# (image.tag unset ⇒ runtime:<appVersion>) would reference a tag we never built.
+CHART_APPVERSION ?= $(shell awk '/^appVersion:/{gsub(/"/,"",$$2); print $$2}' deploy/charts/runtime/Chart.yaml)
 .PHONY: docker-image
 docker-image: ## Build the all-binaries image (run from anywhere; context is the projects root)
 	docker build -f deploy/Dockerfile \
 		--build-arg VERSION=$(VERSION) --build-arg REVISION=$(REVISION) \
-		-t $(IMAGE):$(VERSION) -t $(IMAGE):latest ..
+		-t $(IMAGE):$(VERSION) -t $(IMAGE):$(CHART_APPVERSION) -t $(IMAGE):latest ..
 
 # ---- Helm chart ----
 CHART ?= deploy/charts/runtime

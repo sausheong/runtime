@@ -63,6 +63,13 @@ postgresql:
     username: runtime
     password: runtime
     database: runtime
+  # Bitnami migrated their free Docker Hub catalog in late 2025: the versioned
+  # `docker.io/bitnami/postgresql:<x>-debian-12-rN` tags now 404 (only `latest` +
+  # digests remain there); the pinned tags live under `bitnamilegacy/postgresql`.
+  # Point the subchart at the legacy repo so the bundled-PG path actually pulls.
+  image:
+    registry: docker.io
+    repository: bitnamilegacy/postgresql
 
 # Escape hatches for the DinD opt-in (empty by default).
 extraContainers: []

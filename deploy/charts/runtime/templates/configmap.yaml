@@ -5,9 +5,7 @@ metadata:
   labels:
     {{- include "runtime.labels" . | nindent 4 }}
 data:
+  # runtime.requireAgents (called from the Deployment) guarantees a non-empty
+  # agents list at render time, so there is no empty-config fallback here.
   runtime.yaml: |
-    {{- if .Values.config }}
     {{- toYaml .Values.config | nindent 4 }}
-    {{- else }}
-    agents: []
-    {{- end }}
