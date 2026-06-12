@@ -26,12 +26,21 @@ func NewRegistry(cfg *config.Config, binPath, dsn string) *Registry {
 	r := &Registry{agents: map[string]AgentProcess{}, infos: map[string]AgentInfo{}}
 	for _, a := range cfg.Agents {
 		r.order = append(r.order, a.ID)
-		r.agents[a.ID] = AgentProcess{
-			AgentID: a.ID, Addr: a.ListenAddr, BinPath: binPath, PGDSN: dsn,
+		ap := AgentProcess{
+			AgentID: a.ID, BinPath: binPath, PGDSN: dsn,
 			Kind: a.Kind, Command: a.Command, WorkDir: a.WorkDir, Tenant: a.Tenant,
 			Memory: a.Memory, GatewayOn: a.Gateway.Enabled(),
 			GatewaySearch: a.Gateway == config.GatewaySearch,
 		}
+		if a.URL != "" {
+			ap.Remote = true
+			ap.BaseURL = a.URL
+			ap.AuthToken = a.AuthToken
+		} else {
+			ap.Addr = a.ListenAddr
+			ap.BaseURL = "http://" + a.ListenAddr
+		}
+		r.agents[a.ID] = ap
 		r.infos[a.ID] = AgentInfo{ID: a.ID, Name: a.Name, Model: a.Model, Tenant: a.Tenant}
 	}
 	return r
