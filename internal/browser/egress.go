@@ -259,12 +259,28 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 	go func() { _, _ = io.Copy(src, dst); _ = src.Close() }()
 }
 
-// copyHeader copies HTTP headers, skipping the hop-by-hop Connection headers.
+// hopHeaders are the hop-by-hop headers a proxy must not forward (RFC 7230 §6.1).
+var hopHeaders = []string{
+	"Connection", "Proxy-Connection", "Keep-Alive", "Proxy-Authenticate",
+	"Proxy-Authorization", "Te", "Trailer", "Transfer-Encoding", "Upgrade",
+}
+
+// copyHeader copies HTTP headers minus hop-by-hop headers: the standard set
+// plus any header named in the Connection header (RFC 7230 §6.1). It mutates
+// src (deleting hop-by-hop entries); callers pass a request/response header
+// not reused afterward.
 func copyHeader(dst, src http.Header) {
-	for k, vs := range src {
-		if k == "Proxy-Connection" || k == "Connection" {
-			continue
+	for _, f := range src["Connection"] {
+		for _, name := range strings.Split(f, ",") {
+			if name = strings.TrimSpace(name); name != "" {
+				src.Del(name)
+			}
 		}
+	}
+	for _, h := range hopHeaders {
+		src.Del(h)
+	}
+	for k, vs := range src {
 		for _, v := range vs {
 			dst.Add(k, v)
 		}
