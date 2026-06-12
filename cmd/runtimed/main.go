@@ -243,6 +243,16 @@ func main() {
 	// schema init is not safe to run concurrently).
 	for _, info := range reg.List() {
 		ap, _ := reg.Get(info.ID)
+		if ap.Remote {
+			id := ap.AgentID
+			hm := &controlplane.HealthMonitor{
+				BaseURL: ap.DialBase(), Token: ap.AuthToken,
+				OnChange: func(ok bool) { cm.AgentReachable(id, ok) },
+			}
+			go hm.Run(ctx)
+			slog.Info("monitoring remote agent", "agent", ap.AgentID, "url", ap.DialBase())
+			continue
+		}
 		sup := &controlplane.Supervisor{Spawn: ap.SpawnFunc(), Backoff: time.Second, OnRestart: func() { cm.AgentRestart(ap.AgentID) }}
 		go sup.Run(ctx)
 		slog.Info("supervising agent", "agent", ap.AgentID, "addr", ap.Addr)
