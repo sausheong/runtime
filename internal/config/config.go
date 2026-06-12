@@ -3,6 +3,7 @@ package config
 
 import (
 	"fmt"
+	"net/url"
 	"os"
 	"path"
 	"strings"
@@ -21,6 +22,14 @@ type AgentConfig struct {
 	WorkDir    string   `yaml:"workdir"` // optional working directory for Command (e.g. a Python shim project root).
 	Tenant     string   `yaml:"tenant"`  // optional; "" ⇒ "default" tenant. Owns this agent for access control.
 	Memory     bool     `yaml:"memory"` // optional; opt-in to the per-tenant Postgres memory tool. Default false.
+
+	// URL marks a REMOTE agent: runtimed attaches (health-check + proxy +
+	// status) instead of spawning. Full base, e.g. "https://host:8443".
+	// Mutually exclusive with ListenAddr — exactly one is required.
+	URL string `yaml:"url"`
+	// AuthToken is an optional shared bearer for the runtimed→remote-agent hop;
+	// ${VAR}-expanded at load. Only valid with URL.
+	AuthToken string `yaml:"auth_token"`
 
 	// Gateway opts the agent into the platform MCP gateway (env-injected
 	// URL+key). Optional; off (default) | full (true) | search.
@@ -151,11 +160,31 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("config: at least one agent is required")
 	}
 	ids := map[string]bool{}
-	addrs := map[string]bool{}
+	dials := map[string]bool{} // unified: listen_addr OR url must be unique
 	for i := range c.Agents {
 		a := &c.Agents[i]
-		if a.ID == "" || a.Name == "" || a.Model == "" || a.ListenAddr == "" {
-			return fmt.Errorf("config: agent[%d] requires id, name, model, listen_addr", i)
+		if a.ID == "" || a.Name == "" || a.Model == "" {
+			return fmt.Errorf("config: agent[%d] requires id, name, model", i)
+		}
+		// Exactly one of listen_addr / url.
+		if (a.ListenAddr == "") == (a.URL == "") {
+			return fmt.Errorf("config: agent %q requires exactly one of listen_addr (local) or url (remote)", a.ID)
+		}
+		remote := a.URL != ""
+		if remote {
+			u, err := url.Parse(a.URL)
+			if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+				return fmt.Errorf("config: agent %q url must be http(s)://host[:port] (got %q)", a.ID, a.URL)
+			}
+			// Local-only fields can't be delivered to a process we don't spawn.
+			if len(a.Command) > 0 || a.WorkDir != "" || a.Kind != "" || a.Memory || a.Gateway.Enabled() {
+				return fmt.Errorf("config: remote agent %q must not set command, workdir, kind, memory, or gateway (these are spawn-time only)", a.ID)
+			}
+			if err := expandEnvScalar(&a.AuthToken, "agent "+a.ID+" auth_token"); err != nil {
+				return err
+			}
+		} else if a.AuthToken != "" {
+			return fmt.Errorf("config: agent %q auth_token is only valid with url (remote agents)", a.ID)
 		}
 		if a.Tenant == "" {
 			a.Tenant = "default"
@@ -163,11 +192,15 @@ func (c *Config) Validate() error {
 		if ids[a.ID] {
 			return fmt.Errorf("config: duplicate agent id %q", a.ID)
 		}
-		if addrs[a.ListenAddr] {
-			return fmt.Errorf("config: duplicate listen_addr %q", a.ListenAddr)
+		dial := a.ListenAddr
+		if remote {
+			dial = a.URL
+		}
+		if dials[dial] {
+			return fmt.Errorf("config: duplicate agent dial address %q", dial)
 		}
 		ids[a.ID] = true
-		addrs[a.ListenAddr] = true
+		dials[dial] = true
 	}
 	seen := map[string]bool{}
 	for i, tk := range c.Tokens {

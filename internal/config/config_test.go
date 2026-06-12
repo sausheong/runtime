@@ -722,3 +722,105 @@ func TestGatewayAgentRequiresServers(t *testing.T) {
 		t.Fatalf("with servers should validate: %v", err)
 	}
 }
+
+func TestLoad_RemoteAgentURL(t *testing.T) {
+	t.Setenv("REMOTE_TOK", "shhh")
+	p := writeTmp(t, `
+agents:
+  - id: local-1
+    name: Local
+    model: test/scripted
+    listen_addr: 127.0.0.1:8101
+  - id: remote-1
+    name: Remote
+    model: test/scripted
+    url: https://agent-1.internal:8443
+    auth_token: ${REMOTE_TOK}
+`)
+	cfg, err := Load(p)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Agents[1].URL != "https://agent-1.internal:8443" {
+		t.Fatalf("url = %q", cfg.Agents[1].URL)
+	}
+	if cfg.Agents[1].AuthToken != "shhh" {
+		t.Fatalf("auth_token not expanded: %q", cfg.Agents[1].AuthToken)
+	}
+	// The co-located local agent must still validate, and tenant defaulting
+	// must run for the remote agent (its branch sits before the default).
+	if cfg.Agents[0].ListenAddr != "127.0.0.1:8101" {
+		t.Fatalf("local agent listen_addr lost: %q", cfg.Agents[0].ListenAddr)
+	}
+	if cfg.Agents[1].Tenant != "default" {
+		t.Fatalf("remote agent tenant not defaulted: %q", cfg.Agents[1].Tenant)
+	}
+}
+
+func TestValidate_RemoteRejectsBadCombos(t *testing.T) {
+	cases := map[string]string{
+		"neither addr nor url": `
+agents:
+  - {id: a, name: A, model: m}
+`,
+		"both addr and url": `
+agents:
+  - {id: a, name: A, model: m, listen_addr: 127.0.0.1:8101, url: http://h:1}
+`,
+		"bad scheme": `
+agents:
+  - {id: a, name: A, model: m, url: ftp://h:1}
+`,
+		"no host": `
+agents:
+  - {id: a, name: A, model: m, url: "https://"}
+`,
+		"command on remote": `
+agents:
+  - {id: a, name: A, model: m, url: http://h:1, command: [x]}
+`,
+		"kind on remote": `
+agents:
+  - {id: a, name: A, model: m, url: http://h:1, kind: special}
+`,
+		"memory on remote": `
+agents:
+  - {id: a, name: A, model: m, url: http://h:1, memory: true}
+`,
+		"gateway on remote": `
+agents:
+  - {id: a, name: A, model: m, url: http://h:1, gateway: true}
+gateway:
+  servers:
+    - {name: fs, command: x}
+`,
+		"auth_token without url": `
+agents:
+  - {id: a, name: A, model: m, listen_addr: 127.0.0.1:8101, auth_token: tok}
+`,
+		"duplicate url": `
+agents:
+  - {id: a, name: A, model: m, url: http://h:1}
+  - {id: b, name: B, model: m, url: http://h:1}
+`,
+	}
+	for name, body := range cases {
+		t.Run(name, func(t *testing.T) {
+			p := writeTmp(t, body)
+			if _, err := Load(p); err == nil {
+				t.Fatalf("%s: expected validation error, got nil", name)
+			}
+		})
+	}
+}
+
+func TestValidate_AuthTokenUnsetEnvFailsClosed(t *testing.T) {
+	os.Unsetenv("DEFINITELY_UNSET_TOK")
+	p := writeTmp(t, `
+agents:
+  - {id: a, name: A, model: m, url: http://h:1, auth_token: "${DEFINITELY_UNSET_TOK}"}
+`)
+	if _, err := Load(p); err == nil {
+		t.Fatal("expected error for unset env var in auth_token")
+	}
+}
