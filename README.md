@@ -188,11 +188,44 @@ agents:
 is spawned):
 
 - at least one agent
-- every agent needs `id`, `name`, `model`, and `listen_addr`
+- every agent needs `id`, `name`, `model`, and exactly one of `listen_addr` (local) or `url` (remote)
 - `id`s must be unique
-- `listen_addr`s must be unique
+- each agent's dial address (`listen_addr` or `url`) must be unique
 
 To add or remove an agent, edit `runtime.yaml` and restart `runtimed`.
+
+### Remote agents (attach instead of spawn)
+
+An agent entry with `url:` instead of `listen_addr:` is **remote**: `runtimed`
+attaches to an already-running, contract-conformant `agentd` (health-check,
+reverse-proxy, status) but does **not** spawn or restart it. The remote agent's
+process and environment (`RUNTIME_PG_DSN`, `RUNTIME_LISTEN_ADDR`,
+`RUNTIME_AGENT_ID`, `RUNTIME_AGENT_TENANT`, and optionally
+`RUNTIME_AGENT_AUTH_TOKEN`) are provisioned by whoever runs that host (systemd,
+a Kubernetes Deployment + Secret, `docker run -e`, …).
+
+```yaml
+agents:
+  - id: remote-1
+    name: Remote Agent
+    model: test/scripted
+    tenant: acme
+    url: https://agent-1.internal:8443   # remote: attached + monitored
+    auth_token: ${REMOTE_1_TOKEN}        # optional shared bearer for the hop
+```
+
+- **Mutually exclusive with `listen_addr`** — an agent is either local (spawned)
+  or remote (attached), never both; exactly one is required.
+- **`auth_token`** (optional, `${VAR}`-expanded) is a shared bearer `runtimed`
+  sends on every request (proxy, health, metrics). The remote `agentd` enforces
+  it via `RUNTIME_AGENT_AUTH_TOKEN`; a mismatch shows the agent as `unreachable`.
+- **Scheme** `http://` or `https://` — TLS is the operator's choice (real cert,
+  service mesh, or ingress).
+- **Lifecycle:** a remote agent that is down never blocks `runtimed` startup and
+  is never restarted; it reports unhealthy/`unreachable` (metric
+  `runtime_agent_reachable`) and proxying it returns `503` until it returns.
+- **Spawn-time-only fields** (`command`, `kind`, `memory`, `gateway`) are
+  rejected on a remote agent.
 
 ---
 

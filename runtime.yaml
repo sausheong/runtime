@@ -31,3 +31,16 @@ agents:
 #       url: https://mcp.example.com/mcp
 #       headers: {Authorization: "Bearer ${SEARCH_TOKEN}"}
 #       tenants: [acme]                  # omit ⇒ visible to all tenants
+
+# Optional: remote agent (C3) — attach to an already-running agentd instead of
+# spawning it. Use `url:` (http/https) instead of `listen_addr:`; the two are
+# mutually exclusive. The remote agentd is started separately by the operator
+# with its own env, including RUNTIME_AGENT_AUTH_TOKEN matching auth_token below.
+# Spawn-time-only fields (command/kind/memory/gateway) are rejected on a remote
+# agent. A down remote agent never blocks startup and is never restarted.
+#
+#  - id: remote-1
+#    name: Remote Agent
+#    model: test/scripted
+#    url: https://agent-1.internal:8443
+#    auth_token: ${REMOTE_1_TOKEN}
