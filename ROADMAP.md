@@ -384,10 +384,68 @@ exposing the platform broadly.
    removing the container, and an end-to-end agent turn (real LLM via the
    proxy) where the nutrition agent used `sandbox__execute_code` to compute
    sugar-per-can (43.875g, 87.75% of the WHO limit) inside its verdict.
-   Remaining B4: browser sandbox (M2 candidate), kernel-mode variable
-   persistence, network egress policy / pip-install, per-user scoping,
-   console panel, instance-scoped reap labels (today: exactly one sandboxd
-   per host/DOCKER_HOST). Spec/plan:
+   **Second milestone DONE (merged to `master`, 2026-06-12):** browser sandbox
+   behind the gateway. A new `cmd/browserd` binary (package `internal/browser`)
+   is a sibling to sandboxd, federated as an ordinary `forward_tenant` gateway
+   upstream — agents opt in with the existing `gateway: true`/`search` and see
+   `mcp__gateway__browser__<tool>` with zero agent-side changes. Ten tools
+   (create_browser, navigate, click, type, get_text, extract, screenshot —
+   image content riding the gateway's existing image-content passthrough —,
+   evaluate, list_browsers, close_browser) drive a Chromium per stateful
+   session running in a locked-down Docker container (read-only rootfs, CapDrop
+   ALL, no-new-privileges, non-root uid 1000, CPU/mem/pids limits, optional
+   gVisor via `RUNTIME_BROWSER_RUNTIME=runsc`) over remote CDP via
+   `chromedp.NewRemoteAllocator`. It reuses M1's Manager contract almost
+   verbatim — per-tenant cap with slot reservation under lock, idle-TTL (10m) +
+   max-lifetime (1h) reaper, reap-on-start by label `runtime.browser=1`,
+   existence-hiding lookup (foreign id ⇒ same "no such browser" as a missing
+   id) — and the same `forward_tenant` spoof-proofing (caller-supplied
+   `__rt_tenant` stripped and overridden by the authenticated principal;
+   fails closed when the key is absent). The headline feature is **network
+   egress policy**: Chrome's entire network stack is forced through a
+   browserd-run HTTP/HTTPS proxy via `--proxy-server` (the agent can only drive
+   Chrome over CDP, so the proxy adjudicates all reachable traffic — subresources,
+   fetch, redirects, CONNECT), which allows or denies by hostname in three modes
+   (`RUNTIME_BROWSER_EGRESS_MODE` = deny-all default, allow-list of hostname globs
+   via `RUNTIME_BROWSER_EGRESS_ALLOW`, allow-all-public); the container is on a
+   bridge network and a network-level egress boundary so even a
+   non-proxy-respecting process is contained is recorded as follow-on hardening.
+   Internal/private addresses are blocked unconditionally across all modes with
+   DNS-rebind defense (resolve-then-check) and a fail-closed default; because the
+   proxy sees subresources, fetch, redirects, and CONNECT — not just the top-level
+   URL — it beats DNS/iptables filtering.
+   The chromedp action logic is ported (not imported) from harness, alongside
+   the stealth script and the SSRF private-network set. Proven by hermetic unit
+   tests (egress policy table incl. DNS-rebind + IPv4-mapped IPv6, proxy
+   forward/CONNECT allow-deny, Manager lifecycle mirroring M1, extract, tool
+   server with in-memory transport incl. absent-tenant fail-closed), a
+   live-gated real-Chrome test (`internal/browser/docker_live_test.go`:
+   container browse of an allow-listed local server + egress block of a
+   non-allowlisted host + real screenshot), and a through-serve e2e with
+   identity enforced (`test/gateway_browser_e2e_test.go`: two tenants, spoofed
+   `__rt_tenant` overridden, cross-tenant browser invisible). Build:
+   `make browser-image`. Live proof (real Docker + Chromium, 2026-06-12): the
+   live-gated `TestLiveBrowseAndEgress` drove a real container to browse
+   allow-listed `example.com` (extracted "Example Domain") while every
+   non-allowlisted host — `www.iana.org` plus Chrome's own background telemetry
+   to `accounts.google.com`/`clients2.google.com`/etc. — was denied by the
+   proxy; and an end-to-end agent turn (real LLM via the proxy, `gateway: true`
+   browser agent over a Docker-backed `browserd` upstream) created a browser,
+   navigated to `example.com` through the gateway, and returned the heading
+   "Example Domain" verbatim, while a second turn to non-allowlisted
+   `www.wikipedia.org` came back `ERR_TUNNEL_CONNECTION_FAILED` (the proxy's
+   CONNECT refusal) — `runtime_gateway_tool_calls_total{server="browser"}`
+   recorded `browser__navigate` ok=1/error=1, `create_browser`=2, `extract`=1,
+   `close_browser`=2. Two live bugs the hermetic suite could not see were
+   caught and fixed: Chromium ignores `--remote-debugging-address` and binds
+   CDP to container-loopback only (fixed with an in-image socat bridge from the
+   published port to `127.0.0.1`), and a dual-stack `0.0.0.0:0` proxy listener
+   reports `[::]:port` which the container-proxy-address rewrite must map to
+   `host.docker.internal` (fixed + regression-tested). Spec/plan:
+   `docs/superpowers/{specs,plans}/2026-06-12-sandboxes-m2-browser*`.
+   Remaining B4: kernel-mode variable persistence, pip-install, per-user
+   scoping, console panel, instance-scoped reap labels (today: exactly one
+   sandboxd/browserd per host/DOCKER_HOST). Spec/plan:
    `docs/superpowers/{specs,plans}/2026-06-10-sandboxes-m1-code-interpreter*`.
 5. **Observability** — tracing, metrics, dashboards. The structured `slog` from
    M3 is the lightweight precursor; this is the full version (OpenTelemetry +

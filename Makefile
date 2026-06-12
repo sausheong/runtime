@@ -110,6 +110,10 @@ pg-down: ## Stop the local Postgres
 sandbox-image: ## Build the bundled sandbox image (runtime-sandbox:latest)
 	docker build -f deploy/sandbox.Dockerfile -t runtime-sandbox:latest deploy/
 
+.PHONY: browser-image
+browser-image: ## Build the bundled browser image (runtime-browser:latest)
+	docker build -f deploy/browser.Dockerfile -t runtime-browser:latest deploy/
+
 # ---- Full stack (Postgres + control plane) ----
 .PHONY: compose-up
 compose-up: ## Bring up the full stack (Postgres + runtimed) via Docker

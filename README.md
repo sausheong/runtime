@@ -24,6 +24,7 @@ no lost work, no duplicated committed tool calls.
 - [Authentication & multi-tenancy](#authentication--multi-tenancy)
 - [MCP Gateway](#mcp-gateway)
 - [Code-interpreter sandbox](#code-interpreter-sandbox)
+- [Browser sandbox](#browser-sandbox)
 - [Observability](#observability)
 - [The CLI (`runtimectl`)](#the-cli-runtimectl)
 - [Web console](#web-console)
@@ -825,6 +826,83 @@ reaping clears orphans.
 - **Docker required** — the engine socket (or `DOCKER_HOST`) must be reachable
   from `sandboxd`; gVisor is optional hardening on Linux.
 - **One sandboxd per host** — startup reaping is host-global by label.
+
+---
+
+## Browser sandbox
+
+Alongside the code interpreter, the platform ships an isolated **browser** any
+agent can drive: a `browserd` binary that manages one locked-down Chromium
+container per browser session and exposes it as MCP tools. Like sandboxd it is
+delivered **through the gateway** — declare it as an ordinary `forward_tenant`
+upstream and every gateway-enabled agent (`gateway: true` or `search`) sees the
+tools as `mcp__gateway__browser__<tool>`, with **zero agent-side changes**.
+
+```yaml
+gateway:
+  servers:
+    - name: browser
+      command: bin/browserd
+      forward_tenant: true              # gateway injects the caller's tenant
+      env:
+        RUNTIME_BROWSER_EGRESS_MODE: allow-list
+        RUNTIME_BROWSER_EGRESS_ALLOW: "*.example.com,docs.python.org"
+```
+
+Build the bundled Chromium image once:
+
+```bash
+make browser-image     # builds runtime-browser:latest (override: RUNTIME_BROWSER_IMAGE)
+```
+
+### The tools
+
+`create_browser`, `navigate`, `click`, `type`, `get_text`, `extract`,
+`screenshot` (returns image content, passed through the gateway's existing
+image-content support), `evaluate`, `list_browsers`, `close_browser`. Sessions
+are stateful — a `browser_id` from `create_browser` carries page state across
+calls until closed or reaped.
+
+### Network egress policy
+
+Unlike the code interpreter (which has *no* network at all), the browser needs
+to reach the web — so Chrome's entire network stack is forced through a
+browserd-run HTTP/HTTPS proxy via `--proxy-server` (the agent drives Chrome only
+over CDP, so the proxy adjudicates all of the agent's reachable traffic), which
+allows or denies by hostname:
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `RUNTIME_BROWSER_EGRESS_MODE` | `deny-all` | `deny-all` \| `allow-list` \| `allow-all-public` |
+| `RUNTIME_BROWSER_EGRESS_ALLOW` | (empty) | comma-separated hostname globs for `allow-list` |
+
+The default is **deny-all** (fail closed). Because the proxy sees subresources,
+fetch, redirects, and CONNECT — not just the top-level URL — it filters where
+DNS/iptables rules cannot.
+
+### Security posture
+
+The proxy enforces the hostname allow/deny decision over all of Chrome's traffic
+(the agent drives Chrome only via CDP), and **internal/private addresses are
+always blocked** in every mode (with DNS-rebind defense: hostnames are resolved
+and the resolved IP re-checked). The container sits on a docker bridge so it can
+reach the proxy; a network-level egress boundary (internal network / iptables) so
+that even a non-proxy-respecting in-container process is contained is follow-on
+hardening. The container itself is locked down like the code-interpreter
+sandbox — read-only rootfs, all capabilities dropped, `no-new-privileges`,
+non-root user, CPU/memory/pid limits, optional gVisor via
+`RUNTIME_BROWSER_RUNTIME=runsc`. Tenancy and lifecycle mirror sandboxd:
+`forward_tenant` spoof-proofing, existence-hiding cross-tenant lookup, idle-TTL
++ max-lifetime reaper, per-tenant cap, and reap-on-start by label
+`runtime.browser=1` (one browserd per host).
+
+### Testing
+
+```bash
+go test ./internal/browser/...              # hermetic unit tests (fake backend)
+go test -tags live ./internal/browser/...   # real-Chrome test: needs `make browser-image` + Docker
+go test -tags integration ./test/ -run TestGatewayBrowserE2E   # through-serve e2e: needs Postgres
+```
 
 ---
 
