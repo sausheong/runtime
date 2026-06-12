@@ -43,10 +43,14 @@ func NewAPI(reg *Registry, m *obs.ControlMetrics) *http.ServeMux {
 			}
 			ap, _ := reg.Get(info.ID)
 			wg.Add(1)
-			go func(info AgentInfo, addr string) {
+			go func(info AgentInfo, ap AgentProcess) {
 				defer wg.Done()
 				st := agentStatus{ID: info.ID, Name: info.Name, Model: info.Model}
-				resp, err := client.Get("http://" + addr + "/healthz")
+				req, _ := http.NewRequest("GET", ap.baseURL()+"/healthz", nil)
+				if ap.AuthToken != "" {
+					req.Header.Set("Authorization", "Bearer "+ap.AuthToken)
+				}
+				resp, err := client.Do(req)
 				if err == nil {
 					st.Healthy = resp.StatusCode == 200
 					resp.Body.Close()
@@ -54,7 +58,7 @@ func NewAPI(reg *Registry, m *obs.ControlMetrics) *http.ServeMux {
 				mu.Lock()
 				out = append(out, st)
 				mu.Unlock()
-			}(info, ap.Addr)
+			}(info, ap)
 		}
 		wg.Wait()
 		if out == nil {
