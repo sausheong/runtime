@@ -1,0 +1,16 @@
+{{- if .Values.obs.enabled -}}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "runtime.fullname" . }}
+  labels:
+    {{- include "runtime.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "runtime.selectorLabels" . | nindent 6 }}
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 15s
+{{- end }}
