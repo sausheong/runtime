@@ -29,3 +29,19 @@ func TestExtractMalformedHTMLNoPanic(t *testing.T) {
 	_ = ExtractText("")
 	_ = ExtractText("plain text no tags")
 }
+
+func TestExtractEntityAndNestedSkip(t *testing.T) {
+	// HTML entities must decode (relied upon, via x/net/html).
+	if got := ExtractText("<p>a &amp; b</p>"); !strings.Contains(got, "a & b") {
+		t.Fatalf("entity not decoded: %q", got)
+	}
+	// A block element nested inside a skipped subtree must be fully dropped,
+	// while sibling text outside the skipped subtree survives.
+	got := ExtractText(`<div>keep<nav>drop<p>alsoDrop</p></nav>tail</div>`)
+	if strings.Contains(got, "drop") || strings.Contains(got, "alsoDrop") {
+		t.Fatalf("skipped subtree leaked: %q", got)
+	}
+	if !strings.Contains(got, "keep") || !strings.Contains(got, "tail") {
+		t.Fatalf("non-skipped text lost: %q", got)
+	}
+}
