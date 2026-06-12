@@ -1,0 +1,88 @@
+# Default values for the runtime chart. Secure-by-default.
+
+image:
+  repository: runtime
+  tag: ""                 # defaults to .Chart.AppVersion
+  pullPolicy: IfNotPresent
+imagePullSecrets: []
+
+nameOverride: ""
+fullnameOverride: ""
+
+# The supervisor is a single stateful process tree; >1 is unsupported.
+replicaCount: 1
+
+# runtime.yaml contents — agent registry + optional gateway config.
+# Rendered into a ConfigMap and mounted at /etc/runtime/runtime.yaml.
+config:
+  agents: []
+  # gateway:
+  #   servers: []
+
+# Secrets. For dev set inline; for prod set existingSecret (keys below ignored).
+secrets:
+  existingSecret: ""
+  pgDsn: ""               # RUNTIME_PG_DSN (required unless postgresql.enabled)
+  secretsKeys: ""         # RUNTIME_SECRETS_KEYS
+  secretsPrimary: ""      # RUNTIME_SECRETS_PRIMARY
+  adminBootstrap: ""      # RUNTIME_ADMIN_BOOTSTRAP
+  # NOTE: legacy bearer tokens are NOT a secret env var — they live in
+  # runtime.yaml's `tokens:`. Put them under `config.tokens` (dev only).
+
+identity:
+  enabled: false
+  oidcIssuer: ""          # RUNTIME_OIDC_ISSUER
+  oidcClientID: ""        # RUNTIME_OIDC_CLIENT_ID
+  oidcRedirectURL: ""     # RUNTIME_OIDC_REDIRECT_URL
+
+# Docker-dependent features (sandbox/browser). OFF by default — a plain pod has
+# no Docker daemon. Set dockerHost to enable; see chart README for the DinD recipe.
+features:
+  dockerHost: ""          # DOCKER_HOST, e.g. tcp://localhost:2375
+
+service:
+  type: ClusterIP
+  port: 8080
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts: []               # [{host: runtime.example.com, paths: [{path: /, pathType: Prefix}]}]
+  tls: []
+
+networkPolicy:
+  enabled: false
+
+obs:
+  enabled: false          # ServiceMonitor + Grafana dashboard ConfigMap
+
+postgresql:
+  enabled: false
+  auth:
+    username: runtime
+    password: runtime
+    database: runtime
+
+# Escape hatches for the DinD opt-in (empty by default).
+extraContainers: []
+extraVolumes: []
+extraVolumeMounts: []
+
+resources: {}
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 10001
+  fsGroup: 10001
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: [ALL]
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+podAnnotations: {}

@@ -1,0 +1,14 @@
+apiVersion: v2
+name: runtime
+description: On-prem, durable LLM agent platform (AWS Bedrock AgentCore equivalent)
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+home: https://github.com/sausheong/runtime
+sources:
+  - https://github.com/sausheong/runtime
+dependencies:
+  - name: postgresql
+    version: "16.x.x"
+    repository: https://charts.bitnami.com/bitnami
+    condition: postgresql.enabled

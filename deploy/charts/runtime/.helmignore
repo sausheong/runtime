@@ -1,0 +1,6 @@
+.git
+*.tgz
+charts/*.tgz
+Chart.lock
+dist/
+*.bak
