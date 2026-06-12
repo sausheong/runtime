@@ -6,8 +6,12 @@ package browser
 
 import (
 	"fmt"
+	"io"
+	"log/slog"
 	"net"
+	"net/http"
 	"strings"
+	"time"
 )
 
 // Egress modes.
@@ -149,4 +153,120 @@ func isInternalIP(ip net.IP) bool {
 		}
 	}
 	return false
+}
+
+// Proxy is the forced egress proxy. The Chrome container points HTTP_PROXY /
+// HTTPS_PROXY / --proxy-server at it and has no other route out, so every
+// request passes through ServeHTTP, where Policy adjudicates the host. Plain
+// HTTP is forwarded; HTTPS arrives as CONNECT and is blind-tunneled (the body
+// stays encrypted — host-level control only, by design).
+type Proxy struct {
+	policy *Policy
+	client *http.Client
+	// onDecision is called for every allow/deny (host, allowed). Wired to the
+	// egress metric by cmd/browserd; nil in tests.
+	onDecision func(host string, allowed bool)
+}
+
+// NewProxy builds a Proxy over policy.
+func NewProxy(policy *Policy) *Proxy {
+	return &Proxy{
+		policy: policy,
+		client: &http.Client{
+			Timeout: 60 * time.Second,
+			// Do not auto-follow redirects: each hop is a fresh request the
+			// browser issues and the proxy re-adjudicates. Return the 3xx as-is.
+			CheckRedirect: func(*http.Request, []*http.Request) error {
+				return http.ErrUseLastResponse
+			},
+		},
+	}
+}
+
+// OnDecision sets a callback invoked for every egress decision (host, allowed).
+func (p *Proxy) OnDecision(fn func(host string, allowed bool)) { p.onDecision = fn }
+
+func (p *Proxy) decide(host string) bool {
+	err := p.policy.Decide(host)
+	allowed := err == nil
+	if p.onDecision != nil {
+		p.onDecision(host, allowed)
+	}
+	if allowed {
+		slog.Debug("egress allow", "host", host)
+	} else {
+		slog.Info("egress deny", "host", host, "reason", err)
+	}
+	return allowed
+}
+
+func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodConnect {
+		p.handleConnect(w, r)
+		return
+	}
+	p.handleForward(w, r)
+}
+
+// handleForward proxies a plain-HTTP request after an allow decision.
+func (p *Proxy) handleForward(w http.ResponseWriter, r *http.Request) {
+	if !p.decide(r.Host) {
+		http.Error(w, "egress denied by policy", http.StatusForbidden)
+		return
+	}
+	outReq, err := http.NewRequestWithContext(r.Context(), r.Method, r.URL.String(), r.Body)
+	if err != nil {
+		http.Error(w, "bad proxied request", http.StatusBadGateway)
+		return
+	}
+	copyHeader(outReq.Header, r.Header)
+	resp, err := p.client.Do(outReq)
+	if err != nil {
+		http.Error(w, "upstream error: "+err.Error(), http.StatusBadGateway)
+		return
+	}
+	defer resp.Body.Close()
+	copyHeader(w.Header(), resp.Header)
+	w.WriteHeader(resp.StatusCode)
+	_, _ = io.Copy(w, resp.Body)
+}
+
+// handleConnect blind-tunnels HTTPS after an allow decision on the CONNECT
+// target host.
+func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
+	if !p.decide(r.Host) {
+		http.Error(w, "egress denied by policy", http.StatusForbidden)
+		return
+	}
+	dst, err := net.DialTimeout("tcp", r.Host, 30*time.Second)
+	if err != nil {
+		http.Error(w, "dial upstream: "+err.Error(), http.StatusBadGateway)
+		return
+	}
+	hj, ok := w.(http.Hijacker)
+	if !ok {
+		_ = dst.Close()
+		http.Error(w, "proxy: hijack unsupported", http.StatusInternalServerError)
+		return
+	}
+	src, _, err := hj.Hijack()
+	if err != nil {
+		_ = dst.Close()
+		return
+	}
+	_, _ = src.Write([]byte("HTTP/1.1 200 Connection Established\r\n\r\n"))
+	go func() { _, _ = io.Copy(dst, src); _ = dst.Close() }()
+	go func() { _, _ = io.Copy(src, dst); _ = src.Close() }()
+}
+
+// copyHeader copies HTTP headers, skipping the hop-by-hop Connection headers.
+func copyHeader(dst, src http.Header) {
+	for k, vs := range src {
+		if k == "Proxy-Connection" || k == "Connection" {
+			continue
+		}
+		for _, v := range vs {
+			dst.Add(k, v)
+		}
+	}
 }

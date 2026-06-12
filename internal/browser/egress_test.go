@@ -1,7 +1,11 @@
 package browser
 
 import (
+	"io"
 	"net"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"testing"
 )
 
@@ -75,5 +79,64 @@ func TestPolicyDNSRebindDefense(t *testing.T) {
 	// A literal private IP carrying a port (CONNECT-style) must be denied.
 	if err := pub.Decide("10.0.0.1:443"); err == nil {
 		t.Fatal("private IP with port must be denied")
+	}
+}
+
+func TestProxyForwardAllowDeny(t *testing.T) {
+	// An upstream the proxy will forward to.
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, "hello from upstream")
+	}))
+	defer upstream.Close()
+
+	// Address the upstream by name ("localhost") rather than the 127.0.0.1
+	// literal so the proxy's Policy reaches the resolver hook (an IP literal
+	// is checked directly and would trip the unconditional internal block).
+	// localhost resolves to 127.0.0.1 for the real forward, while the hook
+	// reports a public IP so the internal-block passes on the allowed path.
+	upURL, _ := url.Parse(upstream.URL)
+	allowedURL := "http://localhost:" + upURL.Port() + "/"
+
+	// Allow-list contains the upstream's host (localhost); neutralize the
+	// internal-block for the loopback test host via the resolver hook so the
+	// allowed path isn't denied for being private.
+	p, err := NewPolicy(ModeAllowList, []string{"localhost"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.lookup = func(host string) ([]net.IP, error) {
+		return []net.IP{net.ParseIP("8.8.8.8")}, nil // pretend public
+	}
+	proxy := NewProxy(p)
+	ps := httptest.NewServer(proxy)
+	defer ps.Close()
+
+	// Client whose transport routes through the proxy.
+	proxyURL, _ := url.Parse(ps.URL)
+	client := &http.Client{Transport: &http.Transport{Proxy: http.ProxyURL(proxyURL)}}
+
+	resp, err := client.Get(allowedURL)
+	if err != nil {
+		t.Fatalf("allowed GET through proxy: %v", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if string(body) != "hello from upstream" {
+		t.Fatalf("body = %q", body)
+	}
+
+	// A denied host: deny-all policy → 403 through the proxy.
+	deny, _ := NewPolicy(ModeDenyAll, nil)
+	dps := httptest.NewServer(NewProxy(deny))
+	defer dps.Close()
+	dpu, _ := url.Parse(dps.URL)
+	dclient := &http.Client{Transport: &http.Transport{Proxy: http.ProxyURL(dpu)}}
+	dresp, err := dclient.Get(upstream.URL)
+	if err != nil {
+		t.Fatalf("denied GET (transport): %v", err)
+	}
+	defer dresp.Body.Close()
+	if dresp.StatusCode != http.StatusForbidden {
+		t.Fatalf("denied GET status = %d, want 403", dresp.StatusCode)
 	}
 }
