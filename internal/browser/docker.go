@@ -60,16 +60,19 @@ func NewDockerBackend(cfg DockerConfig) (Backend, error) {
 
 // containerProxyAddr rewrites a proxy address the BROWSERD process listens on
 // into one the CONTAINER can dial. A loopback/wildcard host (127.0.0.1,
-// localhost, 0.0.0.0, or empty) becomes host.docker.internal (mapped to the
-// host gateway via ExtraHosts); any other host (an explicit routable IP set by
-// the operator) is passed through unchanged.
+// localhost, 0.0.0.0, ::1, ::, or empty) becomes host.docker.internal (mapped
+// to the host gateway via ExtraHosts); any other host (an explicit routable IP
+// set by the operator) is passed through unchanged. The IPv6 wildcard "::" is
+// what a dual-stack 0.0.0.0:0 listener reports from Addr().String() (as
+// "[::]:port"), so it MUST be covered — otherwise Chrome is handed
+// --proxy-server=http://[::]:port and fails with ERR_PROXY_CONNECTION_FAILED.
 func containerProxyAddr(addr string) string {
 	host, port, err := net.SplitHostPort(addr)
 	if err != nil {
 		return addr // not host:port — pass through
 	}
 	switch host {
-	case "127.0.0.1", "localhost", "0.0.0.0", "::1", "":
+	case "127.0.0.1", "localhost", "0.0.0.0", "::1", "::", "":
 		host = "host.docker.internal"
 	}
 	return net.JoinHostPort(host, port)
