@@ -866,9 +866,10 @@ calls until closed or reaped.
 ### Network egress policy
 
 Unlike the code interpreter (which has *no* network at all), the browser needs
-to reach the web — so the container has **no direct network route** and all
-traffic is forced through a browserd-run HTTP/HTTPS proxy that allows or denies
-by hostname:
+to reach the web — so Chrome's entire network stack is forced through a
+browserd-run HTTP/HTTPS proxy via `--proxy-server` (the agent drives Chrome only
+over CDP, so the proxy adjudicates all of the agent's reachable traffic), which
+allows or denies by hostname:
 
 | Variable | Default | Meaning |
 |---|---|---|
@@ -881,10 +882,13 @@ DNS/iptables rules cannot.
 
 ### Security posture
 
-The container has **no direct egress**; the proxy enforces the hostname
-allow/deny decision, and **internal/private addresses are always blocked** in
-every mode (with DNS-rebind defense: hostnames are resolved and the resolved IP
-re-checked). The container itself is locked down like the code-interpreter
+The proxy enforces the hostname allow/deny decision over all of Chrome's traffic
+(the agent drives Chrome only via CDP), and **internal/private addresses are
+always blocked** in every mode (with DNS-rebind defense: hostnames are resolved
+and the resolved IP re-checked). The container sits on a docker bridge so it can
+reach the proxy; a network-level egress boundary (internal network / iptables) so
+that even a non-proxy-respecting in-container process is contained is follow-on
+hardening. The container itself is locked down like the code-interpreter
 sandbox — read-only rootfs, all capabilities dropped, `no-new-privileges`,
 non-root user, CPU/memory/pid limits, optional gVisor via
 `RUNTIME_BROWSER_RUNTIME=runsc`. Tenancy and lifecycle mirror sandboxd:

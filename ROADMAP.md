@@ -402,14 +402,18 @@ exposing the platform broadly.
    id) — and the same `forward_tenant` spoof-proofing (caller-supplied
    `__rt_tenant` stripped and overridden by the authenticated principal;
    fails closed when the key is absent). The headline feature is **network
-   egress policy**: the container has NO direct network route — all traffic is
-   forced through a browserd-run HTTP/HTTPS proxy that allows or denies by
-   hostname in three modes (`RUNTIME_BROWSER_EGRESS_MODE` = deny-all default,
-   allow-list of hostname globs via `RUNTIME_BROWSER_EGRESS_ALLOW`,
-   allow-all-public). Internal/private addresses are blocked unconditionally
-   across all modes with DNS-rebind defense (resolve-then-check) and a
-   fail-closed default; because the proxy sees subresources, fetch, redirects,
-   and CONNECT — not just the top-level URL — it beats DNS/iptables filtering.
+   egress policy**: Chrome's entire network stack is forced through a
+   browserd-run HTTP/HTTPS proxy via `--proxy-server` (the agent can only drive
+   Chrome over CDP, so the proxy adjudicates all reachable traffic — subresources,
+   fetch, redirects, CONNECT), which allows or denies by hostname in three modes
+   (`RUNTIME_BROWSER_EGRESS_MODE` = deny-all default, allow-list of hostname globs
+   via `RUNTIME_BROWSER_EGRESS_ALLOW`, allow-all-public); the container is on a
+   bridge network and a network-level egress boundary so even a
+   non-proxy-respecting process is contained is recorded as follow-on hardening.
+   Internal/private addresses are blocked unconditionally across all modes with
+   DNS-rebind defense (resolve-then-check) and a fail-closed default; because the
+   proxy sees subresources, fetch, redirects, and CONNECT — not just the top-level
+   URL — it beats DNS/iptables filtering.
    The chromedp action logic is ported (not imported) from harness, alongside
    the stealth script and the SSRF private-network set. Proven by hermetic unit
    tests (egress policy table incl. DNS-rebind + IPv4-mapped IPv6, proxy

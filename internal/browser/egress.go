@@ -1,7 +1,11 @@
 // Package browser implements the headless-browser sandbox sessions served by
 // cmd/browserd as MCP tools behind the platform gateway. Chrome runs in a
-// locked-down container with no direct network; all traffic is forced through
-// the egress proxy in this package, which allows or denies by hostname.
+// locked-down container; its entire network stack is forced through the egress
+// proxy in this package via --proxy-server, which allows or denies by hostname.
+// The agent can only drive Chrome over CDP, so the proxy adjudicates all of the
+// agent's reachable traffic. (The container itself sits on a docker bridge so it
+// can dial the proxy; a network-level egress boundary that also contains a
+// hypothetical non-proxy-respecting process is recorded as follow-on hardening.)
 package browser
 
 import (
@@ -21,11 +25,12 @@ const (
 	ModeAllowAllPublic = "allow-all-public"
 )
 
-// Policy decides whether the browser may reach a given host. It is the sole
-// egress control: the container has no direct route out, so every connection
-// Chrome opens (top-level, subresource, fetch, redirect, websocket) is decided
-// here. Construction validates the mode; an unknown mode is an error, never a
-// silent allow.
+// Policy decides whether the browser may reach a given host. It is the egress
+// control for all of Chrome's traffic: every connection Chrome opens (top-level,
+// subresource, fetch, redirect, websocket) goes through --proxy-server and is
+// decided here, and since the agent can only drive Chrome over CDP this covers
+// the agent's full reachable surface. Construction validates the mode; an unknown
+// mode is an error, never a silent allow.
 type Policy struct {
 	mode   string
 	allow  []string // hostname globs, lowercased (allow-list mode)
@@ -155,16 +160,16 @@ func isInternalIP(ip net.IP) bool {
 	return false
 }
 
-// Proxy is the forced egress proxy. The Chrome container points HTTP_PROXY /
-// HTTPS_PROXY / --proxy-server at it and has no other route out, so every
-// request passes through ServeHTTP, where Policy adjudicates the host. Plain
-// HTTP is forwarded; HTTPS arrives as CONNECT and is blind-tunneled (the body
-// stays encrypted — host-level control only, by design).
+// Proxy is the forced egress proxy. Chrome points HTTP_PROXY / HTTPS_PROXY /
+// --proxy-server at it, so every request Chrome makes passes through ServeHTTP,
+// where Policy adjudicates the host. Plain HTTP is forwarded; HTTPS arrives as
+// CONNECT and is blind-tunneled (the body stays encrypted — host-level control
+// only, by design).
 type Proxy struct {
 	policy *Policy
 	client *http.Client
-	// onDecision is called for every allow/deny (host, allowed). Wired to the
-	// egress metric by cmd/browserd; nil in tests.
+	// onDecision is called for every allow/deny (host, allowed). Reserved for a
+	// future egress metric; unused in M2 (decisions are surfaced via slog).
 	onDecision func(host string, allowed bool)
 }
 
@@ -184,6 +189,8 @@ func NewProxy(policy *Policy) *Proxy {
 }
 
 // OnDecision sets a callback invoked for every egress decision (host, allowed).
+// Reserved for a future egress metric; unused in M2 (decisions are surfaced via
+// slog).
 func (p *Proxy) OnDecision(fn func(host string, allowed bool)) { p.onDecision = fn }
 
 func (p *Proxy) decide(host string) bool {

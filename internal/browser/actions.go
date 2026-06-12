@@ -54,7 +54,6 @@ func ensureChrome(s *Session) error {
 		allocCancel()
 		return err
 	}
-	s.allocCtx = allocCtx
 	s.taskCtx = taskCtx
 	s.cancel = func() { taskCancel(); allocCancel() }
 	return nil

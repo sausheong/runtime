@@ -16,6 +16,10 @@ import (
 // allowed local server, extraction returns its text, and a denied host is
 // blocked by the egress proxy. Requires Docker + the runtime-browser image
 // (make browser-image) and runs only under -tags live.
+//
+// Requires Docker with a host-gateway route (Docker Desktop, or Linux with
+// ExtraHosts host-gateway). The host-side httptest server and proxy are reached
+// from the container via host.docker.internal.
 func TestLiveBrowseAndEgress(t *testing.T) {
 	site := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = io.WriteString(w, "<html><body><main><h1>Live OK</h1></main></body></html>")
@@ -48,7 +52,12 @@ func TestLiveBrowseAndEgress(t *testing.T) {
 	}
 	defer m.Close(ctx, "acme", s.ID)
 
-	if _, err := Navigate(ctx, s, site.URL, "h1", 0); err != nil {
+	// The httptest server binds 127.0.0.1 on the host; the container reaches it
+	// via host.docker.internal (allow-listed above).
+	siteURL := site.URL // http://127.0.0.1:PORT
+	sitePort := siteURL[strings.LastIndexByte(siteURL, ':')+1:]
+	containerSiteURL := "http://host.docker.internal:" + sitePort
+	if _, err := Navigate(ctx, s, containerSiteURL, "h1", 0); err != nil {
 		t.Fatalf("navigate allowed: %v", err)
 	}
 	txt, err := GetHTML(ctx, s, "body")

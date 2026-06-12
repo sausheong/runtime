@@ -35,10 +35,9 @@ type Session struct {
 	ExpiresAt   time.Time
 	CurrentURL  string
 
-	mu       sync.Mutex         // serializes chromedp actions (one tab)
-	allocCtx context.Context    // remote allocator ctx (later task)
-	taskCtx  context.Context    // chromedp task ctx (later task)
-	cancel   context.CancelFunc // tears down both (later task)
+	mu      sync.Mutex         // serializes chromedp actions (one tab)
+	taskCtx context.Context    // chromedp task ctx (later task)
+	cancel  context.CancelFunc // tears down both (later task)
 }
 
 // Manager owns the browser sessions over a Backend. Mirrors the M1 sandbox
@@ -136,24 +135,7 @@ func (m *Manager) Lookup(tenant, id string) (*Session, error) {
 	return s, nil
 }
 
-// maskIfGone scrubs backend errors before they reach the LLM. A vanished
-// session → errNoSandbox; a still-live session's error is logged and
-// genericized.
-func (m *Manager) maskIfGone(id string, err error) error {
-	if err == nil {
-		return nil
-	}
-	m.mu.Lock()
-	_, ok := m.sessions[id]
-	m.mu.Unlock()
-	if !ok {
-		return errNoSandbox
-	}
-	slog.Warn("browser: backend error", "browser", id, "err", err)
-	return errors.New("browser action failed (see browserd logs)")
-}
-
-// maskNav is maskIfGone for action errors: a vanished session → errNoSandbox;
+// maskNav scrubs action errors: a vanished session → errNoSandbox;
 // a still-live session's error passes through (selector/egress/JS errors are
 // user-actionable and leak nothing).
 func (m *Manager) maskNav(id string, err error) error {

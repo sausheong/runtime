@@ -26,7 +26,7 @@ feature, not a side concern.
 | Decision | Choice | Rationale |
 |---|---|---|
 | Isolation boundary | Chrome in a locked-down Docker container, driven by `chromedp` over remote CDP (`NewRemoteAllocator`) | A container is the only enforcement point that sees *all* of Chrome's traffic and contains a renderer compromise. Reuses M1's `docker.go` lifecycle, reaping, tenancy. Driving with `chromedp` (not hand-rolled CDP) reuses the harness's navigation/wait/screenshot/extract logic, which is allocator-agnostic |
-| Egress enforcement | Forced HTTP/HTTPS proxy (container has no direct route; all traffic via a `browserd`-run proxy that allows/denies by hostname) | A proxy sees subresources, `fetch`, redirects, WebSocket upgrades — not just the top-level URL. Filters by hostname (what operators write rules about), not IP. DNS/iptables filtering races TTLs, breaks on shared-IP CDNs, and is bypassed by Chrome DoH / literal-IP connections |
+| Egress enforcement | Forced HTTP/HTTPS proxy (Chrome's network stack routed via `--proxy-server` to a `browserd`-run proxy that allows/denies by hostname; the agent drives Chrome only over CDP, so the proxy adjudicates all reachable traffic) | A proxy sees subresources, `fetch`, redirects, WebSocket upgrades — not just the top-level URL. Filters by hostname (what operators write rules about), not IP. DNS/iptables filtering races TTLs, breaks on shared-IP CDNs, and is bypassed by Chrome DoH / literal-IP connections. A network-level egress boundary is follow-on (§10) |
 | Egress policy scope | Three modes in M2: `deny-all` (default), `allow-list` (hostname globs), `allow-all-public` (block internal). Richer DSL (per-tenant, ports, methods) deferred | Modes cover the real use cases with a crisp, testable security contract; the mode enum grows later without redesign. Matches how M1 deferred per-tenant credentials and Gateway M3 deferred OAuth2 |
 | Tool surface | Explicit session lifecycle (M1-style) + a high-level `extract` action | `create_browser → verbs → close_browser` mirrors `create_sandbox`; the explicit `browser_id` maps cleanly onto M1's capped/reaped/tenant-scoped Manager (an implicit session label does not). `extract` (clean text/markdown) optimizes the dominant "read the page" path |
 | Daemon | New `cmd/browserd` (package `internal/browser`), a sibling to `cmd/sandboxd` — not an extension | M1's no-network/read-only posture is the inverse of a browser's; one binary serving both would need a backend abstraction with two contradictory postures. A clean sibling keeps each daemon's security contract legible |
@@ -91,7 +91,7 @@ via the container IP and handle debug-port readiness); (2) the egress proxy;
 |---|---|
 | `manager.go` | `Manager` over a `Backend`: per-tenant cap with slot reservation under lock, idle/max-lifetime reaper, reap-on-start, `maskIfGone` existence-hiding, `lookup`-by-(tenant,id). `Session` adds `CDPEndpoint`, the per-session chromedp allocator/ctx + cancels, and a `sync.Mutex` (one tab, serialized actions). Direct descendant of M1 `manager.go` |
 | `backend.go` | `Backend` interface (`Create`→container+CDP endpoint, `Connect`→remote allocator ctx, `Remove`, `ListLeftovers`, `Ping`) + `fakeBackend` (in-memory, no Chrome) for hermetic tests and `RUNTIME_BROWSER_FAKE` |
-| `docker.go` | `dockerBackend`: locked-down Chrome container (no direct net, `HTTP(S)_PROXY` + `--proxy-server` pointed at the egress proxy, read-only rootfs + tmpfs profile dir, CapDrop ALL, non-root, cpu/mem/pids, optional `runsc`); waits for the CDP port; returns endpoint. Label `runtime.browser=1` |
+| `docker.go` | `dockerBackend`: locked-down Chrome container (`HTTP(S)_PROXY` + `--proxy-server` pointed at the egress proxy via `host.docker.internal`, read-only rootfs + tmpfs profile dir, CapDrop ALL, non-root, cpu/mem/pids, optional `runsc`); waits for the CDP port; returns endpoint. Label `runtime.browser=1` |
 | `actions.go` | The chromedp action logic — navigate (networkIdle dance + low-level fallback), click/type/get_text/evaluate/screenshot/extract, per-selector wait budgets, stealth script. Ported from harness `browser.go`, adapted to drive a Manager-held remote-allocator ctx |
 | `egress.go` | The egress proxy: `Policy` (mode + hostname globs), `http.Server` handling forward + `CONNECT`, hostname allow/deny decision, internal-address block via `web.ValidateURLNotInternal` + resolved-IP recheck. Listens on the bridge address the containers reach |
 | `extract.go` | HTML→clean-text/markdown (strip script/style/nav, collapse whitespace). Small, self-contained, separately testable |
@@ -113,15 +113,20 @@ with identity + two tenants).
 
 ## 5. Egress proxy
 
-The contract: **the Chrome container has no direct route to anything; every
-byte it emits crosses this proxy, which allows or denies by hostname.**
+The contract: **Chrome's entire network stack is routed through this proxy via
+`--proxy-server`, which allows or denies by hostname. The agent can only drive
+Chrome over CDP, so the proxy adjudicates all of the agent's reachable traffic.**
 
-**Network wiring.** The container is created with no usable default route out
-(no published ports; egress blocked at the container network). `HTTP_PROXY`/
-`HTTPS_PROXY`/`NO_PROXY` env vars plus a Chrome `--proxy-server=` flag point at
-the proxy's host address (the Docker bridge gateway IP, the one interface the
-container can reach). The flag and env are baked at container create into config
-the agent never touches, so the agent cannot tell Chrome to bypass the proxy.
+**Network wiring.** The container runs on a Docker bridge network (it must be
+able to reach the proxy). `HTTP_PROXY`/`HTTPS_PROXY`/`NO_PROXY` env vars plus a
+Chrome `--proxy-server=` flag point at the proxy's host address, reached from the
+container via `host.docker.internal` (mapped to the host gateway with an
+`ExtraHosts: host.docker.internal:host-gateway` entry). The flag and env are
+baked at container create into config the agent never touches, so the agent
+cannot tell Chrome to bypass the proxy. Enforcement is therefore via Chrome's
+proxy configuration, which is complete for the agent's CDP-only capability; a true
+network-level egress boundary (so even a non-proxy-respecting in-container process
+is contained) is out of scope for M2 — see §10.
 
 **What the proxy sees and decides.** Two request shapes:
 
@@ -261,9 +266,12 @@ egress vars (`RUNTIME_BROWSER_EGRESS_MODE`, `RUNTIME_BROWSER_EGRESS_ALLOW`,
 `RUNTIME_BROWSER_PROXY_ADDR`), and `RUNTIME_BROWSER_ALLOW_DIRECT` /
 `RUNTIME_BROWSER_FAKE` from M1.
 
-**Security posture, consolidated** (the invariants a reviewer checks): container
-has no direct egress; the proxy is the sole network path; internal-address block
-is unconditional across all modes with DNS-rebind defense (resolve-then-check);
+**Security posture, consolidated** (the invariants a reviewer checks): Chrome's
+network stack is routed through the proxy via `--proxy-server` and the agent can
+only drive Chrome over CDP, so the proxy is the enforcement point for all of the
+agent's reachable traffic (the container is on a bridge network — a network-level
+egress boundary is follow-on, §10); internal-address block is unconditional
+across all modes with DNS-rebind defense (resolve-then-check);
 fail-closed default-deny; read-only rootfs + CapDrop ALL + no-new-privileges +
 non-root + pids/mem/cpu caps + optional gVisor; tenancy is spoof-proof via
 gateway `forward_tenant`; cross-tenant existence hidden; the agent never sees or
@@ -331,6 +339,7 @@ review → live proof → `merge --no-ff`).
 
 ## 9. Out of scope (recorded for later milestones)
 
+- Network-level egress boundary (internal network / iptables) so even a non-proxy-respecting in-container process is contained — M2 enforces egress via Chrome's proxy configuration.
 - Per-tenant egress policies (M2 is one policy per `browserd` instance).
 - Path/method egress rules (needs HTTPS MITM).
 - Richer egress DSL (ports, protocols, per-tenant rule sets).
@@ -349,9 +358,16 @@ review → live proof → `merge --no-ff`).
   (browserless, rod). Tactical fallback if the remote driver proves too fiddly:
   keep the container, hand-roll thin nav logic (Option 1 from brainstorming) —
   same architecture, less reuse, not a redesign.
-- **Egress policy bypass** — the proxy is the sole network path (container has no
-  direct route); internal-block is unconditional with resolve-then-check
-  DNS-rebind defense; fail-closed default. All unit-tested.
+- **Egress policy bypass** — Chrome's network stack is routed through the proxy
+  via `--proxy-server` and the agent can only drive Chrome over CDP, so the proxy
+  adjudicates all of the agent's reachable traffic; internal-block is
+  unconditional with resolve-then-check DNS-rebind defense; fail-closed default.
+  All unit-tested. The container is on a bridge network, so a hypothetical
+  non-proxy-respecting process (e.g. a renderer-sandbox escape, which the agent
+  cannot launch) would have a direct route; defense-in-depth (read-only rootfs,
+  CapDrop ALL, no-new-privileges, non-root, pids/mem caps, optional gVisor)
+  mitigates that class, and a network-level egress boundary is recorded as
+  follow-on hardening (§9).
 - **Chrome resource weight** — higher mem default, pids/cpu caps, idle +
   max-lifetime reaping, reap-on-start crash recovery.
 - **Real-world page messiness** (anti-bot, SPAs) — the harness stealth script,

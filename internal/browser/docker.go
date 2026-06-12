@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -57,17 +58,35 @@ func NewDockerBackend(cfg DockerConfig) (Backend, error) {
 	return &dockerBackend{cli: cli, cfg: cfg}, nil
 }
 
+// containerProxyAddr rewrites a proxy address the BROWSERD process listens on
+// into one the CONTAINER can dial. A loopback/wildcard host (127.0.0.1,
+// localhost, 0.0.0.0, or empty) becomes host.docker.internal (mapped to the
+// host gateway via ExtraHosts); any other host (an explicit routable IP set by
+// the operator) is passed through unchanged.
+func containerProxyAddr(addr string) string {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return addr // not host:port — pass through
+	}
+	switch host {
+	case "127.0.0.1", "localhost", "0.0.0.0", "::1", "":
+		host = "host.docker.internal"
+	}
+	return net.JoinHostPort(host, port)
+}
+
 // Create starts one locked-down Chromium container: egress only via the proxy
 // at proxyAddr, read-only rootfs, tmpfs profile, all caps dropped, non-root,
 // bounded cpu/mem/pids. Chrome listens for CDP on cdpPort, published to the host.
 func (d *dockerBackend) Create(ctx context.Context, tenant, proxyAddr string) (BrowserHandle, error) {
 	pids := int64(512)
 	port := nat.Port(cdpPort + "/tcp")
+	cp := containerProxyAddr(proxyAddr)
 	cmd := []string{
 		"chromium", "--headless=new", "--no-sandbox", "--disable-gpu",
 		"--remote-debugging-address=0.0.0.0",
 		"--remote-debugging-port=" + cdpPort,
-		"--proxy-server=http://" + proxyAddr,
+		"--proxy-server=http://" + cp,
 		"--disable-blink-features=AutomationControlled",
 		"--user-data-dir=/profile",
 		"--no-first-run", "--no-default-browser-check",
@@ -78,12 +97,13 @@ func (d *dockerBackend) Create(ctx context.Context, tenant, proxyAddr string) (B
 			Image:        d.cfg.Image,
 			Cmd:          cmd,
 			User:         strconv.Itoa(browserUID),
-			Env:          []string{"HTTP_PROXY=http://" + proxyAddr, "HTTPS_PROXY=http://" + proxyAddr, "NO_PROXY="},
+			Env:          []string{"HTTP_PROXY=http://" + cp, "HTTPS_PROXY=http://" + cp, "NO_PROXY="},
 			Labels:       map[string]string{browserLabel: "1", browserLabel + ".tenant": tenant},
 			ExposedPorts: nat.PortSet{port: struct{}{}},
 		},
 		&container.HostConfig{
 			ReadonlyRootfs:  true,
+			ExtraHosts:      []string{"host.docker.internal:host-gateway"},
 			Tmpfs:           map[string]string{"/profile": fmt.Sprintf("size=%dm,mode=1777", d.cfg.ProfileMB), "/tmp": "size=64m,mode=1777"},
 			CapDrop:         []string{"ALL"},
 			SecurityOpt:     []string{"no-new-privileges"},

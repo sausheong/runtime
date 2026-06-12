@@ -1,8 +1,9 @@
 // Command browserd is the Sandboxes M2 MCP server: isolated headless-browser
 // sandboxes (one locked-down Chromium container per session) exposed as MCP
 // tools over stdio, designed to run as a gateway upstream with
-// forward_tenant: true. Chrome has no direct network — all traffic is forced
-// through the in-process egress proxy, which allows/denies by hostname.
+// forward_tenant: true. Chrome's entire network stack is forced through the
+// in-process egress proxy via --proxy-server; the agent can only drive Chrome
+// over CDP, so the proxy adjudicates all reachable traffic by hostname.
 //
 // Run exactly one browserd per host (or per DOCKER_HOST): reap-on-start removes
 // ALL runtime.browser=1 containers.
@@ -19,7 +20,7 @@
 //	RUNTIME_BROWSER_RUNTIME         engine runtime, e.g. runsc
 //	RUNTIME_BROWSER_EGRESS_MODE     deny-all | allow-list | allow-all-public (default deny-all)
 //	RUNTIME_BROWSER_EGRESS_ALLOW    comma-separated hostname globs (allow-list mode)
-//	RUNTIME_BROWSER_PROXY_ADDR      host:port the egress proxy listens on (default 127.0.0.1:0 → ephemeral)
+//	RUNTIME_BROWSER_PROXY_ADDR      host:port the egress proxy listens on (default 0.0.0.0:0 → ephemeral, all interfaces). Binding all interfaces is safe: the proxy is Policy-gated (deny-all by default) so it only ever grants policy-permitted egress, and the container reaches it via host.docker.internal. Pin to a specific IP (e.g. the docker bridge gateway) to tighten the bind.
 //	RUNTIME_BROWSER_ALLOW_DIRECT    "1" ⇒ accept calls without the gateway's __rt_tenant key
 //	RUNTIME_BROWSER_FAKE            "1" ⇒ in-memory fake backend (tests only)
 package main
@@ -103,7 +104,7 @@ func main() {
 	// Start the egress proxy on a listener the containers can reach.
 	proxyAddr := os.Getenv("RUNTIME_BROWSER_PROXY_ADDR")
 	if proxyAddr == "" {
-		proxyAddr = "127.0.0.1:0"
+		proxyAddr = "0.0.0.0:0"
 	}
 	ln, err := net.Listen("tcp", proxyAddr)
 	if err != nil {
