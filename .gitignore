@@ -19,3 +19,7 @@ nutrition_memory.json
 *.db-shm
 # Generated at runtime by the OpenAI Agents SDK example
 agent_memory.json
+# Helm packaged artifacts + vendored subcharts
+/dist/
+deploy/charts/runtime/charts/
+deploy/charts/runtime/Chart.lock

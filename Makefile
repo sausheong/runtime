@@ -115,6 +115,29 @@ docker-image: ## Build the all-binaries image (run from anywhere; context is the
 		--build-arg VERSION=$(VERSION) --build-arg REVISION=$(REVISION) \
 		-t $(IMAGE):$(VERSION) -t $(IMAGE):latest ..
 
+# ---- Helm chart ----
+CHART ?= deploy/charts/runtime
+
+.PHONY: helm-lint
+helm-lint: ## Lint the Helm chart
+	helm lint $(CHART) --set secrets.pgDsn=postgres://x:x@h:5432/d?sslmode=disable
+
+.PHONY: helm-template
+helm-template: ## Render the chart with a dummy DSN (quick check)
+	helm template r $(CHART) --set secrets.pgDsn=postgres://x:x@h:5432/d?sslmode=disable
+
+.PHONY: helm-deps
+helm-deps: ## Vendor + unpack chart dependencies (Postgres subchart)
+	helm dependency update $(CHART)
+	@# helm v4 requires the subchart UNPACKED as a dir, not just the .tgz, to
+	@# render/install (a vendored .tgz alone fails 'missing in charts/ directory').
+	cd $(CHART)/charts && for t in *.tgz; do [ -e "$$t" ] || continue; tar -xzf "$$t" && rm -f "$$t"; done
+
+.PHONY: helm-package
+helm-package: helm-deps ## Package the chart into dist/
+	mkdir -p dist
+	helm package $(CHART) -d dist
+
 # ---- Sandbox image ----
 .PHONY: sandbox-image
 sandbox-image: ## Build the bundled sandbox image (runtime-sandbox:latest)
