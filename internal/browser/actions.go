@@ -30,6 +30,10 @@ const stealthScript = `(function(){
 // ensureChrome lazily connects a chromedp context to the session's CDP endpoint
 // (remote allocator) the first time an action runs. Must be called with s.mu held.
 func ensureChrome(s *Session) error {
+	// Fast path: already connected. A dead taskCtx surfaces its error rather
+	// than being recreated — unlike the harness's relaunch, recovery is
+	// pointless here because the backing container is gone; the caller closes
+	// and creates a fresh browser instead.
 	if s.taskCtx != nil {
 		return s.taskCtx.Err()
 	}
@@ -113,11 +117,12 @@ func Navigate(parent context.Context, s *Session, url, waitFor string, waitMs in
 		if err := chromedp.Run(ctx, chromedp.Sleep(time.Duration(settle)*time.Millisecond)); err != nil {
 			return err
 		}
-		return chromedp.Run(ctx, chromedp.Title(&title))
+		if err := chromedp.Run(ctx, chromedp.Title(&title)); err != nil {
+			return err
+		}
+		s.CurrentURL = url // under s.mu (withAction holds it)
+		return nil
 	})
-	if err == nil {
-		s.CurrentURL = url
-	}
 	return title, err
 }
 

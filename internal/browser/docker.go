@@ -88,7 +88,6 @@ func (d *dockerBackend) Create(ctx context.Context, tenant, proxyAddr string) (B
 			CapDrop:         []string{"ALL"},
 			SecurityOpt:     []string{"no-new-privileges"},
 			Runtime:         d.cfg.Runtime,
-			PublishAllPorts: true,
 			PortBindings:    nat.PortMap{port: []nat.PortBinding{{HostIP: "127.0.0.1"}}},
 			Resources: container.Resources{
 				NanoCPUs:  int64(d.cfg.CPUs * 1e9),
