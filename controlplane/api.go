@@ -80,7 +80,7 @@ func NewAPI(reg *Registry, m *obs.ControlMetrics) *http.ServeMux {
 			r.URL.Path = "/"
 		}
 		r.URL.RawPath = "" // avoid stale encoded-path mismatches after rewrite
-		reverseProxy(ap.Addr, func() { m.ProxyError(ap.AgentID) }).ServeHTTP(w, r)
+		reverseProxy(ap.baseURL(), ap.AuthToken, func() { m.ProxyError(ap.AgentID) }).ServeHTTP(w, r)
 	})
 
 	return mux

@@ -18,7 +18,7 @@ import (
 // SSE-friendly immediate flushing stays enabled.
 func TestReverseProxy_503OnDeadBackend(t *testing.T) {
 	// 127.0.0.1:1 is a reserved port nothing listens on → dial fails.
-	rp := reverseProxy("127.0.0.1:1", nil)
+	rp := reverseProxy("http://127.0.0.1:1", "", nil)
 	if rp.FlushInterval != -1 {
 		t.Fatalf("FlushInterval = %v, want -1 (immediate flush for SSE)", rp.FlushInterval)
 	}
@@ -42,7 +42,7 @@ func TestReverseProxy_DedupesRequestIDEcho(t *testing.T) {
 	}))
 	defer backend.Close()
 
-	rp := reverseProxy(strings.TrimPrefix(backend.URL, "http://"), nil)
+	rp := reverseProxy(backend.URL, "", nil)
 	outer := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// runtimed's middleware echoes the id before proxying.
 		w.Header().Set("X-Request-Id", "req-from-runtimed")
@@ -280,4 +280,73 @@ func TestBuildEnvGatewaySearchMode(t *testing.T) {
 	}
 	assertHasEnv(t, env, "RUNTIME_GATEWAY_URL=http://127.0.0.1:8080/gateway/mcp?mode=search")
 	assertHasEnv(t, env, "RUNTIME_GATEWAY_KEY=svk-test")
+}
+
+func TestAuthTransport_AddsBearerWhenSet(t *testing.T) {
+	var gotAuth string
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer backend.Close()
+
+	req := httptest.NewRequest("GET", backend.URL, nil)
+	at := authTransport{token: "sekret"}
+	resp, err := at.RoundTrip(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if gotAuth != "Bearer sekret" {
+		t.Fatalf("Authorization = %q, want %q", gotAuth, "Bearer sekret")
+	}
+	if req.Header.Get("Authorization") != "" {
+		t.Fatal("authTransport leaked header onto caller's request")
+	}
+}
+
+func TestAuthTransport_NoBearerWhenEmpty(t *testing.T) {
+	var gotAuth string
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer backend.Close()
+	resp, err := authTransport{}.RoundTrip(httptest.NewRequest("GET", backend.URL, nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if gotAuth != "" {
+		t.Fatalf("Authorization = %q, want empty", gotAuth)
+	}
+}
+
+func TestBaseURL_LocalFallbackAndRemote(t *testing.T) {
+	local := AgentProcess{Addr: "127.0.0.1:8101"}
+	if local.baseURL() != "http://127.0.0.1:8101" {
+		t.Fatalf("local baseURL = %q", local.baseURL())
+	}
+	remote := AgentProcess{BaseURL: "https://h:8443"}
+	if remote.baseURL() != "https://h:8443" {
+		t.Fatalf("remote baseURL = %q", remote.baseURL())
+	}
+}
+
+func TestReverseProxy_SendsBearer(t *testing.T) {
+	var gotAuth string
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer backend.Close()
+	rp := reverseProxy(backend.URL, "tok-123", nil)
+	rec := httptest.NewRecorder()
+	rp.ServeHTTP(rec, httptest.NewRequest("GET", "/sessions", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("code = %d, want 200", rec.Code)
+	}
+	if gotAuth != "Bearer tok-123" {
+		t.Fatalf("backend saw Authorization = %q", gotAuth)
+	}
 }

@@ -27,6 +27,16 @@ type AgentProcess struct {
 	Tenant  string   // tenant that owns this agent (from runtime.yaml; "default" if unset)
 	Memory  bool     // opt-in: when true, the spawn env carries RUNTIME_AGENT_MEMORY=1 so agentd wires the memory tool.
 
+	// Remote marks an attach-only agent: no spawn, no Supervisor — runtimed
+	// health-checks, proxies, and reports status, but never restarts it.
+	Remote bool
+	// BaseURL is the full dial base "scheme://host:port". For local agents it
+	// is synthesized as "http://"+Addr; for remote agents it is the config url.
+	BaseURL string
+	// AuthToken is an optional shared bearer added to every request runtimed
+	// makes to this agent (proxy, health, metrics). "" ⇒ no auth header.
+	AuthToken string
+
 	GatewayOn  bool   // opt-in: when true, spawn env carries RUNTIME_GATEWAY_URL (+_KEY when set).
 	GatewayURL string // full URL of the platform gateway MCP endpoint.
 	GatewayKey string // tenant service key for the gateway; "" in open mode.
@@ -115,13 +125,43 @@ func (a AgentProcess) SpawnFunc() func(ctx context.Context) <-chan error {
 	}
 }
 
-// reverseProxy builds a passthrough to the agent subprocess at addr.
-// FlushInterval = -1 ensures SSE/streaming responses are flushed immediately
-// so events pass through promptly. onError (nil ⇒ no-op) fires before each
-// 503 served by the ErrorHandler — used for proxy-error metrics.
-func reverseProxy(addr string, onError func()) *httputil.ReverseProxy {
-	target, _ := url.Parse("http://" + addr)
+// baseURL returns the full dial base for the agent. Local agents (set only via
+// Addr) fall back to http://Addr; remote agents carry an explicit BaseURL.
+func (a AgentProcess) baseURL() string {
+	if a.BaseURL != "" {
+		return a.BaseURL
+	}
+	return "http://" + a.Addr
+}
+
+// authTransport adds a bearer token to every request. token=="" ⇒ pass through
+// unchanged. The request is cloned so the caller's *http.Request is never
+// mutated (the ReverseProxy reuses its outgoing request object).
+type authTransport struct {
+	token string
+	base  http.RoundTripper // nil ⇒ http.DefaultTransport
+}
+
+func (t authTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	base := t.base
+	if base == nil {
+		base = http.DefaultTransport
+	}
+	if t.token != "" {
+		r = r.Clone(r.Context())
+		r.Header.Set("Authorization", "Bearer "+t.token)
+	}
+	return base.RoundTrip(r)
+}
+
+// reverseProxy builds a passthrough to the agent at base ("scheme://host:port").
+// When token != "", every forwarded request carries an Authorization: Bearer
+// header (remote agents). FlushInterval = -1 keeps SSE/streaming prompt.
+// onError (nil ⇒ no-op) fires before each 503 served by the ErrorHandler.
+func reverseProxy(base, token string, onError func()) *httputil.ReverseProxy {
+	target, _ := url.Parse(base)
 	rp := httputil.NewSingleHostReverseProxy(target)
+	rp.Transport = authTransport{token: token}
 	rp.FlushInterval = -1
 	rp.ErrorHandler = func(w http.ResponseWriter, r *http.Request, _ error) {
 		// Client-initiated cancellation is not an agent failure; don't count it.
