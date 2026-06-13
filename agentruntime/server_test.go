@@ -24,7 +24,11 @@ func newTestManager() *Manager {
 	}
 }
 
-func TestManager_StampsReplicaOnCreate(t *testing.T) {
+// TestManager_ReplicaFieldRoundTripsThroughStore guards that the Manager.replica
+// field exists and that the value an agentd would stamp survives a store
+// round-trip. The full startSession→CreateSession path (which also starts a DBOS
+// workflow) is exercised by the Task 9 integration test, not here.
+func TestManager_ReplicaFieldRoundTripsThroughStore(t *testing.T) {
 	st := store.NewMemStore()
 	m := &Manager{agentID: "a", st: st, replica: 3, subscribers: map[string][]chan WireEvent{}}
 	id, err := st.CreateSession(context.Background(), "a", m.replica)
