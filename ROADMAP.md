@@ -59,11 +59,53 @@ onboarding, and docs, proven by a stranger-install live run.** Capability is
 
 **Net new build = three milestones, zero new pillars:**
 
-- **v1.0-M1 — Self-service onboarding** (Identity + Gateway + console UI):
-  tenant create, agent-key mint, upstream register (MCP + REST/OpenAPI), and
-  per-tenant upstream credentials via the secrets broker — surfaced in a console
-  onboarding UI over an API (+ `runtimectl` parity). "Gateway M4-lite" fused
-  with Identity self-service; exposes the registration side of the C3 M2 broker.
+- **v1.0-M1 — Self-service onboarding — DONE (2026-06-14).** A tenant-admin
+  self-serves — through the **console UI** and `/admin/upstreams` API +
+  `runtimectl admin upstream` — minting agent keys, registering HTTP/OpenAPI
+  gateway upstreams (**never stdio** — rejected at config validation, API, and a
+  DB `CHECK` constraint), and supplying **per-tenant upstream credentials**
+  brokered into the upstream's headers **at dial time** (the `gateway_upstreams`
+  row stores only the secret *name*; the value lives in the encrypted secrets
+  broker and is injected onto a per-dial copy-on-write config, never persisted on
+  the upstream). Upstreams persist in a new `gateway_upstreams` table (a **DB
+  layer atop static file config**; the Manager seeds from file + DB at boot and
+  gained **race-safe runtime `Add`/`Remove`** with per-upstream cancel +
+  conn-close-on-exit, `-race`-proven). Two-tier RBAC: superuser creates the
+  tenant + its admin; the tenant-admin self-serves *within* its tenant
+  (`requireAdmin` + `effectiveTenant`; cross-tenant register/list/delete blocked,
+  no-oracle 204). The console's first mutating flow is CSRF-protected
+  (HMAC-of-session synchronizer token, constant-time). API/console/CLI all funnel
+  through one set of HTTP-agnostic shared helpers (`RegisterUpstreamShared` etc.).
+  Fail-closed throughout: missing credential ⇒ upstream stays `down` (dial
+  aborted, supervise retries); broker/manager nil ⇒ 503/disabled, no panic.
+  Posture invariant enforced: **no secret value OR secret name** in logs, spans,
+  errors, or the `LastError`/status field (the holistic review caught a
+  secret-name leak via `Broker.SecretsFor`'s decrypt error → scrubbed at the
+  resolver boundary). THE FINAL HOLISTIC REVIEW + LIVE PROOF EARNED THEIR KEEP:
+  the holistic review found the secret-name leak AND a reachable nil-`Secrets`
+  panic on `/ui/onboarding` (identity-on + file-gateway + no keyring) — both
+  fixed + regression-tested; the e2e integration surfaced a real
+  `pq.Array(nil)→NULL` violation of the `operations NOT NULL` constraint (an
+  http upstream with no operations) — fixed + store-level regression added. LIVE
+  PROOF (real `runtimed` + bundled Postgres + a **credential-gated** fake
+  upstream that serves its spec only with the right `Authorization`, 2026-06-14,
+  **14/14 + full browser flow**): self-service registration from **zero** file
+  upstreams; **credential injection proven** — the gated upstream reaches
+  `state=up tool_count=1` *only because* the per-tenant secret was injected at
+  dial (wrong credential ⇒ stays `down`, negative-proven); **no secret
+  value/name in `runtimed.log`**; tenant isolation (a second tenant can't see
+  the upstream); delete removes it from catalog. **Real-browser proof**
+  (Playwright vs the live console): paste-token login → `/ui/onboarding` →
+  register the OpenAPI upstream **through the form** (flash "upstream registered",
+  upstream reaches `up`) → **remove via the button** (flash "upstream removed",
+  table empties). Remaining for v1.0: M2 (turnkey compose) + M3 (docs +
+  stranger-install capstone). v1.1 backlog surfaced by review: `buildRoot` →
+  options struct (10 params); a `Manager.closed` guard for post-`Close` `Add`;
+  boot-time file/DB upstream name-collision handling; `gatewayActive` now builds
+  an (empty) gateway + mounts `/gateway/status` for keyring-only deployments
+  (note in compose docs); the `gateway enabled` log key changed
+  `upstreams`→`file_upstreams`+`db_upstreams`. Spec/plan:
+  `docs/superpowers/{specs,plans}/2026-06-14-v1.0-m1-self-service-onboarding*`.
 - **v1.0-M2 — Turnkey single-node compose:** bundled **pgvector-capable**
   Postgres (HARD requirement — unblocks semantic Memory in compose),
   one-command bring-up of all six pillars, fail-closed defaults, documented
