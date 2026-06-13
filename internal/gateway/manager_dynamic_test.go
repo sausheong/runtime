@@ -2,6 +2,8 @@ package gateway
 
 import (
 	"context"
+	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -35,6 +37,35 @@ func TestManagerAddRemove(t *testing.T) {
 	if st := m.Status(""); len(st) != 0 {
 		t.Fatalf("status after remove: %+v", st)
 	}
+	m.Close()
+}
+
+// TestManagerAddRemoveConcurrent hammers the concurrent Add/Remove path that the
+// sequential TestManagerAddRemove cannot reach. The dial blocks ~2ms so Remove
+// frequently fires while supervise is mid-dial, widening the C1 (cancel race /
+// missed-cancel) and I2 (in-flight-dial conn leak) windows. Must pass under -race.
+func TestManagerAddRemoveConcurrent(t *testing.T) {
+	dial := func(ctx context.Context, s config.GatewayServer) (upstreamConn, error) {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(2 * time.Millisecond):
+		}
+		return &fakeConn{}, nil
+	}
+	m := NewManager(nil, WithDial(dial), WithBackoff(time.Millisecond, 2*time.Millisecond))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	m.Start(ctx)
+
+	var wg sync.WaitGroup
+	for i := 0; i < 50; i++ {
+		wg.Add(2)
+		name := fmt.Sprintf("u%d", i)
+		go func() { defer wg.Done(); _ = m.Add(config.GatewayServer{Name: name, URL: "http://x"}) }()
+		go func() { defer wg.Done(); m.Remove(name) }()
+	}
+	wg.Wait()
 	m.Close()
 }
 

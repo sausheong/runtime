@@ -93,20 +93,32 @@ func (m *Manager) Start(ctx context.Context) {
 	m.mu.Lock()
 	m.baseCtx = ctx
 	m.started = true
-	ups := append([]*upstream(nil), m.ups...)
+	// prepLaunch under m.mu so each u.cancel is set before the goroutine (and
+	// before any concurrent Remove can observe the upstream). Spawn after unlock.
+	type launchPair struct {
+		u    *upstream
+		uctx context.Context
+	}
+	pairs := make([]launchPair, 0, len(m.ups))
+	for _, u := range m.ups {
+		pairs = append(pairs, launchPair{u, m.prepLaunch(ctx, u)})
+	}
 	m.mu.Unlock()
-	for _, u := range ups {
-		m.launch(ctx, u)
+	for _, p := range pairs {
+		go m.supervise(p.uctx, p.u)
 	}
 }
 
-// launch starts one supervise goroutine under a per-upstream child context so
-// Remove can cancel exactly that upstream.
-func (m *Manager) launch(parent context.Context, u *upstream) {
+// prepLaunch creates the per-upstream context and stores its cancel so Remove
+// can cancel exactly that upstream. MUST be called with m.mu held (or pre-Start,
+// single-threaded): u.cancel is written here under the lock and read in Remove
+// under the lock, so a fast Add-then-Remove never races on it. Returns the child
+// ctx to hand to the goroutine; spawn the goroutine AFTER releasing m.mu.
+func (m *Manager) prepLaunch(parent context.Context, u *upstream) context.Context {
 	uctx, cancel := context.WithCancel(parent)
 	u.cancel = cancel
 	m.wg.Add(1)
-	go m.supervise(uctx, u)
+	return uctx
 }
 
 // snapshot returns a copy of the upstream slice for lock-free iteration by
@@ -130,10 +142,16 @@ func (m *Manager) Add(cfg config.GatewayServer) error {
 	}
 	u := &upstream{cfg: cfg}
 	m.ups = append(m.ups, u)
-	started, base := m.started, m.baseCtx
+	// If started, prep the launch (sets u.cancel) under m.mu so a concurrent
+	// Remove either runs first (and never finds u) or after (and sees u.cancel
+	// already set). Spawn the goroutine only after releasing the lock.
+	var uctx context.Context
+	if m.started {
+		uctx = m.prepLaunch(m.baseCtx, u)
+	}
 	m.mu.Unlock()
-	if started {
-		m.launch(base, u)
+	if uctx != nil {
+		go m.supervise(uctx, u)
 	}
 	m.generation.Add(1)
 	return nil
@@ -155,10 +173,14 @@ func (m *Manager) Remove(name string) {
 	}
 	u := m.ups[idx]
 	m.ups = append(m.ups[:idx:idx], m.ups[idx+1:]...)
+	// Capture u.cancel under m.mu — it is written under m.mu in prepLaunch, so
+	// reading it here (not after unlock) means a concurrent Add/launch can never
+	// race the write against this read, and the cancel is never missed.
+	cancel := u.cancel
 	m.mu.Unlock()
 
-	if u.cancel != nil {
-		u.cancel()
+	if cancel != nil {
+		cancel()
 	}
 	u.mu.Lock()
 	conn := u.conn
@@ -183,6 +205,22 @@ const pingTimeout = 5 * time.Second
 // also picked up here because the loop redials whenever conn==nil.
 func (m *Manager) supervise(ctx context.Context, u *upstream) {
 	defer m.wg.Done()
+	// On exit (ctx cancelled by Remove/Close), close any conn we still hold.
+	// This closes the Remove-vs-in-flight-dial window: if Remove cancelled and
+	// saw u.conn==nil while dial was mid-flight, dial then returns a live conn
+	// we store and the next loop returns here — without this defer that conn
+	// would leak. Single-close is guaranteed: both Remove and this defer do
+	// lock; c:=u.conn; u.conn=nil; unlock; if c!=nil close(c) — the u.mu-guarded
+	// nil-and-capture means only one observer sees the non-nil conn.
+	defer func() {
+		u.mu.Lock()
+		conn := u.conn
+		u.conn, u.tools = nil, nil
+		u.mu.Unlock()
+		if conn != nil {
+			_ = conn.Close()
+		}
+	}()
 	backoff := m.minBackoff
 	for {
 		if ctx.Err() != nil {
