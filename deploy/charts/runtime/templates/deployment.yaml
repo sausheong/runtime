@@ -42,6 +42,14 @@ spec:
               value: "/etc/runtime/runtime.yaml"
             - name: RUNTIME_AGENTD_BIN
               value: "/app/agentd"
+            {{- if and (eq .Values.scheduling.mode "perAgentPods") (or .Values.secrets.agentAuthToken .Values.secrets.existingSecret) }}
+            - name: RUNTIME_AGENT_AUTH_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "runtime.secretName" . }}
+                  key: RUNTIME_AGENT_AUTH_TOKEN
+                  optional: true
+            {{- end }}
             - name: RUNTIME_PG_DSN
               valueFrom:
                 secretKeyRef:

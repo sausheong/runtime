@@ -5,7 +5,45 @@ metadata:
   labels:
     {{- include "runtime.labels" . | nindent 4 }}
 data:
-  # runtime.requireAgents (called from the Deployment) guarantees a non-empty
-  # agents list at render time, so there is no empty-config fallback here.
+{{- if eq .Values.scheduling.mode "perAgentPods" }}
+  # perAgentPods: runtimed runs control-plane-only and ATTACHES to each agent's
+  # StatefulSet as a remote replica pool. This runtime.yaml is GENERATED from
+  # config.agents — each agent becomes a remote entry whose url is the per-ordinal
+  # headless DNS template ({i} expanded by runtimed) and whose replicas is the
+  # StatefulSet pod count. Spawn-time fields (memory/gateway) are delivered to the
+  # agent POD by its StatefulSet, not via this file.
+  {{- $root := . }}
+  {{- $hasToken := or .Values.secrets.agentAuthToken .Values.secrets.existingSecret }}
+  runtime.yaml: |
+    agents:
+    {{- range $a := .Values.config.agents }}
+      - id: {{ $a.id }}
+        name: {{ $a.name | quote }}
+        model: {{ $a.model | quote }}
+        tenant: {{ $a.tenant | default "default" | quote }}
+        {{- $n := $a.replicas | default 1 | int }}
+        {{- $tmpl := include "runtime.agentDialTemplate" (dict "root" $root "id" $a.id) }}
+        {{- if gt $n 1 }}
+        url: "{{ $tmpl }}"
+        replicas: {{ $n }}
+        {{- else }}
+        url: "{{ $tmpl | replace "{i}" "0" }}"
+        {{- end }}
+        {{- if $hasToken }}
+        auth_token: "${RUNTIME_AGENT_AUTH_TOKEN}"
+        {{- end }}
+    {{- end }}
+    {{- with .Values.config.gateway }}
+    gateway:
+      {{- toYaml . | nindent 6 }}
+    {{- end }}
+    {{- with .Values.config.tokens }}
+    tokens:
+      {{- toYaml . | nindent 6 }}
+    {{- end }}
+{{- else }}
+  # monolith: runtimed exec-spawns each agent. runtime.requireAgents (called from
+  # the Deployment) guarantees a non-empty agents list at render time.
   runtime.yaml: |
     {{- toYaml .Values.config | nindent 4 }}
+{{- end }}
