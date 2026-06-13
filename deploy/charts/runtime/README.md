@@ -451,8 +451,13 @@ Notes:
   shared by all agent pods in this chart. For **distinct per-agent tokens**, supply
   an `existingSecret` with per-agent keys (out of chart scope) — handshake mode is
   detected whenever an `existingSecret` is set.
-- **Per-agent-pod gateway now works through the handshake.** A gateway-enabled
-  agent's `RUNTIME_GATEWAY_URL`/`_KEY` arrive via the env delta, so the C2 M2
-  gateway-opt-in follow-up is retired.
+- **Known limitation — gateway in perAgentPods.** Per-agent-pod (remote) agents
+  still cannot opt into the gateway. `config.Validate` rejects `gateway:` on a
+  remote agent (gateway is a spawn-time-only field), so `RUNTIME_GATEWAY_URL`/`_KEY`
+  are never set for these agents and the handshake delta carries only the empty
+  gateway shadow — agentd skips empty values, so nothing is delivered. The
+  handshake retires the brokered-secrets limitation (DSN + identity + brokered
+  secrets DO arrive), but gateway-enabled agents remain monolith-only; per-agent-pod
+  gateway stays backlogged.
 - **mTLS is still deferred.** The registration token is a bearer over
   operator-terminated TLS (same trust model as the M1 runtimed→agent bearer).

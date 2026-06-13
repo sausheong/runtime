@@ -934,9 +934,12 @@ name. `agentd`'s `fetchRegistration` fetch→setenv→unchanged-path **fails har
 (`log.Fatal` → CrashLoop) on any handshake error, and **skips empty delta
 values** so the infra-provided `RUNTIME_LISTEN_ADDR` + the `$HOSTNAME` ordinal
 fallback survive (the control plane has no Addr for a remote agent — the handshake
-delivers config, not the bind address/ordinal). The per-agent-pod gateway
-(`RUNTIME_GATEWAY_URL`/`_KEY`) now rides the same delta, retiring the second C2 M2
-follow-up for free. Auth is a bearer over operator-terminated TLS (mTLS deferred).
+delivers config, not the bind address/ordinal). The handshake closes the
+brokered-secrets-to-scheduled-pods limitation; per-agent-pod gateway remains
+UNSUPPORTED — `config.Validate` rejects `gateway:` on a remote agent (spawn-time
+field), so `GatewayOn` is false and the delta carries only the empty gateway
+shadow — and stays in the C2/C3 backlog. Auth is a bearer over operator-terminated
+TLS (mTLS deferred).
 Tested: config/handler unit (`envDelta` no-leak, all `/register` status paths,
 `ordinalFromHostname`), identity store integration (token CRUD + bcrypt verify),
 end-to-end integration `TestRegistrationHandshake` (agent boots from a near-empty

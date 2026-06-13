@@ -5,9 +5,9 @@
 **Status:** Design approved; ready for implementation plan.
 **Predecessor:** C3 M1 (attach-instead-of-spawn, `2026-06-13-c3-remote-agents-design.md`).
 **Closes:** the C2 M2 limitation "brokered per-tenant secrets are spawn-time only,
-so per-agent-pod agents get provider creds via the static chart Secret"; and the
-C2 M2 follow-up "per-agent `gateway:` opt-in env is not yet wired into the agent
-pod StatefulSet" (falls out for free — see §3).
+so per-agent-pod agents get provider creds via the static chart Secret". (Does NOT
+close the per-agent `gateway:` opt-in follow-up — gateway is rejected on remote
+agents at config validation, so it remains unsupported; see §3.)
 
 ---
 
@@ -90,10 +90,12 @@ hop — agent→control-plane config delivery — so a process runtimed didn't s
 still gets its full brokered environment. The two tokens are distinct credentials
 in distinct directions and are never conflated.
 
-**Per-agent-pod gateway falls out for free.** Because the env delta carries
-`RUNTIME_GATEWAY_URL`/`_KEY` whenever the agent opted in (§7), a scheduled
-gateway agent is now wired through the handshake — retiring the second C2 M2
-follow-up at no extra cost.
+**Per-agent-pod gateway is NOT delivered by the handshake.** A remote agent
+rejects the `gateway:` field at config validation (`config.Validate` forbids
+spawn-time-only fields on a `url:` agent), so `GatewayOn` is false and the env
+delta carries only the empty `RUNTIME_GATEWAY_URL`/`_KEY` shadow — which agentd
+skips. Per-agent-pod gateway therefore remains unsupported and stays future work;
+this handshake does not change that.
 
 ## 4. Token model & lifecycle
 
