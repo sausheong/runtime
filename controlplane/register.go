@@ -48,6 +48,8 @@ func RegisterHandshake(mux *http.ServeMux, tokens RegTokenVerifier, reg *Registr
 			return
 		}
 		var body RegisterRequest
+		// Cap the (auth-gated) body at 64 KiB; a too-large body surfaces as a decode error → 400.
+		r.Body = http.MaxBytesReader(w, r.Body, 1<<16)
 		// Tolerate an empty body (ordinal 0 default); reject only malformed JSON.
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil && !errors.Is(err, io.EOF) {
 			http.Error(w, "bad request body", http.StatusBadRequest)
@@ -61,7 +63,8 @@ func RegisterHandshake(mux *http.ServeMux, tokens RegTokenVerifier, reg *Registr
 		}
 		delta, err := ap.envDelta(r.Context())
 		if err != nil {
-			// Broker error (e.g. undecryptable secret): fail closed, no partial env.
+			// Broker error (e.g. undecryptable secret): deliberately treated as
+			// fail-closed-unavailable (503, no partial env) rather than 500.
 			slog.Error("register: envDelta failed", "agent", agentID, "tenant", ap.Tenant, "ordinal", body.Ordinal, "err", err)
 			http.Error(w, "registration unavailable", http.StatusServiceUnavailable)
 			return
