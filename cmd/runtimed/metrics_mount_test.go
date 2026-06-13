@@ -18,7 +18,13 @@ func TestMountMetricsBypassesInnerHandler(t *testing.T) {
 	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized) // simulates identity middleware
 	})
-	h := mountMetrics(inner, cm, func() []obs.ScrapeTarget { return nil })
+	// A stand-in register mux: proves POST /register is served by the outer mux,
+	// pre-identity, rather than falling through to the 401 inner handler.
+	regMux := http.NewServeMux()
+	regMux.HandleFunc("POST /register", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusAccepted)
+	})
+	h := mountMetrics(inner, cm, func() []obs.ScrapeTarget { return nil }, regMux)
 
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest("GET", "/metrics", nil))
@@ -27,6 +33,12 @@ func TestMountMetricsBypassesInnerHandler(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), "runtime_") {
 		t.Fatalf("/metrics body missing control families:\n%s", rec.Body.String())
+	}
+
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest("POST", "/register", nil))
+	if rec.Code != 202 {
+		t.Fatalf("/register status = %d, want 202 (must bypass identity, served by regMux)", rec.Code)
 	}
 
 	rec = httptest.NewRecorder()

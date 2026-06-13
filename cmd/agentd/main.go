@@ -28,6 +28,10 @@ func mustEnv(key string) string {
 }
 
 func main() {
+	// C3 M2: when launched as a remote/scheduled pod, pull DSN + identity +
+	// feature env + brokered secrets from the control plane before reading env.
+	fetchRegistration()
+
 	// RUNTIME_PG_DSN is opened here for the marker table; agentruntime.Serve
 	// reads it (and RUNTIME_LISTEN_ADDR) from the environment itself, so they
 	// are not threaded through the builder.

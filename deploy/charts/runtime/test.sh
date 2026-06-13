@@ -108,4 +108,32 @@ if grep -q 'kind: StatefulSet' <<<"$out"; then fail "monolith mode leaked a Stat
 grep -q 'kind: Deployment' <<<"$out" || fail "monolith: no Deployment"
 ok "monolith regression (no StatefulSet)"
 
+# 9. C3 M2 registration handshake: perAgentPods + secrets.registrationToken set →
+#    agent StatefulSet carries RUNTIME_REGISTRATION_URL + a RUNTIME_REGISTRATION_TOKEN
+#    secretKeyRef, and the chart Secret carries the RUNTIME_REGISTRATION_TOKEN key.
+out=$(helm template r "$CHART" $DSN $PAP \
+  --set config.agents[0].id=support --set config.agents[0].name=S \
+  --set config.agents[0].model=test/scripted \
+  --set secrets.registrationToken=svk-a.b)
+grep -q 'RUNTIME_REGISTRATION_URL'   <<<"$out" || fail "handshake: no RUNTIME_REGISTRATION_URL in StatefulSet"
+grep -q '/register'                  <<<"$out" || fail "handshake: registration URL not /register"
+# The token must arrive via a secretKeyRef (key: RUNTIME_REGISTRATION_TOKEN), not inline.
+grep -q 'key: RUNTIME_REGISTRATION_TOKEN' <<<"$out" || fail "handshake: no RUNTIME_REGISTRATION_TOKEN secretKeyRef"
+# The chart-managed Secret must carry the token key.
+grep -qE '^\s+RUNTIME_REGISTRATION_TOKEN:' <<<"$out" || fail "handshake: Secret missing RUNTIME_REGISTRATION_TOKEN key"
+ok "handshake on (perAgentPods + registrationToken)"
+
+# 9b. perAgentPods WITHOUT a registration token (and no existingSecret) → handshake OFF;
+#     no RUNTIME_REGISTRATION_URL (C2 M2 static-Secret behavior preserved).
+out=$(helm template r "$CHART" $DSN $PAP \
+  --set config.agents[0].id=support --set config.agents[0].name=S \
+  --set config.agents[0].model=test/scripted)
+if grep -q 'RUNTIME_REGISTRATION_URL' <<<"$out"; then fail "handshake leaked without a registration token"; fi
+ok "handshake off (perAgentPods, no token)"
+
+# 9c. monolith regression: no registration env anywhere (local spawns fetch nothing).
+out=$(helm template r "$CHART" $DSN $AGENTS --set secrets.registrationToken=svk-a.b)
+if grep -q 'RUNTIME_REGISTRATION_URL' <<<"$out"; then fail "monolith leaked RUNTIME_REGISTRATION_URL"; fi
+ok "monolith regression (no registration env)"
+
 echo "ALL CHART TESTS PASSED"

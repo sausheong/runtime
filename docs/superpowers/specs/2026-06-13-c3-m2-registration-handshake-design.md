@@ -5,9 +5,9 @@
 **Status:** Design approved; ready for implementation plan.
 **Predecessor:** C3 M1 (attach-instead-of-spawn, `2026-06-13-c3-remote-agents-design.md`).
 **Closes:** the C2 M2 limitation "brokered per-tenant secrets are spawn-time only,
-so per-agent-pod agents get provider creds via the static chart Secret"; and the
-C2 M2 follow-up "per-agent `gateway:` opt-in env is not yet wired into the agent
-pod StatefulSet" (falls out for free — see §3).
+so per-agent-pod agents get provider creds via the static chart Secret". (Does NOT
+close the per-agent `gateway:` opt-in follow-up — gateway is rejected on remote
+agents at config validation, so it remains unsupported; see §3.)
 
 ---
 
@@ -90,10 +90,12 @@ hop — agent→control-plane config delivery — so a process runtimed didn't s
 still gets its full brokered environment. The two tokens are distinct credentials
 in distinct directions and are never conflated.
 
-**Per-agent-pod gateway falls out for free.** Because the env delta carries
-`RUNTIME_GATEWAY_URL`/`_KEY` whenever the agent opted in (§7), a scheduled
-gateway agent is now wired through the handshake — retiring the second C2 M2
-follow-up at no extra cost.
+**Per-agent-pod gateway is NOT delivered by the handshake.** A remote agent
+rejects the `gateway:` field at config validation (`config.Validate` forbids
+spawn-time-only fields on a `url:` agent), so `GatewayOn` is false and the env
+delta carries only the empty `RUNTIME_GATEWAY_URL`/`_KEY` shadow — which agentd
+skips. Per-agent-pod gateway therefore remains unsupported and stays future work;
+this handshake does not change that.
 
 ## 4. Token model & lifecycle
 
@@ -221,6 +223,15 @@ operator vars; these stay in the delta. On the agent side `os.Setenv(k, "")` ove
 the pod's own clean env is a harmless no-op, and agentd already treats empty as
 unset. Keeping them makes the delta a faithful, complete description of "what this
 agent should see."
+
+**Not a full bind-address bootstrap.** The delta is config, not the listen
+address: for a remote agent the control plane has no `Addr` (`AgentProcess.Addr`
+is empty for a remote/scheduled `AgentProcess`), so `RUNTIME_LISTEN_ADDR` (and,
+analogously, the ordinal) come back empty in the delta. agentd's fetch **skips
+empty delta values**, so the StatefulSet's static `RUNTIME_LISTEN_ADDR` and the
+`$HOSTNAME`-derived ordinal fallback survive. The handshake therefore bootstraps
+DSN + identity + tenant + feature env + brokered secrets — the bind address and
+ordinal remain pod/infra-provided.
 
 ## 7. agentd fetch path (client side)
 

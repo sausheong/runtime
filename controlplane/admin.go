@@ -24,12 +24,15 @@ type AdminStore interface {
 	RevokeKey(ctx context.Context, tenantID, id string) error
 	ListKeys(ctx context.Context, tenantID string) ([]identity.KeyRow, error)
 	ListTenants(ctx context.Context) ([]identity.TenantRow, error)
+	InsertRegistrationToken(ctx context.Context, tokenID, agentID, hash string) error
+	ListRegistrationTokens(ctx context.Context) ([]identity.RegTokenRow, error)
+	RevokeRegistrationToken(ctx context.Context, tokenID string) error
 }
 
 // RegisterAdmin mounts the /admin/* routes on mux. Every handler requires an
 // admin Principal (set by the identity middleware) and scopes writes to that
 // principal's tenant; tenant creation additionally requires a superuser.
-func RegisterAdmin(mux *http.ServeMux, s AdminStore) {
+func RegisterAdmin(mux *http.ServeMux, s AdminStore, agentTenants map[string]string) {
 	mux.HandleFunc("POST /admin/tenants", func(w http.ResponseWriter, r *http.Request) {
 		p, ok := requireAdmin(w, r)
 		if !ok {
@@ -157,6 +160,103 @@ func RegisterAdmin(mux *http.ServeMux, s AdminStore) {
 			return
 		}
 		writeJSON(w, http.StatusOK, rows)
+	})
+
+	mux.HandleFunc("POST /admin/register-tokens", func(w http.ResponseWriter, r *http.Request) {
+		p, ok := requireAdmin(w, r)
+		if !ok {
+			return
+		}
+		var body struct{ Agent string }
+		if !decode(w, r, &body) {
+			return
+		}
+		if body.Agent == "" {
+			http.Error(w, "agent required", http.StatusBadRequest)
+			return
+		}
+		tenant, known := agentTenants[body.Agent]
+		if !known {
+			http.Error(w, "unknown agent", http.StatusBadRequest)
+			return
+		}
+		// A non-superuser admin may only mint for agents in their own tenant
+		// (the token grants access to that agent's tenant's brokered secrets).
+		if !p.Superuser && tenant != p.TenantID {
+			http.Error(w, "forbidden: agent belongs to another tenant", http.StatusForbidden)
+			return
+		}
+		mk, err := identity.MintServiceKey()
+		if err != nil {
+			serverError(w, "mint registration token", err)
+			return
+		}
+		if err := s.InsertRegistrationToken(r.Context(), mk.ID, body.Agent, mk.Hash); err != nil {
+			serverError(w, "insert registration token", err)
+			return
+		}
+		writeJSON(w, http.StatusCreated, map[string]string{"id": mk.ID, "plaintext": mk.Plaintext})
+	})
+
+	mux.HandleFunc("GET /admin/register-tokens", func(w http.ResponseWriter, r *http.Request) {
+		p, ok := requireAdmin(w, r)
+		if !ok {
+			return
+		}
+		rows, err := s.ListRegistrationTokens(r.Context())
+		if err != nil {
+			serverError(w, "list registration tokens", err)
+			return
+		}
+		// Non-superusers see only tokens for agents in their tenant.
+		if !p.Superuser {
+			filtered := rows[:0]
+			for _, rw := range rows {
+				if agentTenants[rw.AgentID] == p.TenantID {
+					filtered = append(filtered, rw)
+				}
+			}
+			rows = filtered
+		}
+		writeJSON(w, http.StatusOK, rows)
+	})
+
+	mux.HandleFunc("DELETE /admin/register-tokens/{id}", func(w http.ResponseWriter, r *http.Request) {
+		p, ok := requireAdmin(w, r)
+		if !ok {
+			return
+		}
+		id := r.PathValue("id")
+		// Superusers may revoke any token. Non-superusers are tenant-scoped
+		// (parity with DELETE /admin/keys, which uses RevokeKey's tenant filter):
+		// we resolve the token's owning agent via ListRegistrationTokens and
+		// revoke only when it belongs to an agent in the caller's tenant.
+		// When the token is absent OR owned by another tenant we return the
+		// same 204 without revoking — revoke is idempotent either way, and a
+		// uniform response avoids an existence oracle for other tenants' tokens.
+		if !p.Superuser {
+			rows, err := s.ListRegistrationTokens(r.Context())
+			if err != nil {
+				serverError(w, "list registration tokens", err)
+				return
+			}
+			owned := false
+			for _, rw := range rows {
+				if rw.TokenID == id && agentTenants[rw.AgentID] == p.TenantID {
+					owned = true
+					break
+				}
+			}
+			if !owned {
+				w.WriteHeader(http.StatusNoContent)
+				return
+			}
+		}
+		if err := s.RevokeRegistrationToken(r.Context(), id); err != nil {
+			serverError(w, "revoke registration token", err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
 	})
 }
 

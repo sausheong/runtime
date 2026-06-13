@@ -14,8 +14,9 @@ var schemaSQL string
 
 // ErrNoUser / ErrNoKey signal a missing row during authentication resolution.
 var (
-	ErrNoUser = errors.New("identity: no such user")
-	ErrNoKey  = errors.New("identity: no such service key")
+	ErrNoUser     = errors.New("identity: no such user")
+	ErrNoKey      = errors.New("identity: no such service key")
+	ErrNoRegToken = errors.New("identity: no such registration token")
 )
 
 // TenantRow / UserRow / KeyRow are read models for listings.
@@ -34,6 +35,13 @@ type KeyRow struct {
 	Role     Role
 	Label    string
 	Revoked  bool
+}
+
+// RegTokenRow is the listing read model for a registration token (never the secret).
+type RegTokenRow struct {
+	TokenID string
+	AgentID string
+	Revoked bool
 }
 
 // Store is the identity persistence layer over Postgres.
@@ -192,6 +200,51 @@ func (s *Store) ListKeys(ctx context.Context, tenantID string) ([]KeyRow, error)
 		}
 		k.Role = Role(role)
 		out = append(out, k)
+	}
+	return out, rows.Err()
+}
+
+// InsertRegistrationToken stores a minted registration token's hash, bound to an agent.
+func (s *Store) InsertRegistrationToken(ctx context.Context, tokenID, agentID, hash string) error {
+	_, err := s.db.ExecContext(ctx,
+		`INSERT INTO registration_tokens (token_id, agent_id, hash) VALUES ($1,$2,$3)`,
+		tokenID, agentID, hash)
+	return err
+}
+
+// ActiveRegTokenByID returns a non-revoked token's agent_id + hash, or ErrNoRegToken.
+func (s *Store) ActiveRegTokenByID(ctx context.Context, tokenID string) (agentID, hash string, err error) {
+	err = s.db.QueryRowContext(ctx,
+		`SELECT agent_id, hash FROM registration_tokens WHERE token_id=$1 AND revoked_at IS NULL`, tokenID).
+		Scan(&agentID, &hash)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", "", ErrNoRegToken
+	}
+	return agentID, hash, err
+}
+
+// RevokeRegistrationToken marks a token revoked. No-op if already revoked/absent.
+func (s *Store) RevokeRegistrationToken(ctx context.Context, tokenID string) error {
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE registration_tokens SET revoked_at=now() WHERE token_id=$1 AND revoked_at IS NULL`, tokenID)
+	return err
+}
+
+// ListRegistrationTokens returns all tokens (secrets never included).
+func (s *Store) ListRegistrationTokens(ctx context.Context) ([]RegTokenRow, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT token_id, agent_id, (revoked_at IS NOT NULL) FROM registration_tokens ORDER BY created_at`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []RegTokenRow
+	for rows.Next() {
+		var r RegTokenRow
+		if err := rows.Scan(&r.TokenID, &r.AgentID, &r.Revoked); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
 	}
 	return out, rows.Err()
 }

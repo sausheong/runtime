@@ -46,12 +46,19 @@ func (m *Manager) handler() http.Handler {
 }
 
 // requireBearer rejects any request whose Authorization header is not exactly
-// "Bearer <token>" with 401, using a constant-time compare. It guards ALL
-// paths (including /healthz and /metrics): a remote agent's probe endpoints are
-// on the same routable port, and runtimed sends the token on those too.
+// "Bearer <token>" with 401, using a constant-time compare. It guards every
+// path EXCEPT "GET /healthz", which is exempt: K8s liveness/readiness probes hit
+// it with no Authorization header, and it returns a static "ok" with zero data
+// (an unauthenticated handler also harmlessly ignores any bearer runtimed's own
+// C3 M1 health checks still send). /metrics is NOT exempt — it exposes per-agent
+// metric values, so it stays guarded.
 func requireBearer(token string, next http.Handler) http.Handler {
 	want := "Bearer " + token
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && r.URL.Path == "/healthz" {
+			next.ServeHTTP(w, r)
+			return
+		}
 		got := r.Header.Get("Authorization")
 		if subtle.ConstantTimeCompare([]byte(got), []byte(want)) != 1 {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)

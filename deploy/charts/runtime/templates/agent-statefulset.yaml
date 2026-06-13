@@ -4,6 +4,7 @@
 {{- $unusedAgents := include "runtime.requireAgents" . }}
 {{- $root := . }}
 {{- range $a := .Values.config.agents }}
+{{- $handshake := or $root.Values.secrets.registrationToken (and $root.Values.secrets.existingSecret true) }}
 ---
 apiVersion: apps/v1
 kind: StatefulSet
@@ -67,12 +68,29 @@ spec:
                 secretKeyRef:
                   name: {{ include "runtime.secretName" $root }}
                   key: RUNTIME_PG_DSN
+                  # Optional ONLY in handshake mode, where the DSN arrives via
+                  # /register rather than this Secret. Without handshake the DSN
+                  # must be present — keep it required so a missing key fails at
+                  # schedule time (CreateContainerConfigError) not at runtime.
+                  {{- if $handshake }}
+                  optional: true
+                  {{- end }}
             {{- if or $root.Values.secrets.agentAuthToken $root.Values.secrets.existingSecret }}
             - name: RUNTIME_AGENT_AUTH_TOKEN
               valueFrom:
                 secretKeyRef:
                   name: {{ include "runtime.secretName" $root }}
                   key: RUNTIME_AGENT_AUTH_TOKEN
+                  optional: true
+            {{- end }}
+            {{- if $handshake }}
+            - name: RUNTIME_REGISTRATION_URL
+              value: "http://{{ include "runtime.fullname" $root }}:{{ $root.Values.service.port }}/register"
+            - name: RUNTIME_REGISTRATION_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "runtime.secretName" $root }}
+                  key: RUNTIME_REGISTRATION_TOKEN
                   optional: true
             {{- end }}
           ports:

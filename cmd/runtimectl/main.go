@@ -47,13 +47,15 @@ func main() {
 		runConformance(base, resolveAgent(base, agent))
 	case "admin":
 		runAdmin(base, os.Args[2:])
+	case "register":
+		runRegister(base, os.Args[2:])
 	default:
 		usage()
 	}
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: runtimectl <agents|invoke [-v]|sessions|logs|conformance|admin> [--agent <id>] [args]")
+	fmt.Fprintln(os.Stderr, "usage: runtimectl <agents|invoke [-v]|sessions|logs|conformance|admin|register> [--agent <id>] [args]")
 	os.Exit(2)
 }
 
@@ -304,6 +306,45 @@ func runAdmin(base string, args []string) {
 
 func adminUsage() {
 	fmt.Fprintln(os.Stderr, "usage: runtimectl admin <tenant create <id> [--name n]|user add <subject> --role r [--tenant t]|user ls|key create --role r [--label l] [--tenant t]|key ls|key revoke <id>|secret set <name> <value> [--tenant t]|secret ls|secret rm <name>|secret rotate [--tenant t]>")
+	os.Exit(2)
+}
+
+// runRegister dispatches `runtimectl register <mint|list|revoke> ...`, calling
+// the control plane's /admin/register-tokens routes (mirrors `admin key ...`).
+func runRegister(base string, args []string) {
+	if len(args) < 1 {
+		registerUsage()
+	}
+	switch args[0] {
+	case "mint":
+		// register mint --agent <id>
+		agent := flagValue(args[1:], "--agent", "")
+		if agent == "" {
+			registerUsage()
+		}
+		out := mustAdminPost(base, "/admin/register-tokens", map[string]string{"agent": agent})
+		var resp struct{ ID, Plaintext string }
+		if err := json.Unmarshal(out, &resp); err != nil || resp.Plaintext == "" {
+			fmt.Fprintf(os.Stderr, "token created but plaintext missing: %s\n", out)
+			os.Exit(1)
+		}
+		fmt.Printf("%s\n(store this now — shown once; set it as RUNTIME_REGISTRATION_TOKEN on agent %s)\n", resp.Plaintext, agent)
+	case "list", "ls":
+		fmt.Print(string(mustAdminGet(base, "/admin/register-tokens")))
+	case "revoke":
+		// register revoke <token-id>
+		if len(args) < 2 {
+			registerUsage()
+		}
+		mustAdminDelete(base, "/admin/register-tokens/"+args[1])
+		fmt.Printf("registration token %s revoked\n", args[1])
+	default:
+		registerUsage()
+	}
+}
+
+func registerUsage() {
+	fmt.Fprintln(os.Stderr, "usage: runtimectl register <mint --agent <id>|list|revoke <token-id>>")
 	os.Exit(2)
 }
 

@@ -13,13 +13,19 @@ import (
 
 // fakeAdminStore implements AdminStore in-memory.
 type fakeAdminStore struct {
-	tenants map[string]string
-	users   map[string]identity.UserRow
-	keys    map[string]identity.KeyRow
+	tenants   map[string]string
+	users     map[string]identity.UserRow
+	keys      map[string]identity.KeyRow
+	regTokens map[string]identity.RegTokenRow
 }
 
 func newFakeAdminStore() *fakeAdminStore {
-	return &fakeAdminStore{tenants: map[string]string{}, users: map[string]identity.UserRow{}, keys: map[string]identity.KeyRow{}}
+	return &fakeAdminStore{
+		tenants:   map[string]string{},
+		users:     map[string]identity.UserRow{},
+		keys:      map[string]identity.KeyRow{},
+		regTokens: map[string]identity.RegTokenRow{},
+	}
 }
 func (f *fakeAdminStore) CreateTenant(_ context.Context, id, name string) error {
 	f.tenants[id] = name
@@ -66,6 +72,24 @@ func (f *fakeAdminStore) ListKeys(_ context.Context, tid string) ([]identity.Key
 	}
 	return out, nil
 }
+func (f *fakeAdminStore) InsertRegistrationToken(_ context.Context, tokenID, agentID, hash string) error {
+	f.regTokens[tokenID] = identity.RegTokenRow{TokenID: tokenID, AgentID: agentID}
+	return nil
+}
+func (f *fakeAdminStore) ListRegistrationTokens(_ context.Context) ([]identity.RegTokenRow, error) {
+	var out []identity.RegTokenRow
+	for _, t := range f.regTokens {
+		out = append(out, t)
+	}
+	return out, nil
+}
+func (f *fakeAdminStore) RevokeRegistrationToken(_ context.Context, tokenID string) error {
+	if t, ok := f.regTokens[tokenID]; ok {
+		t.Revoked = true
+		f.regTokens[tokenID] = t
+	}
+	return nil
+}
 func (f *fakeAdminStore) ListTenants(_ context.Context) ([]identity.TenantRow, error) {
 	var out []identity.TenantRow
 	for id, name := range f.tenants {
@@ -80,7 +104,7 @@ func withPrincipal(r *http.Request, p identity.Principal) *http.Request {
 
 func adminMux(s AdminStore) http.Handler {
 	mux := http.NewServeMux()
-	RegisterAdmin(mux, s)
+	RegisterAdmin(mux, s, map[string]string{"support": "acme"})
 	return mux
 }
 
@@ -268,6 +292,123 @@ func TestAdmin_RevokeKeyTenantScoped(t *testing.T) {
 	}
 }
 
+func TestAdminRegisterTokens(t *testing.T) {
+	s := newFakeAdminStore()
+	mux := adminMux(s) // agentTenants: support→acme
+
+	// 1) Admin in acme mints a token for "support" → 201 + {id, plaintext}.
+	cr := withPrincipal(httptest.NewRequest("POST", "/admin/register-tokens", strings.NewReader(`{"agent":"support"}`)),
+		identity.Principal{TenantID: "acme", Role: identity.RoleAdmin})
+	crrec := httptest.NewRecorder()
+	mux.ServeHTTP(crrec, cr)
+	if crrec.Code != 201 {
+		t.Fatalf("mint: code=%d body=%s want 201", crrec.Code, crrec.Body.String())
+	}
+	var resp struct {
+		ID        string `json:"id"`
+		Plaintext string `json:"plaintext"`
+	}
+	json.Unmarshal(crrec.Body.Bytes(), &resp)
+	if resp.ID == "" || resp.Plaintext == "" {
+		t.Fatalf("mint response missing id/plaintext: %+v", resp)
+	}
+
+	// 2) Non-superuser admin in another tenant minting for "support" → 403.
+	or := withPrincipal(httptest.NewRequest("POST", "/admin/register-tokens", strings.NewReader(`{"agent":"support"}`)),
+		identity.Principal{TenantID: "other", Role: identity.RoleAdmin})
+	orrec := httptest.NewRecorder()
+	mux.ServeHTTP(orrec, or)
+	if orrec.Code != 403 {
+		t.Fatalf("cross-tenant mint: code=%d want 403", orrec.Code)
+	}
+
+	// 3) Unknown agent → 400.
+	gr := withPrincipal(httptest.NewRequest("POST", "/admin/register-tokens", strings.NewReader(`{"agent":"ghost"}`)),
+		identity.Principal{TenantID: "acme", Role: identity.RoleAdmin})
+	grrec := httptest.NewRecorder()
+	mux.ServeHTTP(grrec, gr)
+	if grrec.Code != 400 {
+		t.Fatalf("unknown agent: code=%d want 400", grrec.Code)
+	}
+
+	// 4) GET as acme admin → list includes the support token.
+	lr := withPrincipal(httptest.NewRequest("GET", "/admin/register-tokens", nil),
+		identity.Principal{TenantID: "acme", Role: identity.RoleAdmin})
+	lrec := httptest.NewRecorder()
+	mux.ServeHTTP(lrec, lr)
+	if lrec.Code != 200 {
+		t.Fatalf("list (acme): code=%d", lrec.Code)
+	}
+	var acmeRows []identity.RegTokenRow
+	json.Unmarshal(lrec.Body.Bytes(), &acmeRows)
+	if len(acmeRows) != 1 || acmeRows[0].TokenID != resp.ID || acmeRows[0].AgentID != "support" {
+		t.Fatalf("acme list should include support token: %+v", acmeRows)
+	}
+
+	// GET as a different tenant → filtered out (empty).
+	lr2 := withPrincipal(httptest.NewRequest("GET", "/admin/register-tokens", nil),
+		identity.Principal{TenantID: "other", Role: identity.RoleAdmin})
+	lrec2 := httptest.NewRecorder()
+	mux.ServeHTTP(lrec2, lr2)
+	if lrec2.Code != 200 {
+		t.Fatalf("list (other): code=%d", lrec2.Code)
+	}
+	var otherRows []identity.RegTokenRow
+	json.Unmarshal(lrec2.Body.Bytes(), &otherRows)
+	if len(otherRows) != 0 {
+		t.Fatalf("other tenant must not see acme's token: %+v", otherRows)
+	}
+
+	// 5) Non-superuser admin in another tenant DELETE'ing acme's token → 204
+	// (no oracle) but the token must NOT be revoked.
+	xr := withPrincipal(httptest.NewRequest("DELETE", "/admin/register-tokens/"+resp.ID, nil),
+		identity.Principal{TenantID: "other", Role: identity.RoleAdmin})
+	xrrec := httptest.NewRecorder()
+	mux.ServeHTTP(xrrec, xr)
+	if xrrec.Code != 204 {
+		t.Fatalf("cross-tenant revoke: code=%d want 204", xrrec.Code)
+	}
+	if s.regTokens[resp.ID].Revoked {
+		t.Fatal("cross-tenant revoke must be a no-op (token still active)")
+	}
+
+	// 6) Owning tenant (acme) admin revokes the support token → 204, revoked.
+	dr := withPrincipal(httptest.NewRequest("DELETE", "/admin/register-tokens/"+resp.ID, nil),
+		identity.Principal{TenantID: "acme", Role: identity.RoleAdmin})
+	drrec := httptest.NewRecorder()
+	mux.ServeHTTP(drrec, dr)
+	if drrec.Code != 204 {
+		t.Fatalf("revoke: code=%d want 204", drrec.Code)
+	}
+	if !s.regTokens[resp.ID].Revoked {
+		t.Fatal("token not revoked")
+	}
+
+	// 7) Superuser revokes unconditionally → mint a fresh token, revoke as
+	// superuser (TenantID == "", Superuser) → 204 + revoked.
+	cr2 := withPrincipal(httptest.NewRequest("POST", "/admin/register-tokens", strings.NewReader(`{"agent":"support"}`)),
+		identity.Principal{Superuser: true, Role: identity.RoleAdmin})
+	cr2rec := httptest.NewRecorder()
+	mux.ServeHTTP(cr2rec, cr2)
+	if cr2rec.Code != 201 {
+		t.Fatalf("superuser mint: code=%d body=%s want 201", cr2rec.Code, cr2rec.Body.String())
+	}
+	var resp2 struct {
+		ID string `json:"id"`
+	}
+	json.Unmarshal(cr2rec.Body.Bytes(), &resp2)
+	sdr := withPrincipal(httptest.NewRequest("DELETE", "/admin/register-tokens/"+resp2.ID, nil),
+		identity.Principal{Superuser: true, Role: identity.RoleAdmin})
+	sdrrec := httptest.NewRecorder()
+	mux.ServeHTTP(sdrrec, sdr)
+	if sdrrec.Code != 204 {
+		t.Fatalf("superuser revoke: code=%d want 204", sdrrec.Code)
+	}
+	if !s.regTokens[resp2.ID].Revoked {
+		t.Fatal("superuser revoke should revoke the token")
+	}
+}
+
 // fakeSecretAdmin implements SecretAdmin in-memory.
 type fakeSecretAdmin struct {
 	set     map[string]map[string]string // tenant -> name -> plaintext
@@ -301,7 +442,7 @@ func (f *fakeSecretAdmin) RotateSecrets(_ context.Context, tenant string) (ident
 // adminMuxWithSecrets wires both the store and the secret admin.
 func adminMuxWithSecrets(s AdminStore, sa SecretAdmin) http.Handler {
 	mux := http.NewServeMux()
-	RegisterAdmin(mux, s)
+	RegisterAdmin(mux, s, map[string]string{"support": "acme"})
 	RegisterSecretAdmin(mux, s, sa)
 	return mux
 }
@@ -354,7 +495,7 @@ func TestSecretAdmin_DisabledIs503(t *testing.T) {
 	s := newFakeAdminStore()
 	s.CreateTenant(context.Background(), "alpha", "A")
 	mux := http.NewServeMux()
-	RegisterAdmin(mux, s)
+	RegisterAdmin(mux, s, map[string]string{"support": "acme"})
 	RegisterSecretAdmin(mux, s, nil) // nil broker ⇒ feature disabled
 	r := withPrincipal(httptest.NewRequest("POST", "/admin/secrets", strings.NewReader(`{"name":"K","value":"v"}`)),
 		identity.Principal{TenantID: "alpha", Role: identity.RoleAdmin})
@@ -419,7 +560,7 @@ func TestSecretAdmin_RotateNonAdminForbidden(t *testing.T) {
 func TestSecretAdmin_RotateDisabledIs503(t *testing.T) {
 	s := newFakeAdminStore()
 	mux := http.NewServeMux()
-	RegisterAdmin(mux, s)
+	RegisterAdmin(mux, s, map[string]string{"support": "acme"})
 	RegisterSecretAdmin(mux, s, nil)
 	r := withPrincipal(httptest.NewRequest("POST", "/admin/secrets/rotate", strings.NewReader(`{}`)),
 		identity.Principal{TenantID: "alpha", Role: identity.RoleAdmin})

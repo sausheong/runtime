@@ -63,6 +63,73 @@ func TestReverseProxy_DedupesRequestIDEcho(t *testing.T) {
 	}
 }
 
+func TestEnvDeltaExcludesInheritedEnv(t *testing.T) {
+	// A sentinel in the process env must NOT appear in the delta — the delta is
+	// the ONLY thing the registration endpoint returns over the network.
+	t.Setenv("RUNTIME_C3M2_SENTINEL", "leak-me")
+	ap := AgentProcess{
+		AgentID: "a1", Addr: "127.0.0.1:8081", PGDSN: "dsn://x",
+		Tenant: "t1", ReplicaIndex: 2, DBOSVMID: "a1#2",
+	}
+	delta, err := ap.envDelta(context.Background())
+	if err != nil {
+		t.Fatalf("envDelta: %v", err)
+	}
+	joined := strings.Join(delta, "\n")
+	if strings.Contains(joined, "RUNTIME_C3M2_SENTINEL") || strings.Contains(joined, "leak-me") {
+		t.Fatalf("delta leaked inherited env:\n%s", joined)
+	}
+	for _, want := range []string{
+		"RUNTIME_PG_DSN=dsn://x", "RUNTIME_AGENT_ID=a1",
+		"RUNTIME_AGENT_TENANT=t1", "RUNTIME_AGENT_REPLICA=2", "DBOS__VMID=a1#2",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("delta missing %q:\n%s", want, joined)
+		}
+	}
+}
+
+// TestEnvDeltaBrokeredValueShadowsInheritedEnv proves that when a brokered
+// secret shares a name with an inherited env var, the delta (the only thing
+// returned over the network) carries the BROKERED value, never the inherited
+// one — the inherited value must not leak in the payload.
+func TestEnvDeltaBrokeredValueShadowsInheritedEnv(t *testing.T) {
+	t.Setenv("RUNTIME_C3M2_SENTINEL", "leak-me")
+	ap := AgentProcess{
+		AgentID: "a1", Addr: "127.0.0.1:8081", PGDSN: "dsn://x", Tenant: "t1",
+		broker: fakeBroker{secrets: map[string]map[string]string{
+			"t1": {"RUNTIME_C3M2_SENTINEL": "from-broker"},
+		}},
+	}
+	delta, err := ap.envDelta(context.Background())
+	if err != nil {
+		t.Fatalf("envDelta: %v", err)
+	}
+	joined := strings.Join(delta, "\n")
+	if !strings.Contains(joined, "RUNTIME_C3M2_SENTINEL=from-broker") {
+		t.Fatalf("delta must carry brokered value:\n%s", joined)
+	}
+	if strings.Contains(joined, "leak-me") {
+		t.Fatalf("delta leaked inherited value:\n%s", joined)
+	}
+}
+
+func TestBuildEnvIsEnvironPlusDelta(t *testing.T) {
+	t.Setenv("RUNTIME_C3M2_SENTINEL2", "keep")
+	ap := AgentProcess{AgentID: "a1", Addr: "127.0.0.1:8081", PGDSN: "dsn://x", Tenant: "t1"}
+	full, err := ap.buildEnv(context.Background())
+	if err != nil {
+		t.Fatalf("buildEnv: %v", err)
+	}
+	joined := strings.Join(full, "\n")
+	if !strings.Contains(joined, "RUNTIME_C3M2_SENTINEL2=keep") {
+		t.Fatalf("buildEnv dropped inherited env")
+	}
+	if !strings.Contains(joined, "RUNTIME_AGENT_ID=a1") {
+		t.Fatalf("buildEnv dropped delta")
+	}
+}
+
 func TestSpawnFuncCommand(t *testing.T) {
 	dir := t.TempDir()
 	out := filepath.Join(dir, "out.txt")

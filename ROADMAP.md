@@ -909,6 +909,74 @@ exactly a remote agent whose lifecycle the orchestrator owns. Remaining C3:
 the registration handshake (M2) and mTLS. Spec/plan:
 `docs/superpowers/{specs,plans}/2026-06-13-c3-remote-agents*`.
 
+**C3 M2 — DONE (2026-06-13).** A remote/scheduled `agentd` now pulls its full
+config from the control plane at boot via an authenticated **pull handshake**
+(agent→control-plane, the reverse of M1's data plane), closing the C2 M2 hole
+where brokered per-tenant secrets could not reach pods runtimed didn't spawn.
+The agent boots knowing only `RUNTIME_REGISTRATION_URL`+`_TOKEN`, POSTs
+`/register` with its token and `$HOSTNAME` ordinal, and receives the per-replica
+env delta (DSN + identity + tenant + opt-in feature env + decrypted brokered
+secrets), which it `os.Setenv`s before its unchanged `os.Getenv` startup path.
+Token model: a per-agent, identity-backed registration token (`registration_tokens`
+table, bcrypt via the existing `MintServiceKey` primitive, bound `agent_id`→tenant),
+managed by `runtimectl register mint|list|revoke` (admin-scoped, behind the
+identity admin guard; cross-tenant mint blocked). Server safety: `buildEnv` was
+split into a network-safe `envDelta` (the entries added on top of the inherited
+env) so runtimed's own `os.Environ()` — master keyring, OIDC client secret,
+admin bootstrap — is **structurally impossible** to ship; `buildEnv` =
+`os.Environ()` + `envDelta` keeps local spawns byte-for-byte unchanged. `POST
+/register` is mounted **pre-identity** (like `/metrics`), authenticated solely by
+its own token, with fail-closed ordinal validation (`Registry.Replica` returns
+false for an unknown agent or out-of-range ordinal → 403) and broker-error
+fail-closed (503, no partial env); uniform 401s give no token oracle; the access
+log records only `agent`/`tenant`/`ordinal`/`token_id`, never a secret or secret
+name. `agentd`'s `fetchRegistration` fetch→setenv→unchanged-path **fails hard**
+(`log.Fatal` → CrashLoop) on any handshake error, and **skips empty delta
+values** so the infra-provided `RUNTIME_LISTEN_ADDR` + the `$HOSTNAME` ordinal
+fallback survive (the control plane has no Addr for a remote agent — the handshake
+delivers config, not the bind address/ordinal). The handshake closes the
+brokered-secrets-to-scheduled-pods limitation; per-agent-pod gateway remains
+UNSUPPORTED — `config.Validate` rejects `gateway:` on a remote agent (spawn-time
+field), so `GatewayOn` is false and the delta carries only the empty gateway
+shadow — and stays in the C2/C3 backlog. Auth is a bearer over operator-terminated
+TLS (mTLS deferred).
+Tested: config/handler unit (`envDelta` no-leak, all `/register` status paths,
+`ordinalFromHostname`), identity store integration (token CRUD + bcrypt verify),
+end-to-end integration `TestRegistrationHandshake` (agent boots from a near-empty
+env, revoked token → agentd exits non-zero, cross-tenant mint → 403), and chart
+render permutations (handshake env present in the StatefulSet + Secret key wired;
+handshake-off and monolith regressions). THE FINAL HOLISTIC REVIEW + LIVE KIND
+PROOF EARNED THEIR KEEP AGAIN: the holistic review found a LOW (the `RUNTIME_PG_DSN`
+secretKeyRef was made `optional:true` unconditionally, weakening schedule-time
+fail-fast for the non-handshake perAgentPods path; fixed by gating `optional` on
+handshake mode), and the live kind proof caught an independent **install-only
+CrashLoop bug invisible to hermetic/integration/render checks**: K8s
+liveness/readiness probes hit agentd's `/healthz` with no bearer, but C3 M1's
+`requireBearer` guarded ALL paths — so any agent pod with `agentAuthToken` set
+(which the handshake flow encourages) got 401 on every probe → CrashLoopBackOff
+forever. (C2 M2's proof missed it because it never set `agentAuthToken`.) Fixed by
+exempting ONLY `GET /healthz` from the agent bearer — it returns a static no-data
+`ok`; `/metrics` stays guarded (it exposes values). LIVE PROOF (real kind cluster +
+bundled Postgres, 2026-06-13, all passed): `make docker-image` → `kind load` →
+`helm install` perAgentPods+bundled-PG+keyring+bootstrap+`agentAuthToken` with a
+2-replica `support` agent (NO registration token yet) → control plane Ready,
+**control-plane Service had exactly 1 endpoint** (C2 M2 label fix), agent pods Ready
+(healthz fix); set a brokered `OPENAI_API_KEY` (tenant `default`, encrypted DB only —
+**never in the chart Secret**) and minted a `support` registration token; **handshake
+proven** — `helm upgrade` injecting the token rolled the pool and BOTH ordinals POSTed
+`/register` (control-plane log `msg=register agent=support ordinal=0/1
+token_id=svk-… vars=11`, **no secret value/name logged**); **brokered-secret
+delivery proven** — `vars=11` = 10 base env vars + the 1 brokered `OPENAI_API_KEY`
+(the only path it could reach the pod, since the chart Secret carries no such key);
+**per-ordinal executor ids proven** — driving sessions produced `support#0` and
+`support#1` rows in `dbos.workflow_status` (distinct executors, no double-exec);
+**fail-closed proven** — `register revoke` then deleting `support-1` → `agentd:
+registration handshake … status 401 Unauthorized` → CrashLoopBackOff; clean
+`helm uninstall` + `kind delete`. Remaining C3: mTLS, per-agent (non-shared) tokens
+via existingSecret, per-agent-pod gateway (still blocked — remote agents reject the
+`gateway:` field at config validation), and brokered-secrets edge cases. Spec/plan:
+`docs/superpowers/{specs,plans}/2026-06-13-c3-m2-registration-handshake*`.
+
 - **Remote agents** — let an agent run on a different host while runtimed still
   manages it. The data plane is already location-agnostic: the control plane
   reverse-proxies plain HTTP to `listen_addr` and health-checks via

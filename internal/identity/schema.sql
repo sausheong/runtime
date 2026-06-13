@@ -30,3 +30,10 @@ CREATE TABLE IF NOT EXISTS secrets (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     PRIMARY KEY (tenant_id, name)
 );
+CREATE TABLE IF NOT EXISTS registration_tokens (
+    token_id    TEXT PRIMARY KEY,
+    agent_id    TEXT NOT NULL,
+    hash        TEXT NOT NULL,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    revoked_at  TIMESTAMPTZ
+);

@@ -248,6 +248,12 @@ func main() {
 	// Prometheus practice; spec §5: label values are operator-level identifiers,
 	// never tenant/user data). Scrape probes get no request-id/access-log
 	// treatment by design (probe noise).
+	// POST /register is authenticated by the agent's own registration token, not
+	// the identity middleware, so it is mounted on the same pre-identity outer mux
+	// as /metrics. idStore is always constructed (both modes) and satisfies
+	// controlplane.RegTokenVerifier via ActiveRegTokenByID.
+	regMux := http.NewServeMux()
+	controlplane.RegisterHandshake(regMux, idStore, reg)
 	handler = mountMetrics(handler, cm, func() []obs.ScrapeTarget {
 		var ts []obs.ScrapeTarget
 		for _, info := range reg.List() {
@@ -260,7 +266,7 @@ func main() {
 			}
 		}
 		return ts
-	})
+	}, regMux)
 
 	// Start the gateway upstreams only now: every os.Exit(1) path above has
 	// passed, so the deferred Close is guaranteed to run and stdio upstream
@@ -411,9 +417,14 @@ func accessLog(next http.Handler, cm *obs.ControlMetrics) http.Handler {
 // inner root mux overwrites it on match, and accessLog reads r.Pattern only
 // AFTER next.ServeHTTP returns — so route normalization in the metrics/access
 // log is unaffected.
-func mountMetrics(inner http.Handler, cm *obs.ControlMetrics, targets func() []obs.ScrapeTarget) http.Handler {
+func mountMetrics(inner http.Handler, cm *obs.ControlMetrics, targets func() []obs.ScrapeTarget, registerMux http.Handler) http.Handler {
 	mux := http.NewServeMux()
 	mux.Handle("GET /metrics", obs.FanoutHandler(cm, targets))
+	// POST /register authenticates with the agent's own per-agent registration
+	// token (not the identity middleware), so — like /metrics — it lives on this
+	// outer mux, reachable WITHOUT an identity principal in both open and
+	// identity-on modes.
+	mux.Handle("POST /register", registerMux)
 	mux.Handle("/", inner)
 	return mux
 }
@@ -425,7 +436,7 @@ func mountMetrics(inner http.Handler, cm *obs.ControlMetrics, targets func() []o
 func buildRoot(reg *controlplane.Registry, adminS controlplane.AdminStore, consoleOIDC console.OIDCConfig, secretBroker controlplane.SecretAdmin, gw *gateway.Handler, cm *obs.ControlMetrics, ctlStore store.Store) http.Handler {
 	apiMux := controlplane.NewAPI(reg, cm, ctlStore)
 	if adminS != nil {
-		controlplane.RegisterAdmin(apiMux, adminS)
+		controlplane.RegisterAdmin(apiMux, adminS, reg.AgentTenants())
 		controlplane.RegisterSecretAdmin(apiMux, adminS, secretBroker)
 	}
 	if gw != nil {
