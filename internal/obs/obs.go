@@ -39,6 +39,10 @@ type ControlMetrics struct {
 	gwDuration     *prometheus.HistogramVec
 	gwUp           *prometheus.GaugeVec
 	scrapeSkips    *prometheus.CounterVec
+	asDesired      *prometheus.GaugeVec
+	asCurrent      *prometheus.GaugeVec
+	asActive       *prometheus.GaugeVec
+	asEvents       *prometheus.CounterVec
 }
 
 func NewControlMetrics() *ControlMetrics {
@@ -88,8 +92,25 @@ func NewControlMetrics() *ControlMetrics {
 		Name: "runtime_metrics_scrape_skips_total",
 		Help: "Agents skipped during fan-out scrape, by reason.",
 	}, []string{"agent", "replica", "reason"})
+	c.asDesired = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "runtime_agent_replicas_desired",
+		Help: "Replica count the autoscaler wants for the agent (clamped to [min,max]).",
+	}, []string{"agent"})
+	c.asCurrent = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "runtime_agent_replicas_current",
+		Help: "Live replica count for the agent (draining replicas included).",
+	}, []string{"agent"})
+	c.asActive = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "runtime_agent_active_sessions",
+		Help: "Non-terminal session count for the agent on the last autoscale tick.",
+	}, []string{"agent"})
+	c.asEvents = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "runtime_autoscale_events_total",
+		Help: "Autoscale actions by agent and action (up/down/undrain/reap/blocked).",
+	}, []string{"agent", "action"})
 	c.reg.MustRegister(c.httpRequests, c.httpDuration, c.agentUp, c.agentReachable, c.agentRestarts,
-		c.proxyErrors, c.gwCalls, c.gwDuration, c.gwUp, c.scrapeSkips)
+		c.proxyErrors, c.gwCalls, c.gwDuration, c.gwUp, c.scrapeSkips,
+		c.asDesired, c.asCurrent, c.asActive, c.asEvents)
 	return c
 }
 
@@ -177,6 +198,43 @@ func (c *ControlMetrics) ScrapeSkip(agent string, replica int, reason string) {
 		return
 	}
 	c.scrapeSkips.WithLabelValues(agent, strconv.Itoa(replica), reason).Inc()
+}
+
+// Autoscale action label values for AutoscaleEvent.
+const (
+	AutoscaleUp      = "up"
+	AutoscaleDown    = "down"
+	AutoscaleUndrain = "undrain"
+	AutoscaleReap    = "reap"
+	AutoscaleBlocked = "blocked"
+)
+
+func (c *ControlMetrics) AutoscaleDesired(agent string, n int) {
+	if c == nil {
+		return
+	}
+	c.asDesired.WithLabelValues(agent).Set(float64(n))
+}
+
+func (c *ControlMetrics) AutoscaleCurrent(agent string, n int) {
+	if c == nil {
+		return
+	}
+	c.asCurrent.WithLabelValues(agent).Set(float64(n))
+}
+
+func (c *ControlMetrics) AutoscaleActive(agent string, n int) {
+	if c == nil {
+		return
+	}
+	c.asActive.WithLabelValues(agent).Set(float64(n))
+}
+
+func (c *ControlMetrics) AutoscaleEvent(agent, action string) {
+	if c == nil {
+		return
+	}
+	c.asEvents.WithLabelValues(agent, action).Inc()
 }
 
 // AgentMetrics is agentd's registry. Every series carries agent=<id> so the
