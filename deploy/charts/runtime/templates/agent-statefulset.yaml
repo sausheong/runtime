@@ -68,7 +68,13 @@ spec:
                 secretKeyRef:
                   name: {{ include "runtime.secretName" $root }}
                   key: RUNTIME_PG_DSN
+                  # Optional ONLY in handshake mode, where the DSN arrives via
+                  # /register rather than this Secret. Without handshake the DSN
+                  # must be present — keep it required so a missing key fails at
+                  # schedule time (CreateContainerConfigError) not at runtime.
+                  {{- if $handshake }}
                   optional: true
+                  {{- end }}
             {{- if or $root.Values.secrets.agentAuthToken $root.Values.secrets.existingSecret }}
             - name: RUNTIME_AGENT_AUTH_TOKEN
               valueFrom:
