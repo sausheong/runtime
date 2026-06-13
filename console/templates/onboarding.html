@@ -14,6 +14,7 @@
   <button type="submit">Mint key</button>
 </form>
 
+{{if .SecretsEnabled}}
 <h2>Credentials</h2>
 <ul>{{range .Secrets}}<li>{{.Name}}</li>{{end}}</ul>
 <form method="post" action="/ui/onboarding/secrets">
@@ -22,6 +23,7 @@
   <input name="value" placeholder="value" type="password">
   <button type="submit">Set credential</button>
 </form>
+{{end}}
 
 <h2>Upstreams</h2>
 <table><tr><th>Name</th><th>Transport</th><th></th></tr>

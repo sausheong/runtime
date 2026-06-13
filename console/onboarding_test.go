@@ -126,6 +126,69 @@ func TestOnboardingGETRendersForAdmin(t *testing.T) {
 	}
 }
 
+// TestOnboardingNilSecretsNoPanic reproduces I1: identity ON + file-configured
+// gateway upstreams + NO secrets keyring builds an Onboarding with Secrets == nil.
+// The GET handler must not panic on the secrets listing, and POST secrets must
+// fail closed with 503 rather than nil-deref.
+func TestOnboardingNilSecretsNoPanic(t *testing.T) {
+	deps := &Onboarding{Upstreams: &fakeUpstreamStore2{}, Mutator: &fakeMut2{}, Admin: &fakeAdmin2{}, Secrets: nil}
+	h := Handler(nil, OIDCConfig{}, deps)
+
+	// GET must not panic and returns 200 (page is still useful: mint keys,
+	// register credential-less upstreams).
+	r := adminReq("GET", "/ui/onboarding", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	if w.Code != http.StatusOK {
+		t.Fatalf("GET with nil Secrets: want 200 got %d", w.Code)
+	}
+	// The credentials section is hidden when no broker is configured.
+	if strings.Contains(w.Body.String(), "/ui/onboarding/secrets") {
+		t.Fatal("credentials form should be hidden when Secrets is nil")
+	}
+
+	// POST secrets WITHOUT a csrf token must 403 (proves the route exists and the
+	// guard runs before any nil deref — i.e. no panic).
+	rp := adminReq("POST", "/ui/onboarding/secrets", url.Values{"name": {"X"}, "value": {"y"}})
+	wp := httptest.NewRecorder()
+	h.ServeHTTP(wp, rp)
+	if wp.Code != http.StatusForbidden {
+		t.Fatalf("POST secrets without csrf (nil Secrets): want 403 got %d", wp.Code)
+	}
+
+	// POST secrets WITH a valid csrf token must 503 (broker absent), not panic.
+	token := issuedCSRF(t, h)
+	rp2 := adminReq("POST", "/ui/onboarding/secrets", url.Values{"csrf_token": {token}, "name": {"X"}, "value": {"y"}})
+	wp2 := httptest.NewRecorder()
+	h.ServeHTTP(wp2, rp2)
+	if wp2.Code != http.StatusServiceUnavailable {
+		t.Fatalf("POST secrets with csrf (nil Secrets): want 503 got %d", wp2.Code)
+	}
+}
+
+// issuedCSRF fetches the onboarding page as the test admin (session cookie
+// "sess-1", matching adminReq) and extracts the CSRF token from a hidden input.
+// The token is HMAC of the session value, so it round-trips with adminReq's
+// runtime_token cookie.
+func issuedCSRF(t *testing.T, h http.Handler) string {
+	t.Helper()
+	r := adminReq("GET", "/ui/onboarding", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	body := w.Body.String()
+	const marker = `name="csrf_token" value="`
+	i := strings.Index(body, marker)
+	if i < 0 {
+		t.Fatal("no csrf_token field found in onboarding page")
+	}
+	rest := body[i+len(marker):]
+	j := strings.Index(rest, `"`)
+	if j < 0 {
+		t.Fatal("malformed csrf_token field")
+	}
+	return rest[:j]
+}
+
 func TestOnboardingPOSTRequiresCSRF(t *testing.T) {
 	h, _ := newTestConsole()
 	form := url.Values{"name": {"orders"}, "url": {"http://x"}, "transport": {"http"}}

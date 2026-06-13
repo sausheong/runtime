@@ -128,11 +128,19 @@ func Handler(reg *controlplane.Registry, oidc OIDCConfig, onb *Onboarding) http.
 				})
 			}
 			ups, _ := onb.Upstreams.ListUpstreams(r.Context(), p.TenantID)
-			secs, _ := onb.Secrets.ListSecretNames(r.Context(), p.TenantID)
+			// Secrets is the one optional dep: nil when no keyring is configured
+			// (RUNTIME_SECRETS_KEYS unset) even though gateway upstreams enable the
+			// onboarding page. Guard the listing so an admin can still mint keys and
+			// register credential-less upstreams without panicking the request.
+			var secs []identity.SecretMeta
+			if onb.Secrets != nil {
+				secs, _ = onb.Secrets.ListSecretNames(r.Context(), p.TenantID)
+			}
 			keys, _ := onb.Admin.ListKeys(r.Context(), p.TenantID)
 			render(w, "onboarding.html", map[string]any{
 				"CSRF": csrf.issue(sessionValue(r)), "Tenant": p.TenantID,
 				"Upstreams": ups, "Secrets": secs, "Keys": keys, "Flash": flash,
+				"SecretsEnabled": onb.Secrets != nil,
 			})
 		})
 
@@ -167,6 +175,10 @@ func Handler(reg *controlplane.Registry, oidc OIDCConfig, onb *Onboarding) http.
 		}))
 
 		mux.HandleFunc("POST /ui/onboarding/secrets", guard(func(p identity.Principal, w http.ResponseWriter, r *http.Request) {
+			if onb.Secrets == nil {
+				http.Error(w, "secrets broker not configured (set RUNTIME_SECRETS_KEYS)", http.StatusServiceUnavailable)
+				return
+			}
 			if err := onb.Secrets.SetSecret(r.Context(), p.TenantID, r.FormValue("name"), r.FormValue("value")); err != nil {
 				http.Error(w, "set secret failed", http.StatusBadRequest)
 				return
