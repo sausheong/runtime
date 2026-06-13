@@ -129,6 +129,15 @@ type GatewayServer struct {
 	// patterns (path.Match syntax). Empty ⇒ all operations. Only valid
 	// with OpenAPI.
 	Operations []string `yaml:"operations"`
+
+	// CredSecret names a per-tenant secret (in the secrets broker) whose value
+	// is injected into CredHeader at dial time. Only valid for http/openapi
+	// upstreams (never stdio). Set programmatically for DB-registered upstreams;
+	// file upstreams normally use ${VAR}-expanded Headers instead.
+	CredSecret string `yaml:"cred_secret"`
+	// CredHeader is the header CredSecret's value is injected into (e.g.
+	// "Authorization"). Required iff CredSecret is set.
+	CredHeader string `yaml:"cred_header"`
 }
 
 // GatewayConfig is the optional top-level gateway: section.
@@ -306,6 +315,14 @@ func (c *Config) Validate() error {
 		for _, p := range s.Operations {
 			if err := validateOperationPattern(p); err != nil {
 				return fmt.Errorf("config: gateway server %q: %w", s.Name, err)
+			}
+		}
+		if s.CredSecret != "" || s.CredHeader != "" {
+			if s.Command != "" {
+				return fmt.Errorf("config: gateway server %q: cred_secret/cred_header not allowed on stdio upstreams", s.Name)
+			}
+			if s.CredSecret == "" || s.CredHeader == "" {
+				return fmt.Errorf("config: gateway server %q: cred_secret and cred_header must both be set", s.Name)
 			}
 		}
 		if err := expandEnvMap(s.Headers, "gateway server "+s.Name+" headers"); err != nil {

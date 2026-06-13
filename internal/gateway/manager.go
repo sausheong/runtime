@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"math/rand/v2"
 	"strings"
@@ -27,7 +28,8 @@ type UpstreamStatus struct {
 
 // upstream is one configured server plus its live connection state.
 type upstream struct {
-	cfg config.GatewayServer
+	cfg    config.GatewayServer
+	cancel context.CancelFunc // per-upstream; cancels just this supervise loop
 
 	mu          sync.Mutex
 	conn        upstreamConn
@@ -40,14 +42,19 @@ type upstream struct {
 // goroutine per upstream (connect → on failure retry with capped backoff).
 // All read methods are safe for concurrent use.
 type Manager struct {
-	ups        []*upstream
+	mu  sync.Mutex // guards ups + started/baseCtx; each upstream's own mu guards its conn state
+	ups []*upstream
+
 	dial       dialFunc
+	cred       CredentialResolver
 	minBackoff time.Duration
 	maxBackoff time.Duration
 
 	generation atomic.Uint64
 	wg         sync.WaitGroup
-	cancel     context.CancelFunc // set by Start; called by Close
+	baseCtx    context.Context    // set by Start; parent for per-upstream contexts
+	started    bool               // true after Start
+	cancel     context.CancelFunc // cancels all supervise loops (Close)
 
 	// Metrics (nil-safe) tracks upstream connection state. Set before Start.
 	Metrics *obs.ControlMetrics
@@ -64,6 +71,14 @@ func WithBackoff(min, max time.Duration) Option {
 	return func(m *Manager) { m.minBackoff, m.maxBackoff = min, max }
 }
 
+// CredentialResolver returns the plaintext secret named for a tenant. Backed by
+// the secrets broker in production. Must return a non-nil error (fail-closed)
+// when the secret is absent.
+type CredentialResolver func(ctx context.Context, tenant, secretName string) (string, error)
+
+// WithCredentials sets the per-tenant credential resolver used at dial time.
+func WithCredentials(r CredentialResolver) Option { return func(m *Manager) { m.cred = r } }
+
 // NewManager builds a Manager for the configured servers. Call Start to begin
 // connecting.
 func NewManager(servers []config.GatewayServer, opts ...Option) *Manager {
@@ -77,21 +92,156 @@ func NewManager(servers []config.GatewayServer, opts ...Option) *Manager {
 	return m
 }
 
-// Start launches the supervision loops. Non-blocking; safe to call once.
-// The loops run until the given context is cancelled or Close is called
-// (Start derives its own cancellable context so Close never deadlocks).
+// Start launches supervision loops for all current upstreams and records the
+// base context so upstreams added later (Add) start under the same lifetime.
+// Non-blocking; safe to call once. The loops run until the given context is
+// cancelled or Close is called (Start derives its own cancellable context so
+// Close never deadlocks).
 func (m *Manager) Start(ctx context.Context) {
 	ctx, m.cancel = context.WithCancel(ctx)
-	for _, u := range m.ups {
-		m.wg.Add(1)
-		go m.supervise(ctx, u)
+	m.mu.Lock()
+	m.baseCtx = ctx
+	m.started = true
+	// prepLaunch under m.mu so each u.cancel is set before the goroutine (and
+	// before any concurrent Remove can observe the upstream). Spawn after unlock.
+	type launchPair struct {
+		u    *upstream
+		uctx context.Context
 	}
+	pairs := make([]launchPair, 0, len(m.ups))
+	for _, u := range m.ups {
+		pairs = append(pairs, launchPair{u, m.prepLaunch(ctx, u)})
+	}
+	m.mu.Unlock()
+	for _, p := range pairs {
+		go m.supervise(p.uctx, p.u)
+	}
+}
+
+// prepLaunch creates the per-upstream context and stores its cancel so Remove
+// can cancel exactly that upstream. MUST be called with m.mu held (or pre-Start,
+// single-threaded): u.cancel is written here under the lock and read in Remove
+// under the lock, so a fast Add-then-Remove never races on it. Returns the child
+// ctx to hand to the goroutine; spawn the goroutine AFTER releasing m.mu.
+func (m *Manager) prepLaunch(parent context.Context, u *upstream) context.Context {
+	uctx, cancel := context.WithCancel(parent)
+	u.cancel = cancel
+	m.wg.Add(1)
+	return uctx
+}
+
+// snapshot returns a copy of the upstream slice for lock-free iteration by
+// readers. The upstreams themselves are shared (their own mu guards state).
+func (m *Manager) snapshot() []*upstream {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]*upstream(nil), m.ups...)
+}
+
+// Add registers a new upstream at runtime. Rejects a duplicate name (including
+// file-config upstreams). If Start has run, the upstream's supervise loop begins
+// immediately; otherwise it starts when Start is called.
+func (m *Manager) Add(cfg config.GatewayServer) error {
+	m.mu.Lock()
+	for _, u := range m.ups {
+		if u.cfg.Name == cfg.Name {
+			m.mu.Unlock()
+			return fmt.Errorf("gateway: upstream %q already exists", cfg.Name)
+		}
+	}
+	u := &upstream{cfg: cfg}
+	m.ups = append(m.ups, u)
+	// If started, prep the launch (sets u.cancel) under m.mu so a concurrent
+	// Remove either runs first (and never finds u) or after (and sees u.cancel
+	// already set). Spawn the goroutine only after releasing the lock.
+	var uctx context.Context
+	if m.started {
+		uctx = m.prepLaunch(m.baseCtx, u)
+	}
+	m.mu.Unlock()
+	if uctx != nil {
+		go m.supervise(uctx, u)
+	}
+	m.generation.Add(1)
+	return nil
+}
+
+// Remove stops and detaches the upstream with the given name (idempotent).
+func (m *Manager) Remove(name string) {
+	m.mu.Lock()
+	idx := -1
+	for i, u := range m.ups {
+		if u.cfg.Name == name {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		m.mu.Unlock()
+		return
+	}
+	u := m.ups[idx]
+	m.ups = append(m.ups[:idx:idx], m.ups[idx+1:]...)
+	// Capture u.cancel under m.mu — it is written under m.mu in prepLaunch, so
+	// reading it here (not after unlock) means a concurrent Add/launch can never
+	// race the write against this read, and the cancel is never missed.
+	cancel := u.cancel
+	m.mu.Unlock()
+
+	if cancel != nil {
+		cancel()
+	}
+	u.mu.Lock()
+	conn := u.conn
+	u.conn, u.tools = nil, nil
+	u.mu.Unlock()
+	if conn != nil {
+		_ = conn.Close()
+	}
+	m.generation.Add(1)
 }
 
 // pingTimeout bounds each supervise-loop health ping. 5s is generous for a
 // no-op MCP ping yet short enough that a hung upstream is detected within a
 // few poll cycles (the loop pings every minBackoff).
 const pingTimeout = 5 * time.Second
+
+// dialWith resolves a per-tenant credential (if configured) into the upstream's
+// headers, then dials. Fail-closed: a resolution error aborts the dial (the
+// supervision loop retries with backoff). The error never includes the value.
+func (m *Manager) dialWith(ctx context.Context, s config.GatewayServer) (upstreamConn, error) {
+	// Inject a per-tenant credential only for a tenant-OWNED upstream: exactly
+	// one tenant means the secret's owner is unambiguous (DB-registered upstreams
+	// always set exactly one tenant via UpstreamRow.ToConfig). A 0- or 2+-tenant
+	// upstream has no unambiguous secret owner, so injection is skipped — and we
+	// warn if a credential was nonetheless configured, since that combination is
+	// almost certainly a misconfiguration that would otherwise dial with no auth.
+	if s.CredSecret != "" && m.cred != nil {
+		if len(s.Tenants) == 1 {
+			val, err := m.cred(ctx, s.Tenants[0], s.CredSecret)
+			if err != nil {
+				return nil, fmt.Errorf("gateway: resolve credential for upstream %q: %w", s.Name, err)
+			}
+			s = withCredHeader(s, s.CredHeader, val)
+		} else {
+			slog.Warn("gateway: credential configured but upstream is not single-tenant; skipping injection",
+				"server", s.Name, "tenants", len(s.Tenants))
+		}
+	}
+	return m.dial(ctx, s)
+}
+
+// withCredHeader returns a copy of s with header k=v added (copy-on-write so the
+// stored cfg is never mutated and the secret never persists on the upstream).
+func withCredHeader(s config.GatewayServer, k, v string) config.GatewayServer {
+	h := make(map[string]string, len(s.Headers)+1)
+	for kk, vv := range s.Headers {
+		h[kk] = vv
+	}
+	h[k] = v
+	s.Headers = h
+	return s
+}
 
 // supervise keeps one upstream connected: dial with capped exponential
 // backoff, mark up, then health-check on a minBackoff cadence — a failed
@@ -101,6 +251,22 @@ const pingTimeout = 5 * time.Second
 // also picked up here because the loop redials whenever conn==nil.
 func (m *Manager) supervise(ctx context.Context, u *upstream) {
 	defer m.wg.Done()
+	// On exit (ctx cancelled by Remove/Close), close any conn we still hold.
+	// This closes the Remove-vs-in-flight-dial window: if Remove cancelled and
+	// saw u.conn==nil while dial was mid-flight, dial then returns a live conn
+	// we store and the next loop returns here — without this defer that conn
+	// would leak. Single-close is guaranteed: both Remove and this defer do
+	// lock; c:=u.conn; u.conn=nil; unlock; if c!=nil close(c) — the u.mu-guarded
+	// nil-and-capture means only one observer sees the non-nil conn.
+	defer func() {
+		u.mu.Lock()
+		conn := u.conn
+		u.conn, u.tools = nil, nil
+		u.mu.Unlock()
+		if conn != nil {
+			_ = conn.Close()
+		}
+	}()
 	backoff := m.minBackoff
 	for {
 		if ctx.Err() != nil {
@@ -110,7 +276,7 @@ func (m *Manager) supervise(ctx context.Context, u *upstream) {
 		connected := u.conn != nil
 		u.mu.Unlock()
 		if !connected {
-			conn, err := m.dial(ctx, u.cfg)
+			conn, err := m.dialWith(ctx, u.cfg)
 			if err != nil {
 				u.mu.Lock()
 				u.lastErr = err
@@ -194,7 +360,7 @@ func (m *Manager) Close() {
 		m.cancel()
 	}
 	m.wg.Wait()
-	for _, u := range m.ups {
+	for _, u := range m.snapshot() {
 		u.mu.Lock()
 		conn := u.conn
 		u.conn = nil
@@ -236,7 +402,7 @@ func visibleTo(s config.GatewayServer, tenant string) bool {
 // ToolsFor returns the live tools visible to tenant.
 func (m *Manager) ToolsFor(tenant string) []tool.Tool {
 	var out []tool.Tool
-	for _, u := range m.ups {
+	for _, u := range m.snapshot() {
 		if !visibleTo(u.cfg, tenant) {
 			continue
 		}
@@ -258,7 +424,7 @@ func (m *Manager) ForwardsTenant(toolName string) bool {
 	if !ok {
 		return false
 	}
-	for _, u := range m.ups {
+	for _, u := range m.snapshot() {
 		if u.cfg.Name == srv {
 			return u.cfg.ForwardTenant
 		}
@@ -270,7 +436,7 @@ func (m *Manager) ForwardsTenant(toolName string) bool {
 // otherwise only upstreams visible to that tenant.
 func (m *Manager) Status(tenant string) []UpstreamStatus {
 	var out []UpstreamStatus
-	for _, u := range m.ups {
+	for _, u := range m.snapshot() {
 		if !visibleTo(u.cfg, tenant) {
 			continue
 		}

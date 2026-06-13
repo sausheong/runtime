@@ -20,6 +20,14 @@ func PrincipalFromContext(ctx context.Context) (identity.Principal, bool) {
 	return p, ok
 }
 
+// WithPrincipal returns ctx with p attached as the request principal. Exported
+// for cross-package tests (e.g. console) that exercise admin-gated handlers
+// without standing up the identity middleware. Production code sets the
+// principal via IdentityMiddleware, not this helper.
+func WithPrincipal(ctx context.Context, p identity.Principal) context.Context {
+	return context.WithValue(ctx, principalKey, p)
+}
+
 // TokenLabelFromContext returns the matched token's label, if the request was
 // authenticated. ok is false in open mode or when unset.
 func TokenLabelFromContext(ctx context.Context) (label string, ok bool) {

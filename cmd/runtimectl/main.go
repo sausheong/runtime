@@ -299,13 +299,44 @@ func runAdmin(base string, args []string) {
 		if failed > 0 {
 			os.Exit(1)
 		}
+	case "upstream add":
+		// admin upstream add --name <n> --url <u> | --openapi <spec> [--base-url b] [--cred-secret s] [--cred-header h] [--tenant t]
+		// Note: --operations is intentionally omitted for M1 (string-valued body); server treats absent operations as "all".
+		name := flagValue(args[2:], "--name", "")
+		if name == "" {
+			adminUsage()
+		}
+		body := map[string]string{
+			"name":        name,
+			"url":         flagValue(args[2:], "--url", ""),
+			"openapi":     flagValue(args[2:], "--openapi", ""),
+			"base_url":    flagValue(args[2:], "--base-url", ""),
+			"cred_secret": flagValue(args[2:], "--cred-secret", ""),
+			"cred_header": flagValue(args[2:], "--cred-header", ""),
+			"tenant":      flagValue(args[2:], "--tenant", ""),
+		}
+		out := mustAdminPost(base, "/admin/upstreams", body)
+		var resp struct{ ID, Name string }
+		if err := json.Unmarshal(out, &resp); err != nil || resp.ID == "" {
+			fmt.Fprintf(os.Stderr, "upstream created but response malformed: %s\n", out)
+			os.Exit(1)
+		}
+		fmt.Printf("upstream %s registered (id=%s)\n", resp.Name, resp.ID)
+	case "upstream ls":
+		fmt.Print(string(mustAdminGet(base, "/admin/upstreams")))
+	case "upstream rm":
+		if len(args) < 3 {
+			adminUsage()
+		}
+		mustAdminDelete(base, "/admin/upstreams/"+args[2])
+		fmt.Printf("upstream %s removed\n", args[2])
 	default:
 		adminUsage()
 	}
 }
 
 func adminUsage() {
-	fmt.Fprintln(os.Stderr, "usage: runtimectl admin <tenant create <id> [--name n]|user add <subject> --role r [--tenant t]|user ls|key create --role r [--label l] [--tenant t]|key ls|key revoke <id>|secret set <name> <value> [--tenant t]|secret ls|secret rm <name>|secret rotate [--tenant t]>")
+	fmt.Fprintln(os.Stderr, "usage: runtimectl admin <tenant create <id> [--name n]|user add <subject> --role r [--tenant t]|user ls|key create --role r [--label l] [--tenant t]|key ls|key revoke <id>|secret set <name> <value> [--tenant t]|secret ls|secret rm <name>|secret rotate [--tenant t]|upstream add --name n (--url u|--openapi spec) [--base-url b] [--cred-secret s] [--cred-header h] [--tenant t]|upstream ls|upstream rm <id>>")
 	os.Exit(2)
 }
 

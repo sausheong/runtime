@@ -1,0 +1,54 @@
+{{define "onboarding.html"}}<!doctype html>
+<html><head><meta charset="utf-8"><title>Onboarding — {{.Tenant}}</title>
+<link rel="stylesheet" href="/ui/static/style.css"></head>
+<body>
+<h1>Onboarding — tenant {{.Tenant}}</h1>
+{{if .Flash}}<p class="flash">{{.Flash}}</p>{{end}}
+
+<h2>Agent keys</h2>
+<ul>{{range .Keys}}<li>{{.ID}} — {{.Role}} {{.Label}}</li>{{end}}</ul>
+<form method="post" action="/ui/onboarding/keys">
+  <input type="hidden" name="csrf_token" value="{{.CSRF}}">
+  <input name="label" placeholder="label">
+  <select name="role"><option>viewer</option><option>operator</option><option>admin</option></select>
+  <button type="submit">Mint key</button>
+</form>
+
+{{if .SecretsEnabled}}
+<h2>Credentials</h2>
+<ul>{{range .Secrets}}<li>{{.Name}}</li>{{end}}</ul>
+<form method="post" action="/ui/onboarding/secrets">
+  <input type="hidden" name="csrf_token" value="{{.CSRF}}">
+  <input name="name" placeholder="ORDERS_API_KEY">
+  <input name="value" placeholder="value" type="password">
+  <button type="submit">Set credential</button>
+</form>
+{{end}}
+
+<h2>Upstreams</h2>
+<table><tr><th>Name</th><th>Transport</th><th></th></tr>
+{{range .Upstreams}}<tr><td>{{.Name}}</td><td>{{.Transport}}</td>
+<td><form method="post" action="/ui/onboarding/upstreams/{{.ID}}/delete">
+  <input type="hidden" name="csrf_token" value="{{$.CSRF}}"><button type="submit">remove</button>
+</form></td></tr>{{end}}
+</table>
+<form method="post" action="/ui/onboarding/upstreams">
+  <input type="hidden" name="csrf_token" value="{{.CSRF}}">
+  <p><input name="name" placeholder="upstream name (e.g. orders)" required></p>
+  <fieldset>
+    <legend>Transport — fill exactly one of the two below</legend>
+    <p><label>HTTP (Streamable MCP) URL<br>
+      <input name="url" placeholder="http://host/mcp" size="48"></label></p>
+    <p><label>OR OpenAPI spec (REST adapter)<br>
+      <input name="openapi" placeholder="http://host/openapi.yaml" size="48"></label>
+      <br><input name="base_url" placeholder="base_url override (optional, OpenAPI only)" size="48"></p>
+  </fieldset>
+  <fieldset>
+    <legend>Per-tenant credential (optional)</legend>
+    <p><input name="cred_secret" placeholder="credential secret name (e.g. ORDERS_API_KEY)"></p>
+    <p><input name="cred_header" placeholder="header to inject into (e.g. Authorization)"></p>
+  </fieldset>
+  <button type="submit">Register upstream</button>
+</form>
+<p><a href="/ui">← back</a></p>
+</body></html>{{end}}

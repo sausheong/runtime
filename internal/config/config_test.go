@@ -1039,3 +1039,34 @@ func TestRemoteReplicaURL(t *testing.T) {
 		t.Fatalf("single remote RemoteReplicaURL(0) = %q err=%v", got, err)
 	}
 }
+
+func TestGatewayCredFieldsValidate(t *testing.T) {
+	// Validate() requires at least one agent before it reaches the gateway
+	// loop, so every case carries a minimal valid agent — otherwise the
+	// negative cases would pass for the wrong reason and the positive case
+	// would fail on the agent check rather than exercising cred validation.
+	agent := func() []AgentConfig {
+		return []AgentConfig{{ID: "a", Name: "A", Model: "m", ListenAddr: "127.0.0.1:1"}}
+	}
+	// cred_header required when cred_secret set
+	c := &Config{Agents: agent(), Gateway: GatewayConfig{Servers: []GatewayServer{
+		{Name: "orders", URL: "http://x", CredSecret: "ORDERS_KEY"},
+	}}}
+	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "must both be set") {
+		t.Fatalf("expected error: cred_secret without cred_header, got %v", err)
+	}
+	// cred_secret not allowed on stdio
+	c = &Config{Agents: agent(), Gateway: GatewayConfig{Servers: []GatewayServer{
+		{Name: "x", Command: "cmd", CredSecret: "K", CredHeader: "Authorization"},
+	}}}
+	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "not allowed on stdio") {
+		t.Fatalf("expected error: cred on stdio upstream, got %v", err)
+	}
+	// valid: http + both fields
+	c = &Config{Agents: agent(), Gateway: GatewayConfig{Servers: []GatewayServer{
+		{Name: "orders", URL: "http://x", CredSecret: "ORDERS_KEY", CredHeader: "Authorization"},
+	}}}
+	if err := c.Validate(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}

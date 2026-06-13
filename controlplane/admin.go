@@ -121,20 +121,16 @@ func RegisterAdmin(mux *http.ServeMux, s AdminStore, agentTenants map[string]str
 			http.Error(w, "valid role required", http.StatusBadRequest)
 			return
 		}
-		mk, err := identity.MintServiceKey()
-		if err != nil {
-			serverError(w, "mint key", err)
-			return
-		}
 		tenant, ok := effectiveTenant(w, r, s, p, body.Tenant)
 		if !ok {
 			return
 		}
-		if err := s.InsertServiceKey(r.Context(), mk.ID, tenant, mk.Hash, role, body.Label); err != nil {
-			serverError(w, "insert key", err)
+		id, plaintext, err := MintAgentKey(r.Context(), s, tenant, role, body.Label)
+		if err != nil {
+			serverError(w, "mint key", err)
 			return
 		}
-		writeJSON(w, http.StatusCreated, map[string]string{"id": mk.ID, "plaintext": mk.Plaintext})
+		writeJSON(w, http.StatusCreated, map[string]string{"id": id, "plaintext": plaintext})
 	})
 
 	mux.HandleFunc("DELETE /admin/keys/{id}", func(w http.ResponseWriter, r *http.Request) {

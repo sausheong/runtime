@@ -75,44 +75,16 @@ func main() {
 		_ = traceShutdown(sctx)
 	}()
 
-	// Gateway (B1 M1): build the upstream manager when configured. PrincipalFor
-	// is wired below once we know whether identity is on (open vs enforced).
-	// Start is deferred until after the identity block: its failure paths
-	// os.Exit(1), which skips deferred cleanup, and a started manager may have
-	// spawned stdio upstream children that would be orphaned.
+	// Gateway (B1 M1 + v1.0-M1 self-service): the upstream manager is built
+	// below, AFTER the secret broker exists, so it can take the per-tenant
+	// credential resolver and be seeded from both file config and DB rows. The
+	// var declarations live here so the identity branch can wire PrincipalFor and
+	// pass gwHandler/gwManager into buildRoot. Start is deferred until after the
+	// identity block: its failure paths os.Exit(1), which skips deferred cleanup,
+	// and a started manager may have spawned stdio upstream children that would be
+	// orphaned.
 	var gwHandler *gateway.Handler
 	var gwManager *gateway.Manager
-	if cfg.Gateway.Enabled() {
-		gwURL := gatewaySelfURL(cfg.Gateway.SelfURL, ctlAddr)
-		reg.SetGateway(gwURL, cfg.Gateway.AgentKeys)
-		gwManager = gateway.NewManager(cfg.Gateway.Servers)
-		gwHandler = gateway.NewHandler(gwManager)
-		// Metrics wiring must precede gwManager.Start (no race on the first
-		// connect transition).
-		gwManager.Metrics = cm
-		gwHandler.Metrics = cm
-		slog.Info("gateway enabled", "upstreams", len(cfg.Gateway.Servers), "url", gwURL)
-
-		// Gateway search (M2): assemble the Index from the Memory embedder env
-		// and fail fast when a search-mode agent exists without embeddings.
-		// Safe to os.Exit here: gwManager.Start runs later, so no stdio upstream
-		// children have been spawned yet.
-		emb, _, embOn, eerr := memory.NewEmbedderFromEnv()
-		if eerr != nil {
-			slog.Error("gateway: embeddings config invalid", "err", eerr)
-			os.Exit(1)
-		}
-		if embOn {
-			floor := envFloatOr("RUNTIME_GATEWAY_SEARCH_FLOOR", 0.2)
-			k := envIntOr("RUNTIME_GATEWAY_SEARCH_K", 5)
-			gwHandler.Index = gateway.NewIndex(emb, floor, k)
-			slog.Info("gateway search enabled", "floor", floor, "k", k)
-		}
-		if err := validateGatewaySearch(cfg, embOn); err != nil {
-			slog.Error("gateway search misconfigured", "err", err)
-			os.Exit(1)
-		}
-	}
 
 	// Identity layer (M1). Operator config via env:
 	//   RUNTIME_OIDC_ISSUER / RUNTIME_OIDC_CLIENT_ID — enable OIDC human login.
@@ -145,6 +117,15 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Gateway upstream store (v1.0-M1 Task 2): persists self-registered upstreams
+	// in the identity DB. Always constructed (both modes); only mounted via the
+	// onboarding API when a gateway manager exists (identity on + brokering).
+	gwStore, err := gateway.NewUpstreamStore(ctx, identityDB)
+	if err != nil {
+		slog.Error("gateway upstream store init failed", "err", err)
+		os.Exit(1)
+	}
+
 	ctlStore, err := store.NewPGStore(ctx, dsn)
 	if err != nil {
 		slog.Error("control store init failed", "err", err)
@@ -166,6 +147,74 @@ func main() {
 	var secretAdmin controlplane.SecretAdmin
 	if secretBroker != nil {
 		secretAdmin = secretBroker
+	}
+
+	// Gateway (B1 + v1.0-M1 self-service): build the manager when file upstreams
+	// exist OR a secrets broker is available (so tenants can self-register
+	// upstreams even with zero file config). Seed from file config + DB rows;
+	// inject the per-tenant credential resolver backed by the broker. Built here,
+	// after secretBroker/secretAdmin are established and BEFORE the identity
+	// branch, but still BEFORE gwManager.Start (below) — preserving the
+	// "no Start until every os.Exit path has passed" invariant.
+	gatewayActive := cfg.Gateway.Enabled() || secretBroker != nil
+	if gatewayActive {
+		gwURL := gatewaySelfURL(cfg.Gateway.SelfURL, ctlAddr)
+		reg.SetGateway(gwURL, cfg.Gateway.AgentKeys)
+
+		dbRows, lerr := gwStore.ListUpstreams(ctx, "") // all tenants
+		if lerr != nil {
+			slog.Error("gateway: load upstreams failed", "err", lerr)
+			os.Exit(1)
+		}
+		servers := append([]config.GatewayServer(nil), cfg.Gateway.Servers...)
+		for _, row := range dbRows {
+			servers = append(servers, row.ToConfig())
+		}
+		var resolver gateway.CredentialResolver
+		if secretBroker != nil {
+			resolver = func(rctx context.Context, tenant, name string) (string, error) {
+				m, serr := secretBroker.SecretsFor(rctx, tenant)
+				if serr != nil {
+					// SecretsFor's decrypt error embeds the secret NAME; scrub it
+					// here so the name never reaches gateway logs/LastError/Status.
+					return "", fmt.Errorf("required credential could not be resolved for tenant")
+				}
+				v, ok := m[name]
+				if !ok {
+					return "", fmt.Errorf("required credential not found for tenant")
+				}
+				return v, nil
+			}
+		}
+		// WithCredentials(nil) is safe: dialWith only invokes the resolver when
+		// m.cred != nil, so a nil resolver (file upstreams, no broker) is a no-op.
+		gwManager = gateway.NewManager(servers, gateway.WithCredentials(resolver))
+		gwHandler = gateway.NewHandler(gwManager)
+		// Metrics wiring must precede gwManager.Start (no race on the first
+		// connect transition).
+		gwManager.Metrics = cm
+		gwHandler.Metrics = cm
+		slog.Info("gateway enabled", "file_upstreams", len(cfg.Gateway.Servers), "db_upstreams", len(dbRows), "url", gwURL)
+
+		// Gateway search (M2): assemble the Index from the Memory embedder env
+		// and fail fast when a search-mode agent exists without embeddings.
+		// Safe to os.Exit here: gwManager.Start runs later, so no stdio upstream
+		// children have been spawned yet.
+		emb, _, embOn, eerr := memory.NewEmbedderFromEnv()
+		if eerr != nil {
+			slog.Error("gateway: embeddings config invalid", "err", eerr)
+			os.Exit(1)
+		}
+		if embOn {
+			floor := envFloatOr("RUNTIME_GATEWAY_SEARCH_FLOOR", 0.2)
+			k := envIntOr("RUNTIME_GATEWAY_SEARCH_K", 5)
+			gwHandler.Index = gateway.NewIndex(emb, floor, k)
+			slog.Info("gateway search enabled", "floor", floor, "k", k)
+		}
+		if verr := validateGatewaySearch(cfg, embOn); verr != nil {
+			slog.Error("gateway search misconfigured", "err", verr)
+			os.Exit(1)
+		}
 	}
 
 	configured, err := idStore.AnyConfigured(ctx)
@@ -196,7 +245,9 @@ func main() {
 		if gwHandler != nil {
 			gwHandler.PrincipalFor = gateway.OpenMode
 		}
-		handler = obs.RequestID(tracedHandler(accessLog(buildRoot(reg, nil, console.OIDCConfig{}, secretAdmin, gwHandler, cm, ctlStore), cm))) // no /admin in open mode
+		// Open mode: no admin store ⇒ no /admin, no onboarding API, no onboarding
+		// page. Pass literal nil for the interface params (true nil interface).
+		handler = obs.RequestID(tracedHandler(accessLog(buildRoot(reg, nil, console.OIDCConfig{}, secretAdmin, gwHandler, nil, nil, nil, cm, ctlStore), cm)))
 	} else {
 		oidcVerifier, verr := identity.NewOIDCVerifier(ctx, oidcIssuer, oidcClientID)
 		if verr != nil {
@@ -237,7 +288,21 @@ func main() {
 		if gwHandler != nil {
 			gwHandler.PrincipalFor = controlplane.PrincipalFromContext
 		}
-		root := buildRoot(reg, idStore, consoleOIDC, secretAdmin, gwHandler, cm, ctlStore) // mounts /admin since the store is non-nil
+		// Self-service onboarding (v1.0-M1): only when a gateway manager exists.
+		// Guard the GatewayMutator interface assignment to avoid the typed-nil
+		// trap — a nil *gateway.Manager stored in the interface would be != nil.
+		var gwMut controlplane.GatewayMutator
+		var onb *console.Onboarding
+		if gwManager != nil {
+			gwMut = gwManager
+			onb = &console.Onboarding{
+				Upstreams: gwStore,
+				Mutator:   gwManager,
+				Admin:     idStore,
+				Secrets:   secretAdmin,
+			}
+		}
+		root := buildRoot(reg, idStore, consoleOIDC, secretAdmin, gwHandler, gwStore, gwMut, onb, cm, ctlStore) // mounts /admin since the store is non-nil
 		handler = obs.RequestID(tracedHandler(controlplane.IdentityMiddleware(accessLog(root, cm), authr, azr, func(status int) {
 			cm.AuthRejected(status)
 		})))
@@ -432,18 +497,26 @@ func mountMetrics(inner http.Handler, cm *obs.ControlMetrics, targets func() []o
 // buildRoot assembles the root mux: console at /ui, control-plane API at /, and
 // (when adminS is non-nil) the admin API at /admin. The secret admin is mounted
 // alongside the admin API; a nil secretBroker makes /admin/secrets return 503.
-// A nil gw leaves /gateway/* unmounted (stdlib mux → 404).
-func buildRoot(reg *controlplane.Registry, adminS controlplane.AdminStore, consoleOIDC console.OIDCConfig, secretBroker controlplane.SecretAdmin, gw *gateway.Handler, cm *obs.ControlMetrics, ctlStore store.Store) http.Handler {
+// A nil gw leaves /gateway/* unmounted (stdlib mux → 404). The self-service
+// onboarding API (/admin/upstreams) mounts only when adminS, us, and gwMut are
+// all non-nil; onb (when non-nil) enables the console onboarding page.
+func buildRoot(reg *controlplane.Registry, adminS controlplane.AdminStore, consoleOIDC console.OIDCConfig, secretBroker controlplane.SecretAdmin, gw *gateway.Handler, us controlplane.UpstreamStore, gwMut controlplane.GatewayMutator, onb *console.Onboarding, cm *obs.ControlMetrics, ctlStore store.Store) http.Handler {
 	apiMux := controlplane.NewAPI(reg, cm, ctlStore)
 	if adminS != nil {
 		controlplane.RegisterAdmin(apiMux, adminS, reg.AgentTenants())
 		controlplane.RegisterSecretAdmin(apiMux, adminS, secretBroker)
+		// Onboarding API mounts only with an admin store AND a live gateway
+		// (us+gwMut non-nil): self-service requires both persistence and a
+		// manager to add the upstream to.
+		if us != nil && gwMut != nil {
+			controlplane.RegisterUpstreamAdmin(apiMux, adminS, us, gwMut)
+		}
 	}
 	if gw != nil {
 		apiMux.Handle("/gateway/mcp", gw.HTTP())
 		apiMux.HandleFunc("GET /gateway/status", gw.Status)
 	}
-	consoleH := console.Handler(reg, consoleOIDC)
+	consoleH := console.Handler(reg, consoleOIDC, onb)
 	root := http.NewServeMux()
 	root.Handle("/ui", consoleH)
 	root.Handle("/ui/", consoleH)
