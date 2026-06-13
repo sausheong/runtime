@@ -58,12 +58,19 @@ func NewUpstreamStore(ctx context.Context, db *sql.DB) (*UpstreamStore, error) {
 }
 
 func (s *UpstreamStore) InsertUpstream(ctx context.Context, r UpstreamRow) error {
+	// pq.Array(nil) emits SQL NULL, which overrides the column's NOT NULL DEFAULT
+	// '{}' and fails the constraint — http upstreams legitimately have no
+	// operations, so coerce nil to a non-nil empty slice (stored as '{}').
+	ops := r.Operations
+	if ops == nil {
+		ops = []string{}
+	}
 	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO gateway_upstreams
 		 (id, tenant_id, name, transport, url, openapi, base_url, operations, cred_secret, cred_header)
 		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
 		r.ID, r.TenantID, r.Name, r.Transport, r.URL, r.OpenAPI, r.BaseURL,
-		pq.Array(r.Operations), r.CredSecret, r.CredHeader)
+		pq.Array(ops), r.CredSecret, r.CredHeader)
 	return err
 }
 
