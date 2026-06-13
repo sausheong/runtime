@@ -63,3 +63,37 @@ func TestCredentialMissingFailsClosed(t *testing.T) {
 		t.Fatalf("error leaks secret: %q", err.Error())
 	}
 }
+
+func TestCredentialSkippedWhenNotSingleTenant(t *testing.T) {
+	resolverCalled := false
+	dialed := make(chan map[string]string, 1)
+	dial := func(ctx context.Context, s config.GatewayServer) (upstreamConn, error) {
+		dialed <- s.Headers
+		return &fakeConn{}, nil
+	}
+	resolver := func(ctx context.Context, tenant, name string) (string, error) {
+		resolverCalled = true
+		return "Bearer x", nil
+	}
+	m := NewManager(nil, WithDial(dial), WithCredentials(resolver),
+		WithBackoff(5*time.Millisecond, 10*time.Millisecond))
+	// 2-tenant upstream with a credential configured: must skip injection, must dial.
+	conn, err := m.dialWith(context.Background(), config.GatewayServer{
+		Name: "shared", URL: "http://x", Tenants: []string{"t1", "t2"},
+		CredSecret: "K", CredHeader: "Authorization",
+	})
+	if err != nil || conn == nil {
+		t.Fatalf("expected successful dial without injection, err=%v", err)
+	}
+	if resolverCalled {
+		t.Fatal("resolver must NOT be called for a non-single-tenant upstream")
+	}
+	select {
+	case h := <-dialed:
+		if _, ok := h["Authorization"]; ok {
+			t.Fatal("Authorization header must not be injected for multi-tenant upstream")
+		}
+	default:
+		t.Fatal("dial not observed")
+	}
+}

@@ -210,12 +210,23 @@ const pingTimeout = 5 * time.Second
 // headers, then dials. Fail-closed: a resolution error aborts the dial (the
 // supervision loop retries with backoff). The error never includes the value.
 func (m *Manager) dialWith(ctx context.Context, s config.GatewayServer) (upstreamConn, error) {
-	if s.CredSecret != "" && m.cred != nil && len(s.Tenants) == 1 {
-		val, err := m.cred(ctx, s.Tenants[0], s.CredSecret)
-		if err != nil {
-			return nil, fmt.Errorf("gateway: resolve credential for upstream %q: %w", s.Name, err)
+	// Inject a per-tenant credential only for a tenant-OWNED upstream: exactly
+	// one tenant means the secret's owner is unambiguous (DB-registered upstreams
+	// always set exactly one tenant via UpstreamRow.ToConfig). A 0- or 2+-tenant
+	// upstream has no unambiguous secret owner, so injection is skipped — and we
+	// warn if a credential was nonetheless configured, since that combination is
+	// almost certainly a misconfiguration that would otherwise dial with no auth.
+	if s.CredSecret != "" && m.cred != nil {
+		if len(s.Tenants) == 1 {
+			val, err := m.cred(ctx, s.Tenants[0], s.CredSecret)
+			if err != nil {
+				return nil, fmt.Errorf("gateway: resolve credential for upstream %q: %w", s.Name, err)
+			}
+			s = withCredHeader(s, s.CredHeader, val)
+		} else {
+			slog.Warn("gateway: credential configured but upstream is not single-tenant; skipping injection",
+				"server", s.Name, "tenants", len(s.Tenants))
 		}
-		s = withCredHeader(s, s.CredHeader, val)
 	}
 	return m.dial(ctx, s)
 }
