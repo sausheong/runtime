@@ -71,8 +71,8 @@ no lost work, no duplicated committed tool calls.
 
 **Three binaries:**
 
-- **`runtimed`** — the control plane. Loads `runtime.yaml`, supervises one
-  `agentd` per agent, and serves the routed HTTP API.
+- **`runtimed`** — the control plane. Loads `runtime.yaml`, supervises one or
+  more `agentd` per agent (a replica pool), and serves the routed HTTP API.
 - **`agentd`** — an agent subprocess. Runs one agent via `agentruntime.Serve`.
   (The bundled `agentd` uses a deterministic built-in test agent; swap in a real
   LLM provider for production — see [Writing your own agent](#writing-your-own-agent-the-sdk).)
@@ -88,8 +88,8 @@ no lost work, no duplicated committed tool calls.
 ## Concepts
 
 - **Agent** — a hosted LLM agent, declared in `runtime.yaml` with an `id`, a
-  display name, a model string, and a `listen_addr`. Runs as one `agentd`
-  subprocess.
+  display name, a model string, and a `listen_addr`. Runs as one or more `agentd`
+  processes (a replica pool; default one).
 - **Session** — one durable conversation with an agent. Backed by a DBOS
   workflow whose id equals the session id. Has a status
   (`created → running → completed | error`) and a turn count.
@@ -191,8 +191,59 @@ is spawned):
 - every agent needs `id`, `name`, `model`, and exactly one of `listen_addr` (local) or `url` (remote)
 - `id`s must be unique
 - each agent's dial address (`listen_addr` or `url`) must be unique
+- `replicas: N` (local agents only; default 1) gives an agent a pool of N processes; replica *i* listens on `base_port + i`, and all derived ports across all agents must be unique and in range 1–65535
 
 To add or remove an agent, edit `runtime.yaml` and restart `runtimed`.
+
+### Replica pools & session affinity
+
+A local agent can run a **pool** of N processes instead of one. Set `replicas:`
+on the agent (its `listen_addr` becomes the *base* — replica *i* listens on
+`base_port + i`):
+
+```yaml
+agents:
+  - id: support
+    name: Support Agent
+    model: test/scripted
+    listen_addr: 127.0.0.1:8101   # base; replicas listen on 8101, 8102, 8103
+    replicas: 3
+```
+
+- **New sessions round-robin** across the pool (`POST /agents/{id}/sessions`).
+- **Each session pins to its owner replica for life.** The owner index is
+  persisted on the session row; every session-scoped request
+  (`GET .../sessions/{id}`, `.../sessions/{id}/stream`) routes back to that
+  replica. This is a *correctness* requirement, not load-balancing: only the
+  owner's durable workflow can resume the session, and live stream events come
+  from the owner's in-memory subscriber set.
+- **Stable per-replica identity.** Replica *i* runs as DBOS executor
+  `<id>#<i>`. A replica restarted by its supervisor at the same index reuses that
+  id and recovers exactly *its own* in-flight sessions — the crash-resume
+  guarantee, now scoped per replica. No two replicas ever recover the same
+  workflow.
+- **Owner down ⇒ 503, not reroute.** If a session's owner replica is down, its
+  session-scoped requests return `503` until the supervisor restarts it (only the
+  owner can resume that workflow). New sessions round-robin blind to liveness, so
+  a `POST` landing on a down replica's index fails and the client retries.
+- **Health:** `GET /agents` reports an agent healthy if **any** replica answers.
+- **Metrics:** every per-replica series carries a `replica` label (including the
+  agent-exposed metrics like `runtime_agent_turns_total`), so a pool's series
+  stay disjoint and aggregate by `agent` in Grafana.
+- **Startup:** replicas start sequentially (the first creates the DBOS schema,
+  the rest find it), so cold-start time scales with the total replica count.
+- `replicas` is **rejected on remote (`url:`) agents** — a remote agent's
+  replica count is the remote operator's concern.
+
+> **Upgrading from a pre-pools deployment:** single-replica agents now run as DBOS
+> executor `<id>#0` rather than the old `local`. A *fresh* deploy needs nothing,
+> but a pre-A1 deployment with in-flight sessions should drain them before
+> upgrading (or remap `executor_id` in `dbos.workflow_status` from `local` to
+> `<id>#0`), since DBOS recovers only workflows stamped with the process's own
+> executor id.
+
+**Deferred:** autoscaling, graceful drain, changing replica count without a
+restart, health-aware (skip-down) new-session routing, and remote-agent pools.
 
 ### Remote agents (attach instead of spawn)
 
@@ -1803,8 +1854,10 @@ milestone or sub-project):
   metrics panel, log shipping, and DBOS-internal metrics.
 - **Write actions from the console** — the console is read-only; deploy/stop/
   invoke from the UI is future work.
-- **Subprocess pools / autoscaling** — one subprocess per agent today; no
-  per-agent replicas or load-based scaling.
+- **Autoscaling** — per-agent replica **pools** are done (`replicas: N`, see
+  [Replica pools & session affinity](#replica-pools--session-affinity)); what's
+  still missing is load-based scaling, graceful drain, and changing the replica
+  count without a restart.
 - **Dynamic deploy** — agents come from `runtime.yaml` at startup; no runtime
   `POST /agents` registration or rollback yet (tokens are config-only too).
 - **Gateway — first three milestones DONE** (see [MCP Gateway](#mcp-gateway)):
@@ -1836,7 +1889,7 @@ milestone or sub-project):
 - **Cross-agent aggregate views** — session listing is per-agent; a fleet-wide
   session view is future console work.
 - **Minor hardening**: `session_events` sequence allocation assumes one writer
-  per session (true today, since one subprocess owns a session); the console
+  per session (true today, since one replica owns a session for life); the console
   cookie is not `Secure` (terminate TLS upstream).
 
 See `docs/superpowers/specs/` for the full design and milestone specs.

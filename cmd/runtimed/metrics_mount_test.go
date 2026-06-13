@@ -14,7 +14,7 @@ func TestMountMetricsBypassesInnerHandler(t *testing.T) {
 	// Every control family is a *Vec; a fresh registry with zero series
 	// gathers zero families and renders an empty body. Record one
 	// observation so at least one runtime_* family is present.
-	cm.AgentUp("x", true)
+	cm.AgentUp("x", 0, true)
 	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized) // simulates identity middleware
 	})

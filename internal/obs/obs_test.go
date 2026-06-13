@@ -30,27 +30,42 @@ func TestControlMetricsHTTPObserved(t *testing.T) {
 
 func TestControlMetricsAgentAndGateway(t *testing.T) {
 	c := NewControlMetrics()
-	c.AgentUp("support", true)
-	c.AgentUp("research", false)
-	c.AgentRestart("support")
+	c.AgentUp("support", 0, true)
+	c.AgentUp("research", 0, false)
+	c.AgentRestart("support", 0)
 	c.ProxyError("support")
 	c.GatewayCall("sandbox", "execute_code", "ok", time.Second)
 	c.GatewayCall("sandbox", "execute_code", "error", time.Second)
 	c.GatewayUpstreamUp("sandbox", true)
-	c.ScrapeSkip("research", "timeout")
+	c.ScrapeSkip("research", 0, "timeout")
 
-	if v := testutil.ToFloat64(c.agentUp.WithLabelValues("support")); v != 1 {
+	if v := testutil.ToFloat64(c.agentUp.WithLabelValues("support", "0")); v != 1 {
 		t.Fatalf("agent_up support = %v, want 1", v)
 	}
-	if v := testutil.ToFloat64(c.agentUp.WithLabelValues("research")); v != 0 {
+	if v := testutil.ToFloat64(c.agentUp.WithLabelValues("research", "0")); v != 0 {
 		t.Fatalf("agent_up research = %v, want 0", v)
 	}
 	if v := testutil.ToFloat64(c.gwCalls.WithLabelValues("sandbox", "execute_code", "ok")); v != 1 {
 		t.Fatalf("gateway ok calls = %v, want 1", v)
 	}
-	if v := testutil.ToFloat64(c.scrapeSkips.WithLabelValues("research", "timeout")); v != 1 {
+	if v := testutil.ToFloat64(c.scrapeSkips.WithLabelValues("research", "0", "timeout")); v != 1 {
 		t.Fatalf("scrape skips = %v, want 1", v)
 	}
+}
+
+func TestControlMetrics_ReplicaLabels(t *testing.T) {
+	c := NewControlMetrics()
+	// New signatures take a replica index; must not panic and must register.
+	c.AgentUp("a", 0, true)
+	c.AgentReachable("rem", 0, true)
+	c.AgentRestart("a", 1)
+	c.ScrapeSkip("a", 2, "timeout")
+	// Nil-safe (no panic on nil receiver).
+	var n *ControlMetrics
+	n.AgentUp("a", 0, false)
+	n.AgentReachable("a", 0, false)
+	n.AgentRestart("a", 0)
+	n.ScrapeSkip("a", 0, "x")
 }
 
 func TestAgentMetricsTurnObserved(t *testing.T) {
@@ -149,12 +164,12 @@ func TestNilReceiversAreSafe(t *testing.T) {
 	// None of these may panic.
 	c.HTTPObserved("/x", "GET", 200, time.Millisecond)
 	c.AuthRejected(401)
-	c.AgentUp("a", true)
-	c.AgentRestart("a")
+	c.AgentUp("a", 0, true)
+	c.AgentRestart("a", 0)
 	c.ProxyError("a")
 	c.GatewayCall("s", "t", "ok", time.Millisecond)
 	c.GatewayUpstreamUp("s", false)
-	c.ScrapeSkip("a", "timeout")
+	c.ScrapeSkip("a", 0, "timeout")
 	a.TurnObserved("completed", time.Millisecond, nil)
 	a.ToolCallObserved("bash")
 }

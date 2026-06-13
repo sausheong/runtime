@@ -166,8 +166,8 @@ func TestObservabilityE2E(t *testing.T) {
 	for _, want := range []string{
 		`agent_turns_total{agent="support"`,
 		`agent_turns_total{agent="research"`,
-		`runtime_agent_up{agent="support"} 1`,
-		`runtime_agent_up{agent="research"} 1`,
+		`runtime_agent_up{agent="support",replica="0"} 1`,
+		`runtime_agent_up{agent="research",replica="0"} 1`,
 		`runtime_http_requests_total{method="POST",route="/agents/{id}/`,
 	} {
 		if !strings.Contains(body, want) {

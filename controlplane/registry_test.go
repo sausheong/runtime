@@ -2,10 +2,80 @@ package controlplane
 
 import (
 	"context"
+	"strconv"
 	"testing"
 
 	"github.com/sausheong/runtime/internal/config"
 )
+
+func TestRegistry_ReplicaSetExpansion(t *testing.T) {
+	cfg := &config.Config{Agents: []config.AgentConfig{
+		{ID: "support", Name: "S", Model: "m", ListenAddr: "127.0.0.1:8101", Replicas: 3, Tenant: "default"},
+	}}
+	r := NewRegistry(cfg, "/bin/agentd", "dsn")
+	set, ok := r.Replicas("support")
+	if !ok || len(set) != 3 {
+		t.Fatalf("Replicas: ok=%v len=%d, want 3", ok, len(set))
+	}
+	for i, ap := range set {
+		if ap.ReplicaIndex != i {
+			t.Errorf("replica %d: ReplicaIndex=%d", i, ap.ReplicaIndex)
+		}
+		wantVMID := "support#" + strconv.Itoa(i)
+		if ap.DBOSVMID != wantVMID {
+			t.Errorf("replica %d: DBOSVMID=%q want %q", i, ap.DBOSVMID, wantVMID)
+		}
+		wantAddr := "127.0.0.1:" + strconv.Itoa(8101+i)
+		if ap.Addr != wantAddr {
+			t.Errorf("replica %d: Addr=%q want %q", i, ap.Addr, wantAddr)
+		}
+	}
+}
+
+func TestRegistry_NextReplicaRoundRobin(t *testing.T) {
+	cfg := &config.Config{Agents: []config.AgentConfig{
+		{ID: "a", Name: "A", Model: "m", ListenAddr: "127.0.0.1:8201", Replicas: 2, Tenant: "default"},
+	}}
+	r := NewRegistry(cfg, "/bin/agentd", "dsn")
+	got := []int{r.NextReplica("a"), r.NextReplica("a"), r.NextReplica("a"), r.NextReplica("a")}
+	want := []int{0, 1, 0, 1}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("NextReplica seq: got %v want %v", got, want)
+		}
+	}
+}
+
+func TestRegistry_RemoteSingleReplica(t *testing.T) {
+	cfg := &config.Config{Agents: []config.AgentConfig{
+		{ID: "rem", Name: "R", Model: "m", URL: "https://h:8443", Tenant: "default"},
+	}}
+	r := NewRegistry(cfg, "/bin/agentd", "dsn")
+	set, ok := r.Replicas("rem")
+	if !ok || len(set) != 1 {
+		t.Fatalf("remote Replicas: ok=%v len=%d, want 1", ok, len(set))
+	}
+	if !set[0].Remote || set[0].DBOSVMID != "" || set[0].BaseURL != "https://h:8443" {
+		t.Fatalf("remote replica fields wrong: %+v", set[0])
+	}
+}
+
+func TestRegistry_ReplicaByIndex(t *testing.T) {
+	cfg := &config.Config{Agents: []config.AgentConfig{
+		{ID: "a", Name: "A", Model: "m", ListenAddr: "127.0.0.1:8301", Replicas: 2, Tenant: "default"},
+	}}
+	r := NewRegistry(cfg, "/bin/agentd", "dsn")
+	ap, ok := r.Replica("a", 1)
+	if !ok || ap.ReplicaIndex != 1 {
+		t.Fatalf("Replica(a,1): ok=%v idx=%d", ok, ap.ReplicaIndex)
+	}
+	if _, ok := r.Replica("a", 2); ok {
+		t.Fatal("Replica(a,2) should be out of range")
+	}
+	if _, ok := r.Replica("nope", 0); ok {
+		t.Fatal("Replica(nope,0) should be unknown")
+	}
+}
 
 func TestRegistry_FromConfig(t *testing.T) {
 	cfg := &config.Config{Agents: []config.AgentConfig{

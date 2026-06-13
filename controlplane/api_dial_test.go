@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/sausheong/runtime/internal/config"
+	"github.com/sausheong/runtime/internal/store"
 )
 
 // A remote agent behind a bearer: /agents must dial its base URL WITH the
@@ -35,7 +36,7 @@ func TestAPI_RemoteAgentHealthAndProxyUseBearer(t *testing.T) {
 		t.Fatal(err)
 	}
 	reg := NewRegistry(cfg, "bin", "dsn")
-	api := NewAPI(reg, nil)
+	api := NewAPI(reg, nil, store.NewMemStore())
 
 	// /agents reports healthy.
 	rec := httptest.NewRecorder()

@@ -23,6 +23,7 @@ import (
 	"github.com/sausheong/runtime/internal/identity"
 	"github.com/sausheong/runtime/internal/memory"
 	"github.com/sausheong/runtime/internal/obs"
+	"github.com/sausheong/runtime/internal/store"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"golang.org/x/oauth2"
 )
@@ -144,6 +145,13 @@ func main() {
 		os.Exit(1)
 	}
 
+	ctlStore, err := store.NewPGStore(ctx, dsn)
+	if err != nil {
+		slog.Error("control store init failed", "err", err)
+		os.Exit(1)
+	}
+	defer ctlStore.Close()
+
 	// Secret broker (Identity M2/M3): built whenever a secrets keyring is
 	// configured (RUNTIME_SECRETS_KEYS or the legacy RUNTIME_SECRETS_KEY),
 	// independent of whether identity enforcement is on. Injected into the
@@ -188,7 +196,7 @@ func main() {
 		if gwHandler != nil {
 			gwHandler.PrincipalFor = gateway.OpenMode
 		}
-		handler = obs.RequestID(tracedHandler(accessLog(buildRoot(reg, nil, console.OIDCConfig{}, secretAdmin, gwHandler, cm), cm))) // no /admin in open mode
+		handler = obs.RequestID(tracedHandler(accessLog(buildRoot(reg, nil, console.OIDCConfig{}, secretAdmin, gwHandler, cm, ctlStore), cm))) // no /admin in open mode
 	} else {
 		oidcVerifier, verr := identity.NewOIDCVerifier(ctx, oidcIssuer, oidcClientID)
 		if verr != nil {
@@ -229,7 +237,7 @@ func main() {
 		if gwHandler != nil {
 			gwHandler.PrincipalFor = controlplane.PrincipalFromContext
 		}
-		root := buildRoot(reg, idStore, consoleOIDC, secretAdmin, gwHandler, cm) // mounts /admin since the store is non-nil
+		root := buildRoot(reg, idStore, consoleOIDC, secretAdmin, gwHandler, cm, ctlStore) // mounts /admin since the store is non-nil
 		handler = obs.RequestID(tracedHandler(controlplane.IdentityMiddleware(accessLog(root, cm), authr, azr, func(status int) {
 			cm.AuthRejected(status)
 		})))
@@ -243,8 +251,13 @@ func main() {
 	handler = mountMetrics(handler, cm, func() []obs.ScrapeTarget {
 		var ts []obs.ScrapeTarget
 		for _, info := range reg.List() {
-			ap, _ := reg.Get(info.ID)
-			ts = append(ts, obs.ScrapeTarget{Agent: ap.AgentID, BaseURL: ap.DialBase(), Token: ap.AuthToken})
+			replicas, _ := reg.Replicas(info.ID)
+			for _, ap := range replicas {
+				ts = append(ts, obs.ScrapeTarget{
+					Agent: ap.AgentID, Replica: ap.ReplicaIndex,
+					BaseURL: ap.DialBase(), Token: ap.AuthToken,
+				})
+			}
 		}
 		return ts
 	})
@@ -267,22 +280,30 @@ func main() {
 	// Start agents sequentially with a readiness gate (M2: DBOS first-run
 	// schema init is not safe to run concurrently).
 	for _, info := range reg.List() {
-		ap, _ := reg.Get(info.ID)
-		if ap.Remote {
-			id := ap.AgentID
-			hm := &controlplane.HealthMonitor{
-				BaseURL: ap.DialBase(), Token: ap.AuthToken,
-				OnChange: func(ok bool) { cm.AgentReachable(id, ok) },
+		replicas, _ := reg.Replicas(info.ID)
+		for _, ap := range replicas {
+			if ap.Remote {
+				id := ap.AgentID
+				idx := ap.ReplicaIndex
+				hm := &controlplane.HealthMonitor{
+					BaseURL: ap.DialBase(), Token: ap.AuthToken,
+					OnChange: func(ok bool) { cm.AgentReachable(id, idx, ok) },
+				}
+				go hm.Run(ctx)
+				slog.Info("monitoring remote agent", "agent", ap.AgentID, "url", ap.DialBase())
+				continue
 			}
-			go hm.Run(ctx)
-			slog.Info("monitoring remote agent", "agent", ap.AgentID, "url", ap.DialBase())
-			continue
-		}
-		sup := &controlplane.Supervisor{Spawn: ap.SpawnFunc(), Backoff: time.Second, OnRestart: func() { cm.AgentRestart(ap.AgentID) }}
-		go sup.Run(ctx)
-		slog.Info("supervising agent", "agent", ap.AgentID, "addr", ap.Addr)
-		if err := waitAgentHealthy(ctx, ap.Addr, 30*time.Second); err != nil {
-			slog.Warn("agent not healthy yet; continuing", "agent", ap.AgentID, "err", err)
+			idx := ap.ReplicaIndex
+			sup := &controlplane.Supervisor{
+				Spawn:     ap.SpawnFunc(),
+				Backoff:   time.Second,
+				OnRestart: func() { cm.AgentRestart(ap.AgentID, idx) },
+			}
+			go sup.Run(ctx)
+			slog.Info("supervising agent replica", "agent", ap.AgentID, "replica", idx, "addr", ap.Addr)
+			if err := waitAgentHealthy(ctx, ap.Addr, 30*time.Second); err != nil {
+				slog.Warn("agent replica not healthy yet; continuing", "agent", ap.AgentID, "replica", idx, "err", err)
+			}
 		}
 	}
 
@@ -374,8 +395,8 @@ func mountMetrics(inner http.Handler, cm *obs.ControlMetrics, targets func() []o
 // (when adminS is non-nil) the admin API at /admin. The secret admin is mounted
 // alongside the admin API; a nil secretBroker makes /admin/secrets return 503.
 // A nil gw leaves /gateway/* unmounted (stdlib mux → 404).
-func buildRoot(reg *controlplane.Registry, adminS controlplane.AdminStore, consoleOIDC console.OIDCConfig, secretBroker controlplane.SecretAdmin, gw *gateway.Handler, cm *obs.ControlMetrics) http.Handler {
-	apiMux := controlplane.NewAPI(reg, cm)
+func buildRoot(reg *controlplane.Registry, adminS controlplane.AdminStore, consoleOIDC console.OIDCConfig, secretBroker controlplane.SecretAdmin, gw *gateway.Handler, cm *obs.ControlMetrics, ctlStore store.Store) http.Handler {
+	apiMux := controlplane.NewAPI(reg, cm, ctlStore)
 	if adminS != nil {
 		controlplane.RegisterAdmin(apiMux, adminS)
 		controlplane.RegisterSecretAdmin(apiMux, adminS, secretBroker)

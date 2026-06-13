@@ -3,9 +3,11 @@ package config
 
 import (
 	"fmt"
+	"net"
 	"net/url"
 	"os"
 	"path"
+	"strconv"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -17,11 +19,12 @@ type AgentConfig struct {
 	Name       string   `yaml:"name"`
 	Model      string   `yaml:"model"`
 	ListenAddr string   `yaml:"listen_addr"`
-	Kind       string   `yaml:"kind"`    // optional; "" ⇒ testagent. Resolved by agentd's kind registry.
-	Command    []string `yaml:"command"` // optional; when set, the supervisor execs this instead of the agentd binary (polyglot/foreign agents). argv form.
-	WorkDir    string   `yaml:"workdir"` // optional working directory for Command (e.g. a Python shim project root).
-	Tenant     string   `yaml:"tenant"`  // optional; "" ⇒ "default" tenant. Owns this agent for access control.
-	Memory     bool     `yaml:"memory"`  // optional; opt-in to the per-tenant Postgres memory tool. Default false.
+	Kind       string   `yaml:"kind"`     // optional; "" ⇒ testagent. Resolved by agentd's kind registry.
+	Command    []string `yaml:"command"`  // optional; when set, the supervisor execs this instead of the agentd binary (polyglot/foreign agents). argv form.
+	WorkDir    string   `yaml:"workdir"`  // optional working directory for Command (e.g. a Python shim project root).
+	Tenant     string   `yaml:"tenant"`   // optional; "" ⇒ "default" tenant. Owns this agent for access control.
+	Memory     bool     `yaml:"memory"`   // optional; opt-in to the per-tenant Postgres memory tool. Default false.
+	Replicas   int      `yaml:"replicas"` // optional; 0/omitted ⇒ 1. Local agents only: replica i listens on base_port+i.
 
 	// URL marks a REMOTE agent: runtimed attaches (health-check + proxy +
 	// status) instead of spawning. Full base, e.g. "https://host:8443".
@@ -177,8 +180,8 @@ func (c *Config) Validate() error {
 				return fmt.Errorf("config: agent %q url must be http(s)://host[:port] (got %q)", a.ID, a.URL)
 			}
 			// Local-only fields can't be delivered to a process we don't spawn.
-			if len(a.Command) > 0 || a.WorkDir != "" || a.Kind != "" || a.Memory || a.Gateway.Enabled() {
-				return fmt.Errorf("config: remote agent %q must not set command, workdir, kind, memory, or gateway (these are spawn-time only)", a.ID)
+			if len(a.Command) > 0 || a.WorkDir != "" || a.Kind != "" || a.Memory || a.Gateway.Enabled() || a.Replicas > 1 {
+				return fmt.Errorf("config: remote agent %q must not set command, workdir, kind, memory, gateway, or replicas (these are spawn-time only)", a.ID)
 			}
 			if err := expandEnvScalar(&a.AuthToken, "agent "+a.ID+" auth_token"); err != nil {
 				return err
@@ -192,15 +195,24 @@ func (c *Config) Validate() error {
 		if ids[a.ID] {
 			return fmt.Errorf("config: duplicate agent id %q", a.ID)
 		}
-		dial := a.ListenAddr
-		if remote {
-			dial = a.URL
-		}
-		if dials[dial] {
-			return fmt.Errorf("config: duplicate agent dial address %q", dial)
-		}
 		ids[a.ID] = true
-		dials[dial] = true
+		if remote {
+			if dials[a.URL] {
+				return fmt.Errorf("config: duplicate agent dial address %q", a.URL)
+			}
+			dials[a.URL] = true
+		} else {
+			addrs, err := a.ReplicaAddrs()
+			if err != nil {
+				return fmt.Errorf("config: %w", err)
+			}
+			for _, addr := range addrs {
+				if dials[addr] {
+					return fmt.Errorf("config: agent %q derived address %q collides with another agent", a.ID, addr)
+				}
+				dials[addr] = true
+			}
+		}
 	}
 	seen := map[string]bool{}
 	for i, tk := range c.Tokens {
@@ -367,4 +379,31 @@ func (c *Config) AgentTenants() map[string]string {
 		m[a.ID] = t
 	}
 	return m
+}
+
+// ReplicaAddrs returns the derived listen addresses for a local agent: replica i
+// listens on base_host:base_port+i. Replicas <= 0 means 1. Errors if the base
+// listen_addr has no parseable numeric port. Not meaningful for remote agents
+// (Validate rejects replicas there); returns the single URL-less base otherwise.
+func (a AgentConfig) ReplicaAddrs() ([]string, error) {
+	n := a.Replicas
+	if n <= 0 {
+		n = 1
+	}
+	host, portStr, err := net.SplitHostPort(a.ListenAddr)
+	if err != nil {
+		return nil, fmt.Errorf("agent %q listen_addr %q: %w", a.ID, a.ListenAddr, err)
+	}
+	base, err := strconv.Atoi(portStr)
+	if err != nil {
+		return nil, fmt.Errorf("agent %q listen_addr %q: port not numeric: %w", a.ID, a.ListenAddr, err)
+	}
+	if base < 1 || base+n-1 > 65535 {
+		return nil, fmt.Errorf("agent %q: derived replica ports %d..%d out of range (1-65535)", a.ID, base, base+n-1)
+	}
+	out := make([]string, n)
+	for i := 0; i < n; i++ {
+		out[i] = net.JoinHostPort(host, strconv.Itoa(base+i))
+	}
+	return out, nil
 }

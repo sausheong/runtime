@@ -824,3 +824,71 @@ agents:
 		t.Fatal("expected error for unset env var in auth_token")
 	}
 }
+
+func TestReplicaAddrs_Default(t *testing.T) {
+	a := AgentConfig{ID: "x", ListenAddr: "127.0.0.1:8101"}
+	got, err := a.ReplicaAddrs()
+	if err != nil {
+		t.Fatalf("ReplicaAddrs: %v", err)
+	}
+	if len(got) != 1 || got[0] != "127.0.0.1:8101" {
+		t.Fatalf("default replicas: got %v, want [127.0.0.1:8101]", got)
+	}
+}
+
+func TestReplicaAddrs_Range(t *testing.T) {
+	a := AgentConfig{ID: "x", ListenAddr: "127.0.0.1:8101", Replicas: 3}
+	got, err := a.ReplicaAddrs()
+	if err != nil {
+		t.Fatalf("ReplicaAddrs: %v", err)
+	}
+	want := []string{"127.0.0.1:8101", "127.0.0.1:8102", "127.0.0.1:8103"}
+	if len(got) != 3 || got[0] != want[0] || got[1] != want[1] || got[2] != want[2] {
+		t.Fatalf("range: got %v, want %v", got, want)
+	}
+}
+
+func TestValidate_ReplicasRejectedOnRemote(t *testing.T) {
+	c := &Config{Agents: []AgentConfig{
+		{ID: "r", Name: "R", Model: "m", URL: "http://h:9000", Replicas: 2},
+	}}
+	if err := c.Validate(); err == nil {
+		t.Fatal("expected error: replicas on remote agent")
+	}
+}
+
+func TestValidate_DerivedPortCollision(t *testing.T) {
+	c := &Config{Agents: []AgentConfig{
+		{ID: "a", Name: "A", Model: "m", ListenAddr: "127.0.0.1:8101", Replicas: 3},
+		{ID: "b", Name: "B", Model: "m", ListenAddr: "127.0.0.1:8102"}, // collides with a#1
+	}}
+	if err := c.Validate(); err == nil {
+		t.Fatal("expected error: derived port collision 127.0.0.1:8102")
+	}
+}
+
+func TestValidate_BadBasePort(t *testing.T) {
+	c := &Config{Agents: []AgentConfig{
+		{ID: "a", Name: "A", Model: "m", ListenAddr: "127.0.0.1:notaport", Replicas: 2},
+	}}
+	if err := c.Validate(); err == nil {
+		t.Fatal("expected error: unparseable base port")
+	}
+}
+
+func TestValidate_NonOverlappingPoolsOK(t *testing.T) {
+	c := &Config{Agents: []AgentConfig{
+		{ID: "a", Name: "A", Model: "m", ListenAddr: "127.0.0.1:8101", Replicas: 3},
+		{ID: "b", Name: "B", Model: "m", ListenAddr: "127.0.0.1:8201", Replicas: 3},
+	}}
+	if err := c.Validate(); err != nil {
+		t.Fatalf("non-overlapping pools should validate: %v", err)
+	}
+}
+
+func TestReplicaAddrs_PortOverflow(t *testing.T) {
+	a := AgentConfig{ID: "x", ListenAddr: "127.0.0.1:65534", Replicas: 4}
+	if _, err := a.ReplicaAddrs(); err == nil {
+		t.Fatal("expected error: derived ports exceed 65535")
+	}
+}

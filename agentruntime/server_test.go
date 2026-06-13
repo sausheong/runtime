@@ -24,6 +24,23 @@ func newTestManager() *Manager {
 	}
 }
 
+// TestManager_ReplicaFieldRoundTripsThroughStore guards that the Manager.replica
+// field exists and that the value an agentd would stamp survives a store
+// round-trip. The full startSession→CreateSession path (which also starts a DBOS
+// workflow) is exercised by the Task 9 integration test, not here.
+func TestManager_ReplicaFieldRoundTripsThroughStore(t *testing.T) {
+	st := store.NewMemStore()
+	m := &Manager{agentID: "a", st: st, replica: 3, subscribers: map[string][]chan WireEvent{}}
+	id, err := st.CreateSession(context.Background(), "a", m.replica)
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	r, _ := st.SessionReplica(context.Background(), id)
+	if r != 3 {
+		t.Fatalf("replica: got %d, want 3", r)
+	}
+}
+
 func TestHealthzAndMeta(t *testing.T) {
 	srv := httptest.NewServer(newTestManager().newMux())
 	defer srv.Close()
@@ -36,10 +53,10 @@ func TestHealthzAndMeta(t *testing.T) {
 func TestListSessionsEndpoint(t *testing.T) {
 	m := newTestManager()
 	ctx := context.Background()
-	id1, _ := m.st.CreateSession(ctx, "a")
+	id1, _ := m.st.CreateSession(ctx, "a", 0)
 	_ = m.st.SetSessionStatus(ctx, id1, "completed")
 	_ = m.st.SetTurnCount(ctx, id1, 2)
-	_, _ = m.st.CreateSession(ctx, "a")
+	_, _ = m.st.CreateSession(ctx, "a", 0)
 
 	srv := httptest.NewServer(m.newMux())
 	defer srv.Close()
@@ -57,7 +74,7 @@ func TestListSessionsEndpoint(t *testing.T) {
 func TestStreamReplaysBufferedTerminal(t *testing.T) {
 	m := newTestManager()
 	ctx := context.Background()
-	id, _ := m.st.CreateSession(ctx, "a")
+	id, _ := m.st.CreateSession(ctx, "a", 0)
 	_, _ = m.st.AppendEvent(ctx, id, "text", []byte(`{"type":"text","text":"a"}`))
 	_, _ = m.st.AppendEvent(ctx, id, "done", []byte(`{"type":"done"}`))
 

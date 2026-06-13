@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"strconv"
 
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 )
@@ -39,6 +40,16 @@ type AgentProcess struct {
 	// makes to this agent (proxy, health, metrics). "" ⇒ no auth header.
 	AuthToken string
 
+	// ReplicaIndex is this replica's 0-based index within its agent's pool.
+	// 0 for single-replica and remote agents. Injected into the child as
+	// RUNTIME_AGENT_REPLICA and used to derive the listen port and executor id.
+	ReplicaIndex int
+	// DBOSVMID is the stable per-replica DBOS executor id "<AgentID>#<index>"
+	// (injected as DBOS__VMID). "" for remote agents (the remote owns its own
+	// executor id). A restart at the same index reuses this id, so the replica
+	// recovers exactly its own in-flight workflows.
+	DBOSVMID string
+
 	GatewayOn  bool   // opt-in: when true, spawn env carries RUNTIME_GATEWAY_URL (+_KEY when set).
 	GatewayURL string // full URL of the platform gateway MCP endpoint.
 	GatewayKey string // tenant service key for the gateway; "" in open mode.
@@ -59,6 +70,11 @@ func (a AgentProcess) buildEnv(ctx context.Context) ([]string, error) {
 		"RUNTIME_AGENT_ID="+a.AgentID,
 		"RUNTIME_AGENT_KIND="+a.Kind,
 		"RUNTIME_AGENT_TENANT="+a.Tenant,
+		// Per-replica identity (Spine A1): RUNTIME_AGENT_REPLICA tells agentd its
+		// index (stamped on sessions); DBOS__VMID is the stable executor id so a
+		// restarted replica recovers exactly its own in-flight workflows.
+		"RUNTIME_AGENT_REPLICA="+strconv.Itoa(a.ReplicaIndex),
+		"DBOS__VMID="+a.DBOSVMID,
 	)
 	// Agents that did NOT opt in get explicit empty-value entries so an
 	// inherited operator var (e.g. a leaked RUNTIME_GATEWAY_URL) can't enable
