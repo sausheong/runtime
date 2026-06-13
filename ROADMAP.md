@@ -945,8 +945,36 @@ Tested: config/handler unit (`envDelta` no-leak, all `/register` status paths,
 end-to-end integration `TestRegistrationHandshake` (agent boots from a near-empty
 env, revoked token → agentd exits non-zero, cross-tenant mint → 403), and chart
 render permutations (handshake env present in the StatefulSet + Secret key wired;
-handshake-off and monolith regressions). Live-proof: <to be filled after kind
-proof>. Remaining C3: mTLS, and brokered-secrets edge cases. Spec/plan:
+handshake-off and monolith regressions). THE FINAL HOLISTIC REVIEW + LIVE KIND
+PROOF EARNED THEIR KEEP AGAIN: the holistic review found a LOW (the `RUNTIME_PG_DSN`
+secretKeyRef was made `optional:true` unconditionally, weakening schedule-time
+fail-fast for the non-handshake perAgentPods path; fixed by gating `optional` on
+handshake mode), and the live kind proof caught an independent **install-only
+CrashLoop bug invisible to hermetic/integration/render checks**: K8s
+liveness/readiness probes hit agentd's `/healthz` with no bearer, but C3 M1's
+`requireBearer` guarded ALL paths — so any agent pod with `agentAuthToken` set
+(which the handshake flow encourages) got 401 on every probe → CrashLoopBackOff
+forever. (C2 M2's proof missed it because it never set `agentAuthToken`.) Fixed by
+exempting ONLY `GET /healthz` from the agent bearer — it returns a static no-data
+`ok`; `/metrics` stays guarded (it exposes values). LIVE PROOF (real kind cluster +
+bundled Postgres, 2026-06-13, all passed): `make docker-image` → `kind load` →
+`helm install` perAgentPods+bundled-PG+keyring+bootstrap+`agentAuthToken` with a
+2-replica `support` agent (NO registration token yet) → control plane Ready,
+**control-plane Service had exactly 1 endpoint** (C2 M2 label fix), agent pods Ready
+(healthz fix); set a brokered `OPENAI_API_KEY` (tenant `default`, encrypted DB only —
+**never in the chart Secret**) and minted a `support` registration token; **handshake
+proven** — `helm upgrade` injecting the token rolled the pool and BOTH ordinals POSTed
+`/register` (control-plane log `msg=register agent=support ordinal=0/1
+token_id=svk-… vars=11`, **no secret value/name logged**); **brokered-secret
+delivery proven** — `vars=11` = 10 base env vars + the 1 brokered `OPENAI_API_KEY`
+(the only path it could reach the pod, since the chart Secret carries no such key);
+**per-ordinal executor ids proven** — driving sessions produced `support#0` and
+`support#1` rows in `dbos.workflow_status` (distinct executors, no double-exec);
+**fail-closed proven** — `register revoke` then deleting `support-1` → `agentd:
+registration handshake … status 401 Unauthorized` → CrashLoopBackOff; clean
+`helm uninstall` + `kind delete`. Remaining C3: mTLS, per-agent (non-shared) tokens
+via existingSecret, per-agent-pod gateway (still blocked — remote agents reject the
+`gateway:` field at config validation), and brokered-secrets edge cases. Spec/plan:
 `docs/superpowers/{specs,plans}/2026-06-13-c3-m2-registration-handshake*`.
 
 - **Remote agents** — let an agent run on a different host while runtimed still
