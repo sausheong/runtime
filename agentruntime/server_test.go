@@ -105,53 +105,72 @@ func TestRequireBearer(t *testing.T) {
 		return httptest.NewServer(m.handler())
 	}
 
-	t.Run("no token configured: open (back-compat)", func(t *testing.T) {
-		srv := mkSrv("")
-		defer srv.Close()
-		resp, err := http.Get(srv.URL + "/healthz")
-		if err != nil || resp.StatusCode != 200 {
-			t.Fatalf("healthz open: err=%v status=%v", err, resp.StatusCode)
+	// get issues GET path with the given Authorization header value ("" = none).
+	get := func(t *testing.T, srv *httptest.Server, path, auth string) int {
+		t.Helper()
+		req, _ := http.NewRequest("GET", srv.URL+path, nil)
+		if auth != "" {
+			req.Header.Set("Authorization", auth)
 		}
-	})
-
-	t.Run("token set: 401 without header, including /healthz and /metrics", func(t *testing.T) {
-		srv := mkSrv(token)
-		defer srv.Close()
-		for _, path := range []string{"/healthz", "/metrics", "/sessions"} {
-			resp, err := http.Get(srv.URL + path)
-			if err != nil {
-				t.Fatal(err)
-			}
-			resp.Body.Close()
-			if resp.StatusCode != http.StatusUnauthorized {
-				t.Fatalf("%s without token: status=%d, want 401", path, resp.StatusCode)
-			}
-		}
-	})
-
-	t.Run("token set: 200 with correct bearer", func(t *testing.T) {
-		srv := mkSrv(token)
-		defer srv.Close()
-		req, _ := http.NewRequest("GET", srv.URL+"/healthz", nil)
-		req.Header.Set("Authorization", "Bearer "+token)
-		resp, err := http.DefaultClient.Do(req)
-		if err != nil || resp.StatusCode != 200 {
-			t.Fatalf("healthz with token: err=%v status=%v", err, resp.StatusCode)
-		}
-	})
-
-	t.Run("token set: 401 with wrong bearer", func(t *testing.T) {
-		srv := mkSrv(token)
-		defer srv.Close()
-		req, _ := http.NewRequest("GET", srv.URL+"/healthz", nil)
-		req.Header.Set("Authorization", "Bearer wrong")
 		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
 			t.Fatal(err)
 		}
 		resp.Body.Close()
-		if resp.StatusCode != http.StatusUnauthorized {
-			t.Fatalf("healthz wrong token: status=%d, want 401", resp.StatusCode)
+		return resp.StatusCode
+	}
+
+	t.Run("no token configured: all paths open (back-compat)", func(t *testing.T) {
+		srv := mkSrv("")
+		defer srv.Close()
+		if got := get(t, srv, "/healthz", ""); got != 200 {
+			t.Fatalf("healthz open: status=%d, want 200", got)
+		}
+		if got := get(t, srv, "/meta", ""); got == http.StatusUnauthorized {
+			t.Fatalf("meta open: status=%d, want not-401", got)
+		}
+	})
+
+	// /healthz is EXEMPT from the bearer (K8s probes never send Authorization;
+	// the handler returns a static no-data "ok"). Everything else stays guarded.
+	t.Run("token set: /healthz exempt regardless of Authorization", func(t *testing.T) {
+		srv := mkSrv(token)
+		defer srv.Close()
+		if got := get(t, srv, "/healthz", ""); got != 200 {
+			t.Fatalf("healthz no auth: status=%d, want 200", got)
+		}
+		if got := get(t, srv, "/healthz", "Bearer wrong"); got != 200 {
+			t.Fatalf("healthz wrong bearer: status=%d, want 200", got)
+		}
+		if got := get(t, srv, "/healthz", "Bearer "+token); got != 200 {
+			t.Fatalf("healthz correct bearer: status=%d, want 200", got)
+		}
+	})
+
+	// /metrics exposes per-agent metric values, so it MUST stay guarded — proves
+	// we did not over-exempt by opening all probe paths.
+	t.Run("token set: /metrics stays guarded", func(t *testing.T) {
+		srv := mkSrv(token)
+		defer srv.Close()
+		if got := get(t, srv, "/metrics", ""); got != http.StatusUnauthorized {
+			t.Fatalf("metrics no auth: status=%d, want 401", got)
+		}
+		if got := get(t, srv, "/metrics", "Bearer wrong"); got != http.StatusUnauthorized {
+			t.Fatalf("metrics wrong bearer: status=%d, want 401", got)
+		}
+	})
+
+	t.Run("token set: normal routes stay guarded", func(t *testing.T) {
+		srv := mkSrv(token)
+		defer srv.Close()
+		if got := get(t, srv, "/meta", ""); got != http.StatusUnauthorized {
+			t.Fatalf("meta no auth: status=%d, want 401", got)
+		}
+		if got := get(t, srv, "/meta", "Bearer wrong"); got != http.StatusUnauthorized {
+			t.Fatalf("meta wrong bearer: status=%d, want 401", got)
+		}
+		if got := get(t, srv, "/meta", "Bearer "+token); got == http.StatusUnauthorized {
+			t.Fatalf("meta correct bearer: status=%d, want not-401", got)
 		}
 	})
 }
