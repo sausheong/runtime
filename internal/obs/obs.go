@@ -58,15 +58,15 @@ func NewControlMetrics() *ControlMetrics {
 	c.agentUp = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "runtime_agent_up",
 		Help: "1 when the agent's /metrics was scraped cleanly on the last fan-out (404 counts as serving).",
-	}, []string{"agent"})
+	}, []string{"agent", "replica"})
 	c.agentReachable = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "runtime_agent_reachable",
 		Help: "1 when a remote agent's /healthz was reachable on the last monitor poll (remote agents only).",
-	}, []string{"agent"})
+	}, []string{"agent", "replica"})
 	c.agentRestarts = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "runtime_agent_restarts_total",
 		Help: "Supervisor respawns per agent.",
-	}, []string{"agent"})
+	}, []string{"agent", "replica"})
 	c.proxyErrors = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "runtime_proxy_errors_total",
 		Help: "Reverse-proxy failures (503s served) per agent.",
@@ -87,7 +87,7 @@ func NewControlMetrics() *ControlMetrics {
 	c.scrapeSkips = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "runtime_metrics_scrape_skips_total",
 		Help: "Agents skipped during fan-out scrape, by reason.",
-	}, []string{"agent", "reason"})
+	}, []string{"agent", "replica", "reason"})
 	c.reg.MustRegister(c.httpRequests, c.httpDuration, c.agentUp, c.agentReachable, c.agentRestarts,
 		c.proxyErrors, c.gwCalls, c.gwDuration, c.gwUp, c.scrapeSkips)
 	return c
@@ -115,7 +115,7 @@ func (c *ControlMetrics) AuthRejected(status int) {
 	c.httpRequests.WithLabelValues("auth_rejected", "", strconv.Itoa(status)).Inc()
 }
 
-func (c *ControlMetrics) AgentUp(agent string, up bool) {
+func (c *ControlMetrics) AgentUp(agent string, replica int, up bool) {
 	if c == nil {
 		return
 	}
@@ -123,12 +123,12 @@ func (c *ControlMetrics) AgentUp(agent string, up bool) {
 	if up {
 		v = 1
 	}
-	c.agentUp.WithLabelValues(agent).Set(v)
+	c.agentUp.WithLabelValues(agent, strconv.Itoa(replica)).Set(v)
 }
 
 // AgentReachable sets the remote-agent reachability gauge (1/0) on each
 // HealthMonitor transition. Nil-safe like the other helpers.
-func (c *ControlMetrics) AgentReachable(agent string, reachable bool) {
+func (c *ControlMetrics) AgentReachable(agent string, replica int, reachable bool) {
 	if c == nil {
 		return
 	}
@@ -136,14 +136,14 @@ func (c *ControlMetrics) AgentReachable(agent string, reachable bool) {
 	if reachable {
 		v = 1
 	}
-	c.agentReachable.WithLabelValues(agent).Set(v)
+	c.agentReachable.WithLabelValues(agent, strconv.Itoa(replica)).Set(v)
 }
 
-func (c *ControlMetrics) AgentRestart(agent string) {
+func (c *ControlMetrics) AgentRestart(agent string, replica int) {
 	if c == nil {
 		return
 	}
-	c.agentRestarts.WithLabelValues(agent).Inc()
+	c.agentRestarts.WithLabelValues(agent, strconv.Itoa(replica)).Inc()
 }
 
 func (c *ControlMetrics) ProxyError(agent string) {
@@ -172,11 +172,11 @@ func (c *ControlMetrics) GatewayUpstreamUp(server string, up bool) {
 	c.gwUp.WithLabelValues(server).Set(v)
 }
 
-func (c *ControlMetrics) ScrapeSkip(agent, reason string) {
+func (c *ControlMetrics) ScrapeSkip(agent string, replica int, reason string) {
 	if c == nil {
 		return
 	}
-	c.scrapeSkips.WithLabelValues(agent, reason).Inc()
+	c.scrapeSkips.WithLabelValues(agent, strconv.Itoa(replica), reason).Inc()
 }
 
 // AgentMetrics is agentd's registry. Every series carries agent=<id> so the
