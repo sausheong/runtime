@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -97,3 +98,68 @@ func TestUpstreamAPIRBACAndValidation(t *testing.T) {
 		t.Fatalf("row tenant scoping wrong: %+v", rows)
 	}
 }
+
+func TestUpstreamCredBothOrNeither(t *testing.T) {
+	mux := http.NewServeMux()
+	store := newFakeAdminStore()
+	store.CreateTenant(context.Background(), "t1", "t1")
+	RegisterUpstreamAdmin(mux, store, &fakeUpstreamStore{}, &fakeMutator{})
+	admin := identity.Principal{Role: identity.RoleAdmin, TenantID: "t1"}
+	// cred_secret without cred_header → 400
+	w := postUpstream(t, mux, admin, map[string]any{"name": "o", "url": "http://x", "cred_secret": "K"})
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("cred_secret alone: want 400 got %d", w.Code)
+	}
+}
+
+func TestUpstreamRollbackOnManagerError(t *testing.T) {
+	mux := http.NewServeMux()
+	store := newFakeAdminStore()
+	store.CreateTenant(context.Background(), "t1", "t1")
+	us := &fakeUpstreamStore{}
+	mut := &errMutator{} // Add always errors
+	RegisterUpstreamAdmin(mux, store, us, mut)
+	admin := identity.Principal{Role: identity.RoleAdmin, TenantID: "t1"}
+	w := postUpstream(t, mux, admin, map[string]any{"name": "orders", "url": "http://x"})
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("manager add error: want 400 got %d (%s)", w.Code, w.Body)
+	}
+	// row must have been rolled back
+	rows, _ := us.ListUpstreams(context.Background(), "t1")
+	if len(rows) != 0 {
+		t.Fatalf("expected rollback to leave 0 rows, got %d", len(rows))
+	}
+}
+
+func TestUpstreamDeleteCrossTenantNoOp(t *testing.T) {
+	ctx := context.Background()
+	mux := http.NewServeMux()
+	store := newFakeAdminStore()
+	store.CreateTenant(ctx, "t1", "t1")
+	store.CreateTenant(ctx, "t2", "t2")
+	us := &fakeUpstreamStore{rows: map[string]gateway.UpstreamRow{
+		"gwu-x": {ID: "gwu-x", TenantID: "t1", Name: "orders", Transport: "http", URL: "http://x"},
+	}}
+	mut := &fakeMutator{}
+	RegisterUpstreamAdmin(mux, store, us, mut)
+	// admin of t2 tries to delete t1's upstream by id
+	admin2 := identity.Principal{Role: identity.RoleAdmin, TenantID: "t2"}
+	r := withPrincipal(httptest.NewRequest("DELETE", "/admin/upstreams/gwu-x", nil), admin2)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, r)
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("cross-tenant delete: want 204 (no oracle) got %d", w.Code)
+	}
+	// row must survive; manager.Remove must NOT have been called
+	if _, ok, _ := us.GetUpstream(ctx, "gwu-x"); !ok {
+		t.Fatal("cross-tenant delete must NOT remove the row")
+	}
+	if len(mut.removed) != 0 {
+		t.Fatalf("manager.Remove must not be called cross-tenant, got %v", mut.removed)
+	}
+}
+
+// errMutator's Add always fails (to exercise rollback).
+type errMutator struct{ fakeMutator }
+
+func (e *errMutator) Add(cfg config.GatewayServer) error { return errors.New("boom") }

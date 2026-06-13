@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 
 	"github.com/sausheong/runtime/internal/config"
 	"github.com/sausheong/runtime/internal/gateway"
@@ -48,7 +49,7 @@ type UpstreamParams struct {
 // tenant is the owning tenant (already resolved by the caller). Returns the
 // stored row.
 func RegisterUpstreamShared(ctx context.Context, store UpstreamStore, mut GatewayMutator, tenant string, p UpstreamParams) (gateway.UpstreamRow, error) {
-	if p.Name == "" || containsSep(p.Name) {
+	if p.Name == "" || strings.Contains(p.Name, "__") {
 		return gateway.UpstreamRow{}, fmt.Errorf("name required and must not contain %q", "__")
 	}
 	if p.Command != "" {
@@ -75,7 +76,10 @@ func RegisterUpstreamShared(ctx context.Context, store UpstreamStore, mut Gatewa
 	}
 	if err := mut.Add(row.ToConfig()); err != nil {
 		// roll back persistence so DB and live state stay consistent
-		_ = store.DeleteUpstream(ctx, tenant, id)
+		if delErr := store.DeleteUpstream(ctx, tenant, id); delErr != nil {
+			slog.Warn("onboarding: rollback of upstream row failed after manager add error",
+				"tenant", tenant, "id", id, "err", delErr)
+		}
 		return gateway.UpstreamRow{}, err
 	}
 	return row, nil
@@ -115,15 +119,6 @@ func resolveTransport(p UpstreamParams) (string, error) {
 		return "", fmt.Errorf("base_url/operations are only valid with openapi")
 	}
 	return transport, nil
-}
-
-func containsSep(s string) bool {
-	for i := 0; i+1 < len(s); i++ {
-		if s[i] == '_' && s[i+1] == '_' {
-			return true
-		}
-	}
-	return false
 }
 
 func genID(prefix string) (string, error) {
