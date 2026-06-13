@@ -17,6 +17,22 @@ agents:
   # replicas. Derived ports must not collide with other agents.
   #   replicas: 3
 
+  # Autoscaling (Spine A2): float the pool between min and max by active-session
+  # load. Opt-in; when omitted the agent uses the static `replicas:` pool above.
+  # runtimed grows/drains replicas on this host. Rejected on remote (url:) agents.
+  # listen_addr is the base; replica i listens on base_port+i, and the whole max
+  # range is reserved at load. Scale-down drains the top replica (stops only at 0
+  # active sessions — a long-lived session blocks that one scale-down by design).
+  # Tuning env: RUNTIME_AUTOSCALE_POLL_SECONDS / _UP_COOLDOWN_SECONDS / _DOWN_COOLDOWN_SECONDS.
+  # - id: support
+  #   name: Support
+  #   model: claude-opus-4-8
+  #   listen_addr: 127.0.0.1:8101
+  #   autoscale:
+  #     min: 1
+  #     max: 4
+  #     target_sessions_per_replica: 5
+
 # Optional: MCP gateway — federate upstream MCP servers into one endpoint at
 # /gateway/mcp. Agents opt in per mode (the platform injects
 # RUNTIME_GATEWAY_URL and, when identity is on, RUNTIME_GATEWAY_KEY):
