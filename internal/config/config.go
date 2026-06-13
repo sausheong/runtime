@@ -186,13 +186,28 @@ func (c *Config) Validate() error {
 		}
 		remote := a.URL != ""
 		if remote {
-			u, err := url.Parse(a.URL)
+			// Validate the concrete dial form: substitute the {i} placeholder
+			// (no-op for a single remote) so url.Parse never sees "{i}", which
+			// is not a legal URL host character.
+			probeURL := strings.ReplaceAll(a.URL, remoteOrdinalPlaceholder, "0")
+			u, err := url.Parse(probeURL)
 			if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
 				return fmt.Errorf("config: agent %q url must be http(s)://host[:port] (got %q)", a.ID, a.URL)
 			}
-			// Local-only fields can't be delivered to a process we don't spawn.
-			if len(a.Command) > 0 || a.WorkDir != "" || a.Kind != "" || a.Memory || a.Gateway.Enabled() || a.Replicas > 1 || a.Autoscale != nil {
-				return fmt.Errorf("config: remote agent %q must not set command, workdir, kind, memory, gateway, replicas, or autoscale (these are spawn-time only)", a.ID)
+			// Local-only spawn fields can't be delivered to a process we don't
+			// spawn. NOTE: replicas IS allowed on a remote agent (C2 M2 remote
+			// pool) — but only paired with an {i}-templated url (checked below).
+			if len(a.Command) > 0 || a.WorkDir != "" || a.Kind != "" || a.Memory || a.Gateway.Enabled() || a.Autoscale != nil {
+				return fmt.Errorf("config: remote agent %q must not set command, workdir, kind, memory, gateway, or autoscale (these are spawn-time only)", a.ID)
+			}
+			// Remote replica pool (C2 M2): replicas>1 requires an {i} ordinal
+			// placeholder in the url; a single remote must NOT contain {i}.
+			hasTmpl := strings.Contains(a.URL, remoteOrdinalPlaceholder)
+			if a.Replicas > 1 && !hasTmpl {
+				return fmt.Errorf("config: remote agent %q has replicas %d but url %q has no %q ordinal placeholder", a.ID, a.Replicas, a.URL, remoteOrdinalPlaceholder)
+			}
+			if a.Replicas <= 1 && hasTmpl {
+				return fmt.Errorf("config: remote agent %q url contains %q but is not a pool (set replicas > 1)", a.ID, remoteOrdinalPlaceholder)
 			}
 			if err := expandEnvScalar(&a.AuthToken, "agent "+a.ID+" auth_token"); err != nil {
 				return err
@@ -208,10 +223,16 @@ func (c *Config) Validate() error {
 		}
 		ids[a.ID] = true
 		if remote {
-			if dials[a.URL] {
-				return fmt.Errorf("config: duplicate agent dial address %q", a.URL)
+			for i := 0; i < a.RemotePoolSize(); i++ {
+				ou, err := a.RemoteReplicaURL(i)
+				if err != nil {
+					return fmt.Errorf("config: %w", err)
+				}
+				if dials[ou] {
+					return fmt.Errorf("config: agent %q ordinal url %q collides with another agent", a.ID, ou)
+				}
+				dials[ou] = true
 			}
-			dials[a.URL] = true
 		} else {
 			if a.Autoscale != nil {
 				as := a.Autoscale
@@ -440,6 +461,34 @@ func (a AgentConfig) ReplicaAddrs() ([]string, error) {
 		out[i] = addr
 	}
 	return out, nil
+}
+
+// remoteOrdinalPlaceholder is the literal substring in a remote agent's url:
+// that RemoteReplicaURL replaces with the 0-based ordinal. Required iff the
+// remote agent runs a pool (replicas > 1); forbidden for a single remote.
+const remoteOrdinalPlaceholder = "{i}"
+
+// RemotePoolSize is the number of ordinals a remote agent attaches to: replicas
+// when > 1, else 1. Meaningful only for remote (url:) agents.
+func (a AgentConfig) RemotePoolSize() int {
+	if a.Replicas > 1 {
+		return a.Replicas
+	}
+	return 1
+}
+
+// RemoteReplicaURL returns the dial URL for ordinal i of a remote agent,
+// substituting "{i}" with i. For a single remote (no placeholder) it returns
+// the url unchanged for i==0. Errors if i is out of [0,RemotePoolSize).
+func (a AgentConfig) RemoteReplicaURL(i int) (string, error) {
+	n := a.RemotePoolSize()
+	if i < 0 || i >= n {
+		return "", fmt.Errorf("agent %q: remote ordinal %d out of range [0,%d)", a.ID, i, n)
+	}
+	if !strings.Contains(a.URL, remoteOrdinalPlaceholder) {
+		return a.URL, nil
+	}
+	return strings.ReplaceAll(a.URL, remoteOrdinalPlaceholder, strconv.Itoa(i)), nil
 }
 
 // reservedAddrs returns the set of derived listen addresses to reserve in the

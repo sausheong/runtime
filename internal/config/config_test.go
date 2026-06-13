@@ -969,3 +969,73 @@ func TestReplicaAddrSingleIndex(t *testing.T) {
 		t.Fatalf("expected out-of-range error for huge index")
 	}
 }
+
+func TestRemoteReplicaPool_Validate(t *testing.T) {
+	base := func() *Config {
+		return &Config{Agents: []AgentConfig{{
+			ID: "support", Name: "S", Model: "m",
+			URL: "http://support-{i}.support-hl.ns.svc:8080", Replicas: 3,
+		}}}
+	}
+	t.Run("templated url with replicas>1 is valid", func(t *testing.T) {
+		if err := base().Validate(); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+	t.Run("replicas>1 without {i} is rejected", func(t *testing.T) {
+		c := base()
+		c.Agents[0].URL = "http://support.support-hl.ns.svc:8080" // no {i}
+		if err := c.Validate(); err == nil {
+			t.Fatal("expected error: replicas>1 needs {i} in url")
+		}
+	})
+	t.Run("single remote with {i} is rejected", func(t *testing.T) {
+		c := base()
+		c.Agents[0].Replicas = 1 // single, but url has {i}
+		if err := c.Validate(); err == nil {
+			t.Fatal("expected error: {i} only valid with replicas>1")
+		}
+	})
+	t.Run("single remote unchanged (no {i}, no replicas) still valid", func(t *testing.T) {
+		c := &Config{Agents: []AgentConfig{{
+			ID: "rem", Name: "R", Model: "m", URL: "https://h:8443",
+		}}}
+		if err := c.Validate(); err != nil {
+			t.Fatalf("C3 single-remote must stay valid: %v", err)
+		}
+	})
+	t.Run("other spawn fields still rejected on remote pool", func(t *testing.T) {
+		c := base()
+		c.Agents[0].Memory = true
+		if err := c.Validate(); err == nil {
+			t.Fatal("expected error: memory not allowed on remote")
+		}
+	})
+	t.Run("expanded ordinal URLs must be unique across agents", func(t *testing.T) {
+		c := &Config{Agents: []AgentConfig{
+			{ID: "a", Name: "A", Model: "m", URL: "http://x-{i}.svc:8080", Replicas: 2},
+			{ID: "b", Name: "B", Model: "m", URL: "http://x-{i}.svc:8080", Replicas: 2},
+		}}
+		if err := c.Validate(); err == nil {
+			t.Fatal("expected error: colliding expanded ordinal URLs")
+		}
+	})
+}
+
+func TestRemoteReplicaURL(t *testing.T) {
+	a := AgentConfig{ID: "s", URL: "http://s-{i}.hl.ns.svc:8080", Replicas: 3}
+	got, err := a.RemoteReplicaURL(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "http://s-1.hl.ns.svc:8080" {
+		t.Fatalf("RemoteReplicaURL(1) = %q", got)
+	}
+	if _, err := a.RemoteReplicaURL(3); err == nil {
+		t.Fatal("expected out-of-range error for i=3 (replicas=3)")
+	}
+	noTmpl := AgentConfig{ID: "s", URL: "http://s.svc:8080", Replicas: 1}
+	if got, err := noTmpl.RemoteReplicaURL(0); err != nil || got != "http://s.svc:8080" {
+		t.Fatalf("single remote RemoteReplicaURL(0) = %q err=%v", got, err)
+	}
+}
