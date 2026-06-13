@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"strconv"
 	"sync"
 	"time"
 
@@ -31,6 +32,10 @@ type Manager struct {
 	// authToken, when non-empty, requires every inbound request to carry
 	// Authorization: Bearer <authToken>. "" ⇒ no auth (local/loopback agents).
 	authToken string
+	// replica is this process's 0-based replica index (from
+	// RUNTIME_AGENT_REPLICA). Stamped onto each session row at create so the
+	// control plane can pin session-scoped requests back to this replica.
+	replica int
 
 	mu          sync.Mutex
 	subscribers map[string][]chan WireEvent // sessionID -> live SSE subscribers
@@ -262,7 +267,7 @@ func (m *Manager) sessionWorkflow(ctx dbos.DBOSContext, in turnInput) (string, e
 // originating POST's X-Request-ID, carried into the checkpointed workflow
 // input for log correlation.
 func (m *Manager) startSession(ctx context.Context, userMsg, imageB64, imageMime, requestID string) (string, error) {
-	sessionID, err := m.st.CreateSession(ctx, m.agentID)
+	sessionID, err := m.st.CreateSession(ctx, m.agentID, m.replica)
 	if err != nil {
 		return "", err
 	}
@@ -317,6 +322,7 @@ func Serve(ctx context.Context, cfg Config) error {
 		return err
 	}
 
+	replica, _ := strconv.Atoi(os.Getenv("RUNTIME_AGENT_REPLICA")) // "" or bad ⇒ 0
 	m := &Manager{
 		agentID:     cfg.Spec.ID,
 		cfg:         cfg,
@@ -324,6 +330,7 @@ func Serve(ctx context.Context, cfg Config) error {
 		st:          st,
 		metrics:     obs.NewAgentMetrics(cfg.Spec.ID),
 		authToken:   os.Getenv("RUNTIME_AGENT_AUTH_TOKEN"),
+		replica:     replica,
 		subscribers: map[string][]chan WireEvent{},
 	}
 

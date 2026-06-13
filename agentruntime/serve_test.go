@@ -12,7 +12,7 @@ import (
 // and an unsubscribed channel stops receiving.
 func TestPublishFanoutAndUnsubscribe(t *testing.T) {
 	m := &Manager{agentID: "a", st: store.NewMemStore(), subscribers: map[string][]chan WireEvent{}}
-	id, _ := m.st.CreateSession(context.Background(), "a")
+	id, _ := m.st.CreateSession(context.Background(), "a", 0)
 	ch1, unsub1 := m.subscribe(id)
 	ch2, _ := m.subscribe(id)
 
