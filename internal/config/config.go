@@ -319,10 +319,10 @@ func (c *Config) Validate() error {
 		}
 		if s.CredSecret != "" || s.CredHeader != "" {
 			if s.Command != "" {
-				return fmt.Errorf("gateway server %q: cred_secret/cred_header not allowed on stdio upstreams", s.Name)
+				return fmt.Errorf("config: gateway server %q: cred_secret/cred_header not allowed on stdio upstreams", s.Name)
 			}
 			if s.CredSecret == "" || s.CredHeader == "" {
-				return fmt.Errorf("gateway server %q: cred_secret and cred_header must both be set", s.Name)
+				return fmt.Errorf("config: gateway server %q: cred_secret and cred_header must both be set", s.Name)
 			}
 		}
 		if err := expandEnvMap(s.Headers, "gateway server "+s.Name+" headers"); err != nil {
