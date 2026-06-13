@@ -76,3 +76,45 @@ func TestGatewayUpstreamStoreCRUD(t *testing.T) {
 		t.Fatalf("expected empty after delete, got %+v", got)
 	}
 }
+
+func TestGatewayUpstreamStoreNilOperations(t *testing.T) {
+	ctx := context.Background()
+	db, err := sql.Open("pgx", gwStoreDSN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := identity.NewStore(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+	st, err := gateway.NewUpstreamStore(ctx, db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = db.ExecContext(ctx, `DELETE FROM gateway_upstreams WHERE tenant_id='gwtnil'`)
+	_, _ = db.ExecContext(ctx, `DELETE FROM tenants WHERE id='gwtnil'`)
+	if _, err := db.ExecContext(ctx, `INSERT INTO tenants(id,name) VALUES('gwtnil','gwtnil')`); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = db.ExecContext(ctx, `DELETE FROM gateway_upstreams WHERE tenant_id='gwtnil'`)
+		_, _ = db.ExecContext(ctx, `DELETE FROM tenants WHERE id='gwtnil'`)
+	})
+
+	// http upstream with NO operations (nil) — must NOT violate the
+	// operations TEXT[] NOT NULL constraint (regression guard for pq.Array(nil)→NULL).
+	row := gateway.UpstreamRow{
+		ID: "gwu-nil", TenantID: "gwtnil", Name: "noops", Transport: "http",
+		URL: "http://x", Operations: nil,
+	}
+	if err := st.InsertUpstream(ctx, row); err != nil {
+		t.Fatalf("insert with nil operations must succeed, got: %v", err)
+	}
+	got, err := st.ListUpstreams(ctx, "gwtnil")
+	if err != nil || len(got) != 1 {
+		t.Fatalf("list: %+v err=%v", got, err)
+	}
+	if len(got[0].Operations) != 0 {
+		t.Fatalf("nil operations should round-trip to empty, got %+v", got[0].Operations)
+	}
+}
