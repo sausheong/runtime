@@ -64,6 +64,16 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
+	traceShutdown, terr := obs.InitTracing(ctx, "runtimed")
+	if terr != nil {
+		slog.Warn("tracing init failed; continuing without traces", "err", terr)
+	}
+	defer func() {
+		sctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = traceShutdown(sctx)
+	}()
+
 	// Gateway (B1 M1): build the upstream manager when configured. PrincipalFor
 	// is wired below once we know whether identity is on (open vs enforced).
 	// Start is deferred until after the identity block: its failure paths

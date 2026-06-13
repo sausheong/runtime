@@ -521,6 +521,31 @@ exposing the platform broadly.
    alerting/recording rules, console `/ui` metrics panel, log shipping, and
    DBOS-internal metrics. Spec/plan:
    `docs/superpowers/{specs,plans}/2026-06-11-observability-m1-metrics*`.
+   **Second milestone DONE (2026-06-13):** OpenTelemetry distributed tracing.
+   A new `internal/obs/tracing.go` is the single owner of the tracer setup:
+   `InitTracing` is the no-op gate — off by default, with no OTLP endpoint it
+   installs a no-op provider for zero overhead (env `OTEL_EXPORTER_OTLP_ENDPOINT`
+   presence enables; `RUNTIME_TRACING_ENABLED` is an explicit 1/0 override;
+   `RUNTIME_TRACE_SAMPLE_RATIO` 0.0–1.0 default 1.0 drives a parent-based + ratio
+   sampler), with a W3C TraceContext + Baggage propagator and `StartSpan` plus
+   attribute builders that enforce IDs-only/no-content. Instrumentation lives at
+   three otelhttp seams (runtimed edge server span, the reverse-proxy transport
+   injecting `traceparent`, and the agentd inbound server span continuing the
+   parent) plus in-process spans `session.workflow`/`agent.turn`/`tool.call`
+   (live-execution only, created inside the DBOS `RunAsStep` closure and NOT
+   checkpointed — replay-safe) and `gateway.upstream`. THE HONEST TRACE SHAPE:
+   the synchronous HTTP path (edge → reverse-proxy → agentd handler) is ONE
+   trace via `traceparent`, but the durable session workflow is a SEPARATE,
+   correlated trace joined by the `request.id` span attribute — because the
+   workflow is launched on the long-lived dbos context, not the inbound request
+   ctx (a durable workflow outlives its request; inherent to durable async).
+   `InitTracing` is wired into both binaries (runtimed `main`, agentd
+   `Serve`, flushing on shutdown after the HTTP drain). The obs compose overlay
+   adds an OTel Collector (OTLP/HTTP :4318) + Jaeger (UI :16686); host-run
+   binaries export to `http://localhost:4318`. Deferred to a later milestone:
+   sandboxd internals, content attributes, and live-wrapped tool/LLM spans.
+   Spec/plan:
+   `docs/superpowers/{specs,plans}/2026-06-13-observability-m2-tracing*`.
 
 ### C. Cross-cutting / platform-level (later)
 

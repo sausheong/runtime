@@ -293,6 +293,16 @@ func Serve(ctx context.Context, cfg Config) error {
 		return errors.New("agentruntime: RUNTIME_LISTEN_ADDR is not set")
 	}
 
+	traceShutdown, terr := obs.InitTracing(ctx, cfg.Spec.ID)
+	if terr != nil {
+		slog.Warn("agentd tracing init failed; continuing without traces", "err", terr)
+	}
+	defer func() {
+		fctx, fcancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer fcancel()
+		_ = traceShutdown(fctx)
+	}()
+
 	st, err := store.NewPGStore(ctx, pgDSN)
 	if err != nil {
 		return err
