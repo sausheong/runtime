@@ -15,7 +15,8 @@ import (
 // agent's replica pool, plus GET /agents and GET /healthz. New sessions
 // round-robin across replicas; session-scoped requests pin to the owning replica
 // (resolved from st); replica-agnostic paths use replica 0. m records
-// proxy-error metrics; nil ⇒ no-op. st resolves session→replica affinity.
+// proxy-error metrics; nil ⇒ no-op. st resolves session→replica affinity and is
+// REQUIRED (non-nil); unlike m it is not nil-safe (pickReplica dereferences it).
 func NewAPI(reg *Registry, m *obs.ControlMetrics, st store.Store) *http.ServeMux {
 	mux := http.NewServeMux()
 
@@ -114,8 +115,13 @@ func pickReplica(r *http.Request, reg *Registry, st store.Store, id string) (Age
 	if sid, ok := sessionID(path); ok {
 		i, err := st.SessionReplica(r.Context(), sid)
 		if err != nil {
-			return AgentProcess{}, false
+			return AgentProcess{}, false // session truly unknown
 		}
+		// A known session whose stored owner index is now out of range (e.g. the
+		// agent was reconfigured to fewer replicas than when this session was
+		// created) is unroutable: only that original executor can resume its
+		// workflow. reg.Replica returns false here and the caller 404s. Honest:
+		// the session exists but its owner replica no longer does.
 		return reg.Replica(id, i)
 	}
 	return reg.Replica(id, 0)
