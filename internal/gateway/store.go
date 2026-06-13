@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	_ "embed"
+	"errors"
 
 	"github.com/lib/pq" // pq.Array for TEXT[]; pgx stdlib is the driver
 
@@ -101,7 +102,7 @@ func (s *UpstreamStore) GetUpstream(ctx context.Context, id string) (UpstreamRow
 		 FROM gateway_upstreams WHERE id=$1`, id).
 		Scan(&r.ID, &r.TenantID, &r.Name, &r.Transport, &r.URL,
 			&r.OpenAPI, &r.BaseURL, pq.Array(&r.Operations), &r.CredSecret, &r.CredHeader)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return UpstreamRow{}, false, nil
 	}
 	if err != nil {
