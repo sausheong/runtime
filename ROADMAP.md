@@ -43,6 +43,48 @@ flow used for M1–M3). Design specs and plans live in `docs/superpowers/`.
 
 ---
 
+## 🎯 v1.0 Acceptance Bar
+
+**The promise:** a stranger can clone the repo, run one `docker compose up` on a
+single host, follow the docs to self-serve onboard a tenant **through the console
+UI**, and run real agents exercising all six AgentCore pillars — **without
+reading the Go source**. Proven by one clean from-scratch live run on a fresh
+machine, driven only by the published docs.
+
+Every pillar already has working, live-proven milestones merged to `master`.
+**v1.0 is not new capability — it is turnkey self-hostability, self-service
+onboarding, and docs, proven by a stranger-install live run.** Capability is
+**frozen** as of 2026-06-13 plus exactly the gap items below; everything else is
+**deferred to v1.1+**.
+
+**Net new build = three milestones, zero new pillars:**
+
+- **v1.0-M1 — Self-service onboarding** (Identity + Gateway + console UI):
+  tenant create, agent-key mint, upstream register (MCP + REST/OpenAPI), and
+  per-tenant upstream credentials via the secrets broker — surfaced in a console
+  onboarding UI over an API (+ `runtimectl` parity). "Gateway M4-lite" fused
+  with Identity self-service; exposes the registration side of the C3 M2 broker.
+- **v1.0-M2 — Turnkey single-node compose:** bundled **pgvector-capable**
+  Postgres (HARD requirement — unblocks semantic Memory in compose),
+  one-command bring-up of all six pillars, fail-closed defaults, documented
+  persistence/reset.
+- **v1.0-M3 — Docs runbook + stranger-install live proof (capstone):**
+  quickstart + operator guide + tenant guide, then `deploy/compose/v1-proof.sh`
+  run clean from a fresh clone on a clean machine, exercising all six pillars
+  driven *only* by the docs. **When it passes, tag v1.0.**
+
+**Deliberate v1.0 boundaries:** single-node compose is the surface (Helm/K8s
+stays "advanced", not in the promise/proof); self-service onboarding is in but
+per-tenant **usage metering is v1.1** (eyes-open asymmetry: onboarding is a
+correctness gate, metering a billing nicety); docs are a gate, not an
+afterthought. **Deferred to v1.1+:** token accounting, alerting, K8s
+operator/CRDs, sandboxes pip/kernel-persistence, Memory TTL/GC + dedup, gateway
+OAuth2/quotas/resources-prompts, non-onboarding console panels, mTLS, C1
+PydanticAI. Full spec + Definition-of-Done checklist:
+`docs/superpowers/specs/2026-06-14-v1.0-acceptance-bar-design.md`.
+
+---
+
 ## ✅ Done — the Runtime spine (sub-project 1 of 6)
 
 The first sub-project from the original decomposition is complete, in three
