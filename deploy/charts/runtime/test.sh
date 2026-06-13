@@ -69,4 +69,43 @@ b=$(helm template r "$CHART" $DSN $AGENTS --set 'config.agents[1].id=x' --set 'c
 [ "$a" != "$b" ] || fail "checksum did not change on config change"
 ok "config checksum"
 
+# 7. perAgentPods: one StatefulSet + headless Service per agent; runtimed config
+#    generated as remote pools; monolith Deployment still present (control plane).
+PAP='--set scheduling.mode=perAgentPods'
+out=$(helm template r "$CHART" $DSN $PAP \
+  --set config.agents[0].id=support --set config.agents[0].name=S \
+  --set config.agents[0].model=test/scripted --set config.agents[0].replicas=2)
+grep -q 'kind: StatefulSet'        <<<"$out" || fail "perAgentPods: no StatefulSet"
+grep -q 'clusterIP: None'          <<<"$out" || fail "perAgentPods: no headless Service"
+grep -q 'serviceName: r-agent-support-hl' <<<"$out" || fail "perAgentPods: wrong serviceName"
+grep -q 'replicas: 2'              <<<"$out" || fail "perAgentPods: replicas not 2"
+grep -q 'DBOS__VMID="support#'     <<<"$out" || fail "perAgentPods: no ordinal VMID derive"
+grep -q 'support-{i}.r-agent-support-hl' <<<"$out" || fail "perAgentPods: generated url not {i}-templated"
+# The dial template must be IDENTICAL on both sides (drift guard): the host base
+# appears in both the headless Service name and the generated url.
+grep -q 'r-agent-support-hl.default.svc.cluster.local' <<<"$out" || fail "perAgentPods: DNS base drift"
+ok "perAgentPods renders StatefulSet+headless+generated remote config"
+
+# 7b. perAgentPods single-replica agent → concrete ordinal-0 url, no {i}, no replicas key.
+out=$(helm template r "$CHART" $DSN $PAP \
+  --set config.agents[0].id=solo --set config.agents[0].name=Solo \
+  --set config.agents[0].model=test/scripted)
+grep -q 'solo-0.r-agent-solo-hl'  <<<"$out" || fail "perAgentPods solo: url not concrete ordinal 0"
+if grep -A6 'id: solo' <<<"$out" | grep -q '{i}'; then fail "perAgentPods solo: url still has {i}"; fi
+ok "perAgentPods single-replica → concrete url"
+
+# 7c. perAgentPods fail-closed: an agent that sets listen_addr.
+if helm template r "$CHART" $DSN $PAP \
+  --set config.agents[0].id=s --set config.agents[0].name=S \
+  --set config.agents[0].model=m --set config.agents[0].listen_addr=127.0.0.1:8101 >/dev/null 2>&1; then
+  fail "expected perAgentPods listen_addr fail-closed"
+fi
+ok "perAgentPods fail-closed (listen_addr set)"
+
+# 8. monolith regression: default mode still renders the M1 shape, no StatefulSet.
+out=$(helm template r "$CHART" $DSN $AGENTS)
+if grep -q 'kind: StatefulSet' <<<"$out"; then fail "monolith mode leaked a StatefulSet"; fi
+grep -q 'kind: Deployment' <<<"$out" || fail "monolith: no Deployment"
+ok "monolith regression (no StatefulSet)"
+
 echo "ALL CHART TESTS PASSED"

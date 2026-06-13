@@ -67,3 +67,10 @@ agents:
 #    model: test/scripted
 #    url: https://agent-1.internal:8443
 #    auth_token: ${REMOTE_1_TOKEN}
+
+# ── Kubernetes per-agent-pod scheduling (C2 M2) ───────────────────────────────
+# This file is the MONOLITH (single-host) agent registry. To run each agent as
+# its own Kubernetes StatefulSet that runtimed attaches to as a remote replica
+# pool, deploy the Helm chart with scheduling.mode=perAgentPods (the chart
+# GENERATES the control-plane runtime.yaml from its config.agents — you do not
+# hand-write url:/replicas: for that mode). See deploy/charts/runtime/README.md.

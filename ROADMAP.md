@@ -771,7 +771,7 @@ agents). Make targets `helm-lint`/`helm-template`/`helm-deps`/`helm-package`; no
 (build-locally, manual push). Docker-dependent sandbox/browser ship in the image but
 are OFF by default (a plain pod has no Docker daemon), surfaced via a `DOCKER_HOST`
 knob + a documented `extraContainers` DinD opt-in (privileged sidecar, single-node
-only). Per-agent-pod scheduling is explicitly deferred to C3; an operator/CRDs to a
+only). Per-agent-pod scheduling landed in C2 M2 (below); an operator/CRDs to a
 later C2 milestone. THE FINAL HOLISTIC REVIEW (pre-live-proof) EARNED ITS KEEP
 AGAIN — it caught FOUR integration bugs invisible to per-task render checks, each an
 independent live-install failure: (1) the bundled Postgres image 404'd — Bitnami's
@@ -798,12 +798,40 @@ list — the exec-spawn supervisor model working inside a pod, end to end); a
 `helm upgrade` adding a third agent flipped the `checksum/config` annotation
 (`41f277bd…`→`0a27ce92…`), rolled a new ReplicaSet to 1/1, and `/agents` then
 reported all THREE agents healthy; clean `helm uninstall` + `kind delete`. Hermetic
-gate green (7-permutation `test.sh`, `go build`/`go vet`). Remaining C2: per-agent-pod
-scheduling (needs C3 + spine A1), a Kubernetes operator/CRDs, multi-arch image
+gate green (7-permutation `test.sh`, `go build`/`go vet`). Remaining C2: a Kubernetes operator/CRDs, multi-arch image
 publish + CI, a pgvector-capable bundled Postgres (the Bitnami image lacks the
 extension, so bundled-PG can't do semantic memory), and HPA/autoscaling (blocked on
 the single-replica supervisor model). Spec/plan:
 `docs/superpowers/{specs,plans}/2026-06-12-c2-packaging*`.
+
+   **Second milestone DONE (merged to `master`, 2026-06-13):** per-agent-pod
+   scheduling. A `scheduling.mode: monolith | perAgentPods` chart toggle. In
+   `perAgentPods` the chart renders one **StatefulSet + headless Service per
+   agent** (agentd-only pods; the ordinal derives `RUNTIME_AGENT_REPLICA` +
+   `DBOS__VMID=<id>#<ordinal>` from `$HOSTNAME`), and runtimed runs
+   **control-plane-only** with a **generated** `runtime.yaml` that rewrites each
+   `config.agents` entry into a **remote replica pool**. This is **C3-remote ×
+   A1-pool**: a remote agent may now set `replicas: N` paired with an `{i}`
+   ordinal placeholder in `url:`, expanding to N per-ordinal attach entries at
+   stable headless DNS (`<id>-<i>.<svc>`); `NextReplica` round-robins the
+   **reachable** ordinals (new liveness-aware routing fed by one `HealthMonitor`
+   per ordinal), while session affinity pins each session to its ordinal for
+   life (durability absolute — a pinned-ordinal-down session 503s until it
+   returns, never re-pins). StatefulSet ordinals = A1 executor ids and
+   StatefulSet highest-ordinal-first scale-down = A2's suffix-only rule, now
+   **enforced by Kubernetes**. Static replica count from config; scale-down is
+   handled live (skip-unreachable), scale-up needs `helm upgrade` (documented
+   seam). Single shared agent bearer (`secrets.agentAuthToken`) authenticates
+   runtimed → each pod. **Known limitation:** brokered per-tenant secrets are
+   spawn-time only, so per-agent-pod agents get provider creds via the chart
+   Secret (backlog: brokered-secrets delivery to scheduled pods, home in C3 M2).
+   Tested: config (remote-pool validation + `RemoteReplicaURL`), registry
+   (pool expansion + skip-unreachable `NextReplica`), an integration test
+   (`TestRemoteReplicaPoolAttach`: distribution, kill-one-ordinal liveness
+   routing + affinity/durability, no restart), and chart render permutations
+   (StatefulSet/headless/generated-config, single-replica concrete url, mode
+   guards, monolith regression). Spec/plan:
+   `docs/superpowers/{specs,plans}/2026-06-13-c2-m2-per-agent-pod-scheduling*`.
 
 - **Containers / Kubernetes** — once C1 makes foreign agents first-class, package
   them as containers and add Helm charts / an operator for orchestrated scale (the
