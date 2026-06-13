@@ -1,0 +1,59 @@
+package main
+
+import (
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"testing"
+)
+
+func TestOrdinalFromHostname(t *testing.T) {
+	cases := map[string]int{"support-0": 0, "support-3": 3, "x-y-12": 12, "nohyphen": 0, "": 0}
+	for host, want := range cases {
+		if got := ordinalFromHostname(host); got != want {
+			t.Fatalf("ordinalFromHostname(%q)=%d want %d", host, got, want)
+		}
+	}
+}
+
+func TestFetchRegistrationSetsEnv(t *testing.T) {
+	var gotOrdinal int
+	var gotAuth string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		var body struct{ Ordinal int }
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		gotOrdinal = body.Ordinal
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"env": map[string]string{"RUNTIME_PG_DSN": "dsn://fetched", "OPENAI_API_KEY": "sk-1"},
+		})
+	}))
+	defer srv.Close()
+
+	t.Setenv("RUNTIME_REGISTRATION_URL", srv.URL)
+	t.Setenv("RUNTIME_REGISTRATION_TOKEN", "svk-abc.def")
+	t.Setenv("HOSTNAME", "support-2")
+	// Ensure target var starts empty.
+	os.Unsetenv("RUNTIME_PG_DSN")
+
+	fetchRegistration()
+
+	if gotAuth != "Bearer svk-abc.def" {
+		t.Fatalf("auth header = %q", gotAuth)
+	}
+	if gotOrdinal != 2 {
+		t.Fatalf("ordinal = %d want 2", gotOrdinal)
+	}
+	if os.Getenv("RUNTIME_PG_DSN") != "dsn://fetched" || os.Getenv("OPENAI_API_KEY") != "sk-1" {
+		t.Fatalf("env not applied: DSN=%q KEY=%q", os.Getenv("RUNTIME_PG_DSN"), os.Getenv("OPENAI_API_KEY"))
+	}
+}
+
+func TestFetchRegistrationNoopWhenUnset(t *testing.T) {
+	os.Unsetenv("RUNTIME_REGISTRATION_URL")
+	os.Unsetenv("RUNTIME_REGISTRATION_TOKEN")
+	// Must not panic / must not block.
+	fetchRegistration()
+}
