@@ -2,6 +2,7 @@ package controlplane
 
 import (
 	"strconv"
+	"sync"
 	"sync/atomic"
 
 	"github.com/sausheong/runtime/internal/config"
@@ -26,6 +27,12 @@ type Registry struct {
 	rr     map[string]*atomic.Uint64 // id -> round-robin counter (new-session routing)
 	broker SecretBroker              // optional; injected into each AgentProcess on read.
 	pools  map[string]*PoolManager   // id -> manager (autoscaled agents only)
+
+	// reachMu guards reach: id → (replicaIndex → reachable). Absent entry ⇒
+	// "unknown", treated as reachable until the first health probe reports.
+	// Written by main's per-ordinal HealthMonitor OnChange; read by NextReplica.
+	reachMu sync.RWMutex
+	reach   map[string]map[int]bool
 }
 
 // NewRegistry builds a Registry from parsed config. binPath is the agentd
@@ -38,6 +45,7 @@ func NewRegistry(cfg *config.Config, binPath, dsn string) *Registry {
 		infos: map[string]AgentInfo{},
 		rr:    map[string]*atomic.Uint64{},
 		pools: map[string]*PoolManager{},
+		reach: map[string]map[int]bool{},
 	}
 	for _, a := range cfg.Agents {
 		r.order = append(r.order, a.ID)
@@ -205,8 +213,40 @@ func (r *Registry) Replica(id string, i int) (AgentProcess, bool) {
 	return r.withBroker(set[i]), true
 }
 
+// SetReachable records a replica's reachability (called by main's per-ordinal
+// HealthMonitor on each transition). Used by NextReplica to skip down ordinals
+// of a remote pool. Safe for concurrent use.
+func (r *Registry) SetReachable(id string, replica int, reachable bool) {
+	r.reachMu.Lock()
+	defer r.reachMu.Unlock()
+	m := r.reach[id]
+	if m == nil {
+		m = map[int]bool{}
+		r.reach[id] = m
+	}
+	m[replica] = reachable
+}
+
+// reachableOrUnknown reports whether replica i of id may receive new sessions:
+// true unless a probe has explicitly marked it unreachable.
+func (r *Registry) reachableOrUnknown(id string, i int) bool {
+	r.reachMu.RLock()
+	defer r.reachMu.RUnlock()
+	m := r.reach[id]
+	if m == nil {
+		return true
+	}
+	v, ok := m[i]
+	if !ok {
+		return true // unknown ⇒ reachable until first probe
+	}
+	return v
+}
+
 // NextReplica returns the next replica index for a NEW session, round-robin via
-// an atomic per-agent counter. Blind to liveness. Returns 0 for unknown ids.
+// an atomic per-agent counter, SKIPPING ordinals a health probe has marked
+// unreachable. Falls back to 0 if every ordinal is unreachable. Autoscaled
+// agents delegate to their PoolManager (which skips draining replicas).
 func (r *Registry) NextReplica(id string) int {
 	if pm, ok := r.pools[id]; ok {
 		return pm.NextReplica()
@@ -215,8 +255,14 @@ func (r *Registry) NextReplica(id string) int {
 	if !ok || len(set) == 0 {
 		return 0
 	}
-	n := r.rr[id].Add(1) - 1
-	return int(n % uint64(len(set)))
+	n := len(set)
+	for tries := 0; tries < n; tries++ {
+		idx := int((r.rr[id].Add(1) - 1) % uint64(n))
+		if r.reachableOrUnknown(id, idx) {
+			return idx
+		}
+	}
+	return 0
 }
 
 // Pools returns the autoscaled agents' managers, keyed by id. main.go starts each.
