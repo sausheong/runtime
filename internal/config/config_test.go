@@ -892,3 +892,80 @@ func TestReplicaAddrs_PortOverflow(t *testing.T) {
 		t.Fatal("expected error: derived ports exceed 65535")
 	}
 }
+
+func TestAutoscaleParsesAndValidates(t *testing.T) {
+	yaml := `
+agents:
+  - id: a
+    name: A
+    model: m
+    listen_addr: 127.0.0.1:9100
+    autoscale: {min: 1, max: 3, target_sessions_per_replica: 2}
+`
+	p := writeTmp(t, yaml)
+	c, err := Load(p)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	a := c.Agents[0]
+	if a.Autoscale == nil || a.Autoscale.Min != 1 || a.Autoscale.Max != 3 || a.Autoscale.TargetSessionsPerReplica != 2 {
+		t.Fatalf("autoscale not parsed: %+v", a.Autoscale)
+	}
+}
+
+func TestAutoscaleRejectsBadBounds(t *testing.T) {
+	cases := []string{
+		`{min: 0, max: 3, target_sessions_per_replica: 2}`,
+		`{min: 3, max: 2, target_sessions_per_replica: 2}`,
+		`{min: 1, max: 3, target_sessions_per_replica: 0}`,
+	}
+	for _, as := range cases {
+		yaml := "agents:\n  - id: a\n    name: A\n    model: m\n    listen_addr: 127.0.0.1:9100\n    autoscale: " + as + "\n"
+		if _, err := Load(writeTmp(t, yaml)); err == nil {
+			t.Fatalf("expected rejection for autoscale %s", as)
+		}
+	}
+}
+
+func TestAutoscaleRejectedOnRemote(t *testing.T) {
+	yaml := `
+agents:
+  - id: a
+    name: A
+    model: m
+    url: https://h:8443
+    autoscale: {min: 1, max: 3, target_sessions_per_replica: 2}
+`
+	if _, err := Load(writeTmp(t, yaml)); err == nil {
+		t.Fatalf("expected autoscale rejected on remote agent")
+	}
+}
+
+func TestAutoscaleReservesMaxPortRange(t *testing.T) {
+	yaml := `
+agents:
+  - id: a
+    name: A
+    model: m
+    listen_addr: 127.0.0.1:9100
+    autoscale: {min: 1, max: 3, target_sessions_per_replica: 2}
+  - id: b
+    name: B
+    model: m
+    listen_addr: 127.0.0.1:9101
+`
+	if _, err := Load(writeTmp(t, yaml)); err == nil {
+		t.Fatalf("expected derived-port collision against reserved max range")
+	}
+}
+
+func TestReplicaAddrSingleIndex(t *testing.T) {
+	a := AgentConfig{ID: "a", ListenAddr: "127.0.0.1:9100"}
+	got, err := a.ReplicaAddr(2)
+	if err != nil || got != "127.0.0.1:9102" {
+		t.Fatalf("ReplicaAddr(2) = %q, %v; want 127.0.0.1:9102", got, err)
+	}
+	if _, err := a.ReplicaAddr(70000); err == nil {
+		t.Fatalf("expected out-of-range error for huge index")
+	}
+}
