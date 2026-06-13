@@ -62,6 +62,9 @@ func TestCredentialMissingFailsClosed(t *testing.T) {
 	if strings.Contains(err.Error(), "secret123") {
 		t.Fatalf("error leaks secret: %q", err.Error())
 	}
+	if got := err.Error(); strings.Contains(got, "ORDERS_KEY") {
+		t.Fatalf("error leaks secret name: %q", got)
+	}
 }
 
 func TestCredentialSkippedWhenNotSingleTenant(t *testing.T) {

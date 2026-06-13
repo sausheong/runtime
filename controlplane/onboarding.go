@@ -72,6 +72,9 @@ func RegisterUpstreamShared(ctx context.Context, store UpstreamStore, mut Gatewa
 		CredSecret: p.CredSecret, CredHeader: p.CredHeader,
 	}
 	if err := store.InsertUpstream(ctx, row); err != nil {
+		if isDuplicateUpstream(err) {
+			return gateway.UpstreamRow{}, fmt.Errorf("an upstream named %q already exists in this tenant", p.Name)
+		}
 		return gateway.UpstreamRow{}, err
 	}
 	if err := mut.Add(row.ToConfig()); err != nil {
@@ -83,6 +86,13 @@ func RegisterUpstreamShared(ctx context.Context, store UpstreamStore, mut Gatewa
 		return gateway.UpstreamRow{}, err
 	}
 	return row, nil
+}
+
+// isDuplicateUpstream reports whether err is a unique-constraint violation
+// (duplicate (tenant_id, name)). Matches the pq/pgx duplicate-key signal
+// without depending on a specific driver error type.
+func isDuplicateUpstream(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "duplicate key")
 }
 
 // RemoveUpstreamShared removes a row (scoped to tenant) and detaches it from the

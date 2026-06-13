@@ -175,11 +175,13 @@ func main() {
 			resolver = func(rctx context.Context, tenant, name string) (string, error) {
 				m, serr := secretBroker.SecretsFor(rctx, tenant)
 				if serr != nil {
-					return "", serr
+					// SecretsFor's decrypt error embeds the secret NAME; scrub it
+					// here so the name never reaches gateway logs/LastError/Status.
+					return "", fmt.Errorf("required credential could not be resolved for tenant")
 				}
 				v, ok := m[name]
 				if !ok {
-					return "", fmt.Errorf("secret %q not found for tenant", name)
+					return "", fmt.Errorf("required credential not found for tenant")
 				}
 				return v, nil
 			}

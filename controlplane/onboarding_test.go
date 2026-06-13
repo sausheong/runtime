@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/sausheong/runtime/internal/config"
@@ -21,6 +22,14 @@ type fakeUpstreamStore struct {
 func (f *fakeUpstreamStore) InsertUpstream(ctx context.Context, r gateway.UpstreamRow) error {
 	if f.rows == nil {
 		f.rows = map[string]gateway.UpstreamRow{}
+	}
+	// Simulate the (tenant_id, name) unique constraint the real Postgres store
+	// enforces: a real violation surfaces "duplicate key value violates unique
+	// constraint ...".
+	for _, existing := range f.rows {
+		if existing.TenantID == r.TenantID && existing.Name == r.Name {
+			return errors.New("duplicate key value violates unique constraint \"gateway_upstreams_tenant_id_name_key\"")
+		}
 	}
 	f.rows[r.ID] = r
 	return nil
@@ -156,6 +165,31 @@ func TestUpstreamDeleteCrossTenantNoOp(t *testing.T) {
 	}
 	if len(mut.removed) != 0 {
 		t.Fatalf("manager.Remove must not be called cross-tenant, got %v", mut.removed)
+	}
+}
+
+func TestUpstreamDuplicateNameFriendlyError(t *testing.T) {
+	mux := http.NewServeMux()
+	store := newFakeAdminStore()
+	store.CreateTenant(context.Background(), "t1", "t1")
+	us := &fakeUpstreamStore{}
+	mut := &fakeMutator{}
+	RegisterUpstreamAdmin(mux, store, us, mut)
+	admin := identity.Principal{Role: identity.RoleAdmin, TenantID: "t1"}
+
+	if w := postUpstream(t, mux, admin, map[string]any{"name": "orders", "url": "http://x"}); w.Code != http.StatusCreated {
+		t.Fatalf("first register: want 201 got %d (%s)", w.Code, w.Body)
+	}
+	w := postUpstream(t, mux, admin, map[string]any{"name": "orders", "url": "http://y"})
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("duplicate register: want 400 got %d (%s)", w.Code, w.Body)
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, "orders") {
+		t.Fatalf("duplicate error should name the upstream: %q", body)
+	}
+	if strings.Contains(body, "constraint") || strings.Contains(body, "gateway_upstreams") || strings.Contains(body, "duplicate key") {
+		t.Fatalf("duplicate error leaks schema internals: %q", body)
 	}
 }
 
