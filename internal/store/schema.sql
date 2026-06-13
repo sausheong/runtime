@@ -10,9 +10,11 @@ CREATE TABLE IF NOT EXISTS sessions (
     workflow_id TEXT NOT NULL,
     status      TEXT NOT NULL DEFAULT 'created',
     turn_count  INT  NOT NULL DEFAULT 0,
+    replica     INT  NOT NULL DEFAULT 0,
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
     last_active_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+ALTER TABLE sessions ADD COLUMN IF NOT EXISTS replica INT NOT NULL DEFAULT 0;
 CREATE TABLE IF NOT EXISTS session_events (
     session_id TEXT NOT NULL REFERENCES sessions(id),
     seq        BIGINT NOT NULL,

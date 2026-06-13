@@ -9,7 +9,7 @@ func TestStore_SessionLifecycle(t *testing.T) {
 	s := NewMemStore()
 	ctx := context.Background()
 
-	id, err := s.CreateSession(ctx, "agent1")
+	id, err := s.CreateSession(ctx, "agent1", 0)
 	if err != nil {
 		t.Fatalf("CreateSession: %v", err)
 	}
@@ -32,7 +32,7 @@ func TestStore_SessionLifecycle(t *testing.T) {
 func TestStore_CreateSessionPopulatesWorkflowID(t *testing.T) {
 	s := NewMemStore()
 	ctx := context.Background()
-	id, err := s.CreateSession(ctx, "agentA")
+	id, err := s.CreateSession(ctx, "agentA", 0)
 	if err != nil {
 		t.Fatalf("CreateSession: %v", err)
 	}
@@ -48,7 +48,7 @@ func TestStore_CreateSessionPopulatesWorkflowID(t *testing.T) {
 func TestStore_SetSessionStatus(t *testing.T) {
 	s := NewMemStore()
 	ctx := context.Background()
-	id, _ := s.CreateSession(ctx, "a")
+	id, _ := s.CreateSession(ctx, "a", 0)
 	if err := s.SetSessionStatus(ctx, id, "running"); err != nil {
 		t.Fatal(err)
 	}
@@ -64,7 +64,7 @@ func TestStore_SetSessionStatus(t *testing.T) {
 func TestStore_SetTurnCount(t *testing.T) {
 	s := NewMemStore()
 	ctx := context.Background()
-	id, _ := s.CreateSession(ctx, "a")
+	id, _ := s.CreateSession(ctx, "a", 0)
 	if err := s.SetTurnCount(ctx, id, 5); err != nil {
 		t.Fatal(err)
 	}
@@ -77,9 +77,9 @@ func TestStore_SetTurnCount(t *testing.T) {
 func TestStore_ListSessionsByAgent(t *testing.T) {
 	s := NewMemStore()
 	ctx := context.Background()
-	a1, _ := s.CreateSession(ctx, "agentA")
-	_, _ = s.CreateSession(ctx, "agentB")
-	a2, _ := s.CreateSession(ctx, "agentA")
+	a1, _ := s.CreateSession(ctx, "agentA", 0)
+	_, _ = s.CreateSession(ctx, "agentB", 0)
+	a2, _ := s.CreateSession(ctx, "agentA", 0)
 	rows, err := s.ListSessions(ctx, "agentA")
 	if err != nil {
 		t.Fatal(err)
@@ -96,7 +96,7 @@ func TestStore_ListSessionsByAgent(t *testing.T) {
 func TestStore_EventLogAppendAndReplay(t *testing.T) {
 	s := NewMemStore()
 	ctx := context.Background()
-	id, _ := s.CreateSession(ctx, "agent1")
+	id, _ := s.CreateSession(ctx, "agent1", 0)
 
 	for i, typ := range []string{"text_delta", "text_delta", "done"} {
 		if _, err := s.AppendEvent(ctx, id, typ, []byte(`{"i":`+itoa(i)+`}`)); err != nil {
@@ -117,6 +117,33 @@ func TestStore_EventLogAppendAndReplay(t *testing.T) {
 	tail, _ := s.EventsSince(ctx, id, 2)
 	if len(tail) != 1 || tail[0].Type != "done" {
 		t.Fatalf("tail replay wrong: %+v", tail)
+	}
+}
+
+func TestStore_CreateSessionPersistsReplica(t *testing.T) {
+	s := NewMemStore()
+	ctx := context.Background()
+	id, err := s.CreateSession(ctx, "agentA", 2)
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	r, err := s.SessionReplica(ctx, id)
+	if err != nil {
+		t.Fatalf("SessionReplica: %v", err)
+	}
+	if r != 2 {
+		t.Fatalf("replica: got %d, want 2", r)
+	}
+	row, _ := s.GetSession(ctx, id)
+	if row.Replica != 2 {
+		t.Fatalf("GetSession replica: got %d, want 2", row.Replica)
+	}
+}
+
+func TestStore_SessionReplicaNotFound(t *testing.T) {
+	s := NewMemStore()
+	if _, err := s.SessionReplica(context.Background(), "nope"); err == nil {
+		t.Fatal("expected error for unknown session")
 	}
 }
 

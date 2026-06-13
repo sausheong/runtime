@@ -8,6 +8,7 @@ type SessionRow struct {
 	WorkflowID string
 	Status     string // created | running | idle | recovering | closed | failed
 	TurnCount  int
+	Replica    int
 }
 
 type Event struct {
@@ -17,9 +18,10 @@ type Event struct {
 }
 
 type Store interface {
-	CreateSession(ctx context.Context, agentID string) (string, error)
+	CreateSession(ctx context.Context, agentID string, replica int) (string, error)
 	GetSession(ctx context.Context, id string) (SessionRow, error)
 	ListSessions(ctx context.Context, agentID string) ([]SessionRow, error)
+	SessionReplica(ctx context.Context, id string) (int, error)
 	SetSessionStatus(ctx context.Context, id, status string) error
 	SetTurnCount(ctx context.Context, id string, n int) error
 	AppendEvent(ctx context.Context, sessionID, typ string, payload []byte) (int64, error)

@@ -63,17 +63,26 @@ func ApplyDDLLocked(ctx context.Context, db *sql.DB, ddl string) error {
 	return nil
 }
 
-func (p *pgStore) CreateSession(ctx context.Context, agentID string) (string, error) {
+func (p *pgStore) CreateSession(ctx context.Context, agentID string, replica int) (string, error) {
 	id := "ses-" + uuid.NewString()
 	_, err := p.db.ExecContext(ctx,
-		`INSERT INTO sessions (id, agent_id, workflow_id, status) VALUES ($1,$2,$1,'created')`,
-		id, agentID)
+		`INSERT INTO sessions (id, agent_id, workflow_id, status, replica) VALUES ($1,$2,$1,'created',$3)`,
+		id, agentID, replica)
 	return id, err
+}
+
+func (p *pgStore) SessionReplica(ctx context.Context, id string) (int, error) {
+	var r int
+	err := p.db.QueryRowContext(ctx, `SELECT replica FROM sessions WHERE id=$1`, id).Scan(&r)
+	if err == sql.ErrNoRows {
+		return 0, fmt.Errorf("session %q not found", id)
+	}
+	return r, err
 }
 
 func (p *pgStore) ListSessions(ctx context.Context, agentID string) ([]SessionRow, error) {
 	rows, err := p.db.QueryContext(ctx,
-		`SELECT id, agent_id, workflow_id, status, turn_count FROM sessions WHERE agent_id=$1 ORDER BY created_at DESC`,
+		`SELECT id, agent_id, workflow_id, status, turn_count, replica FROM sessions WHERE agent_id=$1 ORDER BY created_at DESC`,
 		agentID)
 	if err != nil {
 		return nil, err
@@ -82,7 +91,7 @@ func (p *pgStore) ListSessions(ctx context.Context, agentID string) ([]SessionRo
 	var out []SessionRow
 	for rows.Next() {
 		var s SessionRow
-		if err := rows.Scan(&s.ID, &s.AgentID, &s.WorkflowID, &s.Status, &s.TurnCount); err != nil {
+		if err := rows.Scan(&s.ID, &s.AgentID, &s.WorkflowID, &s.Status, &s.TurnCount, &s.Replica); err != nil {
 			return nil, err
 		}
 		out = append(out, s)
@@ -99,8 +108,8 @@ func (p *pgStore) SetTurnCount(ctx context.Context, id string, n int) error {
 func (p *pgStore) GetSession(ctx context.Context, id string) (SessionRow, error) {
 	var s SessionRow
 	err := p.db.QueryRowContext(ctx,
-		`SELECT id, agent_id, workflow_id, status, turn_count FROM sessions WHERE id=$1`, id).
-		Scan(&s.ID, &s.AgentID, &s.WorkflowID, &s.Status, &s.TurnCount)
+		`SELECT id, agent_id, workflow_id, status, turn_count, replica FROM sessions WHERE id=$1`, id).
+		Scan(&s.ID, &s.AgentID, &s.WorkflowID, &s.Status, &s.TurnCount, &s.Replica)
 	if err == sql.ErrNoRows {
 		return SessionRow{}, fmt.Errorf("session %q not found", id)
 	}
