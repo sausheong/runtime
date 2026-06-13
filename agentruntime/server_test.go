@@ -9,6 +9,11 @@ import (
 	"testing"
 
 	"github.com/sausheong/runtime/internal/store"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/propagation"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
+	"go.opentelemetry.io/otel/trace"
 )
 
 func newTestManager() *Manager {
@@ -132,4 +137,38 @@ func TestRequireBearer(t *testing.T) {
 			t.Fatalf("healthz wrong token: status=%d, want 401", resp.StatusCode)
 		}
 	})
+}
+
+func TestHandler_ContinuesInboundTrace(t *testing.T) {
+	rec := tracetest.NewSpanRecorder()
+	tp := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(rec))
+	otel.SetTracerProvider(tp)
+	otel.SetTextMapPropagator(propagation.TraceContext{})
+	t.Cleanup(func() { _ = tp.Shutdown(context.Background()) })
+
+	srv := httptest.NewServer(newTestManager().handler())
+	defer srv.Close()
+
+	// Build a parent span context and inject it into the request headers.
+	ctx, parent := tp.Tracer("test").Start(context.Background(), "client")
+	req, _ := http.NewRequest("GET", srv.URL+"/healthz", nil)
+	otel.GetTextMapPropagator().Inject(ctx, propagation.HeaderCarrier(req.Header))
+	parentTID := parent.SpanContext().TraceID()
+	parent.End()
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil || resp.StatusCode != 200 {
+		t.Fatalf("healthz: err=%v status=%v", err, resp.StatusCode)
+	}
+	resp.Body.Close()
+
+	var found bool
+	for _, s := range rec.Ended() {
+		if s.SpanContext().TraceID() == parentTID && s.SpanKind() == trace.SpanKindServer {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("no agentd server span continued the inbound trace id")
+	}
 }
