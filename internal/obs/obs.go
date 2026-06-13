@@ -28,16 +28,17 @@ var turnBuckets = []float64{0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60, 120}
 // ControlMetrics is runtimed's registry: HTTP edge, agent supervision,
 // reverse proxy, gateway federation, and fan-out scrape bookkeeping.
 type ControlMetrics struct {
-	reg           *prometheus.Registry
-	httpRequests  *prometheus.CounterVec
-	httpDuration  *prometheus.HistogramVec
-	agentUp       *prometheus.GaugeVec
-	agentRestarts *prometheus.CounterVec
-	proxyErrors   *prometheus.CounterVec
-	gwCalls       *prometheus.CounterVec
-	gwDuration    *prometheus.HistogramVec
-	gwUp          *prometheus.GaugeVec
-	scrapeSkips   *prometheus.CounterVec
+	reg            *prometheus.Registry
+	httpRequests   *prometheus.CounterVec
+	httpDuration   *prometheus.HistogramVec
+	agentUp        *prometheus.GaugeVec
+	agentReachable *prometheus.GaugeVec
+	agentRestarts  *prometheus.CounterVec
+	proxyErrors    *prometheus.CounterVec
+	gwCalls        *prometheus.CounterVec
+	gwDuration     *prometheus.HistogramVec
+	gwUp           *prometheus.GaugeVec
+	scrapeSkips    *prometheus.CounterVec
 }
 
 func NewControlMetrics() *ControlMetrics {
@@ -57,6 +58,10 @@ func NewControlMetrics() *ControlMetrics {
 	c.agentUp = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "runtime_agent_up",
 		Help: "1 when the agent's /metrics was scraped cleanly on the last fan-out (404 counts as serving).",
+	}, []string{"agent"})
+	c.agentReachable = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "runtime_agent_reachable",
+		Help: "1 when a remote agent's /healthz was reachable on the last monitor poll (remote agents only).",
 	}, []string{"agent"})
 	c.agentRestarts = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "runtime_agent_restarts_total",
@@ -83,7 +88,7 @@ func NewControlMetrics() *ControlMetrics {
 		Name: "runtime_metrics_scrape_skips_total",
 		Help: "Agents skipped during fan-out scrape, by reason.",
 	}, []string{"agent", "reason"})
-	c.reg.MustRegister(c.httpRequests, c.httpDuration, c.agentUp, c.agentRestarts,
+	c.reg.MustRegister(c.httpRequests, c.httpDuration, c.agentUp, c.agentReachable, c.agentRestarts,
 		c.proxyErrors, c.gwCalls, c.gwDuration, c.gwUp, c.scrapeSkips)
 	return c
 }
@@ -119,6 +124,19 @@ func (c *ControlMetrics) AgentUp(agent string, up bool) {
 		v = 1
 	}
 	c.agentUp.WithLabelValues(agent).Set(v)
+}
+
+// AgentReachable sets the remote-agent reachability gauge (1/0) on each
+// HealthMonitor transition. Nil-safe like the other helpers.
+func (c *ControlMetrics) AgentReachable(agent string, reachable bool) {
+	if c == nil {
+		return
+	}
+	v := 0.0
+	if reachable {
+		v = 1
+	}
+	c.agentReachable.WithLabelValues(agent).Set(v)
 }
 
 func (c *ControlMetrics) AgentRestart(agent string) {

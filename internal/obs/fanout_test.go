@@ -50,7 +50,7 @@ func TestFanoutMergesHealthyAgents(t *testing.T) {
 	a2 := fakeAgent(t, func(w http.ResponseWriter, _ *http.Request) { fmt.Fprint(w, exposition("beta")) })
 	c := NewControlMetrics()
 	h := FanoutHandler(c, func() []ScrapeTarget {
-		return []ScrapeTarget{{Agent: "alpha", Addr: a1}, {Agent: "beta", Addr: a2}}
+		return []ScrapeTarget{{Agent: "alpha", BaseURL: "http://" + a1}, {Agent: "beta", BaseURL: "http://" + a2}}
 	})
 	body := scrapeHandler(t, h)
 	mustParseClean(t, body)
@@ -82,7 +82,7 @@ func TestFanoutSkipsHangingAgent(t *testing.T) {
 	})
 	c := NewControlMetrics()
 	h := FanoutHandler(c, func() []ScrapeTarget {
-		return []ScrapeTarget{{Agent: "alpha", Addr: healthy}, {Agent: "hung", Addr: hung}}
+		return []ScrapeTarget{{Agent: "alpha", BaseURL: "http://" + healthy}, {Agent: "hung", BaseURL: "http://" + hung}}
 	})
 	start := time.Now()
 	body := scrapeHandler(t, h)
@@ -104,7 +104,7 @@ func TestFanoutSkipsMalformedExposition(t *testing.T) {
 	bad := fakeAgent(t, func(w http.ResponseWriter, _ *http.Request) { fmt.Fprint(w, "{{{not exposition") })
 	c := NewControlMetrics()
 	h := FanoutHandler(c, func() []ScrapeTarget {
-		return []ScrapeTarget{{Agent: "bad", Addr: bad}}
+		return []ScrapeTarget{{Agent: "bad", BaseURL: "http://" + bad}}
 	})
 	body := scrapeHandler(t, h)
 	if !strings.Contains(body, "runtime_agent_up") {
@@ -122,7 +122,7 @@ func TestFanout404IsNoMetricsButStillUp(t *testing.T) {
 	shim := fakeAgent(t, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNotFound) })
 	c := NewControlMetrics()
 	h := FanoutHandler(c, func() []ScrapeTarget {
-		return []ScrapeTarget{{Agent: "shim", Addr: shim}}
+		return []ScrapeTarget{{Agent: "shim", BaseURL: "http://" + shim}}
 	})
 	_ = scrapeHandler(t, h)
 	if v := testutil.ToFloat64(c.agentUp.WithLabelValues("shim")); v != 1 {
@@ -136,7 +136,7 @@ func TestFanout404IsNoMetricsButStillUp(t *testing.T) {
 func TestFanoutUnreachableAgent(t *testing.T) {
 	c := NewControlMetrics()
 	h := FanoutHandler(c, func() []ScrapeTarget {
-		return []ScrapeTarget{{Agent: "gone", Addr: "127.0.0.1:1"}}
+		return []ScrapeTarget{{Agent: "gone", BaseURL: "http://127.0.0.1:1"}}
 	})
 	body := scrapeHandler(t, h)
 	if !strings.Contains(body, "runtime_metrics_scrape_skips_total") {
@@ -153,7 +153,7 @@ func TestFanoutEnforcesAgentLabel(t *testing.T) {
 	liar := fakeAgent(t, func(w http.ResponseWriter, _ *http.Request) { fmt.Fprint(w, exposition("liar")) })
 	c := NewControlMetrics()
 	h := FanoutHandler(c, func() []ScrapeTarget {
-		return []ScrapeTarget{{Agent: "honest", Addr: liar}}
+		return []ScrapeTarget{{Agent: "honest", BaseURL: "http://" + liar}}
 	})
 	body := scrapeHandler(t, h)
 	mustParseClean(t, body)
@@ -175,7 +175,7 @@ runtime_agent_up{agent="evil"} 1
 	})
 	c := NewControlMetrics()
 	h := FanoutHandler(c, func() []ScrapeTarget {
-		return []ScrapeTarget{{Agent: "sneaky", Addr: spoof}}
+		return []ScrapeTarget{{Agent: "sneaky", BaseURL: "http://" + spoof}}
 	})
 	body := scrapeHandler(t, h)
 	mustParseClean(t, body)
@@ -207,7 +207,7 @@ func TestFanoutTypeConflictDropsFamily(t *testing.T) {
 	})
 	c := NewControlMetrics()
 	h := FanoutHandler(c, func() []ScrapeTarget {
-		return []ScrapeTarget{{Agent: "one", Addr: one}, {Agent: "two", Addr: two}}
+		return []ScrapeTarget{{Agent: "one", BaseURL: "http://" + one}, {Agent: "two", BaseURL: "http://" + two}}
 	})
 	body := scrapeHandler(t, h)
 	mustParseClean(t, body)
@@ -236,5 +236,32 @@ func TestFanoutTypeConflictDropsFamily(t *testing.T) {
 		if strings.Contains(body, `flaky_metric{agent="one"}`) {
 			t.Fatalf("dropped agent one's series leaked:\n%s", body)
 		}
+	}
+}
+
+func TestFanout_RemoteTargetUsesBaseURLAndToken(t *testing.T) {
+	const token = "scrape-tok"
+	var sawAuth string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/metrics" {
+			http.NotFound(w, r)
+			return
+		}
+		sawAuth = r.Header.Get("Authorization")
+		fmt.Fprint(w, exposition("remote"))
+	}))
+	defer srv.Close()
+
+	c := NewControlMetrics()
+	h := FanoutHandler(c, func() []ScrapeTarget {
+		return []ScrapeTarget{{Agent: "remote", BaseURL: srv.URL, Token: token}}
+	})
+	body := scrapeHandler(t, h)
+	mustParseClean(t, body)
+	if !strings.Contains(body, `agent_turns_total{agent="remote",outcome="completed"} 3`) {
+		t.Fatalf("remote series missing:\n%s", body)
+	}
+	if sawAuth != "Bearer "+token {
+		t.Fatalf("scrape Authorization = %q", sawAuth)
 	}
 }

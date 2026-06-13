@@ -74,3 +74,62 @@ func TestStreamReplaysBufferedTerminal(t *testing.T) {
 		t.Fatalf("stream body missing id: line on replay: %q", s)
 	}
 }
+
+func TestRequireBearer(t *testing.T) {
+	const token = "agent-tok"
+	mkSrv := func(tok string) *httptest.Server {
+		m := newTestManager()
+		m.authToken = tok
+		return httptest.NewServer(m.handler())
+	}
+
+	t.Run("no token configured: open (back-compat)", func(t *testing.T) {
+		srv := mkSrv("")
+		defer srv.Close()
+		resp, err := http.Get(srv.URL + "/healthz")
+		if err != nil || resp.StatusCode != 200 {
+			t.Fatalf("healthz open: err=%v status=%v", err, resp.StatusCode)
+		}
+	})
+
+	t.Run("token set: 401 without header, including /healthz and /metrics", func(t *testing.T) {
+		srv := mkSrv(token)
+		defer srv.Close()
+		for _, path := range []string{"/healthz", "/metrics", "/sessions"} {
+			resp, err := http.Get(srv.URL + path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			resp.Body.Close()
+			if resp.StatusCode != http.StatusUnauthorized {
+				t.Fatalf("%s without token: status=%d, want 401", path, resp.StatusCode)
+			}
+		}
+	})
+
+	t.Run("token set: 200 with correct bearer", func(t *testing.T) {
+		srv := mkSrv(token)
+		defer srv.Close()
+		req, _ := http.NewRequest("GET", srv.URL+"/healthz", nil)
+		req.Header.Set("Authorization", "Bearer "+token)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil || resp.StatusCode != 200 {
+			t.Fatalf("healthz with token: err=%v status=%v", err, resp.StatusCode)
+		}
+	})
+
+	t.Run("token set: 401 with wrong bearer", func(t *testing.T) {
+		srv := mkSrv(token)
+		defer srv.Close()
+		req, _ := http.NewRequest("GET", srv.URL+"/healthz", nil)
+		req.Header.Set("Authorization", "Bearer wrong")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusUnauthorized {
+			t.Fatalf("healthz wrong token: status=%d, want 401", resp.StatusCode)
+		}
+	})
+}

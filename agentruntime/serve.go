@@ -28,6 +28,9 @@ type Manager struct {
 	// metrics is this agent's Prometheus registry. Nil-safe: tests construct
 	// Manager without it and every obs method no-ops on a nil receiver.
 	metrics *obs.AgentMetrics
+	// authToken, when non-empty, requires every inbound request to carry
+	// Authorization: Bearer <authToken>. "" ⇒ no auth (local/loopback agents).
+	authToken string
 
 	mu          sync.Mutex
 	subscribers map[string][]chan WireEvent // sessionID -> live SSE subscribers
@@ -288,6 +291,7 @@ func Serve(ctx context.Context, cfg Config) error {
 		dbosCtx:     dctx,
 		st:          st,
 		metrics:     obs.NewAgentMetrics(cfg.Spec.ID),
+		authToken:   os.Getenv("RUNTIME_AGENT_AUTH_TOKEN"),
 		subscribers: map[string][]chan WireEvent{},
 	}
 

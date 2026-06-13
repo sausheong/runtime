@@ -104,3 +104,36 @@ func TestRegistryThreadsGatewaySearch(t *testing.T) {
 		t.Fatalf("full agent wrong: %+v", f)
 	}
 }
+
+func TestRegistry_RemoteAgentDialIdentity(t *testing.T) {
+	cfg := &config.Config{Agents: []config.AgentConfig{
+		{ID: "local", Name: "L", Model: "m", ListenAddr: "127.0.0.1:8101"},
+		{ID: "remote", Name: "R", Model: "m", URL: "https://h:8443", AuthToken: "tok"},
+	}}
+	if err := cfg.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	reg := NewRegistry(cfg, "/bin/agentd", "dsn")
+
+	l, _ := reg.Get("local")
+	if l.Remote {
+		t.Fatal("local agent marked Remote")
+	}
+	if l.baseURL() != "http://127.0.0.1:8101" || l.Addr != "127.0.0.1:8101" {
+		t.Fatalf("local dial wrong: base=%q addr=%q", l.baseURL(), l.Addr)
+	}
+
+	r, _ := reg.Get("remote")
+	if !r.Remote {
+		t.Fatal("remote agent not marked Remote")
+	}
+	if r.baseURL() != "https://h:8443" {
+		t.Fatalf("remote baseURL = %q", r.baseURL())
+	}
+	if r.AuthToken != "tok" {
+		t.Fatalf("remote AuthToken = %q", r.AuthToken)
+	}
+	if r.Addr != "" {
+		t.Fatalf("remote Addr should be empty, got %q", r.Addr)
+	}
+}

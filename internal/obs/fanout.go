@@ -17,10 +17,12 @@ import (
 	"github.com/prometheus/common/model"
 )
 
-// ScrapeTarget is one supervised agent's metrics endpoint.
+// ScrapeTarget is one agent's metrics endpoint. BaseURL is the full dial base
+// "scheme://host:port"; Token (optional) is the shared bearer for remote agents.
 type ScrapeTarget struct {
-	Agent string // agent id (used for up/skip series labels)
-	Addr  string // host:port (the agent's listen_addr)
+	Agent   string // agent id (used for up/skip series labels)
+	BaseURL string // full base, e.g. "http://127.0.0.1:8101" or "https://h:8443"
+	Token   string // optional bearer ("" ⇒ no auth header)
 }
 
 // perAgentTimeout bounds each sub-scrape so one sick agent can never stall
@@ -172,9 +174,12 @@ func injectAgentLabel(mf *dto.MetricFamily, agent string) {
 func scrapeOne(ctx context.Context, client *http.Client, tgt ScrapeTarget) (map[string]*dto.MetricFamily, bool, string) {
 	ctx, cancel := context.WithTimeout(ctx, perAgentTimeout)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, "GET", "http://"+tgt.Addr+"/metrics", nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", tgt.BaseURL+"/metrics", nil)
 	if err != nil {
 		return nil, false, "error"
+	}
+	if tgt.Token != "" {
+		req.Header.Set("Authorization", "Bearer "+tgt.Token)
 	}
 	resp, err := client.Do(req)
 	if err != nil {

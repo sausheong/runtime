@@ -1,6 +1,7 @@
 package agentruntime
 
 import (
+	"crypto/subtle"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -24,7 +25,27 @@ func (m *Manager) handler() http.Handler {
 		}
 		mux.ServeHTTP(w, r)
 	})
-	return obs.RequestID(logged)
+	var h http.Handler = logged
+	if m.authToken != "" {
+		h = requireBearer(m.authToken, logged)
+	}
+	return obs.RequestID(h)
+}
+
+// requireBearer rejects any request whose Authorization header is not exactly
+// "Bearer <token>" with 401, using a constant-time compare. It guards ALL
+// paths (including /healthz and /metrics): a remote agent's probe endpoints are
+// on the same routable port, and runtimed sends the token on those too.
+func requireBearer(token string, next http.Handler) http.Handler {
+	want := "Bearer " + token
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got := r.Header.Get("Authorization")
+		if subtle.ConstantTimeCompare([]byte(got), []byte(want)) != 1 {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func (m *Manager) newMux() *http.ServeMux {

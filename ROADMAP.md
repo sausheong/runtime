@@ -721,6 +721,34 @@ the single-replica supervisor model). Spec/plan:
 
 ### C3. Remote agents (attach instead of spawn)
 
+**C3 M1 — DONE (2026-06-13).** `runtimed` can now ATTACH to an already-running
+remote `agentd` instead of only spawning local children. Config: an agent sets
+`url:` (http/https) instead of `listen_addr:` (mutually exclusive, exactly one
+required) plus an optional `${VAR}`-expanded `auth_token:`. The data plane was
+already location-agnostic (reverse-proxy + `/healthz`), so the change upgraded
+the dial identity from a bare host:port to a full base URL + optional bearer
+across all four dial sites (reverse proxy, `/agents` health, metrics fan-out,
+metrics target builder) via `AgentProcess.{Remote,BaseURL,AuthToken}` +
+`baseURL()`/`DialBase()` + an `authTransport`. Lifecycle: remote agents get a
+non-restarting `HealthMonitor` (poll `/healthz`, edge-triggered
+`reachable|unreachable`, new `runtime_agent_reachable` metric) instead of a
+`Supervisor` — degrade-don't-fail: a down remote never blocks boot, is never
+restarted, and proxying returns 503 until it returns. `agentd` gained an
+optional bearer middleware (`RUNTIME_AGENT_AUTH_TOKEN`, constant-time compare,
+guards all paths incl. `/healthz` and `/metrics`); default-off so local spawns
+are byte-for-byte unchanged. Decisions settled in the brainstorm:
+operator-provisioned secrets (the remote agentd owns its env; a registration
+handshake is deferred to C3 M2), opt-in bearer (mTLS deferred), `url:` schema.
+Spawn-time-only fields (command/kind/memory/gateway) are rejected on a remote
+agent. Tested hermetically (config validation, authTransport, registry,
+`/agents` dial, fan-out, HealthMonitor edge-trigger, agentd auth) plus an
+integration test (`TestRemoteAgentAttach`: mixed local+remote, proxy
+round-trip to the remote, kill→unreachable while local stays healthy, no
+restart). This unblocks per-agent-pod scheduling (C2): a K8s-scheduled agent is
+exactly a remote agent whose lifecycle the orchestrator owns. Remaining C3:
+the registration handshake (M2) and mTLS. Spec/plan:
+`docs/superpowers/{specs,plans}/2026-06-13-c3-remote-agents*`.
+
 - **Remote agents** — let an agent run on a different host while runtimed still
   manages it. The data plane is already location-agnostic: the control plane
   reverse-proxies plain HTTP to `listen_addr` and health-checks via
