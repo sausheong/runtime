@@ -72,13 +72,14 @@ func newPoolManager(agentID string, base AgentProcess, acfg config.AutoscaleConf
 	}
 	pm.startReplica = pm.startReplicaProc
 	pm.clock = func() int64 { return timeNowNanos() }
-	// Cooldowns default to 0 (disabled): the policy loop already paces actuation
-	// by pollEvery, so each tick performs at most one step every poll interval.
-	// The cooldown gate stays wired through decideStep for callers that set a
-	// non-zero upCD/downCD to debounce further (e.g. from config in a later task);
-	// at 0 a back-to-back tick at the same clock instant is free to actuate again.
-	pm.upCD = 0
-	pm.downCD = 0
+	// Asymmetric anti-flap hysteresis (spec Section 4): scale-down is deliberately
+	// slower than scale-up so the pool sheds capacity reluctantly but adds it
+	// eagerly. This up/down asymmetry is a separate gate layered ON TOP of the
+	// pollEvery pacing — a single global poll interval cannot express it, since it
+	// debounces up- and down-actuations by different amounts independent of how
+	// often the policy loop ticks.
+	pm.upCD = int64(10 * 1e9)   // scale-up cooldown: at most one grow per 10s
+	pm.downCD = int64(30 * 1e9) // scale-down cooldown: slower than up (anti-flap)
 	pm.pollEvery = int64(5 * 1e9)
 	return pm
 }

@@ -232,14 +232,38 @@ func TestTickGrowsOnLoad(t *testing.T) {
 	if err := pm.grow(ctx); err != nil {
 		t.Fatal(err)
 	}
-	pm.clock = func() int64 { return 1 << 60 }
-	pm.tick(ctx)
+	// Advancing clock: +20s per call, so the 10s up-cooldown elapses between the
+	// two ticks and both are allowed to grow (proving one-step-per-tick AND that
+	// the cooldown gate permits spaced actuations).
+	var now int64
+	pm.clock = func() int64 { now += int64(20 * 1e9); return now }
+	pm.tick(ctx) // active 5 over k=1 ⇒ grow ⇒ k=2
 	if got := len(pm.Replicas()); got != 2 {
 		t.Fatalf("k=%d want 2 (one step per tick)", got)
 	}
-	pm.tick(ctx)
+	pm.tick(ctx) // active 5 over k=2 ⇒ grow ⇒ k=3
 	if got := len(pm.Replicas()); got != 3 {
 		t.Fatalf("k=%d want 3", got)
+	}
+}
+
+func TestTickUpCooldownGates(t *testing.T) {
+	pm, _ := newTestPM(t, 1, 3, 2)
+	pm.st = &fakeLoad{ret: map[int]int{0: 5}} // wants to grow
+	ctx := context.Background()
+	if err := pm.grow(ctx); err != nil {
+		t.Fatal(err)
+	}
+	// Constant clock: the first tick grows (lastUp starts at 0, now huge ⇒ ready),
+	// the second tick is WITHIN the cooldown (now-lastUp == 0 < upCD) ⇒ no grow.
+	pm.clock = func() int64 { return int64(1 << 60) }
+	pm.tick(ctx)
+	if got := len(pm.Replicas()); got != 2 {
+		t.Fatalf("first tick k=%d want 2", got)
+	}
+	pm.tick(ctx) // same instant ⇒ cooldown not elapsed ⇒ held
+	if got := len(pm.Replicas()); got != 2 {
+		t.Fatalf("second tick k=%d want 2 (up-cooldown should gate)", got)
 	}
 }
 
