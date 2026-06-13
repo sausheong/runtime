@@ -10,8 +10,11 @@ data:
   # StatefulSet as a remote replica pool. This runtime.yaml is GENERATED from
   # config.agents — each agent becomes a remote entry whose url is the per-ordinal
   # headless DNS template ({i} expanded by runtimed) and whose replicas is the
-  # StatefulSet pod count. Spawn-time fields (memory/gateway) are delivered to the
-  # agent POD by its StatefulSet, not via this file.
+  # StatefulSet pod count. The memory opt-in is delivered to the agent POD by its
+  # StatefulSet env, not via this file. (Per-agent gateway opt-in is NOT yet wired
+  # into the StatefulSet pod env in perAgentPods mode — a known limitation; see the
+  # chart README. A remote agent entry must not carry memory/gateway anyway, since
+  # config.Validate rejects spawn-time fields on a remote agent.)
   {{- $root := . }}
   {{- $hasToken := or .Values.secrets.agentAuthToken .Values.secrets.existingSecret }}
   runtime.yaml: |

@@ -15,7 +15,13 @@ metadata:
 spec:
   serviceName: {{ include "runtime.agentHeadless" (dict "root" $root "id" $a.id) }}
   replicas: {{ $a.replicas | default 1 }}
-  podManagementPolicy: Parallel
+  # OrderedReady (the StatefulSet default), NOT Parallel: in perAgentPods mode
+  # runtimed is control-plane-only and never Launches DBOS, so each agentd pod
+  # creates the DBOS schema itself on first start. DBOS's runMigrations does a
+  # plain (non-IF-NOT-EXISTS, unlocked) CREATE SCHEMA/TABLE whose duplicate-object
+  # errors are NOT retryable — so N pods racing an empty DB would CrashLoop all but
+  # one. OrderedReady starts ordinal 0 (schema creator) and waits for it Ready
+  # before ordinal 1, exactly as the integration test serializes the first ordinal.
   selector:
     matchLabels:
       {{- include "runtime.selectorLabels" $root | nindent 6 }}

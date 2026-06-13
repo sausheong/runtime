@@ -397,3 +397,9 @@ these pods). Supply provider keys via `secrets.existingSecret`/the chart Secret.
 Brokered-secrets delivery to scheduled pods is backlogged (its natural home is the
 C3 M2 registration handshake, where a pod pulls decrypted secrets over an
 authenticated channel).
+
+**Known limitation — gateway opt-in.** In `perAgentPods` mode a per-agent
+`gateway:` opt-in is not yet wired into the agent pod's StatefulSet env
+(`RUNTIME_GATEWAY_URL`/`_KEY`), so gateway-enabled agents are only supported in
+`monolith` mode for now. Wiring the gateway env into the per-agent StatefulSet is
+a follow-up.
