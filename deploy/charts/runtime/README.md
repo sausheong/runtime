@@ -398,8 +398,61 @@ Brokered-secrets delivery to scheduled pods is backlogged (its natural home is t
 C3 M2 registration handshake, where a pod pulls decrypted secrets over an
 authenticated channel).
 
-**Known limitation — gateway opt-in.** In `perAgentPods` mode a per-agent
-`gateway:` opt-in is not yet wired into the agent pod's StatefulSet env
-(`RUNTIME_GATEWAY_URL`/`_KEY`), so gateway-enabled agents are only supported in
-`monolith` mode for now. Wiring the gateway env into the per-agent StatefulSet is
-a follow-up.
+### Registration handshake (C3 M2)
+
+In `perAgentPods` mode, set `secrets.registrationToken` (or supply an
+`existingSecret` carrying a `RUNTIME_REGISTRATION_TOKEN` key) to turn on the **C3
+M2 registration handshake**. Each agent pod then **pulls its full config from the
+control plane at boot** — DSN, identity, opt-in feature env, and the tenant's
+**brokered (decrypted) per-tenant secrets** — instead of reading provider
+credentials from the static chart Secret. This retires the C2 M2 limitation that
+brokered secrets could not reach scheduled pods (they are spawn-time-only for
+local children, and runtimed does not spawn these pods).
+
+How it works: when the token is present the chart adds `RUNTIME_REGISTRATION_URL`
+(the control-plane Service + `/register`) and a `RUNTIME_REGISTRATION_TOKEN`
+secretKeyRef to each agent StatefulSet. At startup `agentd` POSTs `/register`
+with its token and `$HOSTNAME` ordinal, applies the returned env, then runs its
+normal startup path. It **fails hard** (CrashLoops) if the handshake fails — a
+pod that cannot fetch its config must not start with a partial environment.
+
+Mint a token (admin-scoped, behind the identity admin guard):
+
+```bash
+runtimectl register mint --agent <id>   # prints the one-time plaintext token
+runtimectl register list                # token_id, agent_id, revoked status (no secret)
+runtimectl register revoke <token-id>   # fail-closed at the next pod restart
+```
+
+Then wire it in:
+
+```yaml
+scheduling:
+  mode: perAgentPods
+secrets:
+  registrationToken: "<minted-plaintext>"   # shared by all agent pods (see note)
+```
+
+Notes:
+
+- **Per-agent identity-backed token.** Each token binds to one `agent_id` (whose
+  tenant comes from config) and is bcrypt-hashed in the `registration_tokens`
+  table. A leaked token can fetch ONLY its own agent's tenant secrets, and only
+  for ordinals the StatefulSet will actually create (fail-closed bounds check).
+  Tokens are revocable; `agentd` re-fetches on every restart, so a revoke takes
+  effect at the next restart.
+- **`RUNTIME_LISTEN_ADDR` and the ordinal stay pod/infra-provided.** The handshake
+  delivers DSN + identity + tenant + feature env + brokered secrets — NOT the bind
+  address or replica ordinal. A remote agent has no control-plane `Addr`, so the
+  delta returns those empty and `agentd` skips empty values; the StatefulSet sets
+  `RUNTIME_LISTEN_ADDR` statically and the `$HOSTNAME` wrapper provides the ordinal
+  fallback, exactly as before.
+- **Shared token simplification.** `secrets.registrationToken` is a single value
+  shared by all agent pods in this chart. For **distinct per-agent tokens**, supply
+  an `existingSecret` with per-agent keys (out of chart scope) — handshake mode is
+  detected whenever an `existingSecret` is set.
+- **Per-agent-pod gateway now works through the handshake.** A gateway-enabled
+  agent's `RUNTIME_GATEWAY_URL`/`_KEY` arrive via the env delta, so the C2 M2
+  gateway-opt-in follow-up is retired.
+- **mTLS is still deferred.** The registration token is a bearer over
+  operator-terminated TLS (same trust model as the M1 runtimed→agent bearer).

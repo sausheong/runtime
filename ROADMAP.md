@@ -909,6 +909,43 @@ exactly a remote agent whose lifecycle the orchestrator owns. Remaining C3:
 the registration handshake (M2) and mTLS. Spec/plan:
 `docs/superpowers/{specs,plans}/2026-06-13-c3-remote-agents*`.
 
+**C3 M2 — DONE (2026-06-13).** A remote/scheduled `agentd` now pulls its full
+config from the control plane at boot via an authenticated **pull handshake**
+(agent→control-plane, the reverse of M1's data plane), closing the C2 M2 hole
+where brokered per-tenant secrets could not reach pods runtimed didn't spawn.
+The agent boots knowing only `RUNTIME_REGISTRATION_URL`+`_TOKEN`, POSTs
+`/register` with its token and `$HOSTNAME` ordinal, and receives the per-replica
+env delta (DSN + identity + tenant + opt-in feature env + decrypted brokered
+secrets), which it `os.Setenv`s before its unchanged `os.Getenv` startup path.
+Token model: a per-agent, identity-backed registration token (`registration_tokens`
+table, bcrypt via the existing `MintServiceKey` primitive, bound `agent_id`→tenant),
+managed by `runtimectl register mint|list|revoke` (admin-scoped, behind the
+identity admin guard; cross-tenant mint blocked). Server safety: `buildEnv` was
+split into a network-safe `envDelta` (the entries added on top of the inherited
+env) so runtimed's own `os.Environ()` — master keyring, OIDC client secret,
+admin bootstrap — is **structurally impossible** to ship; `buildEnv` =
+`os.Environ()` + `envDelta` keeps local spawns byte-for-byte unchanged. `POST
+/register` is mounted **pre-identity** (like `/metrics`), authenticated solely by
+its own token, with fail-closed ordinal validation (`Registry.Replica` returns
+false for an unknown agent or out-of-range ordinal → 403) and broker-error
+fail-closed (503, no partial env); uniform 401s give no token oracle; the access
+log records only `agent`/`tenant`/`ordinal`/`token_id`, never a secret or secret
+name. `agentd`'s `fetchRegistration` fetch→setenv→unchanged-path **fails hard**
+(`log.Fatal` → CrashLoop) on any handshake error, and **skips empty delta
+values** so the infra-provided `RUNTIME_LISTEN_ADDR` + the `$HOSTNAME` ordinal
+fallback survive (the control plane has no Addr for a remote agent — the handshake
+delivers config, not the bind address/ordinal). The per-agent-pod gateway
+(`RUNTIME_GATEWAY_URL`/`_KEY`) now rides the same delta, retiring the second C2 M2
+follow-up for free. Auth is a bearer over operator-terminated TLS (mTLS deferred).
+Tested: config/handler unit (`envDelta` no-leak, all `/register` status paths,
+`ordinalFromHostname`), identity store integration (token CRUD + bcrypt verify),
+end-to-end integration `TestRegistrationHandshake` (agent boots from a near-empty
+env, revoked token → agentd exits non-zero, cross-tenant mint → 403), and chart
+render permutations (handshake env present in the StatefulSet + Secret key wired;
+handshake-off and monolith regressions). Live-proof: <to be filled after kind
+proof>. Remaining C3: mTLS, and brokered-secrets edge cases. Spec/plan:
+`docs/superpowers/{specs,plans}/2026-06-13-c3-m2-registration-handshake*`.
+
 - **Remote agents** — let an agent run on a different host while runtimed still
   manages it. The data plane is already location-agnostic: the control plane
   reverse-proxies plain HTTP to `listen_addr` and health-checks via

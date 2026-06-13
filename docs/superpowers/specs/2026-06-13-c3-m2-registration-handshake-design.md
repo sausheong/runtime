@@ -222,6 +222,15 @@ the pod's own clean env is a harmless no-op, and agentd already treats empty as
 unset. Keeping them makes the delta a faithful, complete description of "what this
 agent should see."
 
+**Not a full bind-address bootstrap.** The delta is config, not the listen
+address: for a remote agent the control plane has no `Addr` (`AgentProcess.Addr`
+is empty for a remote/scheduled `AgentProcess`), so `RUNTIME_LISTEN_ADDR` (and,
+analogously, the ordinal) come back empty in the delta. agentd's fetch **skips
+empty delta values**, so the StatefulSet's static `RUNTIME_LISTEN_ADDR` and the
+`$HOSTNAME`-derived ordinal fallback survive. The handshake therefore bootstraps
+DSN + identity + tenant + feature env + brokered secrets — the bind address and
+ordinal remain pod/infra-provided.
+
 ## 7. agentd fetch path (client side)
 
 New `cmd/agentd/register.go`, one function called at the very top of `main()`
