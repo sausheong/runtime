@@ -317,7 +317,10 @@ func runAdmin(base string, args []string) {
 		}
 		out := mustAdminPost(base, "/admin/upstreams", body)
 		var resp struct{ ID, Name string }
-		_ = json.Unmarshal(out, &resp)
+		if err := json.Unmarshal(out, &resp); err != nil || resp.ID == "" {
+			fmt.Fprintf(os.Stderr, "upstream created but response malformed: %s\n", out)
+			os.Exit(1)
+		}
 		fmt.Printf("upstream %s registered (id=%s)\n", resp.Name, resp.ID)
 	case "upstream ls":
 		fmt.Print(string(mustAdminGet(base, "/admin/upstreams")))
