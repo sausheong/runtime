@@ -175,6 +175,60 @@ func TestRegistryThreadsGatewaySearch(t *testing.T) {
 	}
 }
 
+func TestRegistryDelegatesAutoscaledAgent(t *testing.T) {
+	cfg := &config.Config{Agents: []config.AgentConfig{
+		{ID: "as", Name: "AS", Model: "m", ListenAddr: "127.0.0.1:9300",
+			Autoscale: &config.AutoscaleConfig{Min: 1, Max: 3, TargetSessionsPerReplica: 2}},
+		{ID: "st", Name: "ST", Model: "m", ListenAddr: "127.0.0.1:9400", Replicas: 2},
+	}}
+	if err := cfg.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	reg := NewRegistry(cfg, "/bin/true", "dsn")
+
+	if reg.pools["as"] == nil {
+		t.Fatal("expected PoolManager for autoscaled agent")
+	}
+	if reg.pools["st"] != nil {
+		t.Fatal("static agent must not have a PoolManager")
+	}
+	st, ok := reg.Replicas("st")
+	if !ok || len(st) != 2 {
+		t.Fatalf("static replicas = %d, ok=%v; want 2", len(st), ok)
+	}
+
+	pm := reg.pools["as"]
+	pm.startReplica = func(ctx context.Context, ap AgentProcess) (context.CancelFunc, error) {
+		_, c := context.WithCancel(ctx)
+		return c, nil
+	}
+	if err := pm.grow(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	reps, ok := reg.Replicas("as")
+	if !ok || len(reps) != 1 || reps[0].DBOSVMID != "as#0" {
+		t.Fatalf("delegated Replicas wrong: %+v ok=%v", reps, ok)
+	}
+}
+
+func TestRegistrySetBrokerStampsPool(t *testing.T) {
+	cfg := &config.Config{Agents: []config.AgentConfig{
+		{ID: "as", Name: "AS", Model: "m", ListenAddr: "127.0.0.1:9300",
+			Autoscale: &config.AutoscaleConfig{Min: 1, Max: 2, TargetSessionsPerReplica: 2}},
+	}}
+	_ = cfg.Validate()
+	reg := NewRegistry(cfg, "/bin/true", "dsn")
+	reg.SetBroker(stubBroker{})
+	pm := reg.pools["as"]
+	if pm.base.broker == nil {
+		t.Fatal("SetBroker did not stamp the PoolManager base")
+	}
+}
+
+type stubBroker struct{}
+
+func (stubBroker) SecretsFor(context.Context, string) (map[string]string, error) { return nil, nil }
+
 func TestRegistry_RemoteAgentDialIdentity(t *testing.T) {
 	cfg := &config.Config{Agents: []config.AgentConfig{
 		{ID: "local", Name: "L", Model: "m", ListenAddr: "127.0.0.1:8101"},

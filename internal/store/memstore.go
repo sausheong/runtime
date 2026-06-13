@@ -36,6 +36,22 @@ func (m *memStore) SessionReplica(_ context.Context, id string) (int, error) {
 	return s.Replica, nil
 }
 
+func (m *memStore) ActiveSessionsByReplica(_ context.Context, agentID string) (map[int]int, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := map[int]int{}
+	for _, s := range m.sessions {
+		if s.AgentID != agentID {
+			continue
+		}
+		if s.Status == "completed" || s.Status == "error" {
+			continue
+		}
+		out[s.Replica]++
+	}
+	return out, nil
+}
+
 func (m *memStore) ListSessions(_ context.Context, agentID string) ([]SessionRow, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

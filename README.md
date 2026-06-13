@@ -242,8 +242,62 @@ agents:
 > `<id>#0`), since DBOS recovers only workflows stamped with the process's own
 > executor id.
 
-**Deferred:** autoscaling, graceful drain, changing replica count without a
-restart, health-aware (skip-down) new-session routing, and remote-agent pools.
+**Deferred:** health-aware (skip-down) new-session routing and remote-agent
+pools. (Autoscaling and graceful drain landed in A2, below.)
+
+### Autoscaling (A2)
+
+A pooled agent can **float** its replica count with load instead of pinning it.
+Replace `replicas:` with an `autoscale:` block; when it's absent the agent keeps
+the static `replicas:` pool above (byte-for-byte A1):
+
+```yaml
+agents:
+  - id: support
+    name: Support Agent
+    model: claude-opus-4-8
+    listen_addr: 127.0.0.1:8101   # base; replica i listens on base_port + i
+    autoscale:
+      min: 1
+      max: 4
+      target_sessions_per_replica: 5
+```
+
+- **runtimed is both controller and actuator.** No external scaler — the same
+  host that supervises the pool grows it (spawns an `agentd` replica) and shrinks
+  it (drains, then stops the top replica). The whole `max` port range is reserved
+  at config load.
+- **Signal = active (non-terminal) sessions per replica.** Each poll tick,
+  `desired = clamp(ceil(active / target_sessions_per_replica), min, max)`, and the
+  pool takes **at most one step** toward it, gated by **asymmetric cooldowns**
+  (up = 10s, down = 30s by default) so it scales up eagerly and down cautiously.
+- **Drain-only scale-down — durability is absolute.** The top replica is marked
+  *draining* (new sessions stop routing there) and stopped only once its active
+  sessions hit 0. There is **no force-kill or deadline**: a single long-lived
+  session on the top replica blocks *that one* scale-down indefinitely, by
+  design. If load rebounds while it's draining, the drain flag is cleared (the
+  **un-drain fast path**) instead of spawning anew.
+- **Suffix-only mutation.** The pool only ever appends at the top index or removes
+  the highest replica; a session pins to its owner replica (executor
+  `<id>#<i>`) for life, so a middle replica is never removed and **only the owning
+  DBOS executor can resume a session's workflow**. This preserves the A1
+  executor-id invariant — and the `session_events` single-writer invariant — by
+  construction.
+- **Metrics:** `runtime_agent_replicas_desired{agent}`,
+  `runtime_agent_replicas_current{agent}`,
+  `runtime_agent_active_sessions{agent}` (gauges), and
+  `runtime_autoscale_events_total{agent,action}` with
+  `action ∈ up|down|undrain|reap|blocked`.
+- **Tuning env:** `RUNTIME_AUTOSCALE_POLL_SECONDS` (default 5),
+  `RUNTIME_AUTOSCALE_UP_COOLDOWN_SECONDS` (default 10),
+  `RUNTIME_AUTOSCALE_DOWN_COOLDOWN_SECONDS` (default 30).
+- **Degrade-don't-fail boot.** If a pool can't reach `min` at startup, runtimed
+  warns and the policy loop keeps retrying toward `min` — it never `os.Exit`s.
+- `autoscale` is **rejected on remote (`url:`) agents**, same as `replicas`.
+
+**Deferred:** scale-down force-kill deadline, richer signals (CPU/queue/latency),
+per-agent cooldown config, and a signal-only mode (emit the desired count and let
+an external orchestrator actuate — the seam toward Kubernetes/C2).
 
 ### Remote agents (attach instead of spawn)
 
@@ -1854,10 +1908,12 @@ milestone or sub-project):
   metrics panel, log shipping, and DBOS-internal metrics.
 - **Write actions from the console** — the console is read-only; deploy/stop/
   invoke from the UI is future work.
-- **Autoscaling** — per-agent replica **pools** are done (`replicas: N`, see
-  [Replica pools & session affinity](#replica-pools--session-affinity)); what's
-  still missing is load-based scaling, graceful drain, and changing the replica
-  count without a restart.
+- **Autoscaling** — per-agent replica **pools** (`replicas: N`) and **load-based
+  autoscaling** with graceful drain are done (`autoscale: {min, max,
+  target_sessions_per_replica}`, see [Autoscaling (A2)](#autoscaling-a2)); what's
+  still missing is a scale-down force-kill deadline, richer signals (CPU/queue/
+  latency), and a signal-only mode that hands actuation to an external
+  orchestrator.
 - **Dynamic deploy** — agents come from `runtime.yaml` at startup; no runtime
   `POST /agents` registration or rollback yet (tokens are config-only too).
 - **Gateway — first three milestones DONE** (see [MCP Gateway](#mcp-gateway)):

@@ -1,6 +1,6 @@
 # Runtime — Roadmap & Backlog
 
-**Checkpoint date:** 2026-06-13 (Spine A1 — replica pools + session affinity)
+**Checkpoint date:** 2026-06-13 (Spine A2 — autoscaling)
 **Current state:** Runtime spine complete (Milestones 1–3 merged to `master`);
 polyglot agent hosting (C1) first two milestones complete — two foreign
 frameworks (OpenAI Agents SDK + Claude Agent SDK) hosted via the one Python
@@ -100,12 +100,53 @@ the use case demands. Recorded in the M3 README "Status, scope & limitations".
    sessions before upgrading, or run a one-time `UPDATE dbos.workflow_status SET
    executor_id = '<agentid>#0' WHERE executor_id = 'local'` per single-replica
    agent. Fresh deploys need nothing.
-2. **Autoscaling** — scale replicas by load. Depends on pools (A1).
+2. **Autoscaling — DONE (2026-06-13).** runtimed floats a local agent's replica
+   pool with load: it is **both controller and actuator**, growing the pool by
+   spawning an `agentd` replica and shrinking it by draining-then-stopping the
+   highest replica — all on one host. Opt-in per local agent via an
+   `autoscale: {min, max, target_sessions_per_replica}` block; when absent the
+   agent keeps the static A1 `replicas:` pool byte-for-byte, and `autoscale` is
+   rejected on remote (`url:`) agents. A `PoolManager` owns the mutable replica
+   set plus the policy loop: the scale signal is **active (non-terminal) sessions
+   per replica**, `desired = clamp(ceil(active/target), min, max)`, and each poll
+   tick takes **at most one step** toward it. Mutation is **suffix-only** (append
+   at the top index or remove the highest) and scale-down is **drain-only** — the
+   top replica is marked draining (new sessions stop routing there) and stopped
+   only at 0 active sessions, with **no force-kill/deadline**, so a single
+   long-lived session blocks *that one* scale-down indefinitely by design;
+   durability stays absolute. An **un-drain fast path** clears the drain flag if
+   load rebounds while the top is draining. **Asymmetric cooldowns** (up=10s,
+   down=30s; poll=5s) scale up eagerly and down cautiously, all tunable via
+   `RUNTIME_AUTOSCALE_POLL_SECONDS` / `_UP_COOLDOWN_SECONDS` /
+   `_DOWN_COOLDOWN_SECONDS`. `listen_addr` is the base (replica i ⇒ base_port+i)
+   and the whole `max` port range is reserved + collision/overflow-validated at
+   config load. **Degrade-don't-fail boot:** if a pool can't reach `min` at
+   startup runtimed warns and the loop retries toward `min` — it never
+   `os.Exit`s. Metrics: `runtime_agent_replicas_desired{agent}`,
+   `runtime_agent_replicas_current{agent}`,
+   `runtime_agent_active_sessions{agent}` (gauges) and
+   `runtime_autoscale_events_total{agent,action}`
+   (`action ∈ up|down|undrain|reap|blocked`). Suffix-only + drain-only means a
+   session is never reassigned to another executor, so this preserves the A1
+   **executor-id invariant** (`DBOS__VMID=<id>#<i>`) and the `session_events`
+   single-writer invariant (item 4) **by construction**. Tested: unit tests
+   (config/store/obs/PoolManager set-ops + pure `decideStep`) plus an integration
+   test `TestAutoscaleGrowDrain` (grow to 3 under load, the static `replicas:2`
+   path stays exactly 2, no double execution, then drain back to 1). Spec/plan:
+   `docs/superpowers/{specs,plans}/2026-06-13-spine-a2-autoscaling*`.
+   **Deferred:** scale-down force-kill deadline, richer scale signals
+   (CPU/queue/latency), per-agent cooldown config, and a **signal-only mode**
+   (emit the desired count and let an external orchestrator actuate — the seam
+   toward C2 M2 per-agent-pod scheduling).
 3. **Dynamic deploy** — `POST /agents` runtime registration + rollback; today
    agents come from `runtime.yaml` at startup. Tokens are config-only too.
 4. **`session_events` concurrency** — `SELECT MAX(seq)+1` is safe only because
    one subprocess owns a session (one writer). Revisit (lock / sequence /
    `ON CONFLICT` retry) if a session ever gets concurrent writers (e.g. pools).
+   Note: A2 autoscaling preserves this single-writer invariant **by
+   construction** — suffix-only mutation + drain-only scale-down means a session
+   is never reassigned to another executor, so its owning replica stays the sole
+   writer for life.
 5. **DBOS recovery across a recompiled binary** — recovery keys on the agentd
    binary's app-version hash; recovering a workflow across a code change needs
    `DBOS__APPVERSION` pinned. Document/operationalize if doing rolling upgrades.

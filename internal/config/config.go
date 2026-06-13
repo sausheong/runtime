@@ -26,6 +26,8 @@ type AgentConfig struct {
 	Memory     bool     `yaml:"memory"`   // optional; opt-in to the per-tenant Postgres memory tool. Default false.
 	Replicas   int      `yaml:"replicas"` // optional; 0/omitted ⇒ 1. Local agents only: replica i listens on base_port+i.
 
+	Autoscale *AutoscaleConfig `yaml:"autoscale"` // optional; nil ⇒ static A1 behavior (Replicas).
+
 	// URL marks a REMOTE agent: runtimed attaches (health-check + proxy +
 	// status) instead of spawning. Full base, e.g. "https://host:8443".
 	// Mutually exclusive with ListenAddr — exactly one is required.
@@ -37,6 +39,15 @@ type AgentConfig struct {
 	// Gateway opts the agent into the platform MCP gateway (env-injected
 	// URL+key). Optional; off (default) | full (true) | search.
 	Gateway GatewayMode `yaml:"gateway"`
+}
+
+// AutoscaleConfig, when present on a local agent, makes its replica pool float
+// between Min and Max driven by active-session load. Absent (nil) ⇒ the static
+// A1 pool (Replicas, or 1). See docs/superpowers/specs/2026-06-13-spine-a2-*.
+type AutoscaleConfig struct {
+	Min                      int `yaml:"min"`
+	Max                      int `yaml:"max"`
+	TargetSessionsPerReplica int `yaml:"target_sessions_per_replica"`
 }
 
 // TokenConfig is one control-plane API token. Label is for log attribution.
@@ -180,8 +191,8 @@ func (c *Config) Validate() error {
 				return fmt.Errorf("config: agent %q url must be http(s)://host[:port] (got %q)", a.ID, a.URL)
 			}
 			// Local-only fields can't be delivered to a process we don't spawn.
-			if len(a.Command) > 0 || a.WorkDir != "" || a.Kind != "" || a.Memory || a.Gateway.Enabled() || a.Replicas > 1 {
-				return fmt.Errorf("config: remote agent %q must not set command, workdir, kind, memory, gateway, or replicas (these are spawn-time only)", a.ID)
+			if len(a.Command) > 0 || a.WorkDir != "" || a.Kind != "" || a.Memory || a.Gateway.Enabled() || a.Replicas > 1 || a.Autoscale != nil {
+				return fmt.Errorf("config: remote agent %q must not set command, workdir, kind, memory, gateway, replicas, or autoscale (these are spawn-time only)", a.ID)
 			}
 			if err := expandEnvScalar(&a.AuthToken, "agent "+a.ID+" auth_token"); err != nil {
 				return err
@@ -202,7 +213,19 @@ func (c *Config) Validate() error {
 			}
 			dials[a.URL] = true
 		} else {
-			addrs, err := a.ReplicaAddrs()
+			if a.Autoscale != nil {
+				as := a.Autoscale
+				if as.Min < 1 || as.Min > as.Max {
+					return fmt.Errorf("config: agent %q autoscale requires 1 <= min <= max (got min=%d max=%d)", a.ID, as.Min, as.Max)
+				}
+				if as.TargetSessionsPerReplica < 1 {
+					return fmt.Errorf("config: agent %q autoscale target_sessions_per_replica must be >= 1 (got %d)", a.ID, as.TargetSessionsPerReplica)
+				}
+				if a.Replicas > 0 {
+					fmt.Fprintf(os.Stderr, "config: agent %q sets both replicas and autoscale; replicas is ignored (autoscale starts at min=%d)\n", a.ID, as.Min)
+				}
+			}
+			addrs, err := a.reservedAddrs()
 			if err != nil {
 				return fmt.Errorf("config: %w", err)
 			}
@@ -381,29 +404,59 @@ func (c *Config) AgentTenants() map[string]string {
 	return m
 }
 
-// ReplicaAddrs returns the derived listen addresses for a local agent: replica i
-// listens on base_host:base_port+i. Replicas <= 0 means 1. Errors if the base
-// listen_addr has no parseable numeric port. Not meaningful for remote agents
-// (Validate rejects replicas there); returns the single URL-less base otherwise.
+// ReplicaAddr returns the derived host:base_port+i listen address for replica i
+// of a local agent. Errors if the base listen_addr has no parseable numeric port
+// or the derived port falls outside 1..65535.
+func (a AgentConfig) ReplicaAddr(i int) (string, error) {
+	host, portStr, err := net.SplitHostPort(a.ListenAddr)
+	if err != nil {
+		return "", fmt.Errorf("agent %q listen_addr %q: %w", a.ID, a.ListenAddr, err)
+	}
+	base, err := strconv.Atoi(portStr)
+	if err != nil {
+		return "", fmt.Errorf("agent %q listen_addr %q: port not numeric: %w", a.ID, a.ListenAddr, err)
+	}
+	port := base + i
+	if base < 1 || port < 1 || port > 65535 {
+		return "", fmt.Errorf("agent %q: derived replica port %d (base %d + index %d) out of range (1-65535)", a.ID, port, base, i)
+	}
+	return net.JoinHostPort(host, strconv.Itoa(port)), nil
+}
+
+// ReplicaAddrs returns the derived listen addresses for a local agent's STATIC
+// pool: replica i listens on base_host:base_port+i. Replicas <= 0 means 1. Not
+// meaningful for remote agents (Validate rejects replicas there).
 func (a AgentConfig) ReplicaAddrs() ([]string, error) {
 	n := a.Replicas
 	if n <= 0 {
 		n = 1
 	}
-	host, portStr, err := net.SplitHostPort(a.ListenAddr)
-	if err != nil {
-		return nil, fmt.Errorf("agent %q listen_addr %q: %w", a.ID, a.ListenAddr, err)
-	}
-	base, err := strconv.Atoi(portStr)
-	if err != nil {
-		return nil, fmt.Errorf("agent %q listen_addr %q: port not numeric: %w", a.ID, a.ListenAddr, err)
-	}
-	if base < 1 || base+n-1 > 65535 {
-		return nil, fmt.Errorf("agent %q: derived replica ports %d..%d out of range (1-65535)", a.ID, base, base+n-1)
-	}
 	out := make([]string, n)
 	for i := 0; i < n; i++ {
-		out[i] = net.JoinHostPort(host, strconv.Itoa(base+i))
+		addr, err := a.ReplicaAddr(i)
+		if err != nil {
+			return nil, err
+		}
+		out[i] = addr
 	}
 	return out, nil
+}
+
+// reservedAddrs returns the set of derived listen addresses to reserve in the
+// dial-uniqueness map for a local agent. An autoscaled agent reserves its WHOLE
+// max range (so a grown replica always finds a free, non-colliding port); a
+// static agent reserves only its Replicas addresses.
+func (a AgentConfig) reservedAddrs() ([]string, error) {
+	if a.Autoscale != nil {
+		out := make([]string, a.Autoscale.Max)
+		for i := 0; i < a.Autoscale.Max; i++ {
+			addr, err := a.ReplicaAddr(i)
+			if err != nil {
+				return nil, err
+			}
+			out[i] = addr
+		}
+		return out, nil
+	}
+	return a.ReplicaAddrs()
 }

@@ -277,9 +277,33 @@ func main() {
 	go func() { serveErr <- srv.ListenAndServe() }()
 	slog.Info("control plane listening", "addr", ctlAddr, "agents", len(reg.List()), "identity", identityOn)
 
+	// Autoscaled agents (Spine A2): each PoolManager owns its replicas + policy
+	// loop. Start them with the same readiness gate that serializes DBOS schema
+	// init, then the policy goroutine grows/drains by load. Tuning via env.
+	asPoll := envFloatOr("RUNTIME_AUTOSCALE_POLL_SECONDS", 0)
+	asUpCD := envFloatOr("RUNTIME_AUTOSCALE_UP_COOLDOWN_SECONDS", 0)
+	asDownCD := envFloatOr("RUNTIME_AUTOSCALE_DOWN_COOLDOWN_SECONDS", 0)
+	for id, pm := range reg.Pools() {
+		pm.SetDeps(ctlStore, cm, func(ctx context.Context, addr string) error {
+			return waitAgentHealthy(ctx, addr, 30*time.Second)
+		})
+		pm.ApplyTuning(asPoll, asUpCD, asDownCD)
+		if err := pm.Start(ctx); err != nil {
+			// Degrade-don't-fail (consistent with the static boot loop and the
+			// post-gateway-start no-fatal-exit discipline): the policy loop will
+			// keep retrying grow toward min. An os.Exit here would orphan gateway
+			// stdio children and skip deferred cleanup.
+			slog.Error("autoscaled agent could not start its first replica; policy loop will retry", "agent", id, "err", err)
+		}
+		slog.Info("autoscaling agent", "agent", id)
+	}
+
 	// Start agents sequentially with a readiness gate (M2: DBOS first-run
 	// schema init is not safe to run concurrently).
 	for _, info := range reg.List() {
+		if _, isPool := reg.Pools()[info.ID]; isPool {
+			continue // autoscaled: started above via its PoolManager
+		}
 		replicas, _ := reg.Replicas(info.ID)
 		for _, ap := range replicas {
 			if ap.Remote {

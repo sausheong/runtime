@@ -147,4 +147,29 @@ func TestStore_SessionReplicaNotFound(t *testing.T) {
 	}
 }
 
+func TestActiveSessionsByReplica(t *testing.T) {
+	ctx := context.Background()
+	s := NewMemStore()
+	id0a, _ := s.CreateSession(ctx, "ag", 0)
+	id0b, _ := s.CreateSession(ctx, "ag", 0)
+	_ = s.SetSessionStatus(ctx, id0b, "running")
+	id1a, _ := s.CreateSession(ctx, "ag", 1)
+	id1done, _ := s.CreateSession(ctx, "ag", 1)
+	_ = s.SetSessionStatus(ctx, id1done, "completed")
+	_, _ = s.CreateSession(ctx, "other", 0)
+	_ = id0a
+	_ = id1a
+
+	m, err := s.ActiveSessionsByReplica(ctx, "ag")
+	if err != nil {
+		t.Fatalf("ActiveSessionsByReplica: %v", err)
+	}
+	if m[0] != 2 {
+		t.Fatalf("replica 0 active = %d, want 2", m[0])
+	}
+	if m[1] != 1 {
+		t.Fatalf("replica 1 active = %d, want 1 (terminal excluded)", m[1])
+	}
+}
+
 func itoa(i int) string { return string(rune('0' + i)) }
