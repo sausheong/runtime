@@ -333,6 +333,35 @@ func TestBaseURL_LocalFallbackAndRemote(t *testing.T) {
 	}
 }
 
+func TestBuildEnv_ReplicaIdentity(t *testing.T) {
+	ap := AgentProcess{
+		AgentID: "support", Addr: "127.0.0.1:8102", PGDSN: "dsn",
+		ReplicaIndex: 1, DBOSVMID: "support#1",
+	}
+	env, err := ap.buildEnv(context.Background())
+	if err != nil {
+		t.Fatalf("buildEnv: %v", err)
+	}
+	want := map[string]string{
+		"DBOS__VMID":            "support#1",
+		"RUNTIME_AGENT_REPLICA": "1",
+		"RUNTIME_LISTEN_ADDR":   "127.0.0.1:8102",
+	}
+	got := map[string]string{}
+	for _, e := range env {
+		for k := range want {
+			if strings.HasPrefix(e, k+"=") {
+				got[k] = strings.TrimPrefix(e, k+"=")
+			}
+		}
+	}
+	for k, v := range want {
+		if got[k] != v {
+			t.Errorf("env %s: got %q want %q", k, got[k], v)
+		}
+	}
+}
+
 func TestReverseProxy_SendsBearer(t *testing.T) {
 	var gotAuth string
 	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

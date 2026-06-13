@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"strconv"
 
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 )
@@ -69,6 +70,11 @@ func (a AgentProcess) buildEnv(ctx context.Context) ([]string, error) {
 		"RUNTIME_AGENT_ID="+a.AgentID,
 		"RUNTIME_AGENT_KIND="+a.Kind,
 		"RUNTIME_AGENT_TENANT="+a.Tenant,
+		// Per-replica identity (Spine A1): RUNTIME_AGENT_REPLICA tells agentd its
+		// index (stamped on sessions); DBOS__VMID is the stable executor id so a
+		// restarted replica recovers exactly its own in-flight workflows.
+		"RUNTIME_AGENT_REPLICA="+strconv.Itoa(a.ReplicaIndex),
+		"DBOS__VMID="+a.DBOSVMID,
 	)
 	// Agents that did NOT opt in get explicit empty-value entries so an
 	// inherited operator var (e.g. a leaked RUNTIME_GATEWAY_URL) can't enable
