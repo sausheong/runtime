@@ -72,6 +72,22 @@ func TestFanoutMergesHealthyAgents(t *testing.T) {
 	}
 }
 
+func TestFanoutInjectsNonZeroReplicaLabel(t *testing.T) {
+	// Every other fanout test uses Replica=0 (the zero value), so the
+	// strconv.Itoa(replica) injection is only proven for "0". Prove a non-zero
+	// replica index reaches the rendered exposition.
+	a := fakeAgent(t, func(w http.ResponseWriter, _ *http.Request) { fmt.Fprint(w, exposition("alpha")) })
+	c := NewControlMetrics()
+	h := FanoutHandler(c, func() []ScrapeTarget {
+		return []ScrapeTarget{{Agent: "alpha", Replica: 1, BaseURL: "http://" + a}}
+	})
+	body := scrapeHandler(t, h)
+	mustParseClean(t, body)
+	if !strings.Contains(body, `agent_turns_total{agent="alpha",outcome="completed",replica="1"} 3`) {
+		t.Fatalf("missing replica=\"1\" series:\n%s", body)
+	}
+}
+
 func TestFanoutSkipsHangingAgent(t *testing.T) {
 	healthy := fakeAgent(t, func(w http.ResponseWriter, _ *http.Request) { fmt.Fprint(w, exposition("alpha")) })
 	hung := fakeAgent(t, func(w http.ResponseWriter, r *http.Request) {

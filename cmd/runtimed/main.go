@@ -282,7 +282,6 @@ func main() {
 	for _, info := range reg.List() {
 		replicas, _ := reg.Replicas(info.ID)
 		for _, ap := range replicas {
-			ap := ap // capture
 			if ap.Remote {
 				id := ap.AgentID
 				idx := ap.ReplicaIndex
