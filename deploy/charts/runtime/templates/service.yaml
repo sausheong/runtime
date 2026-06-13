@@ -8,6 +8,12 @@ spec:
   type: {{ .Values.service.type }}
   selector:
     {{- include "runtime.selectorLabels" . | nindent 4 }}
+    {{- if eq .Values.scheduling.mode "perAgentPods" }}
+    # Select ONLY the control-plane pod — agent StatefulSet pods share the base
+    # labels, so without this the Service would round-robin onto agent pods and
+    # /agents/* control-plane routes would intermittently 404.
+    app.kubernetes.io/component: control-plane
+    {{- end }}
   ports:
     - name: http
       port: {{ .Values.service.port }}
