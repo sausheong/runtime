@@ -11,6 +11,14 @@ spec:
   selector:
     matchLabels:
       {{- include "runtime.selectorLabels" . | nindent 6 }}
+      {{- if eq .Values.scheduling.mode "perAgentPods" }}
+      # perAgentPods: agent StatefulSet pods share the base selectorLabels, so the
+      # control plane needs a discriminator or its Service (and this Deployment's
+      # own selector) would fan out across the agent pods. Mode-gated so monolith
+      # renders byte-for-byte as before (and the selector stays immutable-safe for
+      # existing monolith upgrades).
+      app.kubernetes.io/component: control-plane
+      {{- end }}
   template:
     metadata:
       annotations:
@@ -20,6 +28,9 @@ spec:
         {{- end }}
       labels:
         {{- include "runtime.selectorLabels" . | nindent 8 }}
+        {{- if eq .Values.scheduling.mode "perAgentPods" }}
+        app.kubernetes.io/component: control-plane
+        {{- end }}
     spec:
       {{- $unusedPg := include "runtime.requirePg" . }}
       {{- $unusedAgents := include "runtime.requireAgents" . }}
@@ -42,6 +53,14 @@ spec:
               value: "/etc/runtime/runtime.yaml"
             - name: RUNTIME_AGENTD_BIN
               value: "/app/agentd"
+            {{- if and (eq .Values.scheduling.mode "perAgentPods") (or .Values.secrets.agentAuthToken .Values.secrets.existingSecret) }}
+            - name: RUNTIME_AGENT_AUTH_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "runtime.secretName" . }}
+                  key: RUNTIME_AGENT_AUTH_TOKEN
+                  optional: true
+            {{- end }}
             - name: RUNTIME_PG_DSN
               valueFrom:
                 secretKeyRef:

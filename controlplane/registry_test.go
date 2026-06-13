@@ -46,6 +46,48 @@ func TestRegistry_NextReplicaRoundRobin(t *testing.T) {
 	}
 }
 
+func TestRegistry_NextReplicaSkipsUnreachable(t *testing.T) {
+	cfg := &config.Config{Agents: []config.AgentConfig{
+		{ID: "a", Name: "A", Model: "m",
+			URL: "http://a-{i}.hl.svc:8080", Replicas: 3, Tenant: "default"},
+	}}
+	r := NewRegistry(cfg, "/bin/agentd", "dsn")
+
+	// All unknown ⇒ treated reachable ⇒ plain round-robin.
+	got := []int{r.NextReplica("a"), r.NextReplica("a"), r.NextReplica("a")}
+	if got[0] != 0 || got[1] != 1 || got[2] != 2 {
+		t.Fatalf("unknown-reachable RR: got %v want [0 1 2]", got)
+	}
+
+	// Mark ordinal 1 unreachable ⇒ it is skipped.
+	r.SetReachable("a", 1, false)
+	for i := 0; i < 6; i++ {
+		if idx := r.NextReplica("a"); idx == 1 {
+			t.Fatalf("NextReplica returned unreachable ordinal 1")
+		}
+	}
+
+	// All unreachable ⇒ fall back to 0.
+	r.SetReachable("a", 0, false)
+	r.SetReachable("a", 2, false)
+	if idx := r.NextReplica("a"); idx != 0 {
+		t.Fatalf("all-unreachable fallback: got %d want 0", idx)
+	}
+
+	// Recovery: ordinal 2 back ⇒ it is selectable again.
+	r.SetReachable("a", 2, true)
+	found2 := false
+	for i := 0; i < 6; i++ {
+		if r.NextReplica("a") == 2 {
+			found2 = true
+			break
+		}
+	}
+	if !found2 {
+		t.Fatal("recovered ordinal 2 never selected")
+	}
+}
+
 func TestRegistry_RemoteSingleReplica(t *testing.T) {
 	cfg := &config.Config{Agents: []config.AgentConfig{
 		{ID: "rem", Name: "R", Model: "m", URL: "https://h:8443", Tenant: "default"},
@@ -57,6 +99,37 @@ func TestRegistry_RemoteSingleReplica(t *testing.T) {
 	}
 	if !set[0].Remote || set[0].DBOSVMID != "" || set[0].BaseURL != "https://h:8443" {
 		t.Fatalf("remote replica fields wrong: %+v", set[0])
+	}
+}
+
+func TestRegistry_RemotePoolExpansion(t *testing.T) {
+	cfg := &config.Config{Agents: []config.AgentConfig{
+		{ID: "support", Name: "S", Model: "m",
+			URL: "http://support-{i}.support-hl.ns.svc:8080", Replicas: 3,
+			AuthToken: "tok", Tenant: "default"},
+	}}
+	r := NewRegistry(cfg, "/bin/agentd", "dsn")
+	set, ok := r.Replicas("support")
+	if !ok || len(set) != 3 {
+		t.Fatalf("Replicas: ok=%v len=%d, want 3", ok, len(set))
+	}
+	for i, ap := range set {
+		if !ap.Remote {
+			t.Errorf("replica %d: Remote=false, want true", i)
+		}
+		if ap.ReplicaIndex != i {
+			t.Errorf("replica %d: ReplicaIndex=%d", i, ap.ReplicaIndex)
+		}
+		want := "http://support-" + strconv.Itoa(i) + ".support-hl.ns.svc:8080"
+		if ap.BaseURL != want {
+			t.Errorf("replica %d: BaseURL=%q want %q", i, ap.BaseURL, want)
+		}
+		if ap.DBOSVMID != "" {
+			t.Errorf("replica %d: DBOSVMID=%q, want empty (remote owns its id)", i, ap.DBOSVMID)
+		}
+		if ap.AuthToken != "tok" {
+			t.Errorf("replica %d: AuthToken=%q", i, ap.AuthToken)
+		}
 	}
 }
 

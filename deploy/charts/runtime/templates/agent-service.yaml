@@ -1,0 +1,27 @@
+{{- if eq .Values.scheduling.mode "perAgentPods" }}
+{{- $root := . }}
+{{- range $a := .Values.config.agents }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "runtime.agentHeadless" (dict "root" $root "id" $a.id) }}
+  labels:
+    {{- include "runtime.labels" $root | nindent 4 }}
+    runtime.agent/id: {{ $a.id | quote }}
+spec:
+  clusterIP: None   # headless: per-ordinal DNS <pod>.<svc>
+  # Publish not-ready addresses so runtimed can resolve + health-probe each
+  # ordinal's DNS as it comes up (runtimed does its own liveness tracking; it
+  # must not wait on K8s readiness to discover a pod).
+  publishNotReadyAddresses: true
+  selector:
+    {{- include "runtime.selectorLabels" $root | nindent 4 }}
+    runtime.agent/id: {{ $a.id | quote }}
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+      protocol: TCP
+{{- end }}
+{{- end }}

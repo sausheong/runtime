@@ -86,6 +86,46 @@ with an actionable message.
 */}}
 {{- define "runtime.requireAgents" -}}
 {{- if not .Values.config.agents -}}
-{{- fail "runtime: config.agents must list at least one agent (each needs id, name, model, listen_addr) — runtimed refuses to start with an empty registry" -}}
+{{- fail "runtime: config.agents must list at least one agent (each needs id, name, model, plus listen_addr in monolith mode) — runtimed refuses to start with an empty registry" -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+Per-agent StatefulSet name: "<release>-agent-<id>". Takes a dict {root, id}.
+*/}}
+{{- define "runtime.agentFullname" -}}
+{{- printf "%s-agent-%s" .root.Release.Name .id | trunc 63 | trimSuffix "-" -}}
+{{- end -}}
+
+{{/* Per-agent headless Service name: "<release>-agent-<id>-hl". dict {root, id}. */}}
+{{- define "runtime.agentHeadless" -}}
+{{- printf "%s-agent-%s-hl" .root.Release.Name .id | trunc 63 | trimSuffix "-" -}}
+{{- end -}}
+
+{{/*
+runtimed's dial url template for an agent's remote pool, with the literal {i}
+ordinal placeholder config.RemoteReplicaURL expands. Pod DNS in a StatefulSet is
+<pod>.<headless-svc>.<ns>.svc.cluster.local, and pod name is <sts>-<ordinal>, so:
+  http://<release>-agent-<id>-{i}.<release>-agent-<id>-hl.<ns>.svc.cluster.local:8080
+dict {root, id}.
+*/}}
+{{- define "runtime.agentDialTemplate" -}}
+{{- $sts := include "runtime.agentFullname" . -}}
+{{- $hl := include "runtime.agentHeadless" . -}}
+{{- printf "http://%s-{i}.%s.%s.svc.cluster.local:8080" $sts $hl .root.Release.Namespace -}}
+{{- end -}}
+
+{{/*
+Fail-closed validation for perAgentPods mode: each agent must NOT set
+listen_addr or url (the chart generates the url) and must have id/name/model.
+*/}}
+{{- define "runtime.requirePerAgentPods" -}}
+{{- range $i, $a := .Values.config.agents -}}
+{{- if or (not $a.id) (not $a.name) (not $a.model) -}}
+{{- fail (printf "runtime: perAgentPods agent[%d] needs id, name, model" $i) -}}
+{{- end -}}
+{{- if or $a.listen_addr $a.url -}}
+{{- fail (printf "runtime: perAgentPods agent %q must NOT set listen_addr or url (the chart generates the per-ordinal url)" $a.id) -}}
+{{- end -}}
 {{- end -}}
 {{- end -}}

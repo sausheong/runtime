@@ -311,10 +311,13 @@ func main() {
 				idx := ap.ReplicaIndex
 				hm := &controlplane.HealthMonitor{
 					BaseURL: ap.DialBase(), Token: ap.AuthToken,
-					OnChange: func(ok bool) { cm.AgentReachable(id, idx, ok) },
+					OnChange: func(ok bool) {
+						cm.AgentReachable(id, idx, ok)
+						reg.SetReachable(id, idx, ok)
+					},
 				}
 				go hm.Run(ctx)
-				slog.Info("monitoring remote agent", "agent", ap.AgentID, "url", ap.DialBase())
+				slog.Info("monitoring remote agent", "agent", ap.AgentID, "replica", idx, "url", ap.DialBase())
 				continue
 			}
 			idx := ap.ReplicaIndex

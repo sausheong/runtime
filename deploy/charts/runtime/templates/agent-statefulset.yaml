@@ -1,0 +1,112 @@
+{{- if eq .Values.scheduling.mode "perAgentPods" }}
+{{- $unused := include "runtime.requirePerAgentPods" . }}
+{{- $unusedPg := include "runtime.requirePg" . }}
+{{- $unusedAgents := include "runtime.requireAgents" . }}
+{{- $root := . }}
+{{- range $a := .Values.config.agents }}
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "runtime.agentFullname" (dict "root" $root "id" $a.id) }}
+  labels:
+    {{- include "runtime.labels" $root | nindent 4 }}
+    runtime.agent/id: {{ $a.id | quote }}
+spec:
+  serviceName: {{ include "runtime.agentHeadless" (dict "root" $root "id" $a.id) }}
+  replicas: {{ $a.replicas | default 1 }}
+  # OrderedReady (the StatefulSet default), NOT Parallel: in perAgentPods mode
+  # runtimed is control-plane-only and never Launches DBOS, so each agentd pod
+  # creates the DBOS schema itself on first start. DBOS's runMigrations does a
+  # plain (non-IF-NOT-EXISTS, unlocked) CREATE SCHEMA/TABLE whose duplicate-object
+  # errors are NOT retryable — so N pods racing an empty DB would CrashLoop all but
+  # one. OrderedReady starts ordinal 0 (schema creator) and waits for it Ready
+  # before ordinal 1, exactly as the integration test serializes the first ordinal.
+  selector:
+    matchLabels:
+      {{- include "runtime.selectorLabels" $root | nindent 6 }}
+      runtime.agent/id: {{ $a.id | quote }}
+  template:
+    metadata:
+      labels:
+        {{- include "runtime.selectorLabels" $root | nindent 8 }}
+        runtime.agent/id: {{ $a.id | quote }}
+    spec:
+      serviceAccountName: {{ include "runtime.serviceAccountName" $root }}
+      {{- with $root.Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml $root.Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: agentd
+          image: "{{ $root.Values.image.repository }}:{{ $root.Values.image.tag | default $root.Chart.AppVersion }}"
+          imagePullPolicy: {{ $root.Values.image.pullPolicy }}
+          # Ordinal-dependent env (RUNTIME_AGENT_REPLICA, DBOS__VMID) is derived
+          # from the pod name ($HOSTNAME = <statefulset>-<ordinal>) at start; all
+          # other env is static and set below.
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              ORD="${HOSTNAME##*-}"
+              export RUNTIME_AGENT_REPLICA="$ORD"
+              export DBOS__VMID="{{ $a.id }}#${ORD}"
+              exec /app/agentd
+          env:
+            - name: RUNTIME_LISTEN_ADDR
+              value: ":8080"
+            - name: RUNTIME_AGENT_ID
+              value: {{ $a.id | quote }}
+            - name: RUNTIME_AGENT_TENANT
+              value: {{ $a.tenant | default "default" | quote }}
+            - name: RUNTIME_AGENT_MEMORY
+              value: {{ if $a.memory }}"1"{{ else }}""{{ end }}
+            - name: RUNTIME_PG_DSN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "runtime.secretName" $root }}
+                  key: RUNTIME_PG_DSN
+            {{- if or $root.Values.secrets.agentAuthToken $root.Values.secrets.existingSecret }}
+            - name: RUNTIME_AGENT_AUTH_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "runtime.secretName" $root }}
+                  key: RUNTIME_AGENT_AUTH_TOKEN
+                  optional: true
+            {{- end }}
+          ports:
+            - name: http
+              containerPort: 8080
+          readinessProbe:
+            httpGet: { path: /healthz, port: http }
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          securityContext:
+            {{- toYaml $root.Values.securityContext | nindent 12 }}
+          resources:
+            {{- toYaml $root.Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: scratch
+              mountPath: /tmp
+      volumes:
+        - name: scratch
+          emptyDir: {}
+      {{- with $root.Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $root.Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $root.Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}
+{{- end }}

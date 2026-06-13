@@ -353,7 +353,53 @@ helm push dist/runtime-0.1.0.tgz oci://<registry>
 
 - **Single replica.** The control plane is not HA — `replicaCount` is fixed at 1.
   Your durability floor is **Postgres HA**, not control-plane replication.
-- **Per-agent-pod scheduling** (one pod per agent) is a future **C3** milestone.
+- **Per-agent-pod scheduling** (one pod per agent) is available via
+  `scheduling.mode: perAgentPods` — see the section below.
 - **No operator** yet — lifecycle is plain Helm.
 - **Bundled Postgres lacks `pgvector`** — use a BYO `pgvector` Postgres for
   semantic memory.
+
+---
+
+## Per-agent-pod scheduling (`scheduling.mode: perAgentPods`)
+
+By default (`monolith`) runtimed exec-spawns every agent as a child in one pod.
+Set `scheduling.mode: perAgentPods` to instead run **each agent as its own
+StatefulSet** (one headless Service per agent for stable per-ordinal DNS) that
+runtimed **attaches to** as a remote replica pool.
+
+```yaml
+scheduling:
+  mode: perAgentPods
+secrets:
+  pgDsn: "postgres://..."
+  agentAuthToken: "a-shared-bearer"   # recommended; runtimed → agent auth
+config:
+  agents:
+    - { id: support, name: Support, model: claude-opus-4-8, tenant: acme, replicas: 2 }
+    - { id: research, name: Research, model: claude-opus-4-8 }   # replicas defaults to 1
+```
+
+In this mode each agent entry takes `id`, `name`, `model`, and optionally
+`tenant`, `replicas` (pod count, default 1), `memory`, `gateway`. Do **not** set
+`listen_addr` or `url` — the chart generates the per-ordinal url and wires
+runtimed's `runtime.yaml` to attach.
+
+**Scaling.** `kubectl scale statefulset <release>-agent-<id> --replicas=N` *down*
+is handled live: runtimed skips ordinals whose health probe fails. Scaling *up*
+beyond the configured `replicas` requires `helm upgrade` (re-render the config so
+runtimed learns the higher ordinal count).
+
+**Known limitation — brokered secrets.** Per-agent-pod agents receive provider
+credentials from the chart Secret (env), not from runtimed's Identity-M2 secrets
+broker, which decrypts and injects only at spawn time (and runtimed does not spawn
+these pods). Supply provider keys via `secrets.existingSecret`/the chart Secret.
+Brokered-secrets delivery to scheduled pods is backlogged (its natural home is the
+C3 M2 registration handshake, where a pod pulls decrypted secrets over an
+authenticated channel).
+
+**Known limitation — gateway opt-in.** In `perAgentPods` mode a per-agent
+`gateway:` opt-in is not yet wired into the agent pod's StatefulSet env
+(`RUNTIME_GATEWAY_URL`/`_KEY`), so gateway-enabled agents are only supported in
+`monolith` mode for now. Wiring the gateway env into the per-agent StatefulSet is
+a follow-up.

@@ -9,6 +9,9 @@ spec:
   selector:
     matchLabels:
       {{- include "runtime.selectorLabels" . | nindent 6 }}
+      {{- if eq .Values.scheduling.mode "perAgentPods" }}
+      app.kubernetes.io/component: control-plane
+      {{- end }}
   endpoints:
     - port: http
       path: /metrics

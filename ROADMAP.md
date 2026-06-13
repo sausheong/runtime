@@ -771,7 +771,7 @@ agents). Make targets `helm-lint`/`helm-template`/`helm-deps`/`helm-package`; no
 (build-locally, manual push). Docker-dependent sandbox/browser ship in the image but
 are OFF by default (a plain pod has no Docker daemon), surfaced via a `DOCKER_HOST`
 knob + a documented `extraContainers` DinD opt-in (privileged sidecar, single-node
-only). Per-agent-pod scheduling is explicitly deferred to C3; an operator/CRDs to a
+only). Per-agent-pod scheduling landed in C2 M2 (below); an operator/CRDs to a
 later C2 milestone. THE FINAL HOLISTIC REVIEW (pre-live-proof) EARNED ITS KEEP
 AGAIN — it caught FOUR integration bugs invisible to per-task render checks, each an
 independent live-install failure: (1) the bundled Postgres image 404'd — Bitnami's
@@ -798,12 +798,81 @@ list — the exec-spawn supervisor model working inside a pod, end to end); a
 `helm upgrade` adding a third agent flipped the `checksum/config` annotation
 (`41f277bd…`→`0a27ce92…`), rolled a new ReplicaSet to 1/1, and `/agents` then
 reported all THREE agents healthy; clean `helm uninstall` + `kind delete`. Hermetic
-gate green (7-permutation `test.sh`, `go build`/`go vet`). Remaining C2: per-agent-pod
-scheduling (needs C3 + spine A1), a Kubernetes operator/CRDs, multi-arch image
+gate green (7-permutation `test.sh`, `go build`/`go vet`). Remaining C2: a Kubernetes operator/CRDs, multi-arch image
 publish + CI, a pgvector-capable bundled Postgres (the Bitnami image lacks the
 extension, so bundled-PG can't do semantic memory), and HPA/autoscaling (blocked on
 the single-replica supervisor model). Spec/plan:
 `docs/superpowers/{specs,plans}/2026-06-12-c2-packaging*`.
+
+   **Second milestone DONE (merged to `master`, 2026-06-13):** per-agent-pod
+   scheduling. A `scheduling.mode: monolith | perAgentPods` chart toggle. In
+   `perAgentPods` the chart renders one **StatefulSet + headless Service per
+   agent** (agentd-only pods; the ordinal derives `RUNTIME_AGENT_REPLICA` +
+   `DBOS__VMID=<id>#<ordinal>` from `$HOSTNAME`), and runtimed runs
+   **control-plane-only** with a **generated** `runtime.yaml` that rewrites each
+   `config.agents` entry into a **remote replica pool**. This is **C3-remote ×
+   A1-pool**: a remote agent may now set `replicas: N` paired with an `{i}`
+   ordinal placeholder in `url:`, expanding to N per-ordinal attach entries at
+   stable headless DNS (`<id>-<i>.<svc>`); `NextReplica` round-robins the
+   **reachable** ordinals (new liveness-aware routing fed by one `HealthMonitor`
+   per ordinal), while session affinity pins each session to its ordinal for
+   life (durability absolute — a pinned-ordinal-down session 503s until it
+   returns, never re-pins). StatefulSet ordinals = A1 executor ids and
+   StatefulSet highest-ordinal-first scale-down = A2's suffix-only rule, now
+   **enforced by Kubernetes**. Static replica count from config; scale-down is
+   handled live (skip-unreachable), scale-up needs `helm upgrade` (documented
+   seam). Single shared agent bearer (`secrets.agentAuthToken`) authenticates
+   runtimed → each pod. **Known limitation:** brokered per-tenant secrets are
+   spawn-time only, so per-agent-pod agents get provider creds via the chart
+   Secret (backlog: brokered-secrets delivery to scheduled pods, home in C3 M2).
+   Tested: config (remote-pool validation + `RemoteReplicaURL`), registry
+   (pool expansion + skip-unreachable `NextReplica`), an integration test
+   (`TestRemoteReplicaPoolAttach`: distribution, kill-one-ordinal liveness
+   routing + affinity/durability, no restart), and chart render permutations
+   (StatefulSet/headless/generated-config, single-replica concrete url, mode
+   guards, monolith regression). THE FINAL HOLISTIC REVIEW + LIVE PROOF EARNED
+   THEIR KEEP (as in C2 M1) — each caught an independent install-only bug
+   invisible to per-task render/grep checks: (1) the holistic review found
+   `podManagementPolicy: Parallel` would CrashLoop all-but-one ordinal on first
+   install — in perAgentPods mode runtimed is control-plane-only and never
+   Launches DBOS, so each agentd pod creates the DBOS schema itself, and DBOS's
+   unlocked non-IF-NOT-EXISTS `CREATE SCHEMA/TABLE` raises non-retryable
+   duplicate-object errors when N pods race an empty DB; fixed by dropping to the
+   default `OrderedReady` so ordinal 0 creates the schema and goes Ready before
+   ordinal 1 (exactly the serialization the integration test relies on). (2) the
+   live kind proof found the runtimed `Service` had FOUR endpoints, not one: agent
+   StatefulSet pods carry the same base `selectorLabels` (name+instance) as
+   runtimed, so the Service load-balanced control-plane requests across the agent
+   pods and `/agents/*` routes intermittently 404'd; fixed with an
+   `app.kubernetes.io/component=control-plane` discriminator on the runtimed
+   Deployment/Service/ServiceMonitor/NetworkPolicy, mode-gated so monolith renders
+   byte-for-byte unchanged (and the immutable Deployment selector is untouched for
+   monolith upgrades). LIVE PROOF (real kind cluster + bundled Postgres,
+   2026-06-13, all passed): `make docker-image` → `kind load` → `helm install`
+   with `postgresql.enabled=true`, `scheduling.mode=perAgentPods`, and two agents
+   (support `replicas:2`, research `replicas:1`) → two StatefulSets + two headless
+   Services + a control-plane-only runtimed; **OrderedReady proven** —
+   `support-1` started only after `support-0` went Ready (0 restarts on the
+   second), no DBOS schema race; **per-ordinal executor ids proven** — pod
+   `support-0`→`DBOS__VMID=support#0`/`REPLICA=0`, `support-1`→`support#1`/`1`
+   (derived from `$HOSTNAME`); runtimed attached all three ordinals at the correct
+   per-ordinal headless DNS; **runtimed Service had exactly 1 endpoint** after the
+   label fix; **`runtimectl conformance` PASSED all 6 checks** against BOTH the
+   pool agent and the single agent through the in-cluster Service (create + stream
+   + get + list routed to the per-agent pods); **distribution proven** — 11 pool
+   sessions split 6/5 across ordinals 0/1, with `dbos.workflow_status` carrying
+   distinct `support#0`/`support#1`/`research#0` executor ids (no double
+   execution); and **scale-down skip-unreachable proven** — `kubectl scale
+   support --replicas=1` then 8 new sessions all landed on ordinal 0 while
+   runtimed stayed healthy (HealthMonitor marked ordinal 1 unreachable,
+   `NextReplica` skipped it; K8s removed the highest ordinal = A2 suffix-only,
+   enforced by the StatefulSet); clean `helm uninstall` + `kind delete`. Remaining
+   perAgentPods follow-ups: per-agent `gateway:` opt-in env is not yet wired into
+   the agent pod StatefulSet (gateway agents are monolith-only for now); brokered
+   secrets to scheduled pods (C3 M2); RFC1123 agent-id validation; a per-agent
+   NetworkPolicy; and runtimed-driven K8s-API scaling / HPA (a later C2
+   milestone). Spec/plan:
+   `docs/superpowers/{specs,plans}/2026-06-13-c2-m2-per-agent-pod-scheduling*`.
 
 - **Containers / Kubernetes** — once C1 makes foreign agents first-class, package
   them as containers and add Helm charts / an operator for orchestrated scale (the
