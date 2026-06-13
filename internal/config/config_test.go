@@ -875,3 +875,20 @@ func TestValidate_BadBasePort(t *testing.T) {
 		t.Fatal("expected error: unparseable base port")
 	}
 }
+
+func TestValidate_NonOverlappingPoolsOK(t *testing.T) {
+	c := &Config{Agents: []AgentConfig{
+		{ID: "a", Name: "A", Model: "m", ListenAddr: "127.0.0.1:8101", Replicas: 3},
+		{ID: "b", Name: "B", Model: "m", ListenAddr: "127.0.0.1:8201", Replicas: 3},
+	}}
+	if err := c.Validate(); err != nil {
+		t.Fatalf("non-overlapping pools should validate: %v", err)
+	}
+}
+
+func TestReplicaAddrs_PortOverflow(t *testing.T) {
+	a := AgentConfig{ID: "x", ListenAddr: "127.0.0.1:65534", Replicas: 4}
+	if _, err := a.ReplicaAddrs(); err == nil {
+		t.Fatal("expected error: derived ports exceed 65535")
+	}
+}

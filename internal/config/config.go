@@ -398,6 +398,9 @@ func (a AgentConfig) ReplicaAddrs() ([]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("agent %q listen_addr %q: port not numeric: %w", a.ID, a.ListenAddr, err)
 	}
+	if base < 1 || base+n-1 > 65535 {
+		return nil, fmt.Errorf("agent %q: derived replica ports %d..%d out of range (1-65535)", a.ID, base, base+n-1)
+	}
 	out := make([]string, n)
 	for i := 0; i < n; i++ {
 		out[i] = net.JoinHostPort(host, strconv.Itoa(base+i))
