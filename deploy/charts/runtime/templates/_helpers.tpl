@@ -86,7 +86,7 @@ with an actionable message.
 */}}
 {{- define "runtime.requireAgents" -}}
 {{- if not .Values.config.agents -}}
-{{- fail "runtime: config.agents must list at least one agent (each needs id, name, model, listen_addr) — runtimed refuses to start with an empty registry" -}}
+{{- fail "runtime: config.agents must list at least one agent (each needs id, name, model, plus listen_addr in monolith mode) — runtimed refuses to start with an empty registry" -}}
 {{- end -}}
 {{- end -}}
 

@@ -39,6 +39,10 @@ secrets:
   agentAuthToken: ""      # RUNTIME_AGENT_AUTH_TOKEN — shared bearer runtimed
                           # uses to reach agent pods (perAgentPods mode). Optional
                           # but recommended. Authenticates runtimed TO each agent.
+                          # NOTE: in perAgentPods mode with an existingSecret, that
+                          # secret MUST carry a RUNTIME_AGENT_AUTH_TOKEN key — the
+                          # generated runtime.yaml references ${RUNTIME_AGENT_AUTH_TOKEN}
+                          # and runtimed fails closed if it is unset.
   # NOTE: legacy bearer tokens are NOT a secret env var — they live in
   # runtime.yaml's `tokens:`. Put them under `config.tokens` (dev only).
 
