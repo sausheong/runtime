@@ -7,6 +7,8 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 )
 
 // SecretBroker resolves a tenant's secrets to name->plaintext at spawn time.
@@ -165,7 +167,10 @@ func (t authTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 func reverseProxy(base, token string, onError func()) *httputil.ReverseProxy {
 	target, _ := url.Parse(base)
 	rp := httputil.NewSingleHostReverseProxy(target)
-	rp.Transport = authTransport{token: token}
+	// otelhttp wraps the auth transport: injects traceparent from the active
+	// span and records a client span. With tracing off (no-op provider) this is
+	// a cheap pass-through.
+	rp.Transport = otelhttp.NewTransport(authTransport{token: token})
 	rp.FlushInterval = -1
 	rp.ErrorHandler = func(w http.ResponseWriter, r *http.Request, _ error) {
 		// Client-initiated cancellation is not an agent failure; don't count it.
