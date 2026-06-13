@@ -199,6 +199,59 @@ func (p *PoolManager) topDraining() bool {
 	return k > 0 && p.replicas[k-1].draining
 }
 
+type scaleStep int
+
+const (
+	stepNone scaleStep = iota
+	stepGrow
+	stepDrain
+	stepUndrain
+	stepBlocked // wanted to act but a cooldown/clamp stopped it (counted, no-op)
+)
+
+// decideStep computes the single step to take this tick. Pure: no I/O, no locks.
+//
+// rawDesired = ceil(active/target) is the unclamped replica count the load wants;
+// k is the current replica count. The step is driven by rawDesired vs k, with the
+// Min/Max clamp surfaced only as a blocking signal at the ceiling:
+//   - up   (rawDesired > k): if k==Max, stepBlocked (load wants more but we are
+//     capped); else undrain the top if it is draining (rebound fast path) or grow,
+//     gated by upReady (cooldown).
+//   - down (rawDesired < k && k > Min): drain the top, gated by downReady (cooldown).
+//   - otherwise stepNone.
+//
+// stepBlocked means "wanted to act but a cooldown or the Max clamp prevented it"
+// — it is counted but performs no mutation.
+//
+// Asymmetry by design: at Max with excess load we report stepBlocked (a thwarted
+// up-action worth observing), but a pool resting at Min with no load is stepNone,
+// not blocked — a floor with no downward pressure is the normal resting state, not
+// an action we'd report every tick. (At Min, rawDesired<=Min means k>Min is false,
+// so the down branch is never entered.)
+func decideStep(acfg config.AutoscaleConfig, active, k int, topDraining, upReady, downReady bool) scaleStep {
+	target := acfg.TargetSessionsPerReplica
+	rawDesired := (active + target - 1) / target // ceil
+	switch {
+	case rawDesired > k && k == acfg.Max:
+		return stepBlocked
+	case rawDesired > k && k < acfg.Max:
+		if !upReady {
+			return stepBlocked
+		}
+		if topDraining {
+			return stepUndrain
+		}
+		return stepGrow
+	case rawDesired < k && k > acfg.Min:
+		if !downReady {
+			return stepBlocked
+		}
+		return stepDrain
+	default:
+		return stepNone
+	}
+}
+
 // startReplicaProc is the production startReplica: it launches a Supervisor for ap
 // under a child context and waits until ap answers /healthz (via readyWait).
 func (p *PoolManager) startReplicaProc(ctx context.Context, ap AgentProcess) (context.CancelFunc, error) {

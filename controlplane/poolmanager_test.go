@@ -172,3 +172,33 @@ func TestPoolManagerReadsRaceClean(t *testing.T) {
 	}()
 	wg.Wait()
 }
+
+func TestDecideStep(t *testing.T) {
+	acfg := config.AutoscaleConfig{Min: 1, Max: 3, TargetSessionsPerReplica: 2}
+	cases := []struct {
+		name      string
+		active, k int
+		topDrain  bool
+		upReady   bool
+		downReady bool
+		want      scaleStep
+	}{
+		{"need up, ready", 5, 1, false, true, true, stepGrow},
+		{"need up, cooling", 5, 1, false, false, true, stepBlocked},
+		{"at max", 99, 3, false, true, true, stepBlocked},
+		{"need down, ready", 1, 3, false, true, true, stepDrain},
+		{"need down, cooling", 1, 3, false, true, false, stepBlocked},
+		{"at min", 0, 1, false, true, true, stepNone},
+		{"rebound undrain", 5, 2, true, true, true, stepUndrain},
+		{"hold steady", 3, 2, false, true, true, stepNone},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := decideStep(acfg, c.active, c.k, c.topDrain, c.upReady, c.downReady)
+			if got != c.want {
+				t.Fatalf("decideStep(active=%d,k=%d,drain=%v,up=%v,down=%v)=%v want %v",
+					c.active, c.k, c.topDrain, c.upReady, c.downReady, got, c.want)
+			}
+		})
+	}
+}
