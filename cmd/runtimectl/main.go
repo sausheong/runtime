@@ -55,7 +55,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: runtimectl <agents|invoke [-v]|sessions|logs|conformance|admin> [--agent <id>] [args]")
+	fmt.Fprintln(os.Stderr, "usage: runtimectl <agents|invoke [-v]|sessions|logs|conformance|admin|register> [--agent <id>] [args]")
 	os.Exit(2)
 }
 
