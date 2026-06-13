@@ -356,6 +356,39 @@ func (p *PoolManager) tick(ctx context.Context) {
 	p.metrics.AutoscaleCurrent(p.agentID, cur)
 }
 
+// Start brings the pool from 0 to min live replicas, growing sequentially so the
+// first replica creates the DBOS schema before the rest launch (M2's first-run
+// schema-init serialization), then launches the policy loop. Deps (store,
+// metrics, readyWait) must be set first via SetDeps. Returns an error only if the
+// very FIRST replica cannot start (a pool that can't reach even one replica is a
+// boot failure); later grow failures are left for the policy loop to retry.
+func (p *PoolManager) Start(ctx context.Context) error {
+	for i := 0; i < p.acfg.Min; i++ {
+		if err := p.grow(ctx); err != nil {
+			if i == 0 {
+				return err
+			}
+			break
+		}
+	}
+	go p.runPolicy(ctx)
+	return nil
+}
+
+// ApplyTuning overrides poll interval and cooldowns from operator/test env (given
+// in seconds; <=0 keeps the default). Call before Start.
+func (p *PoolManager) ApplyTuning(pollSec, upCDSec, downCDSec float64) {
+	if pollSec > 0 {
+		p.pollEvery = int64(pollSec * 1e9)
+	}
+	if upCDSec > 0 {
+		p.upCD = int64(upCDSec * 1e9)
+	}
+	if downCDSec > 0 {
+		p.downCD = int64(downCDSec * 1e9)
+	}
+}
+
 // runPolicy ticks every pollEvery until ctx is cancelled.
 func (p *PoolManager) runPolicy(ctx context.Context) {
 	t := time.NewTicker(time.Duration(p.pollEvery))

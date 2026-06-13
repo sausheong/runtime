@@ -93,7 +93,8 @@ func NewRegistry(cfg *config.Config, binPath, dsn string) *Registry {
 // SetBroker installs the secret broker injected into every AgentProcess returned
 // by Get/Replicas/Replica. NOT safe to call concurrently with reads: it must
 // happen-before the HTTP server and supervisor goroutines start. nil ⇒ no
-// brokering.
+// brokering. It also stamps each PoolManager's base so replicas spawned later by
+// autoscaling inherit the broker (secret injection at spawn time).
 func (r *Registry) SetBroker(b SecretBroker) {
 	r.broker = b
 	for _, pm := range r.pools {
