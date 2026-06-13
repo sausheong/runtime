@@ -59,23 +59,25 @@ type AgentProcess struct {
 	broker SecretBroker // optional; injected by the Registry. nil ⇒ no secret brokering.
 }
 
-// buildEnv assembles the child environment: the inherited operator env, then the
-// RUNTIME_* control vars, then (if a broker is set) the tenant's decrypted
-// secrets LAST so they shadow any inherited var of the same name. A broker error
-// fails closed — the caller must not start the process.
-func (a AgentProcess) buildEnv(ctx context.Context) ([]string, error) {
-	env := append(os.Environ(),
-		"RUNTIME_PG_DSN="+a.PGDSN,
-		"RUNTIME_LISTEN_ADDR="+a.Addr,
-		"RUNTIME_AGENT_ID="+a.AgentID,
-		"RUNTIME_AGENT_KIND="+a.Kind,
-		"RUNTIME_AGENT_TENANT="+a.Tenant,
+// envDelta returns ONLY the entries buildEnv adds on top of the inherited
+// process environment: the RUNTIME_* control vars, the opt-in feature vars, and
+// (if a broker is set) the tenant's decrypted secrets. It NEVER includes
+// os.Environ(), so it is safe to serialize across the network to a remote agent
+// (the registration handshake) — runtimed's own env (master keyring, OIDC
+// secrets) can never leak. A broker error fails closed.
+func (a AgentProcess) envDelta(ctx context.Context) ([]string, error) {
+	env := []string{
+		"RUNTIME_PG_DSN=" + a.PGDSN,
+		"RUNTIME_LISTEN_ADDR=" + a.Addr,
+		"RUNTIME_AGENT_ID=" + a.AgentID,
+		"RUNTIME_AGENT_KIND=" + a.Kind,
+		"RUNTIME_AGENT_TENANT=" + a.Tenant,
 		// Per-replica identity (Spine A1): RUNTIME_AGENT_REPLICA tells agentd its
 		// index (stamped on sessions); DBOS__VMID is the stable executor id so a
 		// restarted replica recovers exactly its own in-flight workflows.
-		"RUNTIME_AGENT_REPLICA="+strconv.Itoa(a.ReplicaIndex),
-		"DBOS__VMID="+a.DBOSVMID,
-	)
+		"RUNTIME_AGENT_REPLICA=" + strconv.Itoa(a.ReplicaIndex),
+		"DBOS__VMID=" + a.DBOSVMID,
+	}
 	// Agents that did NOT opt in get explicit empty-value entries so an
 	// inherited operator var (e.g. a leaked RUNTIME_GATEWAY_URL) can't enable
 	// the feature: exec.Cmd uses the LAST duplicate env entry, and agentd
@@ -109,6 +111,19 @@ func (a AgentProcess) buildEnv(ctx context.Context) ([]string, error) {
 		}
 	}
 	return env, nil
+}
+
+// buildEnv assembles the full child environment for a LOCAL spawn: the inherited
+// operator env, then envDelta on top (so the delta shadows any inherited var of
+// the same name, including the tenant's decrypted secrets which come LAST). A
+// broker error fails closed — the caller must not start the process.
+// buildEnv = os.Environ() + envDelta.
+func (a AgentProcess) buildEnv(ctx context.Context) ([]string, error) {
+	delta, err := a.envDelta(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return append(os.Environ(), delta...), nil
 }
 
 // SpawnFunc returns a Supervisor-compatible spawn closure that launches agentd
