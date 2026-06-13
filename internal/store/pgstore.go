@@ -80,6 +80,26 @@ func (p *pgStore) SessionReplica(ctx context.Context, id string) (int, error) {
 	return r, err
 }
 
+func (p *pgStore) ActiveSessionsByReplica(ctx context.Context, agentID string) (map[int]int, error) {
+	rows, err := p.db.QueryContext(ctx,
+		`SELECT replica, count(*) FROM sessions
+		 WHERE agent_id=$1 AND status NOT IN ('completed','error')
+		 GROUP BY replica`, agentID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[int]int{}
+	for rows.Next() {
+		var replica, n int
+		if err := rows.Scan(&replica, &n); err != nil {
+			return nil, err
+		}
+		out[replica] = n
+	}
+	return out, rows.Err()
+}
+
 func (p *pgStore) ListSessions(ctx context.Context, agentID string) ([]SessionRow, error) {
 	rows, err := p.db.QueryContext(ctx,
 		`SELECT id, agent_id, workflow_id, status, turn_count, replica FROM sessions WHERE agent_id=$1 ORDER BY created_at DESC`,
