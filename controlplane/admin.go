@@ -222,12 +222,37 @@ func RegisterAdmin(mux *http.ServeMux, s AdminStore, agentTenants map[string]str
 	})
 
 	mux.HandleFunc("DELETE /admin/register-tokens/{id}", func(w http.ResponseWriter, r *http.Request) {
-		_, ok := requireAdmin(w, r)
+		p, ok := requireAdmin(w, r)
 		if !ok {
 			return
 		}
-		// Revoke is by token_id (globally unique); admin role suffices.
-		if err := s.RevokeRegistrationToken(r.Context(), r.PathValue("id")); err != nil {
+		id := r.PathValue("id")
+		// Superusers may revoke any token. Non-superusers are tenant-scoped
+		// (parity with DELETE /admin/keys, which uses RevokeKey's tenant filter):
+		// we resolve the token's owning agent via ListRegistrationTokens and
+		// revoke only when it belongs to an agent in the caller's tenant.
+		// When the token is absent OR owned by another tenant we return the
+		// same 204 without revoking — revoke is idempotent either way, and a
+		// uniform response avoids an existence oracle for other tenants' tokens.
+		if !p.Superuser {
+			rows, err := s.ListRegistrationTokens(r.Context())
+			if err != nil {
+				serverError(w, "list registration tokens", err)
+				return
+			}
+			owned := false
+			for _, rw := range rows {
+				if rw.TokenID == id && agentTenants[rw.AgentID] == p.TenantID {
+					owned = true
+					break
+				}
+			}
+			if !owned {
+				w.WriteHeader(http.StatusNoContent)
+				return
+			}
+		}
+		if err := s.RevokeRegistrationToken(r.Context(), id); err != nil {
 			serverError(w, "revoke registration token", err)
 			return
 		}

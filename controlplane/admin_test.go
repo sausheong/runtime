@@ -359,7 +359,20 @@ func TestAdminRegisterTokens(t *testing.T) {
 		t.Fatalf("other tenant must not see acme's token: %+v", otherRows)
 	}
 
-	// 5) DELETE → 204, token marked revoked.
+	// 5) Non-superuser admin in another tenant DELETE'ing acme's token → 204
+	// (no oracle) but the token must NOT be revoked.
+	xr := withPrincipal(httptest.NewRequest("DELETE", "/admin/register-tokens/"+resp.ID, nil),
+		identity.Principal{TenantID: "other", Role: identity.RoleAdmin})
+	xrrec := httptest.NewRecorder()
+	mux.ServeHTTP(xrrec, xr)
+	if xrrec.Code != 204 {
+		t.Fatalf("cross-tenant revoke: code=%d want 204", xrrec.Code)
+	}
+	if s.regTokens[resp.ID].Revoked {
+		t.Fatal("cross-tenant revoke must be a no-op (token still active)")
+	}
+
+	// 6) Owning tenant (acme) admin revokes the support token → 204, revoked.
 	dr := withPrincipal(httptest.NewRequest("DELETE", "/admin/register-tokens/"+resp.ID, nil),
 		identity.Principal{TenantID: "acme", Role: identity.RoleAdmin})
 	drrec := httptest.NewRecorder()
@@ -369,6 +382,30 @@ func TestAdminRegisterTokens(t *testing.T) {
 	}
 	if !s.regTokens[resp.ID].Revoked {
 		t.Fatal("token not revoked")
+	}
+
+	// 7) Superuser revokes unconditionally → mint a fresh token, revoke as
+	// superuser (TenantID == "", Superuser) → 204 + revoked.
+	cr2 := withPrincipal(httptest.NewRequest("POST", "/admin/register-tokens", strings.NewReader(`{"agent":"support"}`)),
+		identity.Principal{Superuser: true, Role: identity.RoleAdmin})
+	cr2rec := httptest.NewRecorder()
+	mux.ServeHTTP(cr2rec, cr2)
+	if cr2rec.Code != 201 {
+		t.Fatalf("superuser mint: code=%d body=%s want 201", cr2rec.Code, cr2rec.Body.String())
+	}
+	var resp2 struct {
+		ID string `json:"id"`
+	}
+	json.Unmarshal(cr2rec.Body.Bytes(), &resp2)
+	sdr := withPrincipal(httptest.NewRequest("DELETE", "/admin/register-tokens/"+resp2.ID, nil),
+		identity.Principal{Superuser: true, Role: identity.RoleAdmin})
+	sdrrec := httptest.NewRecorder()
+	mux.ServeHTTP(sdrrec, sdr)
+	if sdrrec.Code != 204 {
+		t.Fatalf("superuser revoke: code=%d want 204", sdrrec.Code)
+	}
+	if !s.regTokens[resp2.ID].Revoked {
+		t.Fatal("superuser revoke should revoke the token")
 	}
 }
 
