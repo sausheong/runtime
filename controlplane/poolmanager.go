@@ -256,30 +256,46 @@ const (
 
 // decideStep computes the single step to take this tick. Pure: no I/O, no locks.
 //
-// rawDesired = ceil(active/target) is the unclamped replica count the load wants;
-// k is the current replica count. The step is driven by rawDesired vs k, with the
-// Min/Max clamp surfaced only as a blocking signal at the ceiling:
-//   - up   (rawDesired > k): if k==Max, stepBlocked (load wants more but we are
-//     capped); else undrain the top if it is draining (rebound fast path) or grow,
-//     gated by upReady (cooldown).
-//   - down (rawDesired < k && k > Min): drain the top, gated by downReady (cooldown).
+// raw = ceil(active/target) is the unclamped replica count the load wants; k is
+// the current replica count. The direction decision is driven by desired vs k,
+// where desired is raw CLAMPED to [Min,Max] — so the Min floor is actively
+// restored (an idle pool below Min still grows up to Min) and the Max ceiling is
+// held. The one place raw (not the clamp) speaks directly is the ceiling-pressure
+// signal: when load wants more than Max allows (raw>k && k>=Max) we report
+// stepBlocked, a thwarted up-action worth observing.
+//
+//   - capped up-pressure (raw>k && k>=Max): stepBlocked.
+//   - up   (desired > k): undrain the top if it is draining (rebound fast path)
+//     or grow, gated by upReady (cooldown).
+//   - down (desired < k): drain the top, gated by downReady (cooldown).
 //   - otherwise stepNone.
 //
 // stepBlocked means "wanted to act but a cooldown or the Max clamp prevented it"
 // — it is counted but performs no mutation.
 //
-// Asymmetry by design: at Max with excess load we report stepBlocked (a thwarted
-// up-action worth observing), but a pool resting at Min with no load is stepNone,
-// not blocked — a floor with no downward pressure is the normal resting state, not
-// an action we'd report every tick. (At Min, rawDesired<=Min means k>Min is false,
-// so the down branch is never entered.)
+// Asymmetry by design: at Max with excess load we report stepBlocked (capped
+// up-pressure), but a pool resting at Min with no load is stepNone, not blocked —
+// a floor with no downward pressure is the normal resting state, not an action
+// we'd report every tick. (At Min, the clamped desired==Min==k ⇒ stepNone; at Max
+// with excess load, raw>k && k>=Max ⇒ stepBlocked.)
 func decideStep(acfg config.AutoscaleConfig, active, k int, topDraining, upReady, downReady bool) scaleStep {
 	target := acfg.TargetSessionsPerReplica
-	rawDesired := (active + target - 1) / target // ceil
-	switch {
-	case rawDesired > k && k == acfg.Max:
+	raw := (active + target - 1) / target // ceil
+	// Load wants more than Max allows: report thwarted up-pressure (capped).
+	if raw > k && k >= acfg.Max {
 		return stepBlocked
-	case rawDesired > k && k < acfg.Max:
+	}
+	// Clamp to [Min,Max] for the direction decision so the Min floor is actively
+	// restored (an idle pool below Min still grows up to Min) and Max is held.
+	desired := raw
+	if desired < acfg.Min {
+		desired = acfg.Min
+	}
+	if desired > acfg.Max {
+		desired = acfg.Max
+	}
+	switch {
+	case desired > k:
 		if !upReady {
 			return stepBlocked
 		}
@@ -287,7 +303,7 @@ func decideStep(acfg config.AutoscaleConfig, active, k int, topDraining, upReady
 			return stepUndrain
 		}
 		return stepGrow
-	case rawDesired < k && k > acfg.Min:
+	case desired < k:
 		if !downReady {
 			return stepBlocked
 		}
@@ -356,23 +372,24 @@ func (p *PoolManager) tick(ctx context.Context) {
 	p.metrics.AutoscaleCurrent(p.agentID, cur)
 }
 
-// Start brings the pool from 0 to min live replicas, growing sequentially so the
-// first replica creates the DBOS schema before the rest launch (M2's first-run
-// schema-init serialization), then launches the policy loop. Deps (store,
-// metrics, readyWait) must be set first via SetDeps. Returns an error only if the
-// very FIRST replica cannot start (a pool that can't reach even one replica is a
-// boot failure); later grow failures are left for the policy loop to retry.
+// Start grows the pool toward min live replicas (sequential, readiness-gated so
+// the first replica creates the DBOS schema before the rest), then ALWAYS
+// launches the policy loop — which self-heals toward min if an initial grow
+// failed. Returns the first-replica error (for the caller to log) but the pool
+// is not abandoned: the policy loop keeps retrying. Deps must be set via SetDeps
+// first.
 func (p *PoolManager) Start(ctx context.Context) error {
+	var firstErr error
 	for i := 0; i < p.acfg.Min; i++ {
 		if err := p.grow(ctx); err != nil {
 			if i == 0 {
-				return err
+				firstErr = err
 			}
 			break
 		}
 	}
 	go p.runPolicy(ctx)
-	return nil
+	return firstErr
 }
 
 // ApplyTuning overrides poll interval and cooldowns from operator/test env (given

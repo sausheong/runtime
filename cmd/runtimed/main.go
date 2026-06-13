@@ -289,8 +289,11 @@ func main() {
 		})
 		pm.ApplyTuning(asPoll, asUpCD, asDownCD)
 		if err := pm.Start(ctx); err != nil {
-			slog.Error("autoscaled agent failed to reach min replicas", "agent", id, "err", err)
-			os.Exit(1)
+			// Degrade-don't-fail (consistent with the static boot loop and the
+			// post-gateway-start no-fatal-exit discipline): the policy loop will
+			// keep retrying grow toward min. An os.Exit here would orphan gateway
+			// stdio children and skip deferred cleanup.
+			slog.Error("autoscaled agent could not start its first replica; policy loop will retry", "agent", id, "err", err)
 		}
 		slog.Info("autoscaling agent", "agent", id)
 	}
