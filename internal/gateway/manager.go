@@ -46,6 +46,7 @@ type Manager struct {
 	ups []*upstream
 
 	dial       dialFunc
+	cred       CredentialResolver
 	minBackoff time.Duration
 	maxBackoff time.Duration
 
@@ -69,6 +70,14 @@ func WithDial(d dialFunc) Option { return func(m *Manager) { m.dial = d } }
 func WithBackoff(min, max time.Duration) Option {
 	return func(m *Manager) { m.minBackoff, m.maxBackoff = min, max }
 }
+
+// CredentialResolver returns the plaintext secret named for a tenant. Backed by
+// the secrets broker in production. Must return a non-nil error (fail-closed)
+// when the secret is absent.
+type CredentialResolver func(ctx context.Context, tenant, secretName string) (string, error)
+
+// WithCredentials sets the per-tenant credential resolver used at dial time.
+func WithCredentials(r CredentialResolver) Option { return func(m *Manager) { m.cred = r } }
 
 // NewManager builds a Manager for the configured servers. Call Start to begin
 // connecting.
@@ -197,6 +206,32 @@ func (m *Manager) Remove(name string) {
 // few poll cycles (the loop pings every minBackoff).
 const pingTimeout = 5 * time.Second
 
+// dialWith resolves a per-tenant credential (if configured) into the upstream's
+// headers, then dials. Fail-closed: a resolution error aborts the dial (the
+// supervision loop retries with backoff). The error never includes the value.
+func (m *Manager) dialWith(ctx context.Context, s config.GatewayServer) (upstreamConn, error) {
+	if s.CredSecret != "" && m.cred != nil && len(s.Tenants) == 1 {
+		val, err := m.cred(ctx, s.Tenants[0], s.CredSecret)
+		if err != nil {
+			return nil, fmt.Errorf("gateway: resolve credential for upstream %q: %w", s.Name, err)
+		}
+		s = withCredHeader(s, s.CredHeader, val)
+	}
+	return m.dial(ctx, s)
+}
+
+// withCredHeader returns a copy of s with header k=v added (copy-on-write so the
+// stored cfg is never mutated and the secret never persists on the upstream).
+func withCredHeader(s config.GatewayServer, k, v string) config.GatewayServer {
+	h := make(map[string]string, len(s.Headers)+1)
+	for kk, vv := range s.Headers {
+		h[kk] = vv
+	}
+	h[k] = v
+	s.Headers = h
+	return s
+}
+
 // supervise keeps one upstream connected: dial with capped exponential
 // backoff, mark up, then health-check on a minBackoff cadence — a failed
 // ping (crashed stdio child, restarted HTTP upstream) calls markDown so
@@ -230,7 +265,7 @@ func (m *Manager) supervise(ctx context.Context, u *upstream) {
 		connected := u.conn != nil
 		u.mu.Unlock()
 		if !connected {
-			conn, err := m.dial(ctx, u.cfg)
+			conn, err := m.dialWith(ctx, u.cfg)
 			if err != nil {
 				u.mu.Lock()
 				u.lastErr = err
