@@ -147,10 +147,24 @@ func TestAutoscaleGrowDrain(t *testing.T) {
 					return
 				default:
 					asPostSession(base, "pool")
+					// Throttle each worker so 16 goroutines don't busy-spin the
+					// server; several sessions are still in-flight per 0.3s poll,
+					// so sustained-load semantics are unchanged.
+					time.Sleep(2 * time.Millisecond)
 				}
 			}
 		}()
 	}
+	// Guarantee teardown of the load generator no matter how we leave this
+	// function: a sync.Once-guarded stop is registered as a deferred safety net
+	// (so any t.Fatalf below still signals stop and reaps workers) AND called
+	// explicitly after Gate 1 so load drains in time for the Gate-4 drain check.
+	// The guard prevents a double close(stop) panic. Deferred LIFO runs
+	// stopLoad() (close stop) before wg.Wait().
+	var stopOnce sync.Once
+	stopLoad := func() { stopOnce.Do(func() { close(stop) }) }
+	defer wg.Wait()
+	defer stopLoad()
 
 	// Observe distinct-replica growth WHILE the generator sustains load. A
 	// generous 30s deadline absorbs replica spawn + DBOS launch latency for
@@ -159,7 +173,10 @@ func TestAutoscaleGrowDrain(t *testing.T) {
 		return asDistinct(t, db, "pool") >= 3
 	})
 	peak := asDistinct(t, db, "pool")
-	close(stop)
+	// Stop sustained load so pool sessions go terminal for the Gate-4 drain
+	// gate, then wait for workers to exit. stopLoad is sync.Once-guarded, so the
+	// deferred stopLoad()/wg.Wait() above are harmless no-ops after this.
+	stopLoad()
 	wg.Wait()
 	// Re-read after the generator stops in case a late session committed a
 	// replica index we hadn't recorded at the moment we sampled peak.
