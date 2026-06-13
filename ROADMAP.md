@@ -830,7 +830,48 @@ the single-replica supervisor model). Spec/plan:
    (`TestRemoteReplicaPoolAttach`: distribution, kill-one-ordinal liveness
    routing + affinity/durability, no restart), and chart render permutations
    (StatefulSet/headless/generated-config, single-replica concrete url, mode
-   guards, monolith regression). Spec/plan:
+   guards, monolith regression). THE FINAL HOLISTIC REVIEW + LIVE PROOF EARNED
+   THEIR KEEP (as in C2 M1) — each caught an independent install-only bug
+   invisible to per-task render/grep checks: (1) the holistic review found
+   `podManagementPolicy: Parallel` would CrashLoop all-but-one ordinal on first
+   install — in perAgentPods mode runtimed is control-plane-only and never
+   Launches DBOS, so each agentd pod creates the DBOS schema itself, and DBOS's
+   unlocked non-IF-NOT-EXISTS `CREATE SCHEMA/TABLE` raises non-retryable
+   duplicate-object errors when N pods race an empty DB; fixed by dropping to the
+   default `OrderedReady` so ordinal 0 creates the schema and goes Ready before
+   ordinal 1 (exactly the serialization the integration test relies on). (2) the
+   live kind proof found the runtimed `Service` had FOUR endpoints, not one: agent
+   StatefulSet pods carry the same base `selectorLabels` (name+instance) as
+   runtimed, so the Service load-balanced control-plane requests across the agent
+   pods and `/agents/*` routes intermittently 404'd; fixed with an
+   `app.kubernetes.io/component=control-plane` discriminator on the runtimed
+   Deployment/Service/ServiceMonitor/NetworkPolicy, mode-gated so monolith renders
+   byte-for-byte unchanged (and the immutable Deployment selector is untouched for
+   monolith upgrades). LIVE PROOF (real kind cluster + bundled Postgres,
+   2026-06-13, all passed): `make docker-image` → `kind load` → `helm install`
+   with `postgresql.enabled=true`, `scheduling.mode=perAgentPods`, and two agents
+   (support `replicas:2`, research `replicas:1`) → two StatefulSets + two headless
+   Services + a control-plane-only runtimed; **OrderedReady proven** —
+   `support-1` started only after `support-0` went Ready (0 restarts on the
+   second), no DBOS schema race; **per-ordinal executor ids proven** — pod
+   `support-0`→`DBOS__VMID=support#0`/`REPLICA=0`, `support-1`→`support#1`/`1`
+   (derived from `$HOSTNAME`); runtimed attached all three ordinals at the correct
+   per-ordinal headless DNS; **runtimed Service had exactly 1 endpoint** after the
+   label fix; **`runtimectl conformance` PASSED all 6 checks** against BOTH the
+   pool agent and the single agent through the in-cluster Service (create + stream
+   + get + list routed to the per-agent pods); **distribution proven** — 11 pool
+   sessions split 6/5 across ordinals 0/1, with `dbos.workflow_status` carrying
+   distinct `support#0`/`support#1`/`research#0` executor ids (no double
+   execution); and **scale-down skip-unreachable proven** — `kubectl scale
+   support --replicas=1` then 8 new sessions all landed on ordinal 0 while
+   runtimed stayed healthy (HealthMonitor marked ordinal 1 unreachable,
+   `NextReplica` skipped it; K8s removed the highest ordinal = A2 suffix-only,
+   enforced by the StatefulSet); clean `helm uninstall` + `kind delete`. Remaining
+   perAgentPods follow-ups: per-agent `gateway:` opt-in env is not yet wired into
+   the agent pod StatefulSet (gateway agents are monolith-only for now); brokered
+   secrets to scheduled pods (C3 M2); RFC1123 agent-id validation; a per-agent
+   NetworkPolicy; and runtimed-driven K8s-API scaling / HPA (a later C2
+   milestone). Spec/plan:
    `docs/superpowers/{specs,plans}/2026-06-13-c2-m2-per-agent-pod-scheduling*`.
 
 - **Containers / Kubernetes** — once C1 makes foreign agents first-class, package
