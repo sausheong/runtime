@@ -89,6 +89,31 @@ func TestEnvDeltaExcludesInheritedEnv(t *testing.T) {
 	}
 }
 
+// TestEnvDeltaBrokeredValueShadowsInheritedEnv proves that when a brokered
+// secret shares a name with an inherited env var, the delta (the only thing
+// returned over the network) carries the BROKERED value, never the inherited
+// one — the inherited value must not leak in the payload.
+func TestEnvDeltaBrokeredValueShadowsInheritedEnv(t *testing.T) {
+	t.Setenv("RUNTIME_C3M2_SENTINEL", "leak-me")
+	ap := AgentProcess{
+		AgentID: "a1", Addr: "127.0.0.1:8081", PGDSN: "dsn://x", Tenant: "t1",
+		broker: fakeBroker{secrets: map[string]map[string]string{
+			"t1": {"RUNTIME_C3M2_SENTINEL": "from-broker"},
+		}},
+	}
+	delta, err := ap.envDelta(context.Background())
+	if err != nil {
+		t.Fatalf("envDelta: %v", err)
+	}
+	joined := strings.Join(delta, "\n")
+	if !strings.Contains(joined, "RUNTIME_C3M2_SENTINEL=from-broker") {
+		t.Fatalf("delta must carry brokered value:\n%s", joined)
+	}
+	if strings.Contains(joined, "leak-me") {
+		t.Fatalf("delta leaked inherited value:\n%s", joined)
+	}
+}
+
 func TestBuildEnvIsEnvironPlusDelta(t *testing.T) {
 	t.Setenv("RUNTIME_C3M2_SENTINEL2", "keep")
 	ap := AgentProcess{AgentID: "a1", Addr: "127.0.0.1:8081", PGDSN: "dsn://x", Tenant: "t1"}
