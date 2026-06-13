@@ -129,6 +129,11 @@ func (p *PoolManager) undrainTop() {
 
 // reapDrained stops and removes the contiguous draining suffix whose active count
 // is 0. Only contiguous-from-top reaping preserves suffix-only. Never below 1.
+//
+// active is a pre-lock snapshot of per-replica non-terminal session counts; using
+// it across iterations is safe only because draining replicas are unroutable
+// (NextReplica skips them), so a slot already at 0 cannot gain sessions before it
+// is reaped.
 func (p *PoolManager) reapDrained(active map[int]int) {
 	p.mu.Lock()
 	defer p.mu.Unlock()

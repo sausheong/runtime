@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/sausheong/runtime/internal/config"
@@ -98,6 +99,51 @@ func TestPoolManagerUndrainTop(t *testing.T) {
 	pm.undrainTop()
 	if pm.topDraining() {
 		t.Fatal("undrainTop did not clear draining")
+	}
+}
+
+func TestPoolManagerGrowRacedBranch(t *testing.T) {
+	base := AgentProcess{AgentID: "ag", BinPath: "/bin/true", PGDSN: "dsn", Tenant: "default"}
+	acfg := config.AutoscaleConfig{Min: 1, Max: 5, TargetSessionsPerReplica: 2}
+	addrOf := func(i int) (string, error) { return fmt.Sprintf("127.0.0.1:%d", 9100+i), nil }
+	pm := newPoolManager("ag", base, acfg, addrOf, nil, nil)
+
+	release := make(chan struct{})
+	entered := make(chan struct{}, 2)
+	var canceled int32
+	pm.startReplica = func(ctx context.Context, ap AgentProcess) (context.CancelFunc, error) {
+		entered <- struct{}{} // signal we're spawning (outside pm lock)
+		<-release             // block so both grows observe the same k
+		return func() { atomic.AddInt32(&canceled, 1) }, nil
+	}
+
+	errs := make(chan error, 2)
+	for i := 0; i < 2; i++ {
+		go func() { errs <- pm.grow(context.Background()) }()
+	}
+	// Wait until BOTH grows have entered startReplica (both saw k==0) before
+	// releasing them — guarantees a real collision at the same index.
+	<-entered
+	<-entered
+	close(release)
+
+	e1, e2 := <-errs, <-errs
+	// Exactly one grow wins (nil), the other returns errGrowRaced.
+	raced := 0
+	if e1 == errGrowRaced {
+		raced++
+	}
+	if e2 == errGrowRaced {
+		raced++
+	}
+	if raced != 1 {
+		t.Fatalf("expected exactly one errGrowRaced, got e1=%v e2=%v", e1, e2)
+	}
+	if got := len(pm.Replicas()); got != 1 {
+		t.Fatalf("expected exactly 1 published replica, got %d", got)
+	}
+	if atomic.LoadInt32(&canceled) != 1 {
+		t.Fatalf("expected the raced loser's cancel to run exactly once, got %d", atomic.LoadInt32(&canceled))
 	}
 }
 
