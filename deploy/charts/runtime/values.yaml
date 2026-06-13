@@ -19,6 +19,14 @@ replicaCount: 1
 #                  as remote replica pools (C2 M2). Each agent's pod count comes
 #                  from config.agents[].replicas (default 1); agents must NOT set
 #                  listen_addr/url in this mode (the chart generates the url).
+#
+# Registration handshake (C3 M2): in perAgentPods mode, when
+# secrets.registrationToken is set (or an existingSecret carrying a
+# RUNTIME_REGISTRATION_TOKEN key is used), agent pods perform the registration
+# handshake at boot — they fetch their DSN + brokered secrets from the control
+# plane's POST /register endpoint instead of reading them from the chart Secret.
+# When no registration token is present they read everything from the chart
+# Secret (the C2 M2 behavior).
 scheduling:
   mode: monolith
 
@@ -43,6 +51,12 @@ secrets:
                           # secret MUST carry a RUNTIME_AGENT_AUTH_TOKEN key — the
                           # generated runtime.yaml references ${RUNTIME_AGENT_AUTH_TOKEN}
                           # and runtimed fails closed if it is unset.
+  registrationToken: ""   # RUNTIME_REGISTRATION_TOKEN — per-agent handshake bearer
+                          # (perAgentPods). When set, agent pods pull DSN + brokered
+                          # secrets from the control plane at boot instead of from
+                          # this Secret. Mint with: runtimectl register mint --agent <id>.
+                          # NOTE: with an existingSecret, that secret must carry a
+                          # RUNTIME_REGISTRATION_TOKEN key when handshake mode is used.
   # NOTE: legacy bearer tokens are NOT a secret env var — they live in
   # runtime.yaml's `tokens:`. Put them under `config.tokens` (dev only).
 
