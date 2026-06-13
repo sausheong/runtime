@@ -12,6 +12,16 @@ fullnameOverride: ""
 # The supervisor is a single stateful process tree; >1 is unsupported.
 replicaCount: 1
 
+# Scheduling topology:
+#   monolith     — one pod; runtimed exec-spawns every agent as a child (C2 M1).
+#   perAgentPods — one StatefulSet + headless Service per agent (agentd-only
+#                  pods); runtimed runs control-plane-only and ATTACHES to them
+#                  as remote replica pools (C2 M2). Each agent's pod count comes
+#                  from config.agents[].replicas (default 1); agents must NOT set
+#                  listen_addr/url in this mode (the chart generates the url).
+scheduling:
+  mode: monolith
+
 # runtime.yaml contents — agent registry + optional gateway config.
 # Rendered into a ConfigMap and mounted at /etc/runtime/runtime.yaml.
 config:
@@ -26,6 +36,9 @@ secrets:
   secretsKeys: ""         # RUNTIME_SECRETS_KEYS
   secretsPrimary: ""      # RUNTIME_SECRETS_PRIMARY
   adminBootstrap: ""      # RUNTIME_ADMIN_BOOTSTRAP
+  agentAuthToken: ""      # RUNTIME_AGENT_AUTH_TOKEN — shared bearer runtimed
+                          # uses to reach agent pods (perAgentPods mode). Optional
+                          # but recommended. Authenticates runtimed TO each agent.
   # NOTE: legacy bearer tokens are NOT a secret env var — they live in
   # runtime.yaml's `tokens:`. Put them under `config.tokens` (dev only).
 
