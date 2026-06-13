@@ -51,12 +51,22 @@ func NewRegistry(cfg *config.Config, binPath, dsn string) *Registry {
 			GatewaySearch: a.Gateway == config.GatewaySearch,
 		}
 		if a.URL != "" {
-			rem := base
-			rem.Remote = true
-			rem.BaseURL = a.URL
-			rem.AuthToken = a.AuthToken
-			rem.ReplicaIndex = 0
-			r.sets[a.ID] = []AgentProcess{rem}
+			n := a.RemotePoolSize()
+			set := make([]AgentProcess, n)
+			for i := 0; i < n; i++ {
+				ou, err := a.RemoteReplicaURL(i)
+				if err != nil {
+					// Validate() proved these expand; fall back defensively.
+					ou = a.URL
+				}
+				rem := base
+				rem.Remote = true
+				rem.BaseURL = ou
+				rem.AuthToken = a.AuthToken
+				rem.ReplicaIndex = i
+				set[i] = rem
+			}
+			r.sets[a.ID] = set
 			continue
 		}
 		// Autoscaled local agent (Spine A2): a PoolManager owns the mutable set;

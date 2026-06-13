@@ -60,6 +60,37 @@ func TestRegistry_RemoteSingleReplica(t *testing.T) {
 	}
 }
 
+func TestRegistry_RemotePoolExpansion(t *testing.T) {
+	cfg := &config.Config{Agents: []config.AgentConfig{
+		{ID: "support", Name: "S", Model: "m",
+			URL: "http://support-{i}.support-hl.ns.svc:8080", Replicas: 3,
+			AuthToken: "tok", Tenant: "default"},
+	}}
+	r := NewRegistry(cfg, "/bin/agentd", "dsn")
+	set, ok := r.Replicas("support")
+	if !ok || len(set) != 3 {
+		t.Fatalf("Replicas: ok=%v len=%d, want 3", ok, len(set))
+	}
+	for i, ap := range set {
+		if !ap.Remote {
+			t.Errorf("replica %d: Remote=false, want true", i)
+		}
+		if ap.ReplicaIndex != i {
+			t.Errorf("replica %d: ReplicaIndex=%d", i, ap.ReplicaIndex)
+		}
+		want := "http://support-" + strconv.Itoa(i) + ".support-hl.ns.svc:8080"
+		if ap.BaseURL != want {
+			t.Errorf("replica %d: BaseURL=%q want %q", i, ap.BaseURL, want)
+		}
+		if ap.DBOSVMID != "" {
+			t.Errorf("replica %d: DBOSVMID=%q, want empty (remote owns its id)", i, ap.DBOSVMID)
+		}
+		if ap.AuthToken != "tok" {
+			t.Errorf("replica %d: AuthToken=%q", i, ap.AuthToken)
+		}
+	}
+}
+
 func TestRegistry_ReplicaByIndex(t *testing.T) {
 	cfg := &config.Config{Agents: []config.AgentConfig{
 		{ID: "a", Name: "A", Model: "m", ListenAddr: "127.0.0.1:8301", Replicas: 2, Tenant: "default"},
