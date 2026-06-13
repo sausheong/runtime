@@ -22,3 +22,19 @@ func TestCSRFTokenRoundTrip(t *testing.T) {
 		t.Fatal("empty token accepted")
 	}
 }
+
+func TestCSRFDeterministicPerInstance(t *testing.T) {
+	c := newCSRF()
+	if c.issue("sess") != c.issue("sess") {
+		t.Fatal("issue must be deterministic for the same session within one instance")
+	}
+}
+
+func TestCSRFKeyIsPerInstance(t *testing.T) {
+	a, b := newCSRF(), newCSRF()
+	// Two instances have independent random keys, so a token from one must not
+	// verify on the other (proves the key is actually random/per-instance).
+	if b.verify("sess", a.issue("sess")) {
+		t.Fatal("token from one instance must not verify on another (keys must differ)")
+	}
+}
