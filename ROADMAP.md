@@ -1,6 +1,6 @@
 # Runtime — Roadmap & Backlog
 
-**Checkpoint date:** 2026-06-12 (Gateway M3 — REST/OpenAPI→tool adapters)
+**Checkpoint date:** 2026-06-13 (Spine A1 — replica pools + session affinity)
 **Current state:** Runtime spine complete (Milestones 1–3 merged to `master`);
 polyglot agent hosting (C1) first two milestones complete — two foreign
 frameworks (OpenAI Agents SDK + Claude Agent SDK) hosted via the one Python
@@ -72,9 +72,26 @@ specs/plans dated 2026-06-07/08.
 Carried-forward debt flagged during M1–M3 reviews. None blocking; pick up if/when
 the use case demands. Recorded in the M3 README "Status, scope & limitations".
 
-1. **Subprocess pools / replicas per agent** — today one subprocess per agent.
-   Needs session→replica affinity (a session must hit the replica whose DBOS
-   workflow it is). Pulls in real routing complexity. (Deferred from M2.)
+1. **Subprocess pools / replicas per agent — DONE (2026-06-13).** A local agent
+   runs `replicas: N` supervised `agentd` processes behind one `/agents/{id}`
+   route. New sessions round-robin across the pool; each session pins to its
+   owner replica for life via a persisted `sessions.replica` column, because only
+   the owning DBOS executor can resume that session's durable workflow (and it
+   holds the live SSE subscriber set). Each replica runs as a stable executor
+   `DBOS__VMID=<id>#<i>`, so a supervisor restart at the same index recovers
+   exactly that replica's in-flight work (M1 durability, per replica) with no
+   double execution. `listen_addr` is the base (replica i ⇒ base_port+i; derived
+   ports validated unique + in range); `replicas:1`/omitted is byte-for-byte the
+   old behavior; `replicas` is rejected on remote agents. Per-replica supervision,
+   any-replica-healthy `/agents`, and per-replica metrics (a `replica` label on
+   `agent_up`/`agent_reachable`/`agent_restarts`/`scrape_skips` and on the
+   agent-exposed series). Owner-down ⇒ 503 until restart; round-robin is blind to
+   liveness (skip-down deferred). Unblocks A2 (autoscaling) and C2 M2 (per-agent-pod
+   scheduling). Tested: config/registry/routing/store/metrics unit tests + an
+   integration test (`TestReplicaPoolsAffinity`: distribution, affinity, kill-one-
+   replica durability with no double execution). Spec/plan:
+   `docs/superpowers/{specs,plans}/2026-06-13-spine-a1-replica-pools*`. Remaining
+   spine items 2-6 below unchanged.
 2. **Autoscaling** — scale replicas by load. Depends on pools (A1).
 3. **Dynamic deploy** — `POST /agents` runtime registration + rollback; today
    agents come from `runtime.yaml` at startup. Tokens are config-only too.

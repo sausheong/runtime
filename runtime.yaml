@@ -10,6 +10,13 @@ agents:
     model: test/scripted
     listen_addr: 127.0.0.1:8102
 
+  # Replica pool (Spine A1): run N agentd processes for one agent. Replica i
+  # listens on base_port+i (so listen_addr is the base). New sessions round-robin
+  # across replicas; each session then pins to its owner replica for life. Omit
+  # or 1 = single process (default, unchanged). Remote (url:) agents may not set
+  # replicas. Derived ports must not collide with other agents.
+  #   replicas: 3
+
 # Optional: MCP gateway — federate upstream MCP servers into one endpoint at
 # /gateway/mcp. Agents opt in per mode (the platform injects
 # RUNTIME_GATEWAY_URL and, when identity is on, RUNTIME_GATEWAY_KEY):
