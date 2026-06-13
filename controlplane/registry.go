@@ -25,6 +25,7 @@ type Registry struct {
 	infos  map[string]AgentInfo
 	rr     map[string]*atomic.Uint64 // id -> round-robin counter (new-session routing)
 	broker SecretBroker              // optional; injected into each AgentProcess on read.
+	pools  map[string]*PoolManager   // id -> manager (autoscaled agents only)
 }
 
 // NewRegistry builds a Registry from parsed config. binPath is the agentd
@@ -36,6 +37,7 @@ func NewRegistry(cfg *config.Config, binPath, dsn string) *Registry {
 		sets:  map[string][]AgentProcess{},
 		infos: map[string]AgentInfo{},
 		rr:    map[string]*atomic.Uint64{},
+		pools: map[string]*PoolManager{},
 	}
 	for _, a := range cfg.Agents {
 		r.order = append(r.order, a.ID)
@@ -55,6 +57,16 @@ func NewRegistry(cfg *config.Config, binPath, dsn string) *Registry {
 			rem.AuthToken = a.AuthToken
 			rem.ReplicaIndex = 0
 			r.sets[a.ID] = []AgentProcess{rem}
+			continue
+		}
+		// Autoscaled local agent (Spine A2): a PoolManager owns the mutable set;
+		// the static slice stays nil (reads delegate). main.go starts it.
+		if a.Autoscale != nil {
+			ac := a // capture for the addrOf closure
+			pm := newPoolManager(a.ID, base, *a.Autoscale,
+				func(i int) (string, error) { return ac.ReplicaAddr(i) }, nil, nil)
+			r.pools[a.ID] = pm
+			r.sets[a.ID] = nil
 			continue
 		}
 		// Local: expand to the derived replica addresses. Validate() has already
@@ -82,7 +94,12 @@ func NewRegistry(cfg *config.Config, binPath, dsn string) *Registry {
 // by Get/Replicas/Replica. NOT safe to call concurrently with reads: it must
 // happen-before the HTTP server and supervisor goroutines start. nil ⇒ no
 // brokering.
-func (r *Registry) SetBroker(b SecretBroker) { r.broker = b }
+func (r *Registry) SetBroker(b SecretBroker) {
+	r.broker = b
+	for _, pm := range r.pools {
+		pm.base.broker = b
+	}
+}
 
 // SetGateway records the gateway endpoint URL and per-tenant agent keys, stamped
 // onto every gateway-enabled replica. Like SetBroker, must complete before the
@@ -97,6 +114,12 @@ func (r *Registry) SetGateway(url string, keys map[string]string) {
 			set[i].GatewayKey = keys[set[i].Tenant]
 		}
 		r.sets[id] = set
+	}
+	for _, pm := range r.pools {
+		if pm.base.GatewayOn {
+			pm.base.GatewayURL = url
+			pm.base.GatewayKey = keys[pm.base.Tenant]
+		}
 	}
 }
 
@@ -119,6 +142,13 @@ func (r *Registry) withBroker(ap AgentProcess) AgentProcess {
 // Get returns replica 0 of id (agent-level info: tenant, gateway, broker),
 // preserving callers that want "the agent" rather than a specific replica.
 func (r *Registry) Get(id string) (AgentProcess, bool) {
+	if pm, ok := r.pools[id]; ok {
+		ap, ok := pm.replica0Info()
+		if !ok {
+			return AgentProcess{}, false
+		}
+		return r.withBroker(ap), true
+	}
 	set, ok := r.sets[id]
 	if !ok || len(set) == 0 {
 		return AgentProcess{}, false
@@ -128,6 +158,14 @@ func (r *Registry) Get(id string) (AgentProcess, bool) {
 
 // Replicas returns the ordered replica set for id (broker attached to each).
 func (r *Registry) Replicas(id string) ([]AgentProcess, bool) {
+	if pm, ok := r.pools[id]; ok {
+		reps := pm.Replicas()
+		out := make([]AgentProcess, len(reps))
+		for i := range reps {
+			out[i] = r.withBroker(reps[i])
+		}
+		return out, true
+	}
 	set, ok := r.sets[id]
 	if !ok {
 		return nil, false
@@ -142,6 +180,13 @@ func (r *Registry) Replicas(id string) ([]AgentProcess, bool) {
 // Replica returns one replica by index (broker attached). false if id unknown
 // or i out of range.
 func (r *Registry) Replica(id string, i int) (AgentProcess, bool) {
+	if pm, ok := r.pools[id]; ok {
+		ap, ok := pm.Replica(i)
+		if !ok {
+			return AgentProcess{}, false
+		}
+		return r.withBroker(ap), true
+	}
 	set, ok := r.sets[id]
 	if !ok || i < 0 || i >= len(set) {
 		return AgentProcess{}, false
@@ -152,6 +197,9 @@ func (r *Registry) Replica(id string, i int) (AgentProcess, bool) {
 // NextReplica returns the next replica index for a NEW session, round-robin via
 // an atomic per-agent counter. Blind to liveness. Returns 0 for unknown ids.
 func (r *Registry) NextReplica(id string) int {
+	if pm, ok := r.pools[id]; ok {
+		return pm.NextReplica()
+	}
 	set, ok := r.sets[id]
 	if !ok || len(set) == 0 {
 		return 0
@@ -159,6 +207,9 @@ func (r *Registry) NextReplica(id string) int {
 	n := r.rr[id].Add(1) - 1
 	return int(n % uint64(len(set)))
 }
+
+// Pools returns the autoscaled agents' managers, keyed by id. main.go starts each.
+func (r *Registry) Pools() map[string]*PoolManager { return r.pools }
 
 // List returns agent infos in config order.
 func (r *Registry) List() []AgentInfo {

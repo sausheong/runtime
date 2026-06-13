@@ -214,6 +214,28 @@ func (p *PoolManager) NextReplica() int {
 	return 0
 }
 
+// replica0Info returns the AgentProcess for index 0, derived from the base
+// template even when no replica is live yet (pre-Start). Used for agent-level
+// info (tenant/broker) and a health dial target. ok=false only if addr derive fails.
+func (p *PoolManager) replica0Info() (AgentProcess, bool) {
+	if ap, ok := p.Replica(0); ok {
+		return ap, true
+	}
+	ap, err := p.replicaProcess(0)
+	if err != nil {
+		return AgentProcess{}, false
+	}
+	return ap, true
+}
+
+// SetDeps injects the store, metrics, and readiness probe before Start. Must be
+// called before runPolicy/grow start spawning real replicas.
+func (p *PoolManager) SetDeps(st store.Store, m *obs.ControlMetrics, readyWait func(ctx context.Context, addr string) error) {
+	p.st = st
+	p.metrics = m
+	p.readyWait = readyWait
+}
+
 // topDraining reports whether the highest replica is marked draining (test helper).
 func (p *PoolManager) topDraining() bool {
 	p.mu.RLock()
