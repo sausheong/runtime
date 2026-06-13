@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strconv"
 	"sync"
+	"time"
 
 	"github.com/sausheong/runtime/internal/config"
 	"github.com/sausheong/runtime/internal/obs"
@@ -36,6 +37,16 @@ type PoolManager struct {
 	st      store.Store
 	metrics *obs.ControlMetrics
 
+	// clock yields monotonic-ish nanos (default timeNowNanos); injected in tests.
+	clock func() int64
+	// lastUp/lastDown: last up/down actuation (nanos). Owned by the policy
+	// goroutine (single-writer); not mutex-guarded.
+	lastUp    int64
+	lastDown  int64
+	upCD      int64 // scale-up cooldown (nanos)
+	downCD    int64 // scale-down cooldown (nanos)
+	pollEvery int64 // poll interval (nanos)
+
 	// startReplica spawns replica ap's Supervisor and returns a cancel that stops
 	// it. Production impl starts a Supervisor + waits for /healthz; tests inject a
 	// fake. Set by newPoolManager; overridable in tests.
@@ -60,8 +71,19 @@ func newPoolManager(agentID string, base AgentProcess, acfg config.AutoscaleConf
 		st: st, metrics: metrics,
 	}
 	pm.startReplica = pm.startReplicaProc
+	pm.clock = func() int64 { return timeNowNanos() }
+	// Cooldowns default to 0 (disabled): the policy loop already paces actuation
+	// by pollEvery, so each tick performs at most one step every poll interval.
+	// The cooldown gate stays wired through decideStep for callers that set a
+	// non-zero upCD/downCD to debounce further (e.g. from config in a later task);
+	// at 0 a back-to-back tick at the same clock instant is free to actuate again.
+	pm.upCD = 0
+	pm.downCD = 0
+	pm.pollEvery = int64(5 * 1e9)
 	return pm
 }
+
+func timeNowNanos() int64 { return time.Now().UnixNano() }
 
 // replicaProcess builds the AgentProcess for index i from the base template,
 // mirroring NewRegistry's per-replica construction.
@@ -249,6 +271,79 @@ func decideStep(acfg config.AutoscaleConfig, active, k int, topDraining, upReady
 		return stepDrain
 	default:
 		return stepNone
+	}
+}
+
+// tick runs one policy iteration: read load, decide, actuate at most one step,
+// always reap drained-to-zero top replicas, update gauges. Never scales on a
+// failed load read (holds current size).
+func (p *PoolManager) tick(ctx context.Context) {
+	active, err := p.st.ActiveSessionsByReplica(ctx, p.agentID)
+	if err != nil {
+		return
+	}
+	total := 0
+	for _, n := range active {
+		total += n
+	}
+	p.mu.RLock()
+	k := len(p.replicas)
+	topDrain := k > 0 && p.replicas[k-1].draining
+	p.mu.RUnlock()
+
+	now := p.clock()
+	upReady := now-p.lastUp >= p.upCD
+	downReady := now-p.lastDown >= p.downCD
+
+	switch decideStep(p.acfg, total, k, topDrain, upReady, downReady) {
+	case stepGrow:
+		if err := p.grow(ctx); err != nil {
+			p.metrics.AutoscaleEvent(p.agentID, obs.AutoscaleBlocked)
+		} else {
+			p.lastUp = now
+			p.metrics.AutoscaleEvent(p.agentID, obs.AutoscaleUp)
+		}
+	case stepUndrain:
+		p.undrainTop()
+		p.lastUp = now
+		p.metrics.AutoscaleEvent(p.agentID, obs.AutoscaleUndrain)
+	case stepDrain:
+		p.drainTop()
+		p.lastDown = now
+		p.metrics.AutoscaleEvent(p.agentID, obs.AutoscaleDown)
+	case stepBlocked:
+		p.metrics.AutoscaleEvent(p.agentID, obs.AutoscaleBlocked)
+	}
+
+	p.reapDrained(active)
+
+	p.mu.RLock()
+	cur := len(p.replicas)
+	p.mu.RUnlock()
+	target := p.acfg.TargetSessionsPerReplica
+	desired := (total + target - 1) / target
+	if desired < p.acfg.Min {
+		desired = p.acfg.Min
+	}
+	if desired > p.acfg.Max {
+		desired = p.acfg.Max
+	}
+	p.metrics.AutoscaleActive(p.agentID, total)
+	p.metrics.AutoscaleDesired(p.agentID, desired)
+	p.metrics.AutoscaleCurrent(p.agentID, cur)
+}
+
+// runPolicy ticks every pollEvery until ctx is cancelled.
+func (p *PoolManager) runPolicy(ctx context.Context) {
+	t := time.NewTicker(time.Duration(p.pollEvery))
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			p.tick(ctx)
+		}
 	}
 }
 

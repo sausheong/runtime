@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/sausheong/runtime/internal/config"
+	"github.com/sausheong/runtime/internal/store"
 )
 
 // newTestPM builds a PoolManager with an injected spawn that never starts a real
@@ -200,5 +201,69 @@ func TestDecideStep(t *testing.T) {
 					c.active, c.k, c.topDrain, c.upReady, c.downReady, got, c.want)
 			}
 		})
+	}
+}
+
+// fakeLoad is a store.Store stub returning a scripted active-by-replica map.
+type fakeLoad struct {
+	store.Store
+	mu  sync.Mutex
+	ret map[int]int
+	err error
+}
+
+func (f *fakeLoad) ActiveSessionsByReplica(_ context.Context, _ string) (map[int]int, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.err != nil {
+		return nil, f.err
+	}
+	m := map[int]int{}
+	for k, v := range f.ret {
+		m[k] = v
+	}
+	return m, nil
+}
+
+func TestTickGrowsOnLoad(t *testing.T) {
+	pm, _ := newTestPM(t, 1, 3, 2)
+	pm.st = &fakeLoad{ret: map[int]int{0: 5}}
+	ctx := context.Background()
+	if err := pm.grow(ctx); err != nil {
+		t.Fatal(err)
+	}
+	pm.clock = func() int64 { return 1 << 60 }
+	pm.tick(ctx)
+	if got := len(pm.Replicas()); got != 2 {
+		t.Fatalf("k=%d want 2 (one step per tick)", got)
+	}
+	pm.tick(ctx)
+	if got := len(pm.Replicas()); got != 3 {
+		t.Fatalf("k=%d want 3", got)
+	}
+}
+
+func TestTickFailedReadIsNoOp(t *testing.T) {
+	pm, _ := newTestPM(t, 1, 3, 2)
+	pm.st = &fakeLoad{err: fmt.Errorf("db down")}
+	ctx := context.Background()
+	_ = pm.grow(ctx)
+	pm.clock = func() int64 { return 1 << 60 }
+	pm.tick(ctx)
+	if got := len(pm.Replicas()); got != 1 {
+		t.Fatalf("k=%d want 1 (no scaling on failed read)", got)
+	}
+}
+
+func TestTickReapsDrainedTop(t *testing.T) {
+	pm, _ := newTestPM(t, 1, 3, 2)
+	ctx := context.Background()
+	_ = pm.grow(ctx)
+	pm.drainTop()
+	pm.st = &fakeLoad{ret: map[int]int{0: 1}}
+	pm.clock = func() int64 { return 1 << 60 }
+	pm.tick(ctx)
+	if got := len(pm.Replicas()); got != 1 {
+		t.Fatalf("k=%d want 1 (drained top reaped)", got)
 	}
 }
