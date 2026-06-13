@@ -6,7 +6,7 @@ type SessionRow struct {
 	ID         string
 	AgentID    string
 	WorkflowID string
-	Status     string // created | running | idle | recovering | closed | failed
+	Status     string // created | running | completed | error
 	TurnCount  int
 	Replica    int
 }
