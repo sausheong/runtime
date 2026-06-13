@@ -199,7 +199,11 @@ func Handler(reg *controlplane.Registry, oidc OIDCConfig, onb *Onboarding) http.
 	return mux
 }
 
-// sessionValue returns the session cookie value (CSRF binding input).
+// sessionValue returns the runtime_token cookie value, which the CSRF token is
+// bound to. Invariant: in identity mode an admin principal is derived FROM this
+// cookie, so a present principal implies a non-empty session value — i.e. the
+// CSRF token is never bound to the empty string for a real admin. (If that ever
+// changes, all admins would share the HMAC of "" and tokens would cross-forge.)
 func sessionValue(r *http.Request) string {
 	if c, err := r.Cookie("runtime_token"); err == nil {
 		return c.Value

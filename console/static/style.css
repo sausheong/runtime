@@ -4,3 +4,4 @@ table{border-collapse:collapse;width:100%}
 th,td{text-align:left;padding:.4rem .8rem;border-bottom:1px solid #eee}
 a{color:#2a6;text-decoration:none}
 pre{background:#f6f6f6;padding:1rem;border-radius:6px;white-space:pre-wrap}
+.flash { padding: 0.5rem 0.75rem; background: #eef6ff; border: 1px solid #b6d4fe; border-radius: 4px; font-family: monospace; }

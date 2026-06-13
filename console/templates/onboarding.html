@@ -32,14 +32,20 @@
 </table>
 <form method="post" action="/ui/onboarding/upstreams">
   <input type="hidden" name="csrf_token" value="{{.CSRF}}">
-  <input name="name" placeholder="orders" required>
-  <label><input type="radio" name="transport" value="http" checked> HTTP url</label>
-  <input name="url" placeholder="http://host/mcp">
-  <label><input type="radio" name="transport" value="openapi"> OpenAPI</label>
-  <input name="openapi" placeholder="http://host/openapi.yaml">
-  <input name="base_url" placeholder="base_url (openapi)">
-  <input name="cred_secret" placeholder="cred secret name (optional)">
-  <input name="cred_header" placeholder="cred header e.g. Authorization">
+  <p><input name="name" placeholder="upstream name (e.g. orders)" required></p>
+  <fieldset>
+    <legend>Transport — fill exactly one of the two below</legend>
+    <p><label>HTTP (Streamable MCP) URL<br>
+      <input name="url" placeholder="http://host/mcp" size="48"></label></p>
+    <p><label>OR OpenAPI spec (REST adapter)<br>
+      <input name="openapi" placeholder="http://host/openapi.yaml" size="48"></label>
+      <br><input name="base_url" placeholder="base_url override (optional, OpenAPI only)" size="48"></p>
+  </fieldset>
+  <fieldset>
+    <legend>Per-tenant credential (optional)</legend>
+    <p><input name="cred_secret" placeholder="credential secret name (e.g. ORDERS_API_KEY)"></p>
+    <p><input name="cred_header" placeholder="header to inject into (e.g. Authorization)"></p>
+  </fieldset>
   <button type="submit">Register upstream</button>
 </form>
 <p><a href="/ui">← back</a></p>
