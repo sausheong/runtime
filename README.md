@@ -235,6 +235,13 @@ agents:
 - `replicas` is **rejected on remote (`url:`) agents** — a remote agent's
   replica count is the remote operator's concern.
 
+> **Upgrading from a pre-pools deployment:** single-replica agents now run as DBOS
+> executor `<id>#0` rather than the old `local`. A *fresh* deploy needs nothing,
+> but a pre-A1 deployment with in-flight sessions should drain them before
+> upgrading (or remap `executor_id` in `dbos.workflow_status` from `local` to
+> `<id>#0`), since DBOS recovers only workflows stamped with the process's own
+> executor id.
+
 **Deferred:** autoscaling, graceful drain, changing replica count without a
 restart, health-aware (skip-down) new-session routing, and remote-agent pools.
 

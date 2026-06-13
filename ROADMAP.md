@@ -82,7 +82,9 @@ the use case demands. Recorded in the M3 README "Status, scope & limitations".
    exactly that replica's in-flight work (M1 durability, per replica) with no
    double execution. `listen_addr` is the base (replica i ⇒ base_port+i; derived
    ports validated unique + in range); `replicas:1`/omitted is byte-for-byte the
-   old behavior; `replicas` is rejected on remote agents. Per-replica supervision,
+   old behavior for routing/SSE/health — but note the DBOS executor id changes
+   from `local` to `<id>#0` (see upgrade-in-place migration below); `replicas` is
+   rejected on remote agents. Per-replica supervision,
    any-replica-healthy `/agents`, and per-replica metrics (a `replica` label on
    `agent_up`/`agent_reachable`/`agent_restarts`/`scrape_skips` and on the
    agent-exposed series). Owner-down ⇒ 503 until restart; round-robin is blind to
@@ -92,6 +94,12 @@ the use case demands. Recorded in the M3 README "Status, scope & limitations".
    replica durability with no double execution). Spec/plan:
    `docs/superpowers/{specs,plans}/2026-06-13-spine-a1-replica-pools*`. Remaining
    spine items 2-6 below unchanged.
+   **Upgrade-in-place migration:** a pre-A1 deployment stamped its workflows with
+   the default executor id `local`; A1 processes use `<id>#<i>`, so pre-existing
+   in-flight workflows are not auto-recovered after upgrade. Drain in-flight
+   sessions before upgrading, or run a one-time `UPDATE dbos.workflow_status SET
+   executor_id = '<agentid>#0' WHERE executor_id = 'local'` per single-replica
+   agent. Fresh deploys need nothing.
 2. **Autoscaling** — scale replicas by load. Depends on pools (A1).
 3. **Dynamic deploy** — `POST /agents` runtime registration + rollback; today
    agents come from `runtime.yaml` at startup. Tokens are config-only too.
