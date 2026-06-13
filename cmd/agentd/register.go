@@ -61,6 +61,16 @@ func fetchRegistration() {
 		log.Fatalf("agentd: decode registration response: %v", err)
 	}
 	for k, v := range out.Env {
+		// Skip empty-valued delta entries: for a REMOTE agent the control plane's
+		// envDelta emits RUNTIME_LISTEN_ADDR="" and DBOS__VMID="" (it sets BaseURL,
+		// not Addr/DBOSVMID). The handshake supplies DSN/identity/secrets; the bind
+		// address and executor id are operator/pod-provided infra config (the chart
+		// sets RUNTIME_LISTEN_ADDR=":8080" statically). Applying the empty value
+		// here would clobber that infra config and agentd could not bind, so an
+		// empty handshake value means "not provided" — leave the inherited var.
+		if v == "" {
+			continue
+		}
 		if err := os.Setenv(k, v); err != nil {
 			log.Fatalf("agentd: apply registration env %s: %v", k, err)
 		}
