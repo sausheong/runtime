@@ -128,15 +128,18 @@ func (p *PoolManager) grow(ctx context.Context) error {
 	return nil
 }
 
-// drainTop marks the highest replica draining (no-op if k==0 or already draining).
-func (p *PoolManager) drainTop() {
+// drainTop marks the highest replica draining and reports whether this call newly
+// transitioned it to draining. Returns false (no transition) when k==0 or the top
+// was already draining; true only when it newly marked the top draining.
+func (p *PoolManager) drainTop() bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	k := len(p.replicas)
 	if k == 0 || p.replicas[k-1].draining {
-		return
+		return false
 	}
 	p.replicas[k-1].draining = true
+	return true
 }
 
 // undrainTop clears the draining flag on the highest replica (un-drain fast path).
@@ -334,9 +337,11 @@ func (p *PoolManager) tick(ctx context.Context) {
 	upReady := now-p.lastUp >= p.upCD
 	downReady := now-p.lastDown >= p.downCD
 
+	newlyDrained := false
 	switch decideStep(p.acfg, total, k, topDrain, upReady, downReady) {
 	case stepGrow:
 		if err := p.grow(ctx); err != nil {
+			p.lastUp = now
 			p.metrics.AutoscaleEvent(p.agentID, obs.AutoscaleBlocked)
 		} else {
 			p.lastUp = now
@@ -347,14 +352,25 @@ func (p *PoolManager) tick(ctx context.Context) {
 		p.lastUp = now
 		p.metrics.AutoscaleEvent(p.agentID, obs.AutoscaleUndrain)
 	case stepDrain:
-		p.drainTop()
+		newlyDrained = p.drainTop()
 		p.lastDown = now
 		p.metrics.AutoscaleEvent(p.agentID, obs.AutoscaleDown)
 	case stepBlocked:
 		p.metrics.AutoscaleEvent(p.agentID, obs.AutoscaleBlocked)
 	}
 
-	p.reapDrained(active)
+	// Never reap a replica in the same tick it was newly drained: the load
+	// snapshot above predates the drain mark, so a session routed to the top
+	// between snapshot and drain would be invisible here and could be reaped out
+	// from under a live durable workflow. Deferring the reap to a later tick
+	// re-reads the snapshot AFTER the drain (and after NextReplica has been
+	// skipping the draining replica under lock), closing that window. (A residual
+	// micro-window remains only if a session is routed to the top, then its row
+	// commit lags more than a full poll interval past the next snapshot — far
+	// outside normal operation.)
+	if !newlyDrained {
+		p.reapDrained(active)
+	}
 
 	p.mu.RLock()
 	cur := len(p.replicas)

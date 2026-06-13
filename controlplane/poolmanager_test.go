@@ -291,3 +291,31 @@ func TestTickReapsDrainedTop(t *testing.T) {
 		t.Fatalf("k=%d want 1 (drained top reaped)", got)
 	}
 }
+
+func TestTickDrainAndReapSeparatedByTick(t *testing.T) {
+	pm, _ := newTestPM(t, 1, 3, 2)
+	ctx := context.Background()
+	if err := pm.grow(ctx); err != nil { // k=1
+		t.Fatal(err)
+	}
+	if err := pm.grow(ctx); err != nil { // k=2 (pool starts empty; need two grows)
+		t.Fatal(err)
+	}
+	// Low load (total=1 over target=2 ⇒ desired=1 < k=2) so the top (index 1),
+	// which has 0 active, should be drained. Constant clock ⇒ cooldowns elapsed.
+	pm.st = &fakeLoad{ret: map[int]int{0: 1}} // index 1 absent ⇒ 0 active
+	pm.clock = func() int64 { return 1 << 60 }
+
+	pm.tick(ctx) // newly drains index 1 this tick ⇒ must NOT reap it yet
+	if got := len(pm.Replicas()); got != 2 {
+		t.Fatalf("after drain tick k=%d, want 2 (newly-drained top must not be reaped same tick)", got)
+	}
+	if !pm.topDraining() {
+		t.Fatal("top should be draining after the drain tick")
+	}
+
+	pm.tick(ctx) // top already draining ⇒ drainTop no-op ⇒ reapDrained runs ⇒ reap
+	if got := len(pm.Replicas()); got != 1 {
+		t.Fatalf("after second tick k=%d, want 1 (prior-tick-drained top reaped)", got)
+	}
+}
