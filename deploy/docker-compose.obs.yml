@@ -1,7 +1,10 @@
-# Observability overlay: Prometheus + Grafana with a provisioned dashboard.
+# Observability overlay: Prometheus + Grafana + OTel Collector + Jaeger.
 # Usage:
 #   docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.obs.yml up -d
 # Grafana: http://localhost:3000 (anonymous viewer enabled), Prometheus: http://localhost:9090
+# Jaeger UI (traces): http://localhost:16686
+# Host-run binaries export traces by setting OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318
+# (the OTel Collector receives OTLP/HTTP on :4318 and forwards to Jaeger).
 services:
   prometheus:
     image: prom/prometheus:latest
@@ -25,3 +28,20 @@ services:
       - "3000:3000"
     depends_on:
       - prometheus
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:latest
+    command: ["--config=/etc/otel/collector-config.yaml"]
+    volumes:
+      - ./otel/collector-config.yaml:/etc/otel/collector-config.yaml:ro
+    ports:
+      - "4318:4318"   # OTLP HTTP (host-run binaries export here)
+    depends_on:
+      - jaeger
+
+  jaeger:
+    image: jaegertracing/all-in-one:latest
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+    ports:
+      - "16686:16686"  # Jaeger UI

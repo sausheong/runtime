@@ -227,16 +227,24 @@ func (h *Handler) toolHandler(builtFor string, t tool.Tool, forwardTenant bool) 
 		}
 		serverName, _, _ := strings.Cut(t.Name(), "__") // sound: "__" banned in server names
 		start := time.Now()
-		res, err := t.Execute(ctx, args)
+		uctx, uspan := obs.StartSpan(ctx, "gateway.upstream",
+			obs.GatewayServerAttr(serverName), obs.GatewayToolAttr(t.Name()))
+		res, err := t.Execute(uctx, args)
 		dur := time.Since(start)
 		if err != nil {
+			uspan.SetAttributes(obs.OutcomeAttr(obs.OutcomeError))
+			uspan.End()
 			h.Metrics.GatewayCall(serverName, t.Name(), obs.OutcomeError, dur)
 			return errResult(err.Error()), nil
 		}
 		if res.Error != "" {
+			uspan.SetAttributes(obs.OutcomeAttr(obs.OutcomeError))
+			uspan.End()
 			h.Metrics.GatewayCall(serverName, t.Name(), obs.OutcomeError, dur)
 			return errResult(res.Error), nil
 		}
+		uspan.SetAttributes(obs.OutcomeAttr(obs.OutcomeOK))
+		uspan.End()
 		h.Metrics.GatewayCall(serverName, t.Name(), obs.OutcomeOK, dur)
 		out := &sdk.CallToolResult{}
 		// Emit the text part when there is output, or when there are no

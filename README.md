@@ -1031,10 +1031,42 @@ full-stack compose (`deploy/docker-compose.full.yml`, `runtimed` in Docker),
 edit `deploy/prometheus.yml` to target the `runtimed` service name instead of
 `host.docker.internal`.
 
+### Distributed tracing (OpenTelemetry)
+
+Tracing is **off by default**: with no OTLP endpoint configured the platform
+installs a no-op tracer, so spans cost nothing. Enable it by pointing the
+binaries at an OTLP/HTTP collector.
+
+| Env var | Purpose |
+|---|---|
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | OTLP/HTTP base URL (e.g. `http://localhost:4318`). Its **presence enables tracing**. |
+| `RUNTIME_TRACING_ENABLED` | Explicit `1`/`0` override (force on or off regardless of the endpoint). |
+| `RUNTIME_TRACE_SAMPLE_RATIO` | Parent-based sampling ratio, `0.0`–`1.0` (default `1.0`). |
+
+The obs overlay bundles an **OTel Collector + Jaeger**:
+
+```bash
+docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.obs.yml up -d
+# Host-run runtimed/agentd export to http://localhost:4318
+# Jaeger UI: http://localhost:16686
+```
+
+Then run `runtimed`/`agentd` on the host with
+`OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318`.
+
+**Trace shape.** A request produces **correlated traces** across `runtimed`
+and the per-agent `agentd` service. The synchronous HTTP path (edge →
+reverse-proxy → agentd handler) forms one trace via W3C `traceparent`. The
+agent's durable session workflow (`session.workflow` → `agent.turn` →
+`tool.call`) runs as a **separate, correlated trace** — joined to the request
+by the `request.id` span attribute (equal to the `X-Request-ID` echoed on the
+response), since a durable workflow outlives the request that started it. So a
+single request is **two correlated traces joined by `request.id`**, not one
+nested tree. Spans carry IDs and structural attributes only
+(agent/session/turn/tool/outcome) — no message content or tool arguments.
+
 ### Limitations
 
-- **No tracing yet** — request ids are the correlation seed; OTel spans/OTLP
-  push are an Observability M2 candidate.
 - **sandboxd internals are not directly instrumented** — sandbox activity is
   visible only as gateway tool-call series (`server="sandbox"`); per-container
   detail belongs with Sandboxes M2.

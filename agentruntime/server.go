@@ -8,12 +8,15 @@ import (
 	"strconv"
 
 	"github.com/sausheong/runtime/internal/obs"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 )
 
-// handler is the full agentd HTTP stack: RequestID outermost (it mutates
-// r.Header, so nothing may observe the request first), then an access log for
-// every request except the probe-noise paths /healthz and /metrics, then the
-// route mux.
+// handler is the full agentd HTTP stack, outermost to innermost:
+// RequestID (mutates r.Header, so nothing may observe the request first) →
+// requireBearer (only when an auth token is set; a 401 short-circuits before
+// any span) → otelhttp server span (continues an inbound traceparent, named by
+// matched route) → access log (skips the probe paths /healthz and /metrics) →
+// the route mux.
 func (m *Manager) handler() http.Handler {
 	mux := m.newMux()
 	logged := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -26,8 +29,18 @@ func (m *Manager) handler() http.Handler {
 		mux.ServeHTTP(w, r)
 	})
 	var h http.Handler = logged
+	// otelhttp server span: continues an inbound traceparent (parent) so the
+	// agentd work nests under runtimed's trace. Named by route, not raw path.
+	h = otelhttp.NewHandler(h, "agentd.request",
+		otelhttp.WithSpanNameFormatter(func(_ string, r *http.Request) string {
+			if r.Pattern != "" {
+				return r.Method + " " + r.Pattern
+			}
+			return r.Method
+		}),
+	)
 	if m.authToken != "" {
-		h = requireBearer(m.authToken, logged)
+		h = requireBearer(m.authToken, h)
 	}
 	return obs.RequestID(h)
 }

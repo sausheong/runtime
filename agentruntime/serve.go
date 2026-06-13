@@ -121,6 +121,14 @@ func (m *Manager) sessionWorkflow(ctx dbos.DBOSContext, in turnInput) (string, e
 	// identical state (RunTurn does not run on replay).
 	canonical := session.NewSession(m.agentID, wfID)
 
+	// Live-execution span only (NOT checkpointed): on DBOS replay the workflow
+	// body re-runs but completed turn STEPS are skipped, so spans created here
+	// and inside the step closure reflect only live work. A span is a live
+	// concern, never durable state.
+	_, wspan := obs.StartSpan(ctx, "session.workflow",
+		obs.AgentAttr(m.agentID), obs.SessionAttr(wfID), obs.RequestIDAttr(in.RequestID))
+	defer wspan.End()
+
 	// Status/turn writes below run in the deterministic workflow body, so they
 	// re-run on replay. Safe: SetSessionStatus is last-write-wins and
 	// SetTurnCount sets the deterministic loop index (not an increment), so
@@ -188,15 +196,29 @@ func (m *Manager) sessionWorkflow(ctx dbos.DBOSContext, in turnInput) (string, e
 			// function), so everything here executes once per real turn —
 			// at-least-once, duplicated only if a crash lands between RunTurn
 			// completing and the step checkpoint committing.
+			turnCtx, tspan := obs.StartSpan(stepCtx, "agent.turn", obs.TurnAttr(turn))
 			start := time.Now()
 			tr, terr := rt.RunTurn(stepCtx, userMsg, images, nil) // headless (emit=nil)
 			elapsed := time.Since(start)
 			if terr != nil {
+				tspan.SetAttributes(obs.OutcomeAttr("error"))
+				tspan.End()
 				m.observeTurn("error", elapsed, nil, nil)
 				slog.Warn("turn failed", "agent", m.agentID, "session", wfID,
 					"turn", turn, "request_id", in.RequestID, "err", terr)
 				return turnOutput{}, terr
 			}
+			tspan.SetAttributes(obs.OutcomeAttr(tr.StopReason))
+			for _, e := range tr.Entries {
+				if e.Type == session.EntryTypeToolCall {
+					var td session.ToolCallData
+					if err := json.Unmarshal(e.Data, &td); err == nil && td.Tool != "" {
+						_, toolSpan := obs.StartSpan(turnCtx, "tool.call", obs.ToolAttr(td.Tool))
+						toolSpan.End()
+					}
+				}
+			}
+			tspan.End()
 			m.observeTurn(tr.StopReason, elapsed, tr.Usage, tr.Entries)
 			slog.Info("turn",
 				"agent", m.agentID,
@@ -270,6 +292,16 @@ func Serve(ctx context.Context, cfg Config) error {
 	if listenAddr == "" {
 		return errors.New("agentruntime: RUNTIME_LISTEN_ADDR is not set")
 	}
+
+	traceShutdown, terr := obs.InitTracing(ctx, cfg.Spec.ID)
+	if terr != nil {
+		slog.Warn("agentd tracing init failed; continuing without traces", "err", terr)
+	}
+	defer func() {
+		fctx, fcancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer fcancel()
+		_ = traceShutdown(fctx)
+	}()
 
 	st, err := store.NewPGStore(ctx, pgDSN)
 	if err != nil {

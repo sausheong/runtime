@@ -23,8 +23,23 @@ import (
 	"github.com/sausheong/runtime/internal/identity"
 	"github.com/sausheong/runtime/internal/memory"
 	"github.com/sausheong/runtime/internal/obs"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"golang.org/x/oauth2"
 )
+
+// tracedHandler wraps h with an otelhttp server span named by matched route
+// (never the raw path — cardinality-safe). Placed inside RequestID so the id is
+// already in context; transparent when tracing is off (no-op provider).
+func tracedHandler(h http.Handler) http.Handler {
+	return otelhttp.NewHandler(h, "runtimed.request",
+		otelhttp.WithSpanNameFormatter(func(_ string, r *http.Request) string {
+			if r.Pattern != "" {
+				return r.Method + " " + r.Pattern
+			}
+			return r.Method
+		}),
+	)
+}
 
 func main() {
 	setupLogging()
@@ -48,6 +63,16 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+
+	traceShutdown, terr := obs.InitTracing(ctx, "runtimed")
+	if terr != nil {
+		slog.Warn("tracing init failed; continuing without traces", "err", terr)
+	}
+	defer func() {
+		sctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = traceShutdown(sctx)
+	}()
 
 	// Gateway (B1 M1): build the upstream manager when configured. PrincipalFor
 	// is wired below once we know whether identity is on (open vs enforced).
@@ -163,7 +188,7 @@ func main() {
 		if gwHandler != nil {
 			gwHandler.PrincipalFor = gateway.OpenMode
 		}
-		handler = obs.RequestID(accessLog(buildRoot(reg, nil, console.OIDCConfig{}, secretAdmin, gwHandler, cm), cm)) // no /admin in open mode
+		handler = obs.RequestID(tracedHandler(accessLog(buildRoot(reg, nil, console.OIDCConfig{}, secretAdmin, gwHandler, cm), cm))) // no /admin in open mode
 	} else {
 		oidcVerifier, verr := identity.NewOIDCVerifier(ctx, oidcIssuer, oidcClientID)
 		if verr != nil {
@@ -205,9 +230,9 @@ func main() {
 			gwHandler.PrincipalFor = controlplane.PrincipalFromContext
 		}
 		root := buildRoot(reg, idStore, consoleOIDC, secretAdmin, gwHandler, cm) // mounts /admin since the store is non-nil
-		handler = obs.RequestID(controlplane.IdentityMiddleware(accessLog(root, cm), authr, azr, func(status int) {
+		handler = obs.RequestID(tracedHandler(controlplane.IdentityMiddleware(accessLog(root, cm), authr, azr, func(status int) {
 			cm.AuthRejected(status)
-		}))
+		})))
 		slog.Info("identity enabled", "oidc", oidcIssuer != "", "bootstrap", bootstrapKey != "", "legacy_tokens", len(legacyTokens))
 	}
 
