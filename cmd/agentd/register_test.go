@@ -9,7 +9,7 @@ import (
 )
 
 func TestOrdinalFromHostname(t *testing.T) {
-	cases := map[string]int{"support-0": 0, "support-3": 3, "x-y-12": 12, "nohyphen": 0, "": 0}
+	cases := map[string]int{"support-0": 0, "support-3": 3, "x-y-12": 12, "nohyphen": 0, "": 0, "x-": 0, "support-x": 0}
 	for host, want := range cases {
 		if got := ordinalFromHostname(host); got != want {
 			t.Fatalf("ordinalFromHostname(%q)=%d want %d", host, got, want)
