@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"math/rand/v2"
 	"strings"
@@ -27,7 +28,8 @@ type UpstreamStatus struct {
 
 // upstream is one configured server plus its live connection state.
 type upstream struct {
-	cfg config.GatewayServer
+	cfg    config.GatewayServer
+	cancel context.CancelFunc // per-upstream; cancels just this supervise loop
 
 	mu          sync.Mutex
 	conn        upstreamConn
@@ -40,14 +42,18 @@ type upstream struct {
 // goroutine per upstream (connect → on failure retry with capped backoff).
 // All read methods are safe for concurrent use.
 type Manager struct {
-	ups        []*upstream
+	mu  sync.Mutex // guards ups + started/baseCtx; each upstream's own mu guards its conn state
+	ups []*upstream
+
 	dial       dialFunc
 	minBackoff time.Duration
 	maxBackoff time.Duration
 
 	generation atomic.Uint64
 	wg         sync.WaitGroup
-	cancel     context.CancelFunc // set by Start; called by Close
+	baseCtx    context.Context    // set by Start; parent for per-upstream contexts
+	started    bool               // true after Start
+	cancel     context.CancelFunc // cancels all supervise loops (Close)
 
 	// Metrics (nil-safe) tracks upstream connection state. Set before Start.
 	Metrics *obs.ControlMetrics
@@ -77,15 +83,91 @@ func NewManager(servers []config.GatewayServer, opts ...Option) *Manager {
 	return m
 }
 
-// Start launches the supervision loops. Non-blocking; safe to call once.
-// The loops run until the given context is cancelled or Close is called
-// (Start derives its own cancellable context so Close never deadlocks).
+// Start launches supervision loops for all current upstreams and records the
+// base context so upstreams added later (Add) start under the same lifetime.
+// Non-blocking; safe to call once. The loops run until the given context is
+// cancelled or Close is called (Start derives its own cancellable context so
+// Close never deadlocks).
 func (m *Manager) Start(ctx context.Context) {
 	ctx, m.cancel = context.WithCancel(ctx)
-	for _, u := range m.ups {
-		m.wg.Add(1)
-		go m.supervise(ctx, u)
+	m.mu.Lock()
+	m.baseCtx = ctx
+	m.started = true
+	ups := append([]*upstream(nil), m.ups...)
+	m.mu.Unlock()
+	for _, u := range ups {
+		m.launch(ctx, u)
 	}
+}
+
+// launch starts one supervise goroutine under a per-upstream child context so
+// Remove can cancel exactly that upstream.
+func (m *Manager) launch(parent context.Context, u *upstream) {
+	uctx, cancel := context.WithCancel(parent)
+	u.cancel = cancel
+	m.wg.Add(1)
+	go m.supervise(uctx, u)
+}
+
+// snapshot returns a copy of the upstream slice for lock-free iteration by
+// readers. The upstreams themselves are shared (their own mu guards state).
+func (m *Manager) snapshot() []*upstream {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]*upstream(nil), m.ups...)
+}
+
+// Add registers a new upstream at runtime. Rejects a duplicate name (including
+// file-config upstreams). If Start has run, the upstream's supervise loop begins
+// immediately; otherwise it starts when Start is called.
+func (m *Manager) Add(cfg config.GatewayServer) error {
+	m.mu.Lock()
+	for _, u := range m.ups {
+		if u.cfg.Name == cfg.Name {
+			m.mu.Unlock()
+			return fmt.Errorf("gateway: upstream %q already exists", cfg.Name)
+		}
+	}
+	u := &upstream{cfg: cfg}
+	m.ups = append(m.ups, u)
+	started, base := m.started, m.baseCtx
+	m.mu.Unlock()
+	if started {
+		m.launch(base, u)
+	}
+	m.generation.Add(1)
+	return nil
+}
+
+// Remove stops and detaches the upstream with the given name (idempotent).
+func (m *Manager) Remove(name string) {
+	m.mu.Lock()
+	idx := -1
+	for i, u := range m.ups {
+		if u.cfg.Name == name {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		m.mu.Unlock()
+		return
+	}
+	u := m.ups[idx]
+	m.ups = append(m.ups[:idx:idx], m.ups[idx+1:]...)
+	m.mu.Unlock()
+
+	if u.cancel != nil {
+		u.cancel()
+	}
+	u.mu.Lock()
+	conn := u.conn
+	u.conn, u.tools = nil, nil
+	u.mu.Unlock()
+	if conn != nil {
+		_ = conn.Close()
+	}
+	m.generation.Add(1)
 }
 
 // pingTimeout bounds each supervise-loop health ping. 5s is generous for a
@@ -194,7 +276,7 @@ func (m *Manager) Close() {
 		m.cancel()
 	}
 	m.wg.Wait()
-	for _, u := range m.ups {
+	for _, u := range m.snapshot() {
 		u.mu.Lock()
 		conn := u.conn
 		u.conn = nil
@@ -236,7 +318,7 @@ func visibleTo(s config.GatewayServer, tenant string) bool {
 // ToolsFor returns the live tools visible to tenant.
 func (m *Manager) ToolsFor(tenant string) []tool.Tool {
 	var out []tool.Tool
-	for _, u := range m.ups {
+	for _, u := range m.snapshot() {
 		if !visibleTo(u.cfg, tenant) {
 			continue
 		}
@@ -258,7 +340,7 @@ func (m *Manager) ForwardsTenant(toolName string) bool {
 	if !ok {
 		return false
 	}
-	for _, u := range m.ups {
+	for _, u := range m.snapshot() {
 		if u.cfg.Name == srv {
 			return u.cfg.ForwardTenant
 		}
@@ -270,7 +352,7 @@ func (m *Manager) ForwardsTenant(toolName string) bool {
 // otherwise only upstreams visible to that tenant.
 func (m *Manager) Status(tenant string) []UpstreamStatus {
 	var out []UpstreamStatus
-	for _, u := range m.ups {
+	for _, u := range m.snapshot() {
 		if !visibleTo(u.cfg, tenant) {
 			continue
 		}
