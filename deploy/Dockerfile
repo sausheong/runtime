@@ -11,7 +11,8 @@ RUN go build -o /out/runtimed   ./cmd/runtimed \
  && go build -o /out/agentd     ./cmd/agentd \
  && go build -o /out/sandboxd   ./cmd/sandboxd \
  && go build -o /out/browserd   ./cmd/browserd \
- && go build -o /out/runtimectl ./cmd/runtimectl
+ && go build -o /out/runtimectl ./cmd/runtimectl \
+ && go build -o /out/v1-probe   ./cmd/v1-probe
 
 FROM debian:bookworm-slim
 ARG VERSION=dev
@@ -29,6 +30,7 @@ COPY --from=build /out/agentd     /app/agentd
 COPY --from=build /out/sandboxd   /app/sandboxd
 COPY --from=build /out/browserd   /app/browserd
 COPY --from=build /out/runtimectl /app/runtimectl
+COPY --from=build /out/v1-probe   /app/v1-probe
 COPY runtime/runtime.yaml /app/runtime.yaml
 ENV RUNTIME_AGENTD_BIN=/app/agentd \
     PATH=/app:$PATH
