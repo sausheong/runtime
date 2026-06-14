@@ -1,0 +1,27 @@
+# Turnkey-compose agent registry. Identity is enabled via env in
+# docker-compose.yml (RUNTIME_ADMIN_BOOTSTRAP + RUNTIME_SECRETS_KEYS/PRIMARY).
+# Two scripted agents need no LLM key, so the stack runs with zero external
+# accounts. The code interpreter and browser ship as stdio gateway upstreams
+# (runtimed spawns /app/sandboxd and /app/browserd; each launches sibling
+# containers on the mounted Docker socket).
+agents:
+  - id: support
+    name: Support Agent
+    model: test/scripted
+    listen_addr: 127.0.0.1:8101
+    memory: true        # durable per-tenant memory (semantic recall via embedder)
+    gateway: true       # sees federated gateway tools (sandbox, browser, upstreams)
+  - id: research
+    name: Research Agent
+    model: test/scripted
+    listen_addr: 127.0.0.1:8102
+    gateway: true
+
+gateway:
+  servers:
+    - name: sandbox
+      command: /app/sandboxd
+      forward_tenant: true      # gateway injects the caller's tenant
+    - name: browser
+      command: /app/browserd
+      forward_tenant: true
