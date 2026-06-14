@@ -20,6 +20,7 @@ no lost work, no duplicated committed tool calls.
 - [Architecture](#architecture)
 - [Concepts](#concepts)
 - [Quick start](#quick-start)
+- [v1.0 — turnkey self-host](#v10--turnkey-self-host)
 - [Configuring agents (`runtime.yaml`)](#configuring-agents-runtimeyaml)
 - [Authentication & multi-tenancy](#authentication--multi-tenancy)
 - [MCP Gateway](#mcp-gateway)
@@ -163,6 +164,23 @@ RUNTIME_AGENTD_BIN=./agentd ./runtimed
 
 ./runtimectl logs --agent support ses-…   # replay a session's events
 ```
+
+---
+
+## v1.0 — turnkey self-host
+
+For a one-command, all-six-pillars deployment on a single host (no
+build-from-source dance), follow the turnkey guides:
+
+- **[Quickstart](docs/quickstart.md)** — clone both repos, `make compose-init`,
+  `docker compose build`, `docker compose up`.
+- **[Operator guide](docs/operator-guide.md)** — bootstrap login, ports,
+  persistence/reset, security posture, observability.
+- **[Tenant guide](docs/tenant-guide.md)** — onboard a tenant in the console UI
+  and exercise all six pillars.
+
+The capstone proof `deploy/compose/v1-proof.sh` brings the stack up and asserts
+every pillar end-to-end.
 
 ---
 
