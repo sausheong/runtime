@@ -1,10 +1,14 @@
 #!/usr/bin/env bash
-# M2 capstone: bring up the turnkey stack and assert all six pillars' substrate,
-# plus persistence and no-secrets-in-logs. Run from anywhere; resolves its own dir.
+# v1.0 capstone proof — brings up the turnkey stack and asserts ALL SIX PILLARS
+# end-to-end, plus persistence and no-secrets-in-logs. Run from anywhere;
+# resolves its own dir.
 # Requires Docker + these host ports free: 8080 5432 9090 3000 16686 4318 9000.
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/../.." && pwd)"   # repo root (/Users/sausheong/projects/runtime)
+# v1-probe does the MCP-session calls bash can't (gateway tool call, sandbox
+# exec). Run from the host against localhost:8080 via `go run`.
+probe() { ( cd "$ROOT" && go run ./cmd/v1-probe "$@" ); }
 cd "$HERE"
 
 fails=0
@@ -94,9 +98,15 @@ if curl -sf -H "Authorization: Bearer $RUNTIME_ADMIN_BOOTSTRAP" -X POST localhos
 ( cd "$ROOT" && RUNTIME_DEMO_ADDR=:9000 go run ./examples/rest-demo >/tmp/m2-restdemo.log 2>&1 & echo $! > /tmp/m2-restdemo.pid )
 DEMO_PID="$(cat /tmp/m2-restdemo.pid 2>/dev/null || true)"
 sleep 4
+# Per-tenant upstream credential (broker → injected into the upstream headers at
+# dial). rest-demo accepts any header, so this stays deterministic while
+# exercising the credential-at-dial path on the compose stack.
+curl -sf -H "Authorization: Bearer $RUNTIME_ADMIN_BOOTSTRAP" -X POST localhost:8080/admin/secrets \
+  -d '{"tenant":"smoke","name":"ORDERS_API_KEY","value":"demo-secret"}' >/dev/null 2>&1 \
+  && pass "tenant credential set" || fail "set credential failed"
 if curl -sf -H "Authorization: Bearer $RUNTIME_ADMIN_BOOTSTRAP" -X POST localhost:8080/admin/upstreams \
-   -d '{"tenant":"smoke","name":"orders","transport":"openapi","openapi":"http://host.docker.internal:9000/openapi.yaml"}' >/dev/null 2>&1; then
-  pass "openapi upstream registered"; else fail "upstream register failed"; fi
+   -d '{"tenant":"smoke","name":"orders","transport":"openapi","openapi":"http://host.docker.internal:9000/openapi.yaml","cred_secret":"ORDERS_API_KEY","cred_header":"Authorization"}' >/dev/null 2>&1; then
+  pass "openapi upstream registered (with credential)"; else fail "upstream register failed"; fi
 # Live upstream state lives on /gateway/status ([]UpstreamStatus with a `state`
 # field), NOT /admin/upstreams (which returns the DB rows, no live state). The
 # bootstrap principal is a superuser, so /gateway/status returns all tenants.
@@ -109,10 +119,46 @@ for i in $(seq 1 20); do
 done
 [ "$up" = 1 ] && pass "gateway upstream up" || fail "upstream never reached up"
 
+# Gateway: discovery + REST-adapter tool CALL through /gateway/mcp (MCP session
+# via v1-probe; agent_keys[default]=bootstrap).
+probe list --base http://localhost:8080 --key "$RUNTIME_ADMIN_BOOTSTRAP" \
+  && pass "gateway: orders(REST)+sandbox(MCP) federated" || fail "gateway tool discovery failed"
+probe call-rest --base http://localhost:8080 --key "$RUNTIME_ADMIN_BOOTSTRAP" \
+  && pass "gateway: REST-adapter tool call returned data" || fail "gateway REST call failed"
+
+# Sandboxes: real container launch + code exec via the mounted docker.sock.
+probe sandbox --base http://localhost:8080 --key "$RUNTIME_ADMIN_BOOTSTRAP" \
+  && pass "sandbox: execute_code returned 42" || fail "sandbox exec failed"
+
+# Identity: cross-tenant refusal. A SECOND tenant's operator key must not see
+# tenant smoke's upstream on /gateway/status.
+curl -sf -H "Authorization: Bearer $RUNTIME_ADMIN_BOOTSTRAP" -X POST localhost:8080/admin/tenants \
+  -d '{"id":"other","name":"Other"}' >/dev/null 2>&1 || true
+otherkey="$(curl -s -H "Authorization: Bearer $RUNTIME_ADMIN_BOOTSTRAP" -X POST localhost:8080/admin/keys \
+  -d '{"tenant":"other","role":"operator","label":"proof"}' | python3 -c "import sys,json;print(json.load(sys.stdin).get('plaintext',''))" 2>/dev/null || echo "")"
+if [ -n "$otherkey" ]; then
+  seen="$(curl -s -H "Authorization: Bearer $otherkey" localhost:8080/gateway/status \
+    | python3 -c "import sys,json;d=json.load(sys.stdin);L=d if isinstance(d,list) else d.get('upstreams',[]);print(sum(1 for u in L if u.get('name')=='orders'))" 2>/dev/null || echo "?")"
+  [ "$seen" = 0 ] && pass "cross-tenant: other tenant cannot see orders upstream" || fail "cross-tenant leak (other saw orders: $seen)"
+else
+  fail "could not mint second-tenant key for cross-tenant check"
+fi
+
 # 7. Observability.
 curl -sf localhost:3000/api/health >/dev/null && pass "grafana healthy" || fail "grafana down"
 curl -sf localhost:16686/ >/dev/null && pass "jaeger UI reachable" || fail "jaeger down"
 if curl -s "localhost:9090/api/v1/targets" | grep -q runtimed; then pass "prometheus scrapes runtimed"; else fail "runtimed not a prometheus target"; fi
+
+# Observability: a trace reached Jaeger (runtimed exports OTLP → collector →
+# jaeger). Service name is exactly "runtimed".
+sleep 3
+svc="$(curl -s 'http://localhost:16686/api/services' | python3 -c "import sys,json;print(','.join(json.load(sys.stdin).get('data') or []))" 2>/dev/null || echo "")"
+if echo "$svc" | grep -qi runtimed; then
+  pass "jaeger has the runtimed service (traces flowing)"
+else
+  tr="$(curl -s 'http://localhost:16686/api/traces?service=runtimed&limit=1' | python3 -c "import sys,json;print(len(json.load(sys.stdin).get('data') or []))" 2>/dev/null || echo 0)"
+  { [ "$tr" -ge 1 ] 2>/dev/null && pass "jaeger has >=1 runtimed trace"; } || fail "no runtimed trace in jaeger (services=$svc)"
+fi
 
 # 8. Persistence across down/up (no -v).
 docker compose exec -T postgres psql -U runtime -d runtime -c \
@@ -131,4 +177,4 @@ if grep -qF "$key_b64" /tmp/m2-smoke-logs.txt; then fail "AES key leaked into lo
 
 # Summary.
 echo "----------------------------------------"
-if [ "$fails" -eq 0 ]; then echo "ALL PASS — M2 smoke green"; else echo "$fails CHECK(S) FAILED"; exit 1; fi
+if [ "$fails" -eq 0 ]; then echo "ALL PASS — v1.0 proof green"; else echo "$fails CHECK(S) FAILED"; exit 1; fi
