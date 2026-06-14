@@ -64,6 +64,7 @@ services:
       RUNTIME_SANDBOX_IMAGE: runtime-sandbox:latest
       RUNTIME_BROWSER_IMAGE: runtime-browser:latest
       RUNTIME_BROWSER_CDP_DIAL_HOST: host.docker.internal
+      RUNTIME_BROWSER_CDP_PUBLISH_HOST: "0.0.0.0"
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
     volumes:
       - ./runtime.compose.yaml:/app/runtime.compose.yaml:ro

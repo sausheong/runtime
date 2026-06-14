@@ -39,3 +39,14 @@ func TestCDPDialHost(t *testing.T) {
 		t.Errorf("override cdpDialHost = %q, want host.docker.internal", got)
 	}
 }
+
+func TestCDPPublishHost(t *testing.T) {
+	t.Setenv("RUNTIME_BROWSER_CDP_PUBLISH_HOST", "")
+	if got := cdpPublishHost(); got != "127.0.0.1" {
+		t.Errorf("default cdpPublishHost = %q, want 127.0.0.1", got)
+	}
+	t.Setenv("RUNTIME_BROWSER_CDP_PUBLISH_HOST", "0.0.0.0")
+	if got := cdpPublishHost(); got != "0.0.0.0" {
+		t.Errorf("override cdpPublishHost = %q, want 0.0.0.0", got)
+	}
+}

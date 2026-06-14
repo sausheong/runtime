@@ -92,6 +92,23 @@ func cdpDialHost() string {
 	return "127.0.0.1"
 }
 
+// cdpPublishHost is the host interface the browser container's CDP port is
+// published on. Default 127.0.0.1 (loopback-only — safest; correct when
+// browserd and the engine share a host). When browserd runs INSIDE a container
+// and dials the published port via host.docker.internal (the bridge gateway),
+// the port must be published on a bridge-reachable interface — set
+// RUNTIME_BROWSER_CDP_PUBLISH_HOST=0.0.0.0 there. SECURITY: 0.0.0.0 exposes the
+// unauthenticated CDP port on the host's published (ephemeral) port; acceptable
+// only on a single-node trusted self-host (same trust posture as mounting the
+// docker socket). The browser's network egress is still proxy-gated (deny-all
+// by default), so this does not widen the browser's own reach.
+func cdpPublishHost() string {
+	if h := os.Getenv("RUNTIME_BROWSER_CDP_PUBLISH_HOST"); h != "" {
+		return h
+	}
+	return "127.0.0.1"
+}
+
 // Create starts one locked-down Chromium container: egress only via the proxy
 // at proxyAddr, read-only rootfs, tmpfs profile, all caps dropped, non-root,
 // bounded cpu/mem/pids. Chrome listens for CDP on cdpPort, published to the host.
@@ -119,7 +136,7 @@ func (d *dockerBackend) Create(ctx context.Context, tenant, proxyAddr string) (B
 			CapDrop:        []string{"ALL"},
 			SecurityOpt:    []string{"no-new-privileges"},
 			Runtime:        d.cfg.Runtime,
-			PortBindings:   nat.PortMap{port: []nat.PortBinding{{HostIP: "127.0.0.1"}}},
+			PortBindings:   nat.PortMap{port: []nat.PortBinding{{HostIP: cdpPublishHost()}}},
 			Resources: container.Resources{
 				NanoCPUs:  int64(d.cfg.CPUs * 1e9),
 				Memory:    d.cfg.MemMB << 20,
