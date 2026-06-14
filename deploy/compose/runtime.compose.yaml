@@ -18,6 +18,15 @@ agents:
     gateway: true
 
 gateway:
+  # With identity ON, every `gateway: true` agent needs a service key for its
+  # tenant (runtimed is fail-closed: it refuses to start otherwise). On this
+  # single-node turnkey stack the agents are runtimed's own subprocesses on a
+  # trusted host, so they authenticate to the gateway with the bootstrap
+  # superuser key (expanded from the same env the stack already sets). A
+  # multi-tenant production deployment would instead mint a per-tenant service
+  # key and map it here.
+  agent_keys:
+    default: ${RUNTIME_ADMIN_BOOTSTRAP}
   servers:
     - name: sandbox
       command: /app/sandboxd
