@@ -24,6 +24,10 @@ def test_embeddings_deterministic():
     b = client.post("/embeddings", json=payload).json()["data"][0]["embedding"]
     assert a == b
 
+def test_empty_input_rejected():
+    r = client.post("/embeddings", json={"model": "x", "input": ""})
+    assert r.status_code == 422
+
 def test_embeddings_distinguishes_related_from_unrelated():
     def emb(t):
         return client.post("/embeddings", json={"model": "x", "input": t}).json()["data"][0]["embedding"]

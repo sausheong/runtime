@@ -7,7 +7,7 @@ time, so the running container needs no network — true air-gap after
 ignored (a single model is bundled).
 """
 from fastapi import FastAPI
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from fastembed import TextEmbedding
 
 MODEL_NAME = "BAAI/bge-small-en-v1.5"
@@ -22,7 +22,7 @@ _model = TextEmbedding(model_name=MODEL_NAME)
 
 class EmbedRequest(BaseModel):
     model: str | None = None
-    input: str
+    input: str = Field(min_length=1)
 
 
 @app.get("/healthz")
