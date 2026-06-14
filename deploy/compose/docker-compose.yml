@@ -1,0 +1,133 @@
+# Runtime — turnkey single-node deployment (v1.0 surface).
+#
+#   make compose-init           # once: generate .env with secrets
+#   docker compose build        # build runtimed + embedder + sandbox/browser images
+#   docker compose up           # bring up all six pillars
+#
+# Run from this directory (deploy/compose). Data persists in the `pgdata`
+# named volume across `down`; `down -v` resets everything.
+#
+# SECURITY: runtimed mounts the host Docker socket so it can launch sandbox and
+# browser sibling containers. That is root-equivalent on the host — acceptable
+# for a single-node trusted self-host; do not expose this compose on untrusted
+# infrastructure.
+name: runtime
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: runtime
+      POSTGRES_PASSWORD: runtime
+      POSTGRES_DB: runtime
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./initdb:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U runtime"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  embedder:
+    build: ./embedder
+    image: runtime-embedder:latest
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/healthz').status==200 else 1)\""]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+      start_period: 30s
+
+  runtimed:
+    build:
+      context: ../../..
+      dockerfile: runtime/deploy/Dockerfile
+    image: runtime:latest
+    depends_on:
+      postgres:
+        condition: service_healthy
+      embedder:
+        condition: service_healthy
+    environment:
+      RUNTIME_PG_DSN: postgres://runtime:runtime@postgres:5432/runtime?sslmode=disable
+      RUNTIME_CTL_ADDR: ":8080"
+      RUNTIME_CONFIG: /app/runtime.compose.yaml
+      RUNTIME_ADMIN_BOOTSTRAP: ${RUNTIME_ADMIN_BOOTSTRAP}
+      RUNTIME_SECRETS_KEYS: ${RUNTIME_SECRETS_KEYS}
+      RUNTIME_SECRETS_PRIMARY: ${RUNTIME_SECRETS_PRIMARY}
+      RUNTIME_EMBED_MODEL: ${RUNTIME_EMBED_MODEL:-bge-small-en-v1.5}
+      RUNTIME_EMBED_DIM: ${RUNTIME_EMBED_DIM:-384}
+      RUNTIME_EMBED_RECALL_FLOOR: ${RUNTIME_EMBED_RECALL_FLOOR:-0.55}
+      OPENAI_BASE_URL: http://embedder:8000
+      OPENAI_API_KEY: ""
+      RUNTIME_SANDBOX_IMAGE: runtime-sandbox:latest
+      RUNTIME_BROWSER_IMAGE: runtime-browser:latest
+      RUNTIME_BROWSER_CDP_DIAL_HOST: host.docker.internal
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+    volumes:
+      - ./runtime.compose.yaml:/app/runtime.compose.yaml:ro
+      - /var/run/docker.sock:/var/run/docker.sock
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "8080:8080"
+
+  prometheus:
+    image: prom/prometheus:latest
+    command: ["--config.file=/etc/prometheus/prometheus.yml"]
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "9090:9090"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  grafana:
+    image: grafana/grafana:latest
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+    volumes:
+      - ../grafana/provisioning:/etc/grafana/provisioning:ro
+      - ../grafana/dashboards:/var/lib/grafana/dashboards:ro
+    ports:
+      - "3000:3000"
+    depends_on:
+      - prometheus
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:latest
+    command: ["--config=/etc/otel/collector-config.yaml"]
+    volumes:
+      - ../otel/collector-config.yaml:/etc/otel/collector-config.yaml:ro
+    ports:
+      - "4318:4318"
+    depends_on:
+      - jaeger
+
+  jaeger:
+    image: jaegertracing/all-in-one:latest
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+    ports:
+      - "16686:16686"
+
+  sandbox:
+    profiles: ["build-only"]
+    build:
+      context: ..
+      dockerfile: sandbox.Dockerfile
+    image: runtime-sandbox:latest
+    command: ["true"]
+
+  browser:
+    profiles: ["build-only"]
+    build:
+      context: ..
+      dockerfile: browser.Dockerfile
+    image: runtime-browser:latest
+    command: ["true"]
+
+volumes:
+  pgdata:
