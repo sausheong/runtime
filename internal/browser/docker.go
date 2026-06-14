@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"strconv"
 	"time"
 
@@ -78,6 +79,19 @@ func containerProxyAddr(addr string) string {
 	return net.JoinHostPort(host, port)
 }
 
+// cdpDialHost is the host browserd dials to reach a started browser
+// container's published CDP port. Default 127.0.0.1 (browserd and the engine
+// share a host). When browserd runs INSIDE a container (e.g. the turnkey
+// compose, where it is spawned by a containerized runtimed), the published
+// port lives on the host, reachable via host.docker.internal — set
+// RUNTIME_BROWSER_CDP_DIAL_HOST=host.docker.internal there.
+func cdpDialHost() string {
+	if h := os.Getenv("RUNTIME_BROWSER_CDP_DIAL_HOST"); h != "" {
+		return h
+	}
+	return "127.0.0.1"
+}
+
 // Create starts one locked-down Chromium container: egress only via the proxy
 // at proxyAddr, read-only rootfs, tmpfs profile, all caps dropped, non-root,
 // bounded cpu/mem/pids. Chrome listens for CDP on cdpPort, published to the host.
@@ -99,13 +113,13 @@ func (d *dockerBackend) Create(ctx context.Context, tenant, proxyAddr string) (B
 			ExposedPorts: nat.PortSet{port: struct{}{}},
 		},
 		&container.HostConfig{
-			ReadonlyRootfs:  true,
-			ExtraHosts:      []string{"host.docker.internal:host-gateway"},
-			Tmpfs:           map[string]string{"/profile": fmt.Sprintf("size=%dm,mode=1777", d.cfg.ProfileMB), "/tmp": "size=64m,mode=1777", "/home/browser": "size=64m,mode=1777"},
-			CapDrop:         []string{"ALL"},
-			SecurityOpt:     []string{"no-new-privileges"},
-			Runtime:         d.cfg.Runtime,
-			PortBindings:    nat.PortMap{port: []nat.PortBinding{{HostIP: "127.0.0.1"}}},
+			ReadonlyRootfs: true,
+			ExtraHosts:     []string{"host.docker.internal:host-gateway"},
+			Tmpfs:          map[string]string{"/profile": fmt.Sprintf("size=%dm,mode=1777", d.cfg.ProfileMB), "/tmp": "size=64m,mode=1777", "/home/browser": "size=64m,mode=1777"},
+			CapDrop:        []string{"ALL"},
+			SecurityOpt:    []string{"no-new-privileges"},
+			Runtime:        d.cfg.Runtime,
+			PortBindings:   nat.PortMap{port: []nat.PortBinding{{HostIP: "127.0.0.1"}}},
 			Resources: container.Resources{
 				NanoCPUs:  int64(d.cfg.CPUs * 1e9),
 				Memory:    d.cfg.MemMB << 20,
@@ -152,8 +166,9 @@ func (d *dockerBackend) waitForCDP(ctx context.Context, containerID string) (str
 
 // cdpEndpointFromInspect inspects the container for the host port mapped to
 // cdpPort, fetches webSocketDebuggerUrl from Chrome's /json/version, and
-// rewrites its host to 127.0.0.1:<hostport> (Chrome reports 0.0.0.0/its own
-// hostname there, which the host can't dial).
+// rewrites its host to <cdpDialHost>:<hostport> (default 127.0.0.1;
+// host.docker.internal when browserd is containerized) (Chrome reports
+// 0.0.0.0/its own hostname there, which the host can't dial).
 func cdpEndpointFromInspect(ctx context.Context, cli *client.Client, containerID string) (string, error) {
 	insp, err := cli.ContainerInspect(ctx, containerID)
 	if err != nil {
@@ -171,7 +186,7 @@ func cdpEndpointFromInspect(ctx context.Context, cli *client.Client, containerID
 	reqCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet,
-		"http://127.0.0.1:"+hostPort+"/json/version", nil)
+		"http://"+cdpDialHost()+":"+hostPort+"/json/version", nil)
 	if err != nil {
 		return "", err
 	}
@@ -198,7 +213,7 @@ func cdpEndpointFromInspect(ctx context.Context, cli *client.Client, containerID
 	if err != nil {
 		return "", fmt.Errorf("parse ws url: %w", err)
 	}
-	u.Host = "127.0.0.1:" + hostPort
+	u.Host = cdpDialHost() + ":" + hostPort
 	return u.String(), nil
 }
 
