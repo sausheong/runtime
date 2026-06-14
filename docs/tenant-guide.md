@@ -25,7 +25,17 @@ As the superuser (operator), then as the tenant-admin:
 ## The six pillars, exercised
 
 The platform ships `deploy/compose/v1-proof.sh`, which exercises every pillar
-deterministically (no LLM key needed). Run it from the repo root:
+deterministically (no LLM key needed).
+
+> **The proof runs its own throwaway stack — it is destructive.** `v1-proof.sh`
+> regenerates `.env` (a fresh bootstrap key) and tears the stack down with
+> `docker compose down -v` (wiping the `pgdata` volume) on exit. Run it on a
+> **disposable checkout, or before** you onboard anything through the console —
+> it will delete a tenant/upstream you created by hand and invalidate the
+> bootstrap key you logged in with. The onboarding walkthrough above is the
+> by-hand path; the proof is the automated, self-contained gate.
+
+Run it from the repo root:
 
 ```bash
 deploy/compose/v1-proof.sh
@@ -33,11 +43,11 @@ deploy/compose/v1-proof.sh
 
 It asserts:
 
-- **Runtime** — the control plane is healthy and a session round-trips.
+- **Runtime** — the control plane comes up healthy and serves requests.
 - **Identity** — unauthenticated calls are refused; a second tenant cannot see
   this tenant's upstream (cross-tenant isolation).
 - **Gateway** — the federated catalog includes the REST upstream (`orders`) and
-  the MCP sandbox; a REST-adapter tool call returns data.
+  the MCP sandbox; a REST-adapter tool call round-trips through the gateway.
 - **Memory** — a fact is written and **semantically recalled** (the bundled
   embedder + pgvector).
 - **Sandboxes** — code runs in an isolated container (`print(6*7)` → 42).
