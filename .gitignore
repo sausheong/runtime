@@ -1,4 +1,8 @@
 .superpowers/
+# Internal planning docs + agent instructions — not part of the public repo
+docs/superpowers/
+CLAUDE.md
+**/CLAUDE.md
 *.log
 /bin/
 /tmp/
