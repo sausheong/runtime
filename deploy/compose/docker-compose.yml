@@ -37,7 +37,7 @@ services:
       interval: 3s
       timeout: 3s
       retries: 30
-      start_period: 30s
+      start_period: 60s
 
   runtimed:
     build:
@@ -70,6 +70,14 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    # On native Linux the docker socket is root:docker (0660); runtimed runs as a
+    # non-root uid, so it needs the host's docker group GID to read the socket and
+    # launch sandbox/browser sibling containers. Find yours with:
+    #   getent group docker | cut -d: -f3
+    # and set DOCKER_GID in .env. Default 999 is the common Debian/Ubuntu value.
+    # (On Docker Desktop the socket is world-accessible and this is a harmless no-op.)
+    group_add:
+      - "${DOCKER_GID:-999}"
     ports:
       - "8080:8080"
 
