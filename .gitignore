@@ -8,6 +8,9 @@ nutrition_memory.json
 /agentd
 /runtimed
 /runtimectl
+/sandboxd
+/browserd
+/v1-probe
 # Local LLM credentials for examples (never commit real keys; .env.example is the template)
 .env
 # Python artifacts (shims + examples)
