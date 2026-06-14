@@ -104,8 +104,13 @@ sleep 4
 curl -sf -H "Authorization: Bearer $RUNTIME_ADMIN_BOOTSTRAP" -X POST localhost:8080/admin/secrets \
   -d '{"tenant":"smoke","name":"ORDERS_API_KEY","value":"demo-secret"}' >/dev/null 2>&1 \
   && pass "tenant credential set" || fail "set credential failed"
+# base_url is REQUIRED here: the spec's own servers[] says http://localhost:9000,
+# which from inside the runtimed container is the container's loopback, not the
+# host. Override it to host.docker.internal so the gateway's tool calls reach the
+# host-run rest-demo. (The spec is fetched from the openapi URL; the operation
+# calls use base_url.)
 if curl -sf -H "Authorization: Bearer $RUNTIME_ADMIN_BOOTSTRAP" -X POST localhost:8080/admin/upstreams \
-   -d '{"tenant":"smoke","name":"orders","transport":"openapi","openapi":"http://host.docker.internal:9000/openapi.yaml","cred_secret":"ORDERS_API_KEY","cred_header":"Authorization"}' >/dev/null 2>&1; then
+   -d '{"tenant":"smoke","name":"orders","transport":"openapi","openapi":"http://host.docker.internal:9000/openapi.yaml","base_url":"http://host.docker.internal:9000","cred_secret":"ORDERS_API_KEY","cred_header":"Authorization"}' >/dev/null 2>&1; then
   pass "openapi upstream registered (with credential)"; else fail "upstream register failed"; fi
 # Live upstream state lives on /gateway/status ([]UpstreamStatus with a `state`
 # field), NOT /admin/upstreams (which returns the DB rows, no live state). The

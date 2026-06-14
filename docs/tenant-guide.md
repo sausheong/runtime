@@ -19,6 +19,11 @@ As the superuser (operator), then as the tenant-admin:
    - spec URL: `http://host.docker.internal:9000/openapi.yaml`
      (start the demo first, from the repo root: `go run ./examples/rest-demo` —
      it listens on :9000)
+   - base URL: `http://host.docker.internal:9000` — **required.** The demo's
+     own spec advertises `http://localhost:9000`, which from inside the
+     containerized gateway is the *container's* loopback, not your host. Setting
+     the base URL overrides it so tool calls reach the host-run demo. (Any
+     upstream running on the host, not in the compose network, needs this.)
    - credential: select the secret you set; header `Authorization`
 5. Watch the upstream reach **up** on the onboarding page.
 

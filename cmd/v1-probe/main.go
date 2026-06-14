@@ -95,13 +95,29 @@ func connectWhenFederated(base, key string, want ...string) *sdk.ClientSession {
 	}
 }
 
+// contentText extracts the human-readable text from a tool result's content
+// parts (an error result carries its message as TextContent), so failures show
+// the real reason instead of pointer addresses.
+func contentText(content []sdk.Content) string {
+	var parts []string
+	for _, c := range content {
+		if tc, ok := c.(*sdk.TextContent); ok {
+			parts = append(parts, tc.Text)
+		}
+	}
+	if len(parts) == 0 {
+		return "(no text content)"
+	}
+	return strings.Join(parts, " | ")
+}
+
 func callJSON(sess *sdk.ClientSession, name string, args map[string]any, out any) {
 	res, err := sess.CallTool(context.Background(), &sdk.CallToolParams{Name: name, Arguments: args})
 	if err != nil {
 		die("call %s: %v", name, err)
 	}
 	if res.IsError {
-		die("call %s errored: %+v", name, res.Content)
+		die("call %s errored: %s", name, contentText(res.Content))
 	}
 	if len(res.Content) != 1 {
 		die("call %s: want 1 content part, got %d", name, len(res.Content))

@@ -71,13 +71,20 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
     extra_hosts:
       - "host.docker.internal:host-gateway"
-    # On native Linux the docker socket is root:docker (0660); runtimed runs as a
-    # non-root uid, so it needs the host's docker group GID to read the socket and
-    # launch sandbox/browser sibling containers. Find yours with:
-    #   getent group docker | cut -d: -f3
-    # and set DOCKER_GID in .env. Default 999 is the common Debian/Ubuntu value.
-    # (On Docker Desktop the socket is world-accessible and this is a harmless no-op.)
+    # runtimed runs as a non-root uid but must read the mounted docker socket to
+    # launch sandbox/browser sibling containers. The socket's group differs by
+    # platform: on Docker Desktop the in-container socket is root:root (gid 0);
+    # on native Linux it is root:docker (the host docker group's gid). We add
+    # BOTH so the common cases work out of the box:
+    #   - "0"            covers Docker Desktop (macOS/Windows) — the gid-0 socket
+    #   - "${DOCKER_GID:-999}" covers native Linux; set DOCKER_GID in .env to your
+    #                    host's docker gid (`getent group docker | cut -d: -f3`;
+    #                    999 is the common Debian/Ubuntu default).
+    # Membership only grants the socket's group-rw bit; this is within the
+    # single-node "docker.sock is root-equivalent" trust posture documented in
+    # the operator guide.
     group_add:
+      - "0"
       - "${DOCKER_GID:-999}"
     ports:
       - "8080:8080"
