@@ -173,7 +173,7 @@ For a one-command, all-six-pillars deployment on a single host (no
 build-from-source dance), follow the turnkey guides:
 
 - **[Quickstart](docs/quickstart.md)** — clone both repos, `make compose-init`,
-  `docker compose build`, `docker compose up`.
+  `make compose-build`, `docker compose up`.
 - **[Operator guide](docs/operator-guide.md)** — bootstrap login, ports,
   persistence/reset, security posture, observability.
 - **[Tenant guide](docs/tenant-guide.md)** — onboard a tenant in the console UI
