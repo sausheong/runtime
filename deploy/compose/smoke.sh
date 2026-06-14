@@ -24,7 +24,12 @@ emb_call() { # $1 = input text -> prints JSON
 cleanup() {
   echo "--- collecting logs + tearing down ---"
   docker compose logs > /tmp/m2-smoke-logs.txt 2>&1 || true
+  # `go run` spawns a compiled child that outlives the wrapper PID, so also
+  # reap any rest-demo process by name (it binds :9000).
   [ -n "${DEMO_PID:-}" ] && kill "$DEMO_PID" 2>/dev/null || true
+  pkill -f 'examples/rest-demo' 2>/dev/null || true
+  pkill -f '/rest-demo$' 2>/dev/null || true
+  rm -f /tmp/m2-restdemo.pid
   docker compose down -v >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
