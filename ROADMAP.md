@@ -98,7 +98,7 @@ onboarding, and docs, proven by a stranger-install live run.** Capability is
   (Playwright vs the live console): paste-token login → `/ui/onboarding` →
   register the OpenAPI upstream **through the form** (flash "upstream registered",
   upstream reaches `up`) → **remove via the button** (flash "upstream removed",
-  table empties). Remaining for v1.0: M2 (turnkey compose) + M3 (docs +
+  table empties). Remaining for v1.0 (after M2 landed): M3 (docs +
   stranger-install capstone). v1.1 backlog surfaced by review: `buildRoot` →
   options struct (10 params); a `Manager.closed` guard for post-`Close` `Add`;
   boot-time file/DB upstream name-collision handling; `gatewayActive` now builds
@@ -106,10 +106,54 @@ onboarding, and docs, proven by a stranger-install live run.** Capability is
   (note in compose docs); the `gateway enabled` log key changed
   `upstreams`→`file_upstreams`+`db_upstreams`. Spec/plan:
   `docs/superpowers/{specs,plans}/2026-06-14-v1.0-m1-self-service-onboarding*`.
-- **v1.0-M2 — Turnkey single-node compose:** bundled **pgvector-capable**
-  Postgres (HARD requirement — unblocks semantic Memory in compose),
-  one-command bring-up of all six pillars, fail-closed defaults, documented
-  persistence/reset.
+- **v1.0-M2 — Turnkey single-node compose — DONE (2026-06-14).** One
+  `docker compose up` at `deploy/compose/` brings up all six pillars on a clean
+  host. **Reframe:** the bar predicted "swap in a pgvector image," but every
+  compose file already used `pgvector/pgvector:pg16` — the real gaps were a
+  single all-six-pillars file, auto `CREATE EXTENSION`, a turnkey embedder,
+  docker-socket wiring, identity-on bootstrap, and persistence. Delivered: a
+  **bundled air-gap embedder** (`embedder/` — FastAPI + fastembed
+  `bge-small-en-v1.5` dim 384, model baked at *build* so the container needs no
+  network; OpenAPI-compatible `/embeddings`; non-root; rejects empty input);
+  **auto pgvector** via `initdb/01-create-extension.sql` (the image runs it as
+  superuser on first init, closing the unprivileged-role gap); **semantic Memory
+  out of the box** with an **empirically-calibrated recall floor** (`0.60`, from
+  measured related=0.69 / unrelated=0.51 — the default `0.25` is tuned for
+  OpenAI embeddings and would silently mis-recall with bge-small); **Sandboxes**
+  via a mounted docker.sock + `group_add: ${DOCKER_GID:-999}` (non-root runtimed
+  reaches the engine on Linux) with sandbox/browser images built via a
+  `build-only` compose profile (no-up services) and consumed as **stdio gateway
+  upstreams**; **identity ON** with `make compose-init` generating `.env`
+  (bootstrap superuser key + AES secrets key, `_PRIMARY` matching the key id);
+  **Observability** (prometheus scrapes runtimed `/metrics` — served outside the
+  identity middleware — grafana + otel-collector→jaeger); **named-volume
+  persistence** (`down` preserves, `down -v` resets + re-runs the pgvector init).
+  One small Go change: `RUNTIME_BROWSER_CDP_DIAL_HOST`/`_CDP_PUBLISH_HOST`
+  (default `127.0.0.1`) let a containerized browserd dial *and* publish a sibling
+  browser's CDP port on a bridge-reachable interface, so the browser pillar works
+  on native Linux, not just Docker Desktop. THE LIVE PROOF EARNED ITS KEEP:
+  `deploy/compose/smoke.sh` caught a **boot crash** (with identity on, runtimed is
+  fail-closed when a `gateway: true` agent's tenant has no `agent_keys` entry →
+  fixed by mapping the default tenant to the bootstrap key via env expansion in
+  `runtime.compose.yaml`) and a **wrong-endpoint status check** (the upstream-up
+  poll hit `/admin/upstreams`, which returns DB rows with no live `state`; live
+  state lives on `/gateway/status` — the upstream had genuinely connected). The
+  holistic review caught **build-context bloat** (no `.dockerignore` → the
+  runtimed build tarred the whole `projects/` workspace; the embedder build
+  shipped its 177 MB `.venv` — both fixed, context dropped to ~9 MB / ~93 B) and
+  the **browser CDP publish-bind gap on native Linux**. LIVE PROOF (real stack,
+  2026-06-14, **14/14** from a fresh `docker compose build`): all six pillars'
+  substrate live — pgvector present, embedder returns dim-384, recall floor
+  straddles related/unrelated, identity 401-vs-bootstrap, tenant created via the
+  M1 onboarding API, an OpenAPI upstream (`examples/rest-demo` via
+  `host.docker.internal`) reaches `state=up`, grafana/jaeger/prometheus healthy,
+  data persists across `down`/`up`, and **no secret value or AES key in
+  `docker compose logs`**. v1.1 backlog surfaced: pin observability image tags
+  (currently `:latest`) for a reproducible turnkey; `DOCKER_GID` auto-detect on
+  Linux; smoke.sh does not yet exercise a browser-tool call at runtime (the
+  publish-host fix is unit-tested but the live browser path is M3/manual). Remaining
+  for v1.0: **M3 (docs runbook + stranger-install capstone → tag v1.0)**.
+  Spec/plan: `docs/superpowers/{specs,plans}/2026-06-14-v1.0-m2-turnkey-compose*`.
 - **v1.0-M3 — Docs runbook + stranger-install live proof (capstone):**
   quickstart + operator guide + tenant guide, then `deploy/compose/v1-proof.sh`
   run clean from a fresh clone on a clean machine, exercising all six pillars
