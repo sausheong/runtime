@@ -152,13 +152,37 @@ browser-image: ## Build the bundled browser image (runtime-browser:latest)
 	docker build -f deploy/browser.Dockerfile -t runtime-browser:latest deploy/
 
 # ---- Full stack (Postgres + control plane) ----
-.PHONY: compose-up
-compose-up: ## Bring up the full stack (Postgres + runtimed) via Docker
+.PHONY: compose-up-dev
+compose-up-dev: ## Bring up the dev stack (postgres+runtimed) via docker-compose.full.yml
 	docker compose -f deploy/docker-compose.full.yml up --build
 
-.PHONY: compose-down
-compose-down: ## Tear down the full stack
+.PHONY: compose-down-dev
+compose-down-dev: ## Tear down the dev stack
 	docker compose -f deploy/docker-compose.full.yml down
+
+# ---- Turnkey single-node compose (v1.0 surface) ----
+COMPOSE_DIR ?= deploy/compose
+FORCE       ?=
+
+.PHONY: compose-init
+compose-init: ## Generate deploy/compose/.env with fresh secrets (FORCE=--force to regenerate)
+	$(COMPOSE_DIR)/init.sh $(FORCE)
+
+.PHONY: compose-build
+compose-build: ## Build all turnkey images (incl. sandbox/browser sibling images)
+	cd $(COMPOSE_DIR) && docker compose --profile build-only build
+
+.PHONY: compose-up
+compose-up: ## Bring up the turnkey stack (all six pillars)
+	cd $(COMPOSE_DIR) && docker compose up
+
+.PHONY: compose-down
+compose-down: ## Tear down the turnkey stack (PRESERVES data)
+	cd $(COMPOSE_DIR) && docker compose down
+
+.PHONY: compose-reset
+compose-reset: ## Tear down the turnkey stack AND wipe data volumes
+	cd $(COMPOSE_DIR) && docker compose down -v
 
 # ---- Clean ----
 .PHONY: clean
