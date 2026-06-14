@@ -92,11 +92,14 @@ sleep 4
 if curl -sf -H "Authorization: Bearer $RUNTIME_ADMIN_BOOTSTRAP" -X POST localhost:8080/admin/upstreams \
    -d '{"tenant":"smoke","name":"orders","transport":"openapi","openapi":"http://host.docker.internal:9000/openapi.yaml"}' >/dev/null 2>&1; then
   pass "openapi upstream registered"; else fail "upstream register failed"; fi
+# Live upstream state lives on /gateway/status ([]UpstreamStatus with a `state`
+# field), NOT /admin/upstreams (which returns the DB rows, no live state). The
+# bootstrap principal is a superuser, so /gateway/status returns all tenants.
 up=0
 for i in $(seq 1 20); do
-  st="$(curl -s -H "Authorization: Bearer $RUNTIME_ADMIN_BOOTSTRAP" localhost:8080/admin/upstreams \
-     | python3 -c "import sys,json;d=json.load(sys.stdin);L=d if isinstance(d,list) else d.get('upstreams',[]);print(next((u.get('status','') for u in L if u.get('name')=='orders'),''))" 2>/dev/null || echo "")"
-  echo "$st" | grep -qi up && { up=1; break; }
+  st="$(curl -s -H "Authorization: Bearer $RUNTIME_ADMIN_BOOTSTRAP" localhost:8080/gateway/status \
+     | python3 -c "import sys,json;d=json.load(sys.stdin);L=d if isinstance(d,list) else d.get('upstreams',[]);print(next((u.get('state','') for u in L if u.get('name')=='orders'),''))" 2>/dev/null || echo "")"
+  [ "$st" = up ] && { up=1; break; }
   sleep 2
 done
 [ "$up" = 1 ] && pass "gateway upstream up" || fail "upstream never reached up"
