@@ -1,0 +1,17 @@
+# BuildKit uses this (Dockerfile-adjacent) ignore file for the runtimed image
+# build, whose context is the projects root (contains harness/ and runtime/).
+# Exclude everything, then re-include only the two trees the Dockerfile COPYs.
+*
+!harness/
+!runtime/
+
+# Within the two trees, drop heavy/irrelevant artifacts.
+**/.git
+**/node_modules
+**/.venv
+**/__pycache__
+**/.pytest_cache
+**/dist
+**/build
+**/*.log
+runtime/deploy/compose/.env
