@@ -221,6 +221,25 @@ func issuedCSRF(t *testing.T, h http.Handler) string {
 	return rest[:j]
 }
 
+func TestOnboardingGETRendersUsers(t *testing.T) {
+	h, _, admin := newTestConsoleWithAdmin()
+	_ = admin.UpsertUser(context.Background(), "t1", "alice@example.com", identity.RoleAdmin)
+
+	r := adminReq("GET", "/ui/onboarding", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	if w.Code != http.StatusOK {
+		t.Fatalf("GET onboarding: want 200 got %d", w.Code)
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, "alice@example.com") {
+		t.Fatal("users table missing the seeded user")
+	}
+	if !strings.Contains(body, `action="/ui/onboarding/users"`) {
+		t.Fatal("add-user form missing")
+	}
+}
+
 func TestOnboardingPOSTRequiresCSRF(t *testing.T) {
 	h, _ := newTestConsole()
 	form := url.Values{"name": {"orders"}, "url": {"http://x"}, "transport": {"http"}}

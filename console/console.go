@@ -137,9 +137,10 @@ func Handler(reg *controlplane.Registry, oidc OIDCConfig, onb *Onboarding) http.
 				secs, _ = onb.Secrets.ListSecretNames(r.Context(), p.TenantID)
 			}
 			keys, _ := onb.Admin.ListKeys(r.Context(), p.TenantID)
+			users, _ := onb.Admin.ListUsers(r.Context(), p.TenantID)
 			render(w, "onboarding.html", map[string]any{
 				"CSRF": csrf.issue(sessionValue(r)), "Tenant": p.TenantID,
-				"Upstreams": ups, "Secrets": secs, "Keys": keys, "Flash": flash,
+				"Upstreams": ups, "Secrets": secs, "Keys": keys, "Users": users, "Flash": flash,
 				"SecretsEnabled": onb.Secrets != nil,
 			})
 		})
