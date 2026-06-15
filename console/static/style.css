@@ -57,8 +57,8 @@ body {
   color: #fff;
   font-size: 15px; font-weight: 700;
 }
-.topbar nav { display: flex; gap: .25rem; margin-left: auto; }
-.topbar nav a {
+.topbar nav { display: flex; align-items: center; gap: .25rem; margin-left: auto; }
+.topbar nav a, .topbar nav .navbtn {
   padding: .4rem .7rem;
   border-radius: 7px;
   color: var(--muted);
@@ -66,6 +66,15 @@ body {
   font-weight: 500;
 }
 .topbar nav a:hover { background: var(--bg); color: var(--text); text-decoration: none; }
+.topbar nav form { margin: 0; }
+.topbar nav .navbtn {
+  background: transparent;
+  border: 1px solid var(--border-strong);
+  font: inherit;
+  font-weight: 500;
+  cursor: pointer;
+}
+.topbar nav .navbtn:hover { background: var(--bg); color: var(--text); }
 
 /* ---- Layout ---- */
 .container { max-width: 960px; margin: 0 auto; padding: 2rem 1.5rem 4rem; }
