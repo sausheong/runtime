@@ -45,19 +45,45 @@ func (f *fakeMut2) Add(cfg config.GatewayServer) error            { return nil }
 func (f *fakeMut2) Remove(name string)                            {}
 func (f *fakeMut2) Status(tenant string) []gateway.UpstreamStatus { return nil }
 
-// fakeAdmin2 implements controlplane.AdminStore with zero-value stubs.
-type fakeAdmin2 struct{}
+// fakeAdmin2 implements controlplane.AdminStore. User methods are stateful so
+// tests can observe add/update/remove; the rest are zero-value stubs.
+type fakeAdmin2 struct {
+	users     map[string]identity.UserRow // subject -> row
+	userOrder []string                    // subjects in insertion order
+}
 
 func (f *fakeAdmin2) CreateTenant(ctx context.Context, id, name string) error { return nil }
 func (f *fakeAdmin2) TenantExists(ctx context.Context, id string) (bool, error) {
 	return false, nil
 }
 func (f *fakeAdmin2) UpsertUser(ctx context.Context, tenantID, subject string, role identity.Role) error {
+	if f.users == nil {
+		f.users = map[string]identity.UserRow{}
+	}
+	if _, exists := f.users[subject]; !exists {
+		f.userOrder = append(f.userOrder, subject)
+	}
+	f.users[subject] = identity.UserRow{TenantID: tenantID, Subject: subject, Role: role}
 	return nil
 }
-func (f *fakeAdmin2) DeleteUser(ctx context.Context, tenantID, subject string) error { return nil }
+func (f *fakeAdmin2) DeleteUser(ctx context.Context, tenantID, subject string) error {
+	delete(f.users, subject)
+	for i, s := range f.userOrder {
+		if s == subject {
+			f.userOrder = append(f.userOrder[:i], f.userOrder[i+1:]...)
+			break
+		}
+	}
+	return nil
+}
 func (f *fakeAdmin2) ListUsers(ctx context.Context, tenantID string) ([]identity.UserRow, error) {
-	return nil, nil
+	var out []identity.UserRow
+	for _, s := range f.userOrder {
+		if f.users[s].TenantID == tenantID {
+			out = append(out, f.users[s])
+		}
+	}
+	return out, nil
 }
 func (f *fakeAdmin2) InsertServiceKey(ctx context.Context, id, tenantID, hash string, role identity.Role, label string) error {
 	return nil
@@ -103,14 +129,20 @@ func adminReq(method, path string, body url.Values) *http.Request {
 }
 
 func newTestConsole() (http.Handler, *fakeUpstreamStore2) {
+	h, us, _ := newTestConsoleWithAdmin()
+	return h, us
+}
+
+func newTestConsoleWithAdmin() (http.Handler, *fakeUpstreamStore2, *fakeAdmin2) {
 	us := &fakeUpstreamStore2{}
+	admin := &fakeAdmin2{}
 	deps := &Onboarding{
 		Upstreams: us,
 		Mutator:   &fakeMut2{},
-		Admin:     &fakeAdmin2{},
+		Admin:     admin,
 		Secrets:   &fakeSec2{},
 	}
-	return Handler(nil, OIDCConfig{}, deps), us
+	return Handler(nil, OIDCConfig{}, deps), us, admin
 }
 
 func TestOnboardingGETRendersForAdmin(t *testing.T) {
@@ -189,6 +221,25 @@ func issuedCSRF(t *testing.T, h http.Handler) string {
 	return rest[:j]
 }
 
+func TestOnboardingGETRendersUsers(t *testing.T) {
+	h, _, admin := newTestConsoleWithAdmin()
+	_ = admin.UpsertUser(context.Background(), "t1", "alice@example.com", identity.RoleAdmin)
+
+	r := adminReq("GET", "/ui/onboarding", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	if w.Code != http.StatusOK {
+		t.Fatalf("GET onboarding: want 200 got %d", w.Code)
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, "alice@example.com") {
+		t.Fatal("users table missing the seeded user")
+	}
+	if !strings.Contains(body, `action="/ui/onboarding/users"`) {
+		t.Fatal("add-user form missing")
+	}
+}
+
 func TestOnboardingPOSTRequiresCSRF(t *testing.T) {
 	h, _ := newTestConsole()
 	form := url.Values{"name": {"orders"}, "url": {"http://x"}, "transport": {"http"}}
@@ -197,5 +248,159 @@ func TestOnboardingPOSTRequiresCSRF(t *testing.T) {
 	h.ServeHTTP(w, r)
 	if w.Code != http.StatusForbidden {
 		t.Fatalf("POST without csrf: want 403 got %d", w.Code)
+	}
+}
+
+func TestOnboardingAddUser(t *testing.T) {
+	h, _, admin := newTestConsoleWithAdmin()
+	token := issuedCSRF(t, h)
+	form := url.Values{"csrf_token": {token}, "subject": {"bob@example.com"}, "role": {"operator"}}
+	r := adminReq("POST", "/ui/onboarding/users", form)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	if w.Code != http.StatusSeeOther {
+		t.Fatalf("add user: want 303 got %d", w.Code)
+	}
+	got, _ := admin.ListUsers(context.Background(), "t1")
+	if len(got) != 1 || got[0].Subject != "bob@example.com" || got[0].Role != identity.RoleOperator {
+		t.Fatalf("user not upserted: %+v", got)
+	}
+}
+
+func TestOnboardingAddUserInvalidRole(t *testing.T) {
+	h, _, _ := newTestConsoleWithAdmin()
+	token := issuedCSRF(t, h)
+	form := url.Values{"csrf_token": {token}, "subject": {"x@y.com"}, "role": {"superhero"}}
+	r := adminReq("POST", "/ui/onboarding/users", form)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("invalid role: want 400 got %d", w.Code)
+	}
+}
+
+func TestOnboardingAddUserEmptySubject(t *testing.T) {
+	h, _, _ := newTestConsoleWithAdmin()
+	token := issuedCSRF(t, h)
+	form := url.Values{"csrf_token": {token}, "subject": {""}, "role": {"viewer"}}
+	r := adminReq("POST", "/ui/onboarding/users", form)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("empty subject: want 400 got %d", w.Code)
+	}
+}
+
+func TestOnboardingAddUserRequiresCSRF(t *testing.T) {
+	h, _, _ := newTestConsoleWithAdmin()
+	form := url.Values{"subject": {"x@y.com"}, "role": {"viewer"}}
+	r := adminReq("POST", "/ui/onboarding/users", form)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("no csrf: want 403 got %d", w.Code)
+	}
+}
+
+func TestOnboardingSelfDemoteRejected(t *testing.T) {
+	h, _, _ := newTestConsoleWithAdmin()
+	token := issuedCSRF(t, h)
+	// adminReq's principal has Subject == "" and Role == admin; demoting "" to
+	// viewer is self-demotion. (Empty-subject validation also returns 400 here,
+	// which is consistent — both assert 400.)
+	form := url.Values{"csrf_token": {token}, "subject": {""}, "role": {"viewer"}}
+	r := adminReq("POST", "/ui/onboarding/users", form)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("self-demote: want 400 got %d", w.Code)
+	}
+}
+
+func TestOnboardingRemoveUser(t *testing.T) {
+	h, _, admin := newTestConsoleWithAdmin()
+	_ = admin.UpsertUser(context.Background(), "t1", "carol@example.com", identity.RoleViewer)
+	token := issuedCSRF(t, h)
+	form := url.Values{"csrf_token": {token}}
+	r := adminReq("POST", "/ui/onboarding/users/carol@example.com/delete", form)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	if w.Code != http.StatusSeeOther {
+		t.Fatalf("remove user: want 303 got %d", w.Code)
+	}
+	got, _ := admin.ListUsers(context.Background(), "t1")
+	if len(got) != 0 {
+		t.Fatalf("user not removed: %+v", got)
+	}
+}
+
+func TestOnboardingRemoveUserRequiresCSRF(t *testing.T) {
+	h, _, admin := newTestConsoleWithAdmin()
+	_ = admin.UpsertUser(context.Background(), "t1", "carol@example.com", identity.RoleViewer)
+	r := adminReq("POST", "/ui/onboarding/users/carol@example.com/delete", url.Values{})
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("remove without csrf: want 403 got %d", w.Code)
+	}
+}
+
+// NOTE: self-removal via an EMPTY path segment (/ui/onboarding/users//delete) is
+// not testable — Go's ServeMux collapses the "//" and 301-redirects before the
+// handler runs, so the empty {subject} never reaches the guard. The self-removal
+// guard is exercised with a non-empty subject in TestOnboardingSelfRemoveNonEmptySubject
+// (Task 5), which can set the principal's subject to match the path.
+
+// adminReqAs is adminReq with a chosen principal subject (and admin role), so
+// tests can exercise the self-lockout guards with a non-empty subject.
+func adminReqAs(method, path, subject string, body url.Values) *http.Request {
+	r := adminReq(method, path, body)
+	p := identity.Principal{Role: identity.RoleAdmin, TenantID: "t1", Subject: subject}
+	return r.WithContext(controlplane.WithPrincipal(r.Context(), p))
+}
+
+// nonAdminReq builds a request whose principal is a viewer (not admin).
+func nonAdminReq(method, path string, body url.Values) *http.Request {
+	r := adminReq(method, path, body)
+	p := identity.Principal{Role: identity.RoleViewer, TenantID: "t1", Subject: "viewer@example.com"}
+	return r.WithContext(controlplane.WithPrincipal(r.Context(), p))
+}
+
+func TestOnboardingAddUserNonAdminForbidden(t *testing.T) {
+	h, _, _ := newTestConsoleWithAdmin()
+	token := issuedCSRF(t, h)
+	form := url.Values{"csrf_token": {token}, "subject": {"x@y.com"}, "role": {"viewer"}}
+	r := nonAdminReq("POST", "/ui/onboarding/users", form)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("non-admin add user: want 403 got %d", w.Code)
+	}
+}
+
+func TestOnboardingSelfDemoteNonEmptySubject(t *testing.T) {
+	h, _, _ := newTestConsoleWithAdmin()
+	token := issuedCSRF(t, h)
+	form := url.Values{"csrf_token": {token}, "subject": {"me@example.com"}, "role": {"viewer"}}
+	r := adminReqAs("POST", "/ui/onboarding/users", "me@example.com", form)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("self-demote (non-empty subject): want 400 got %d", w.Code)
+	}
+}
+
+func TestOnboardingSelfRemoveNonEmptySubject(t *testing.T) {
+	h, _, admin := newTestConsoleWithAdmin()
+	// Seed for realism only: the self-removal guard returns 400 before DeleteUser
+	// is ever reached, so this test passes with or without the seed.
+	_ = admin.UpsertUser(context.Background(), "t1", "me@example.com", identity.RoleAdmin)
+	token := issuedCSRF(t, h)
+	form := url.Values{"csrf_token": {token}}
+	r := adminReqAs("POST", "/ui/onboarding/users/me@example.com/delete", "me@example.com", form)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("self-remove (non-empty subject): want 400 got %d", w.Code)
 	}
 }

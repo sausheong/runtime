@@ -14,6 +14,20 @@
   <button type="submit">Mint key</button>
 </form>
 
+<h2>Users</h2>
+<table><tr><th>Subject</th><th>Role</th><th></th></tr>
+{{range .Users}}<tr><td>{{.Subject}}</td><td>{{.Role}}</td>
+<td><form method="post" action="/ui/onboarding/users/{{.Subject}}/delete">
+  <input type="hidden" name="csrf_token" value="{{$.CSRF}}"><button type="submit">remove</button>
+</form></td></tr>{{end}}
+</table>
+<form method="post" action="/ui/onboarding/users">
+  <input type="hidden" name="csrf_token" value="{{.CSRF}}">
+  <input name="subject" placeholder="user subject (OIDC sub or email)" required>
+  <select name="role"><option>viewer</option><option>operator</option><option>admin</option></select>
+  <button type="submit">Add or update user</button>
+</form>
+
 {{if .SecretsEnabled}}
 <h2>Credentials</h2>
 <ul>{{range .Secrets}}<li>{{.Name}}</li>{{end}}</ul>

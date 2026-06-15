@@ -137,9 +137,10 @@ func Handler(reg *controlplane.Registry, oidc OIDCConfig, onb *Onboarding) http.
 				secs, _ = onb.Secrets.ListSecretNames(r.Context(), p.TenantID)
 			}
 			keys, _ := onb.Admin.ListKeys(r.Context(), p.TenantID)
+			users, _ := onb.Admin.ListUsers(r.Context(), p.TenantID)
 			render(w, "onboarding.html", map[string]any{
 				"CSRF": csrf.issue(sessionValue(r)), "Tenant": p.TenantID,
-				"Upstreams": ups, "Secrets": secs, "Keys": keys, "Flash": flash,
+				"Upstreams": ups, "Secrets": secs, "Keys": keys, "Users": users, "Flash": flash,
 				"SecretsEnabled": onb.Secrets != nil,
 			})
 		})
@@ -172,6 +173,43 @@ func Handler(reg *controlplane.Registry, oidc OIDCConfig, onb *Onboarding) http.
 				return
 			}
 			flashRedirect(w, r, "key:"+plaintext)
+		}))
+
+		mux.HandleFunc("POST /ui/onboarding/users", guard(func(p identity.Principal, w http.ResponseWriter, r *http.Request) {
+			subject := r.FormValue("subject")
+			if subject == "" {
+				http.Error(w, "subject required", http.StatusBadRequest)
+				return
+			}
+			role, err := identity.RoleFromString(r.FormValue("role"))
+			if err != nil {
+				http.Error(w, "valid role required", http.StatusBadRequest)
+				return
+			}
+			// Anti-lockout: an admin must not demote their own subject below admin.
+			if subject == p.Subject && role != identity.RoleAdmin {
+				http.Error(w, "cannot demote yourself", http.StatusBadRequest)
+				return
+			}
+			if err := onb.Admin.UpsertUser(r.Context(), p.TenantID, subject, role); err != nil {
+				http.Error(w, "upsert user failed", http.StatusInternalServerError)
+				return
+			}
+			flashRedirect(w, r, "user saved")
+		}))
+
+		mux.HandleFunc("POST /ui/onboarding/users/{subject}/delete", guard(func(p identity.Principal, w http.ResponseWriter, r *http.Request) {
+			subject := r.PathValue("subject")
+			// Anti-lockout: an admin must not remove their own subject.
+			if subject == p.Subject {
+				http.Error(w, "cannot remove yourself", http.StatusBadRequest)
+				return
+			}
+			if err := onb.Admin.DeleteUser(r.Context(), p.TenantID, subject); err != nil {
+				http.Error(w, "delete user failed", http.StatusInternalServerError)
+				return
+			}
+			flashRedirect(w, r, "user removed")
 		}))
 
 		mux.HandleFunc("POST /ui/onboarding/secrets", guard(func(p identity.Principal, w http.ResponseWriter, r *http.Request) {
