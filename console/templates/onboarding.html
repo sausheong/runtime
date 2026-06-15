@@ -1,68 +1,137 @@
 {{define "onboarding.html"}}<!doctype html>
 <html><head><meta charset="utf-8"><title>Onboarding — {{.Tenant}}</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="stylesheet" href="/ui/static/style.css"></head>
 <body>
-<h1>Onboarding — tenant {{.Tenant}}</h1>
-{{if .Flash}}<p class="flash">{{.Flash}}</p>{{end}}
+<header class="topbar">
+  <a class="brand" href="/ui"><span class="logo">R</span> Runtime</a>
+  <nav>
+    <a href="/ui">Agents</a>
+    <a href="/ui/onboarding">Onboarding</a>
+  </nav>
+</header>
+<main class="container">
+  <div class="page-head">
+    <h1>Onboarding</h1>
+    <p class="subtitle">Manage access and tools for tenant <span class="badge badge-role">{{.Tenant}}</span></p>
+  </div>
 
-<h2>Agent keys</h2>
-<ul>{{range .Keys}}<li>{{.ID}} — {{.Role}} {{.Label}}</li>{{end}}</ul>
-<form method="post" action="/ui/onboarding/keys">
-  <input type="hidden" name="csrf_token" value="{{.CSRF}}">
-  <input name="label" placeholder="label">
-  <select name="role"><option>viewer</option><option>operator</option><option>admin</option></select>
-  <button type="submit">Mint key</button>
-</form>
+  {{if .Flash}}<p class="flash">{{.Flash}}</p>{{end}}
 
-<h2>Users</h2>
-<table><tr><th>Subject</th><th>Role</th><th></th></tr>
-{{range .Users}}<tr><td>{{.Subject}}</td><td>{{.Role}}</td>
-<td><form method="post" action="/ui/onboarding/users/{{.Subject}}/delete">
-  <input type="hidden" name="csrf_token" value="{{$.CSRF}}"><button type="submit">remove</button>
-</form></td></tr>{{end}}
-</table>
-<form method="post" action="/ui/onboarding/users">
-  <input type="hidden" name="csrf_token" value="{{.CSRF}}">
-  <input name="subject" placeholder="user subject (OIDC sub or email)" required>
-  <select name="role"><option>viewer</option><option>operator</option><option>admin</option></select>
-  <button type="submit">Add or update user</button>
-</form>
+  <!-- ===== Users ===== -->
+  <section class="card">
+    <h2>Users</h2>
+    <p class="card-desc">People who can sign in to this tenant, and their role.</p>
+    <table>
+      <thead><tr><th>Subject</th><th>Role</th><th></th></tr></thead>
+      <tbody>
+      {{range .Users}}<tr>
+        <td class="mono">{{.Subject}}</td>
+        <td><span class="badge badge-role">{{.Role}}</span></td>
+        <td class="actions"><form method="post" action="/ui/onboarding/users/{{.Subject}}/delete">
+          <input type="hidden" name="csrf_token" value="{{$.CSRF}}"><button type="submit" class="danger">Remove</button>
+        </form></td>
+      </tr>{{else}}
+        <tr><td colspan="3" class="empty">No users yet.</td></tr>
+      {{end}}
+      </tbody>
+    </table>
+    <form method="post" action="/ui/onboarding/users">
+      <input type="hidden" name="csrf_token" value="{{.CSRF}}">
+      <div class="row" style="margin-top:1rem">
+        <input name="subject" placeholder="user subject (OIDC sub or email)" required style="flex:1">
+        <select name="role"><option>viewer</option><option>operator</option><option>admin</option></select>
+        <button type="submit">Add or update user</button>
+      </div>
+    </form>
+  </section>
 
-{{if .SecretsEnabled}}
-<h2>Credentials</h2>
-<ul>{{range .Secrets}}<li>{{.Name}}</li>{{end}}</ul>
-<form method="post" action="/ui/onboarding/secrets">
-  <input type="hidden" name="csrf_token" value="{{.CSRF}}">
-  <input name="name" placeholder="ORDERS_API_KEY">
-  <input name="value" placeholder="value" type="password">
-  <button type="submit">Set credential</button>
-</form>
-{{end}}
+  <!-- ===== Agent keys ===== -->
+  <section class="card">
+    <h2>Agent keys</h2>
+    <p class="card-desc">Service keys for machines and agents. The full key is shown once, on creation.</p>
+    <table>
+      <thead><tr><th>ID</th><th>Role</th><th>Label</th></tr></thead>
+      <tbody>
+      {{range .Keys}}<tr>
+        <td class="mono">{{.ID}}</td>
+        <td><span class="badge badge-role">{{.Role}}</span></td>
+        <td>{{.Label}}</td>
+      </tr>{{else}}
+        <tr><td colspan="3" class="empty">No keys yet.</td></tr>
+      {{end}}
+      </tbody>
+    </table>
+    <form method="post" action="/ui/onboarding/keys">
+      <input type="hidden" name="csrf_token" value="{{.CSRF}}">
+      <div class="row" style="margin-top:1rem">
+        <input name="label" placeholder="label (e.g. ci-runner)" style="flex:1">
+        <select name="role"><option>viewer</option><option>operator</option><option>admin</option></select>
+        <button type="submit">Mint key</button>
+      </div>
+    </form>
+  </section>
 
-<h2>Upstreams</h2>
-<table><tr><th>Name</th><th>Transport</th><th></th></tr>
-{{range .Upstreams}}<tr><td>{{.Name}}</td><td>{{.Transport}}</td>
-<td><form method="post" action="/ui/onboarding/upstreams/{{.ID}}/delete">
-  <input type="hidden" name="csrf_token" value="{{$.CSRF}}"><button type="submit">remove</button>
-</form></td></tr>{{end}}
-</table>
-<form method="post" action="/ui/onboarding/upstreams">
-  <input type="hidden" name="csrf_token" value="{{.CSRF}}">
-  <p><input name="name" placeholder="upstream name (e.g. orders)" required></p>
-  <fieldset>
-    <legend>Transport — fill exactly one of the two below</legend>
-    <p><label>HTTP (Streamable MCP) URL<br>
-      <input name="url" placeholder="http://host/mcp" size="48"></label></p>
-    <p><label>OR OpenAPI spec (REST adapter)<br>
-      <input name="openapi" placeholder="http://host/openapi.yaml" size="48"></label>
-      <br><input name="base_url" placeholder="base_url override (optional, OpenAPI only)" size="48"></p>
-  </fieldset>
-  <fieldset>
-    <legend>Per-tenant credential (optional)</legend>
-    <p><input name="cred_secret" placeholder="credential secret name (e.g. ORDERS_API_KEY)"></p>
-    <p><input name="cred_header" placeholder="header to inject into (e.g. Authorization)"></p>
-  </fieldset>
-  <button type="submit">Register upstream</button>
-</form>
-<p><a href="/ui">← back</a></p>
+  {{if .SecretsEnabled}}
+  <!-- ===== Credentials ===== -->
+  <section class="card">
+    <h2>Credentials</h2>
+    <p class="card-desc">Per-tenant secrets brokered into upstream requests. Values are never displayed.</p>
+    <table>
+      <thead><tr><th>Name</th></tr></thead>
+      <tbody>
+      {{range .Secrets}}<tr><td class="mono">{{.Name}}</td></tr>{{else}}
+        <tr><td class="empty">No credentials set.</td></tr>
+      {{end}}
+      </tbody>
+    </table>
+    <form method="post" action="/ui/onboarding/secrets">
+      <input type="hidden" name="csrf_token" value="{{.CSRF}}">
+      <div class="row" style="margin-top:1rem">
+        <input name="name" placeholder="ORDERS_API_KEY" style="flex:1">
+        <input name="value" placeholder="value" type="password" style="flex:1">
+        <button type="submit">Set credential</button>
+      </div>
+    </form>
+  </section>
+  {{end}}
+
+  <!-- ===== Upstreams ===== -->
+  <section class="card">
+    <h2>Gateway upstreams</h2>
+    <p class="card-desc">External tool sources federated into the gateway (HTTP/MCP or OpenAPI/REST).</p>
+    <table>
+      <thead><tr><th>Name</th><th>Transport</th><th></th></tr></thead>
+      <tbody>
+      {{range .Upstreams}}<tr>
+        <td>{{.Name}}</td>
+        <td><span class="badge badge-muted">{{.Transport}}</span></td>
+        <td class="actions"><form method="post" action="/ui/onboarding/upstreams/{{.ID}}/delete">
+          <input type="hidden" name="csrf_token" value="{{$.CSRF}}"><button type="submit" class="danger">Remove</button>
+        </form></td>
+      </tr>{{else}}
+        <tr><td colspan="3" class="empty">No upstreams registered.</td></tr>
+      {{end}}
+      </tbody>
+    </table>
+    <form method="post" action="/ui/onboarding/upstreams" style="margin-top:1rem">
+      <input type="hidden" name="csrf_token" value="{{.CSRF}}">
+      <p><input name="name" placeholder="upstream name (e.g. orders)" required style="width:100%"></p>
+      <fieldset>
+        <legend>Transport — fill exactly one of the two below</legend>
+        <p><label>HTTP (Streamable MCP) URL<br>
+          <input name="url" placeholder="http://host/mcp" style="width:100%"></label></p>
+        <p><label>OR OpenAPI spec (REST adapter)<br>
+          <input name="openapi" placeholder="http://host/openapi.yaml" style="width:100%"></label></p>
+        <p><input name="base_url" placeholder="base_url override (optional, OpenAPI only)" style="width:100%"></p>
+      </fieldset>
+      <fieldset>
+        <legend>Per-tenant credential (optional)</legend>
+        <p><input name="cred_secret" placeholder="credential secret name (e.g. ORDERS_API_KEY)" style="width:100%"></p>
+        <p><input name="cred_header" placeholder="header to inject into (e.g. Authorization)" style="width:100%"></p>
+      </fieldset>
+      <button type="submit">Register upstream</button>
+    </form>
+  </section>
+</main>
 </body></html>{{end}}

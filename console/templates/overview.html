@@ -1,10 +1,33 @@
-<!doctype html><html><head><title>Runtime — Agents</title>
+<!doctype html><html><head><meta charset="utf-8"><title>Runtime — Agents</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="stylesheet" href="/ui/static/style.css"></head><body>
-<h1>Agents</h1>
-<p><a href="/ui/onboarding">Onboarding</a></p>
-<table><thead><tr><th>ID</th><th>Name</th><th>Model</th></tr></thead><tbody>
-{{range .Agents}}
-<tr><td><a href="/ui/agents/{{.ID}}">{{.ID}}</a></td><td>{{.Name}}</td><td>{{.Model}}</td></tr>
-{{end}}
-</tbody></table>
+<header class="topbar">
+  <a class="brand" href="/ui"><span class="logo">R</span> Runtime</a>
+  <nav>
+    <a href="/ui">Agents</a>
+    <a href="/ui/onboarding">Onboarding</a>
+  </nav>
+</header>
+<main class="container">
+  <div class="page-head">
+    <h1>Agents</h1>
+    <p class="subtitle">Agents registered on this control plane.</p>
+  </div>
+  <div class="card">
+    <table>
+      <thead><tr><th>ID</th><th>Name</th><th>Model</th></tr></thead>
+      <tbody>
+      {{range .Agents}}
+        <tr>
+          <td><a href="/ui/agents/{{.ID}}" class="mono">{{.ID}}</a></td>
+          <td>{{.Name}}</td>
+          <td><span class="badge badge-muted mono">{{.Model}}</span></td>
+        </tr>
+      {{else}}
+        <tr><td colspan="3" class="empty">No agents registered.</td></tr>
+      {{end}}
+      </tbody>
+    </table>
+  </div>
+</main>
 </body></html>

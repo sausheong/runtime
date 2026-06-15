@@ -1,7 +1,16 @@
-<!doctype html><html><head><title>Runtime — login</title>
+<!doctype html><html><head><meta charset="utf-8"><title>Runtime — Sign in</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="stylesheet" href="/ui/static/style.css"></head><body>
-<h1>Enter API token</h1>
-<form method="post" action="/ui/login">
-<input name="token" type="password" placeholder="token" autofocus>
-<button type="submit">Continue</button></form>
+<div class="auth-wrap">
+  <div class="auth-card">
+    <span class="brand"><span class="logo">R</span> Runtime</span>
+    <h1>Sign in</h1>
+    <p class="subtitle">Enter your API token to access the console.</p>
+    <form method="post" action="/ui/login">
+      <input name="token" type="password" placeholder="API token" autofocus autocomplete="off">
+      <button type="submit">Continue</button>
+    </form>
+    <p class="auth-hint">Paste a service key, or your identity token.</p>
+  </div>
+</div>
 </body></html>

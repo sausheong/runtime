@@ -1,8 +1,25 @@
-<!doctype html><html><head><title>Runtime — session</title>
+<!doctype html><html><head><meta charset="utf-8"><title>Runtime — session</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="stylesheet" href="/ui/static/style.css"></head><body>
-<p><a href="/ui/agents/{{.AgentID}}">&larr; sessions</a></p>
-<h1>Session {{.SessionID}}</h1>
-<pre id="events"></pre>
+<header class="topbar">
+  <a class="brand" href="/ui"><span class="logo">R</span> Runtime</a>
+  <nav>
+    <a href="/ui">Agents</a>
+    <a href="/ui/onboarding">Onboarding</a>
+  </nav>
+</header>
+<main class="container">
+  <p class="breadcrumb"><a href="/ui">Agents</a> &rsaquo; <a href="/ui/agents/{{.AgentID}}">{{.AgentID}}</a> &rsaquo; session</p>
+  <div class="page-head">
+    <h1>Session</h1>
+    <p class="subtitle mono">{{.SessionID}}</p>
+  </div>
+  <div class="card">
+    <h2>Event stream</h2>
+    <p class="card-desc">Live events for this session, replayed from the start.</p>
+    <pre id="events"></pre>
+  </div>
+</main>
 <script>const AGENT="{{.AgentID}}", SID="{{.SessionID}}";</script>
 <script src="/ui/static/app.js"></script>
 <script>streamSession();</script>
