@@ -10,6 +10,7 @@ import (
 
 	"github.com/sausheong/runtime/controlplane"
 	"github.com/sausheong/runtime/internal/identity"
+	"github.com/sausheong/runtime/internal/store"
 )
 
 //go:embed templates/*.html static/*
@@ -51,7 +52,9 @@ type Onboarding struct {
 // agents overview from the registry and link to the control-plane API + SSE
 // endpoints it is mounted beside. When onb is non-nil it additionally mounts the
 // self-service onboarding page and its CSRF-guarded, admin-gated POST handlers.
-func Handler(reg *controlplane.Registry, oidc OIDCConfig, onb *Onboarding) http.Handler {
+// st (the control-plane store) backs the observability views; it may be nil
+// (session tallies render as "—").
+func Handler(reg *controlplane.Registry, st store.Store, oidc OIDCConfig, onb *Onboarding) http.Handler {
 	mux := http.NewServeMux()
 	csrf := newCSRF()
 
