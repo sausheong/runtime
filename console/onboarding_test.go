@@ -350,3 +350,57 @@ func TestOnboardingRemoveUserRequiresCSRF(t *testing.T) {
 // handler runs, so the empty {subject} never reaches the guard. The self-removal
 // guard is exercised with a non-empty subject in TestOnboardingSelfRemoveNonEmptySubject
 // (Task 5), which can set the principal's subject to match the path.
+
+// adminReqAs is adminReq with a chosen principal subject (and admin role), so
+// tests can exercise the self-lockout guards with a non-empty subject.
+func adminReqAs(method, path, subject string, body url.Values) *http.Request {
+	r := adminReq(method, path, body)
+	p := identity.Principal{Role: identity.RoleAdmin, TenantID: "t1", Subject: subject}
+	return r.WithContext(controlplane.WithPrincipal(r.Context(), p))
+}
+
+// nonAdminReq builds a request whose principal is a viewer (not admin).
+func nonAdminReq(method, path string, body url.Values) *http.Request {
+	r := adminReq(method, path, body)
+	p := identity.Principal{Role: identity.RoleViewer, TenantID: "t1", Subject: "viewer@example.com"}
+	return r.WithContext(controlplane.WithPrincipal(r.Context(), p))
+}
+
+func TestOnboardingAddUserNonAdminForbidden(t *testing.T) {
+	h, _, _ := newTestConsoleWithAdmin()
+	token := issuedCSRF(t, h)
+	form := url.Values{"csrf_token": {token}, "subject": {"x@y.com"}, "role": {"viewer"}}
+	r := nonAdminReq("POST", "/ui/onboarding/users", form)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("non-admin add user: want 403 got %d", w.Code)
+	}
+}
+
+func TestOnboardingSelfDemoteNonEmptySubject(t *testing.T) {
+	h, _, _ := newTestConsoleWithAdmin()
+	token := issuedCSRF(t, h)
+	form := url.Values{"csrf_token": {token}, "subject": {"me@example.com"}, "role": {"viewer"}}
+	r := adminReqAs("POST", "/ui/onboarding/users", "me@example.com", form)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("self-demote (non-empty subject): want 400 got %d", w.Code)
+	}
+}
+
+func TestOnboardingSelfRemoveNonEmptySubject(t *testing.T) {
+	h, _, admin := newTestConsoleWithAdmin()
+	// Seed for realism only: the self-removal guard returns 400 before DeleteUser
+	// is ever reached, so this test passes with or without the seed.
+	_ = admin.UpsertUser(context.Background(), "t1", "me@example.com", identity.RoleAdmin)
+	token := issuedCSRF(t, h)
+	form := url.Values{"csrf_token": {token}}
+	r := adminReqAs("POST", "/ui/onboarding/users/me@example.com/delete", "me@example.com", form)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("self-remove (non-empty subject): want 400 got %d", w.Code)
+	}
+}
