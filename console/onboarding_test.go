@@ -142,7 +142,7 @@ func newTestConsoleWithAdmin() (http.Handler, *fakeUpstreamStore2, *fakeAdmin2) 
 		Admin:     admin,
 		Secrets:   &fakeSec2{},
 	}
-	return Handler(nil, OIDCConfig{}, deps), us, admin
+	return Handler(nil, nil, OIDCConfig{}, deps), us, admin
 }
 
 func TestOnboardingGETRendersForAdmin(t *testing.T) {
@@ -164,7 +164,7 @@ func TestOnboardingGETRendersForAdmin(t *testing.T) {
 // fail closed with 503 rather than nil-deref.
 func TestOnboardingNilSecretsNoPanic(t *testing.T) {
 	deps := &Onboarding{Upstreams: &fakeUpstreamStore2{}, Mutator: &fakeMut2{}, Admin: &fakeAdmin2{}, Secrets: nil}
-	h := Handler(nil, OIDCConfig{}, deps)
+	h := Handler(nil, nil, OIDCConfig{}, deps)
 
 	// GET must not panic and returns 200 (page is still useful: mint keys,
 	// register credential-less upstreams).

@@ -5,6 +5,7 @@
   <a class="brand" href="/ui"><span class="logo">R</span> Runtime</a>
   <nav>
     <a href="/ui">Agents</a>
+    <a href="/ui/observability">Observability</a>
     <a href="/ui/onboarding">Onboarding</a>
     <form method="post" action="/ui/logout"><button type="submit" class="navbtn">Sign out</button></form>
   </nav>
@@ -15,6 +16,16 @@
     <h1>Sessions</h1>
     <p class="subtitle">Conversations handled by <span class="mono">{{.AgentID}}</span>.</p>
   </div>
+  <section class="card">
+    <h2>Metrics</h2>
+    <div class="row">
+      <div class="stat"><div class="stat-num">{{.Obs.Healthy}}/{{.Obs.Replicas}}</div><div class="stat-label">Health</div></div>
+      <div class="stat"><div class="stat-num">{{.Obs.Sessions.Running}}</div><div class="stat-label">Running</div></div>
+      <div class="stat"><div class="stat-num">{{.Obs.Sessions.Completed}}</div><div class="stat-label">Completed</div></div>
+      <div class="stat"><div class="stat-num">{{.Obs.Sessions.Error}}</div><div class="stat-label">Error</div></div>
+      <div class="stat"><div class="stat-num">{{.Obs.Sessions.Total}}</div><div class="stat-label">Total</div></div>
+    </div>
+  </section>
   <div class="card">
     <table id="sessions">
       <thead><tr><th>Session</th><th>Status</th><th>Turns</th></tr></thead>

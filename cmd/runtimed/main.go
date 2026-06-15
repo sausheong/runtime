@@ -516,7 +516,7 @@ func buildRoot(reg *controlplane.Registry, adminS controlplane.AdminStore, conso
 		apiMux.Handle("/gateway/mcp", gw.HTTP())
 		apiMux.HandleFunc("GET /gateway/status", gw.Status)
 	}
-	consoleH := console.Handler(reg, consoleOIDC, onb)
+	consoleH := console.Handler(reg, ctlStore, consoleOIDC, onb)
 	root := http.NewServeMux()
 	root.Handle("/ui", consoleH)
 	root.Handle("/ui/", consoleH)

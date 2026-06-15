@@ -33,7 +33,7 @@ func (s stubAuth) Authenticate(_ context.Context, _ *http.Request) (identity.Pri
 
 func TestConsole_OverviewFiltersByTenant(t *testing.T) {
 	h := controlplane.IdentityMiddleware(
-		Handler(testRegMulti(t), OIDCConfig{}, nil),
+		Handler(testRegMulti(t), nil, OIDCConfig{}, nil),
 		stubAuth{p: identity.Principal{TenantID: "beta", Role: identity.RoleViewer}},
 		identity.NewAuthorizer(map[string]string{"a": "alpha", "b": "beta"}),
 		nil,
@@ -51,7 +51,7 @@ func TestConsole_OverviewFiltersByTenant(t *testing.T) {
 
 func TestConsole_AgentPageCrossTenant404(t *testing.T) {
 	h := controlplane.IdentityMiddleware(
-		Handler(testRegMulti(t), OIDCConfig{}, nil),
+		Handler(testRegMulti(t), nil, OIDCConfig{}, nil),
 		stubAuth{p: identity.Principal{TenantID: "beta", Role: identity.RoleViewer}},
 		identity.NewAuthorizer(map[string]string{"a": "alpha", "b": "beta"}),
 		nil,
@@ -65,7 +65,7 @@ func TestConsole_AgentPageCrossTenant404(t *testing.T) {
 
 func TestConsole_OpenModeShowsAll(t *testing.T) {
 	// No principal in context (open mode) → all agents visible.
-	h := Handler(testRegMulti(t), OIDCConfig{}, nil)
+	h := Handler(testRegMulti(t), nil, OIDCConfig{}, nil)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest("GET", "/ui", nil))
 	body := rec.Body.String()
@@ -83,7 +83,7 @@ func testReg(t *testing.T) *controlplane.Registry {
 }
 
 func TestConsole_Overview(t *testing.T) {
-	srv := httptest.NewServer(Handler(testReg(t), OIDCConfig{}, nil))
+	srv := httptest.NewServer(Handler(testReg(t), nil, OIDCConfig{}, nil))
 	defer srv.Close()
 	resp, err := http.Get(srv.URL + "/ui")
 	if err != nil {
@@ -97,7 +97,7 @@ func TestConsole_Overview(t *testing.T) {
 }
 
 func TestConsole_LoginPage(t *testing.T) {
-	srv := httptest.NewServer(Handler(testReg(t), OIDCConfig{}, nil))
+	srv := httptest.NewServer(Handler(testReg(t), nil, OIDCConfig{}, nil))
 	defer srv.Close()
 	resp, err := http.Get(srv.URL + "/ui/login")
 	if err != nil {
@@ -110,7 +110,7 @@ func TestConsole_LoginPage(t *testing.T) {
 }
 
 func TestConsole_UnknownAgent404(t *testing.T) {
-	srv := httptest.NewServer(Handler(testReg(t), OIDCConfig{}, nil))
+	srv := httptest.NewServer(Handler(testReg(t), nil, OIDCConfig{}, nil))
 	defer srv.Close()
 	resp, _ := http.Get(srv.URL + "/ui/agents/nope")
 	if resp.StatusCode != 404 {
@@ -120,7 +120,7 @@ func TestConsole_UnknownAgent404(t *testing.T) {
 }
 
 func TestConsole_LoginShowsPasteWhenOIDCDisabled(t *testing.T) {
-	h := Handler(testReg(t), OIDCConfig{Enabled: false}, nil)
+	h := Handler(testReg(t), nil, OIDCConfig{Enabled: false}, nil)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest("GET", "/ui/login", nil))
 	if rec.Code != 200 || !strings.Contains(rec.Body.String(), "token") {
@@ -129,7 +129,7 @@ func TestConsole_LoginShowsPasteWhenOIDCDisabled(t *testing.T) {
 }
 
 func TestConsole_LoginRedirectsToIdPWhenEnabled(t *testing.T) {
-	h := Handler(testReg(t), OIDCConfig{
+	h := Handler(testReg(t), nil, OIDCConfig{
 		Enabled:     true,
 		AuthCodeURL: func(state string) string { return "https://idp.example/authorize?state=" + state },
 	}, nil)
@@ -144,7 +144,7 @@ func TestConsole_LoginRedirectsToIdPWhenEnabled(t *testing.T) {
 }
 
 func TestConsole_CallbackSetsCookie(t *testing.T) {
-	h := Handler(testReg(t), OIDCConfig{
+	h := Handler(testReg(t), nil, OIDCConfig{
 		Enabled:  true,
 		Exchange: func(_ context.Context, code string) (string, error) { return "id-token-" + code, nil },
 	}, nil)
@@ -165,7 +165,7 @@ func TestConsole_CallbackSetsCookie(t *testing.T) {
 }
 
 func TestConsole_CallbackExchangeErrorIs401(t *testing.T) {
-	h := Handler(testReg(t), OIDCConfig{
+	h := Handler(testReg(t), nil, OIDCConfig{
 		Enabled:  true,
 		Exchange: func(_ context.Context, code string) (string, error) { return "", errors.New("boom") },
 	}, nil)
@@ -183,7 +183,7 @@ func TestConsole_CallbackExchangeErrorIs401(t *testing.T) {
 
 func TestConsole_CallbackNoExchangeIs400(t *testing.T) {
 	// OIDCConfig with no Exchange func (e.g. discovery failed) → 400, no cookie.
-	h := Handler(testReg(t), OIDCConfig{Enabled: true}, nil)
+	h := Handler(testReg(t), nil, OIDCConfig{Enabled: true}, nil)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest("GET", "/ui/callback?code=abc", nil))
 	if rec.Code != 400 {

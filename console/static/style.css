@@ -228,3 +228,16 @@ pre {
 .auth-card input { width: 100%; padding: .6rem .7rem; }
 .auth-card button { width: 100%; padding: .6rem; }
 .auth-hint { color: var(--muted); font-size: .82rem; margin-top: 1rem; }
+
+/* ---- Stat tiles (observability) ---- */
+.stat {
+  flex: 1;
+  min-width: 110px;
+  padding: .9rem 1rem;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  text-align: center;
+}
+.stat-num { font-size: 1.6rem; font-weight: 650; letter-spacing: -.02em; color: var(--text); }
+.stat-label { font-size: .75rem; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin-top: .2rem; }

@@ -10,6 +10,7 @@ import (
 
 	"github.com/sausheong/runtime/controlplane"
 	"github.com/sausheong/runtime/internal/identity"
+	"github.com/sausheong/runtime/internal/store"
 )
 
 //go:embed templates/*.html static/*
@@ -51,7 +52,9 @@ type Onboarding struct {
 // agents overview from the registry and link to the control-plane API + SSE
 // endpoints it is mounted beside. When onb is non-nil it additionally mounts the
 // self-service onboarding page and its CSRF-guarded, admin-gated POST handlers.
-func Handler(reg *controlplane.Registry, oidc OIDCConfig, onb *Onboarding) http.Handler {
+// st (the control-plane store) backs the observability views; it may be nil
+// (session tallies render as "—").
+func Handler(reg *controlplane.Registry, st store.Store, oidc OIDCConfig, onb *Onboarding) http.Handler {
 	mux := http.NewServeMux()
 	csrf := newCSRF()
 
@@ -99,6 +102,23 @@ func Handler(reg *controlplane.Registry, oidc OIDCConfig, onb *Onboarding) http.
 		render(w, "overview.html", map[string]any{"Agents": visibleAgents(r, reg)})
 	})
 
+	mux.HandleFunc("GET /ui/observability", func(w http.ResponseWriter, r *http.Request) {
+		agents := visibleAgents(r, reg)
+		fleet := buildFleetObs(r.Context(), reg, st, httpProbe, agents)
+		if onb != nil {
+			// onb is non-nil only when identity is on, and IdentityMiddleware then
+			// always injects a principal on a successful request — so the else
+			// (open-mode, all tenants) branch is effectively unreachable here;
+			// kept for safety and to mirror principalCanSeeTenant's open-mode rule.
+			if p, ok := controlplane.PrincipalFromContext(r.Context()); ok {
+				fleet.Upstreams = onb.Mutator.Status(p.TenantID)
+			} else {
+				fleet.Upstreams = onb.Mutator.Status("")
+			}
+		}
+		render(w, "observability.html", map[string]any{"Fleet": fleet})
+	})
+
 	mux.HandleFunc("GET /ui/agents/{id}", func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
 		ap, ok := reg.Get(id)
@@ -106,7 +126,14 @@ func Handler(reg *controlplane.Registry, oidc OIDCConfig, onb *Onboarding) http.
 			http.NotFound(w, r)
 			return
 		}
-		render(w, "agent.html", map[string]any{"AgentID": id})
+		// Name/Model are omitted: reg.Get returns an AgentProcess (no display
+		// name), and the agent panel renders health/sessions, not the name. The
+		// page heading already shows the id. Avoid setting Name to the id, which
+		// would mislead any future template that surfaces Obs.Name.
+		obs := buildAgentObs(r.Context(), reg, st, httpProbe, controlplane.AgentInfo{
+			ID: ap.AgentID, Tenant: ap.Tenant,
+		})
+		render(w, "agent.html", map[string]any{"AgentID": id, "Obs": obs})
 	})
 
 	mux.HandleFunc("GET /ui/agents/{id}/sessions/{sid}", func(w http.ResponseWriter, r *http.Request) {
