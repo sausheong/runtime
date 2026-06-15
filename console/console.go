@@ -126,7 +126,10 @@ func Handler(reg *controlplane.Registry, st store.Store, oidc OIDCConfig, onb *O
 			http.NotFound(w, r)
 			return
 		}
-		render(w, "agent.html", map[string]any{"AgentID": id})
+		obs := buildAgentObs(r.Context(), reg, st, httpProbe, controlplane.AgentInfo{
+			ID: ap.AgentID, Name: id, Tenant: ap.Tenant,
+		})
+		render(w, "agent.html", map[string]any{"AgentID": id, "Obs": obs})
 	})
 
 	mux.HandleFunc("GET /ui/agents/{id}/sessions/{sid}", func(w http.ResponseWriter, r *http.Request) {

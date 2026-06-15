@@ -98,3 +98,25 @@ func TestObservabilityNavLinkPresent(t *testing.T) {
 		t.Fatal("overview topbar missing Observability nav link")
 	}
 }
+
+func TestAgentPageHasMetricsPanel(t *testing.T) {
+	st := store.NewMemStore()
+	id, _ := st.CreateSession(context.Background(), "a", 0)
+	_ = st.SetSessionStatus(context.Background(), id, "running")
+	h := Handler(obsTestReg(t), st, OIDCConfig{}, nil) // open mode
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest("GET", "/ui/agents/a", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /ui/agents/a: code=%d want 200", rec.Code)
+	}
+	body := rec.Body.String()
+	// Anchor on the tile markup (not the bare word "Health") so this asserts the
+	// metrics panel specifically, and on the Health value tile reflecting the
+	// single replica (0/1, since the loopback probe fails in tests).
+	if !strings.Contains(body, `<div class="stat-label">Health</div>`) {
+		t.Fatal("agent page missing metrics panel Health tile")
+	}
+	if !strings.Contains(body, `<div class="stat-num">0/1</div>`) {
+		t.Fatal("metrics panel missing Health value tile (want 0/1)")
+	}
+}
