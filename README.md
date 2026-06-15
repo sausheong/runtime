@@ -60,9 +60,9 @@ no lost work, no duplicated committed tool calls.
 | **Structured logging** | `slog` everywhere (text or JSON via `RUNTIME_LOG_FORMAT`), with agent/session fields. |
 | **BYO agent** | Link the `agentruntime` SDK, hand it a harness `AgentSpec` + provider + tools, and get the durable contract for free — zero durability or HTTP code. |
 | **MCP gateway** | A central `/gateway/mcp` endpoint: MCP federation + semantic tool search + REST/OpenAPI adapters. Stdio, Streamable HTTP, and plain REST upstreams (one tool per OpenAPI operation), namespaced, tenant-filtered, discoverable by embedding-ranked search. |
-| **Code-interpreter sandbox** | An isolated, stateful Python + shell execution environment per session — one locked-down Docker container (no network, read-only rootfs, resource limits), tenant-scoped, delivered to every agent through the MCP gateway. |
-| **Observability** | One Prometheus `/metrics` endpoint for the whole fleet (control plane + every agent, merged), `X-Request-ID` correlation end-to-end through proxy, logs, and durable workflow, and a bundled Prometheus + Grafana compose overlay with a provisioned dashboard. |
-| **On-prem & self-contained** | Go binaries + Postgres. No cloud, no Kubernetes required, air-gap friendly. Full-stack `docker compose` included. |
+| **Code-interpreter & browser sandboxes** | Two isolated, stateful, per-session execution environments delivered through the gateway: a locked-down Python + shell **code interpreter** (no network, read-only rootfs, resource limits) and a locked-down **Chromium browser** (egress-policed via a hostname allow/deny proxy). Both tenant-scoped, both zero agent-side changes. |
+| **Observability** | One Prometheus `/metrics` endpoint for the whole fleet (control plane + every agent, merged), `X-Request-ID` correlation end-to-end, **OpenTelemetry distributed tracing** (OTLP push, correlated runtimed↔agentd traces), and a bundled Prometheus + Grafana + Jaeger compose overlay with a provisioned dashboard. |
+| **Turnkey self-host** | One `docker compose up` brings up all six AgentCore pillars on a single host — bundled air-gap embedder, auto pgvector, identity on. Go binaries + Postgres; no cloud, no Kubernetes required, air-gap friendly. Helm chart for K8s when you want it. |
 
 ---
 
@@ -630,8 +630,9 @@ embeddings — no new egress.
 > Service-key secrets and OIDC tokens travel as bearer credentials — terminate
 > TLS upstream. Service-key verification is constant-time (bcrypt) and hashed at
 > rest. Per-tenant secrets brokering and key rotation are implemented (see above).
-> Console session CSRF hardening (`state`/`nonce`) is tracked for later
-> Identity milestones (see `ROADMAP.md` §B3).
+> The console's mutating onboarding flow is CSRF-protected (HMAC-of-session
+> synchronizer token); OIDC login-flow `state`/`nonce` hardening is tracked for
+> later Identity milestones (see `ROADMAP.md` §B3).
 
 ---
 
@@ -858,8 +859,12 @@ backoff) owning its lifecycle. A call against a down upstream returns an MCP
 
 ### Limitations
 
-- **Static config only** — upstreams come from `runtime.yaml` at startup; no
-  dynamic registration.
+- **Dynamic registration is HTTP/OpenAPI-only** — stdio upstreams come from
+  `runtime.yaml` at startup; **HTTP and OpenAPI** upstreams can also be
+  registered at runtime per tenant (console UI + `/admin/upstreams` API +
+  `runtimectl`, persisted in `gateway_upstreams`), with per-tenant credentials
+  brokered at dial. Runtime registration of **stdio** upstreams is intentionally
+  disallowed (it would let a tenant run commands on the host).
 - **Tools only** — no resources or prompts federation yet.
 - **REST upstreams: JSON bodies, shared credentials** — see
   [REST / OpenAPI upstreams](#rest--openapi-upstreams) for the per-milestone
@@ -1220,6 +1225,9 @@ nested tree. Spans carry IDs and structural attributes only
 | `runtimectl admin secret ls` | List the tenant's secret names + timestamps (never the values). |
 | `runtimectl admin secret rm <name>` | Delete a tenant secret. |
 | `runtimectl admin secret rotate [--tenant <t>]` | Re-encrypt secrets under the current primary key (superuser: all tenants). |
+| `runtimectl admin upstream add --name <n> (--url <u>\|--openapi <spec>) [--base-url <b>] [--cred-secret <s>] [--cred-header <h>] [--tenant <t>]` | Register an HTTP/OpenAPI gateway upstream at runtime (per tenant); `--cred-secret` brokers a tenant secret into header `--cred-header` at dial. |
+| `runtimectl admin upstream ls` | List the tenant's registered upstreams. |
+| `runtimectl admin upstream rm <id>` | Remove a registered upstream. |
 
 `--agent` may be omitted when exactly one agent is registered (it's auto-selected);
 it's required when there are several. The `admin` commands require an `admin`
@@ -1229,8 +1237,8 @@ principal (send it via `RUNTIME_TOKEN`).
 
 ## Web console
 
-`runtimed` serves a read-only operator console at **`/ui`** (same port as the
-API). Open `http://localhost:8080/ui` in a browser.
+`runtimed` serves an operator console at **`/ui`** (same port as the API). Open
+`http://localhost:8080/ui` in a browser.
 
 - **`/ui`** — fleet overview, **filtered to the caller's tenant** (a superuser
   or open mode sees all).
@@ -1238,13 +1246,18 @@ API). Open `http://localhost:8080/ui` in a browser.
   for an agent in another tenant.
 - **`/ui/agents/{id}/sessions/{sid}`** — live session view, streaming events via
   `EventSource`.
+- **`/ui/onboarding`** — a tenant-admin self-service page: mint agent keys,
+  register HTTP/OpenAPI gateway upstreams, and attach per-tenant credentials
+  (the one mutating flow; CSRF-protected with an HMAC-of-session token). See the
+  [Tenant guide](docs/tenant-guide.md).
 
 When auth is enabled, the console redirects to **`/ui/login`**: with OIDC
 configured it bounces to the identity provider and stores the validated token in
 the `runtime_token` cookie; otherwise it falls back to a paste-token form. The
-console is strictly read-only — it observes agents and sessions but cannot
-deploy, stop, or invoke. Server-rendered Go templates with a tiny vanilla-JS/SSE
-layer — no build step, embedded in the binary.
+console is **observe-and-onboard**: it views agents and sessions and drives
+tenant onboarding (keys + gateway upstreams), but cannot deploy, stop, or invoke
+agents. Server-rendered Go templates with a tiny vanilla-JS/SSE layer — no build
+step, embedded in the binary.
 
 ---
 
@@ -1258,7 +1271,7 @@ layer — no build step, embedded in the binary.
 | `GET /metrics` | Prometheus exposition for the whole fleet (control plane + merged agent series; always auth-exempt — see [Observability](#observability)). |
 | `GET /agents` | JSON list of registered agents with a best-effort health probe: `[{id,name,model,healthy}]`. |
 | `ANY /agents/{id}/...` | Reverse-proxied to agent `{id}`'s subprocess, with the `/agents/{id}` prefix stripped. Unknown id → `404`; agent down/restarting → `503`. |
-| `GET /ui`, `/ui/...` | The read-only web console (see [Web console](#web-console)). |
+| `GET /ui`, `/ui/...` | The operator web console (see [Web console](#web-console)). |
 
 All control-plane routes except `/healthz`, `/ui/login`, and `/ui/static/*` are
 gated by the identity middleware when auth is enabled (see
@@ -1683,11 +1696,26 @@ WorkingDirectory=/opt/runtime
 WantedBy=multi-user.target
 ```
 
-### Docker Compose (full stack)
+### Docker Compose (turnkey — all six pillars)
 
-`deploy/docker-compose.full.yml` runs the whole platform — Postgres + the
-control plane — with one command. It builds `runtimed` + `agentd` via
-`deploy/Dockerfile` (a multi-stage Go build).
+For the **complete v1.0 platform** (all six pillars: control plane + Postgres +
+bundled embedder + sandbox/browser + Prometheus/Grafana/Jaeger) in one command,
+use the turnkey compose at `deploy/compose/` and follow the
+[Quickstart](docs/quickstart.md):
+
+```bash
+cd runtime && make compose-init
+cd deploy/compose && docker compose --profile build-only build && docker compose up
+```
+
+This is the path the [v1.0 turnkey guides](#v10--turnkey-self-host) and the
+capstone proof (`deploy/compose/v1-proof.sh`) document.
+
+### Docker Compose (control plane only)
+
+`deploy/docker-compose.full.yml` runs just the control plane + Postgres (no
+sandboxes/embedder/observability) with one command. It builds `runtimed` +
+`agentd` via `deploy/Dockerfile` (a multi-stage Go build).
 
 > **Build context:** the `runtime` module depends on `../harness` via a `replace`
 > directive, so the Docker build context must contain BOTH `runtime/` and
@@ -1878,26 +1906,39 @@ go test -tags live ./internal/sandbox/ -v   # real containers: file round-trip, 
 
 ## Status, scope & limitations
 
-Runtime is built in milestones. **Milestone 1** delivered the durable single-agent
+Runtime reached **v1.0** (tagged `v1.0`): a turnkey self-hostable on-prem
+AgentCore equivalent — one `docker compose up` brings up all six pillars on a
+single host, a stranger can self-serve onboard a tenant through the console UI,
+and the capstone proof (`deploy/compose/v1-proof.sh`) exercises every pillar
+end-to-end. See [v1.0 — turnkey self-host](#v10--turnkey-self-host).
+
+It got there in milestones. **Milestone 1** delivered the durable single-agent
 spine; **Milestone 2** added the multi-agent platform (config-driven registry,
 path routing, per-agent supervision, session status, full CLI); **Milestone 3**
 added the operability layer (the read-only web console, structured logging, the
 contract conformance suite, bounded shutdown, 503-on-restart, per-agent health,
-full-stack Docker build). Since then: **polyglot agent hosting** (two milestones —
-the Python contract shim hosting the OpenAI Agents SDK and the Claude Agent SDK,
-each running the full nutrition investigator — see the Python shim section); the
-**Identity** sub-project (three milestones — multi-tenant access control,
-per-tenant secrets brokering, and secrets key rotation, below); the **Memory**
-sub-project (three milestones — durable per-tenant store, semantic recall, and
-auto-ingestion, with recall and ingest wired into the live turn path — see
-[agent memory](#per-tenant-agent-memory)); the **Gateway** sub-project (three
-milestones — MCP federation core, semantic tool search, and REST/OpenAPI→tool
-adapters — see [MCP Gateway](#mcp-gateway)); the **Sandboxes** sub-project (first
-milestone — the Docker-backed code interpreter, delivered through the gateway
-— see [Code-interpreter sandbox](#code-interpreter-sandbox)); and the
-**Observability** sub-project (first milestone — fleet-wide Prometheus
-metrics, request-id correlation, and the Grafana overlay — see
-[Observability](#observability)).
+full-stack Docker build). Then the six AgentCore pillars, each with multiple
+live-proven milestones:
+
+- **Spine hardening** — per-agent replica **pools** with session affinity and
+  **load-based autoscaling** with graceful drain (see [Replica pools](#replica-pools--session-affinity) and [Autoscaling](#autoscaling-a2)).
+- **Identity** (three milestones) — multi-tenant access control, per-tenant
+  secrets brokering, and secrets key rotation (see [Authentication & multi-tenancy](#authentication--multi-tenancy)).
+- **Memory** (three milestones) — durable per-tenant store, semantic recall, and
+  auto-ingestion, wired into the live turn path (see [agent memory](#per-tenant-agent-memory)).
+- **Gateway** (three milestones) — MCP federation core, semantic tool search, and
+  REST/OpenAPI→tool adapters (see [MCP Gateway](#mcp-gateway)).
+- **Sandboxes** (two milestones) — the Docker-backed code interpreter **and** the
+  egress-policed browser, both delivered through the gateway (see
+  [Code-interpreter sandbox](#code-interpreter-sandbox) and [Browser sandbox](#browser-sandbox)).
+- **Observability** (two milestones) — fleet-wide Prometheus metrics with
+  request-id correlation, plus OpenTelemetry distributed tracing (see
+  [Observability](#observability)).
+- **Polyglot hosting** (two milestones) — the Python contract shim hosting the
+  OpenAI Agents SDK and the Claude Agent SDK (see the [Python shim](#hosting-a-foreign-sdk-agent-python-shim)).
+- **Containers / Kubernetes** — a container image + Helm chart, per-agent-pod
+  scheduling, and **remote agents** (attach instead of spawn) with a registration
+  handshake (see [Remote agents](#remote-agents-attach-instead-of-spawn) and [Kubernetes / Helm](#kubernetes--helm)).
 
 **Deliberately not yet implemented** (each is planned, scoped to a later
 milestone or sub-project):
@@ -1916,16 +1957,19 @@ milestone or sub-project):
   ingest wired into the live turn path. **Still to come:** compaction/TTL/GC of
   dead rows, finer (per-agent/per-user) scoping, per-tenant embedding models,
   refinement/merge dedup, and session-level synthesis.
-- **Observability — first milestone DONE** (see [Observability](#observability)):
+- **Observability — first two milestones DONE** (see [Observability](#observability)):
   M1 Prometheus metrics (control-plane + per-agent series merged behind one
   auth-free `/metrics` via a hardened fan-out scrape), `X-Request-ID`
   correlation end-to-end (edge → proxy → agent logs → DBOS workflow input),
-  and the Prometheus + Grafana compose overlay with a provisioned dashboard.
-  **Still to come:** OTel tracing/OTLP push, sandboxd-internal metrics,
-  per-tenant token accounting, alerting/recording rules, a console `/ui`
-  metrics panel, log shipping, and DBOS-internal metrics.
-- **Write actions from the console** — the console is read-only; deploy/stop/
-  invoke from the UI is future work.
+  and the Prometheus + Grafana compose overlay with a provisioned dashboard;
+  M2 **OpenTelemetry distributed tracing** (OTLP/HTTP push, correlated
+  runtimed↔agentd traces joined by `request.id`, bundled OTel Collector +
+  Jaeger). **Still to come:** sandboxd-internal metrics, per-tenant token
+  accounting, alerting/recording rules, a console `/ui` metrics panel, log
+  shipping, and DBOS-internal metrics.
+- **Agent lifecycle from the console** — the console drives tenant onboarding
+  (keys + gateway upstreams) but cannot deploy/stop/invoke agents from the UI;
+  that remains future work.
 - **Autoscaling** — per-agent replica **pools** (`replicas: N`) and **load-based
   autoscaling** with graceful drain are done (`autoscale: {min, max,
   target_sessions_per_replica}`, see [Autoscaling (A2)](#autoscaling-a2)); what's
@@ -1940,26 +1984,33 @@ milestone or sub-project):
   (`gateway: search` / `?mode=search` — one listed `search_tools` tool,
   embedding-ranked discovery, callable-but-unlisted catalog), and M3
   REST/OpenAPI→tool adapters (`openapi:` upstreams — one generated tool per
-  spec operation, no MCP server required). **Still to come:**
-  dynamic upstream registration, resources/prompts passthrough, OAuth2
-  upstream auth, per-tenant upstream credentials, a console panel,
-  auto-minted agent keys, and rate limits.
+  spec operation, no MCP server required). v1.0-M1 added **self-service dynamic
+  upstream registration** (HTTP/OpenAPI upstreams via the console UI +
+  `/admin/upstreams` API + `runtimectl`, persisted in `gateway_upstreams`) and
+  **per-tenant upstream credentials** (brokered into the upstream's headers at
+  dial time). **Still to come:** resources/prompts passthrough, OAuth2
+  upstream auth, auto-minted agent keys, and rate limits.
 - **Polyglot hosting — first two milestones DONE** (see
   [the Python shim](#hosting-a-foreign-sdk-agent-python-shim)): the OpenAI
   Agents SDK and Claude Agent SDK adapters, each hosting the full nutrition
   investigator. **Still to come:** Level-2 in-flight crash resume, a TS shim,
   further adapters (PydanticAI is the next candidate), and reconciling the
   shim's follow-up-messages endpoint into the Go contract + conformance suite.
-- **Sandboxes — first milestone DONE** (see
-  [Code-interpreter sandbox](#code-interpreter-sandbox)): the isolated,
-  stateful, Docker-backed code interpreter, federated behind the gateway with
-  tenant-scoped ownership. **Still to come:** the browser sandbox, kernel-mode
-  variable persistence (same tool surface, persistent interpreter), network
-  egress policy / runtime `pip install`, per-user scoping, and a console
-  panel.
-- **Containers / Kubernetes** — the agent contract is designed to admit
-  containerized agents later (the conformance suite already validates them);
-  today agents are local subprocesses.
+- **Sandboxes — first two milestones DONE** (see
+  [Code-interpreter sandbox](#code-interpreter-sandbox) and
+  [Browser sandbox](#browser-sandbox)): the isolated, stateful, Docker-backed
+  code interpreter **and** the egress-policed Chromium browser, both federated
+  behind the gateway with tenant-scoped ownership. **Still to come:** kernel-mode
+  variable persistence (same tool surface, persistent interpreter), runtime
+  `pip install` / relaxed egress for the code interpreter, per-user scoping, and
+  a console panel.
+- **Containers / Kubernetes — DONE** (see [Kubernetes / Helm](#kubernetes--helm)
+  and [Remote agents](#remote-agents-attach-instead-of-spawn)): a container image
+  + Helm chart, per-agent-pod scheduling (each agent its own StatefulSet attached
+  as a remote pool), and **remote agents** (attach instead of spawn) with a
+  registration handshake that pulls a per-agent env-delta from `POST /register`.
+  Local subprocesses remain the default single-node mode. **Still to come:** a
+  K8s operator/CRDs and mTLS between control plane and remote agents.
 - **Cross-agent aggregate views** — session listing is per-agent; a fleet-wide
   session view is future console work.
 - **Minor hardening**: `session_events` sequence allocation assumes one writer
