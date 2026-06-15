@@ -130,6 +130,9 @@ func buildAgentFeed(ctx context.Context, reg *controlplane.Registry, client agen
 	if !ok {
 		return nil
 	}
+	// The feed's newest-first ordering relies on ListSessions returning sessions
+	// newest-first, which the agent runtime's GET /sessions does (its store query
+	// is ORDER BY created_at DESC).
 	sessions, err := client.ListSessions(ctx, ap)
 	if err != nil {
 		return nil
