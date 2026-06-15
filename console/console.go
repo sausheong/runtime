@@ -198,6 +198,20 @@ func Handler(reg *controlplane.Registry, oidc OIDCConfig, onb *Onboarding) http.
 			flashRedirect(w, r, "user saved")
 		}))
 
+		mux.HandleFunc("POST /ui/onboarding/users/{subject}/delete", guard(func(p identity.Principal, w http.ResponseWriter, r *http.Request) {
+			subject := r.PathValue("subject")
+			// Anti-lockout: an admin must not remove their own subject.
+			if subject == p.Subject {
+				http.Error(w, "cannot remove yourself", http.StatusBadRequest)
+				return
+			}
+			if err := onb.Admin.DeleteUser(r.Context(), p.TenantID, subject); err != nil {
+				http.Error(w, "delete user failed", http.StatusInternalServerError)
+				return
+			}
+			flashRedirect(w, r, "user removed")
+		}))
+
 		mux.HandleFunc("POST /ui/onboarding/secrets", guard(func(p identity.Principal, w http.ResponseWriter, r *http.Request) {
 			if onb.Secrets == nil {
 				http.Error(w, "secrets broker not configured (set RUNTIME_SECRETS_KEYS)", http.StatusServiceUnavailable)

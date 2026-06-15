@@ -316,3 +316,37 @@ func TestOnboardingSelfDemoteRejected(t *testing.T) {
 		t.Fatalf("self-demote: want 400 got %d", w.Code)
 	}
 }
+
+func TestOnboardingRemoveUser(t *testing.T) {
+	h, _, admin := newTestConsoleWithAdmin()
+	_ = admin.UpsertUser(context.Background(), "t1", "carol@example.com", identity.RoleViewer)
+	token := issuedCSRF(t, h)
+	form := url.Values{"csrf_token": {token}}
+	r := adminReq("POST", "/ui/onboarding/users/carol@example.com/delete", form)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	if w.Code != http.StatusSeeOther {
+		t.Fatalf("remove user: want 303 got %d", w.Code)
+	}
+	got, _ := admin.ListUsers(context.Background(), "t1")
+	if len(got) != 0 {
+		t.Fatalf("user not removed: %+v", got)
+	}
+}
+
+func TestOnboardingRemoveUserRequiresCSRF(t *testing.T) {
+	h, _, admin := newTestConsoleWithAdmin()
+	_ = admin.UpsertUser(context.Background(), "t1", "carol@example.com", identity.RoleViewer)
+	r := adminReq("POST", "/ui/onboarding/users/carol@example.com/delete", url.Values{})
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("remove without csrf: want 403 got %d", w.Code)
+	}
+}
+
+// NOTE: self-removal via an EMPTY path segment (/ui/onboarding/users//delete) is
+// not testable — Go's ServeMux collapses the "//" and 301-redirects before the
+// handler runs, so the empty {subject} never reaches the guard. The self-removal
+// guard is exercised with a non-empty subject in TestOnboardingSelfRemoveNonEmptySubject
+// (Task 5), which can set the principal's subject to match the path.
