@@ -1,8 +1,26 @@
-<!doctype html><html><head><title>Runtime — {{.AgentID}}</title>
+<!doctype html><html><head><meta charset="utf-8"><title>Runtime — {{.AgentID}}</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="stylesheet" href="/ui/static/style.css"></head><body>
-<p><a href="/ui">&larr; agents</a></p>
-<h1>Sessions — {{.AgentID}}</h1>
-<table id="sessions"><thead><tr><th>Session</th><th>Status</th><th>Turns</th></tr></thead><tbody></tbody></table>
+<header class="topbar">
+  <a class="brand" href="/ui"><span class="logo">R</span> Runtime</a>
+  <nav>
+    <a href="/ui">Agents</a>
+    <a href="/ui/onboarding">Onboarding</a>
+  </nav>
+</header>
+<main class="container">
+  <p class="breadcrumb"><a href="/ui">Agents</a> &rsaquo; <span class="mono">{{.AgentID}}</span></p>
+  <div class="page-head">
+    <h1>Sessions</h1>
+    <p class="subtitle">Conversations handled by <span class="mono">{{.AgentID}}</span>.</p>
+  </div>
+  <div class="card">
+    <table id="sessions">
+      <thead><tr><th>Session</th><th>Status</th><th>Turns</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+</main>
 <script>const AGENT="{{.AgentID}}";</script>
 <script src="/ui/static/app.js"></script>
 <script>loadSessions();</script>
