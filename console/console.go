@@ -126,8 +126,12 @@ func Handler(reg *controlplane.Registry, st store.Store, oidc OIDCConfig, onb *O
 			http.NotFound(w, r)
 			return
 		}
+		// Name/Model are omitted: reg.Get returns an AgentProcess (no display
+		// name), and the agent panel renders health/sessions, not the name. The
+		// page heading already shows the id. Avoid setting Name to the id, which
+		// would mislead any future template that surfaces Obs.Name.
 		obs := buildAgentObs(r.Context(), reg, st, httpProbe, controlplane.AgentInfo{
-			ID: ap.AgentID, Name: id, Tenant: ap.Tenant,
+			ID: ap.AgentID, Tenant: ap.Tenant,
 		})
 		render(w, "agent.html", map[string]any{"AgentID": id, "Obs": obs})
 	})
