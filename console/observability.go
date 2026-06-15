@@ -3,6 +3,7 @@ package console
 import (
 	"context"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -95,6 +96,74 @@ func buildAgentObs(ctx context.Context, reg *controlplane.Registry, client agent
 		o.Sessions = tallyHTTP(ctx, client, ap)
 	}
 	return o
+}
+
+// FeedEntry is one row in an agent's activity feed.
+type FeedEntry struct {
+	SessionID string
+	Seq       int64
+	Type      string
+	Snippet   string
+}
+
+// snippetOf renders an event's human-readable detail: the error (prefixed) when
+// present, else the text, trimmed to ~140 chars.
+func snippetOf(e eventRow) string {
+	s := e.Text
+	if e.Err != "" {
+		s = "error: " + e.Err
+	}
+	if len(s) > 140 {
+		s = strings.TrimSpace(s[:140]) + "…"
+	}
+	return s
+}
+
+// buildAgentFeed assembles a newest-session-first, seq-ascending-within feed for
+// one agent, capped at maxEvents across at most maxSessions sessions. Reads the
+// agent's own HTTP API (works for local and remote agents). Per-session fetch
+// errors are skipped (degrade, don't fail); no replicas / list error / no
+// sessions yields an empty slice.
+func buildAgentFeed(ctx context.Context, reg *controlplane.Registry, client agentClient, agentID string, maxSessions, maxEvents int) []FeedEntry {
+	ap, ok := reg.Replica(agentID, 0)
+	if !ok {
+		return nil
+	}
+	sessions, err := client.ListSessions(ctx, ap)
+	if err != nil {
+		return nil
+	}
+	if len(sessions) > maxSessions {
+		sessions = sessions[:maxSessions] // newest-first; keep the newest maxSessions
+	}
+	// Fetch each session's events concurrently; preserve session order on merge.
+	perSession := make([][]eventRow, len(sessions))
+	var wg sync.WaitGroup
+	for i := range sessions {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			evs, err := client.ListEvents(ctx, ap, sessions[i].ID, maxEvents)
+			if err != nil {
+				return // skip this session
+			}
+			perSession[i] = evs
+		}(i)
+	}
+	wg.Wait()
+
+	out := make([]FeedEntry, 0, maxEvents)
+	for i, evs := range perSession {
+		for _, e := range evs { // events are seq-ascending from the endpoint
+			out = append(out, FeedEntry{
+				SessionID: sessions[i].ID, Seq: e.Seq, Type: e.Type, Snippet: snippetOf(e),
+			})
+			if len(out) >= maxEvents {
+				return out
+			}
+		}
+	}
+	return out
 }
 
 // buildFleetObs assembles the fleet snapshot across the given (already

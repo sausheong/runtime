@@ -93,6 +93,57 @@ func TestBuildFleetObs_AggregatesActiveAndHealthy(t *testing.T) {
 	}
 }
 
+func TestBuildAgentFeed_OrderingAndTruncation(t *testing.T) {
+	reg := obsTestReg(t)
+	// /sessions returns newest-first: S1 then S2.
+	client := &fakeAgentClient{
+		sessions: map[string][]sessionRow{
+			"a": {{ID: "s1", Status: "running"}, {ID: "s2", Status: "completed"}},
+		},
+		events: map[string][]eventRow{
+			"s1": {{Seq: 1, Type: "text", Text: "one"}, {Seq: 2, Type: "text", Text: "two"}},
+			"s2": {{Seq: 1, Type: "done"}},
+		},
+	}
+	feed := buildAgentFeed(context.Background(), reg, client, "a", 10, 50)
+	if len(feed) != 3 {
+		t.Fatalf("len=%d want 3: %+v", len(feed), feed)
+	}
+	// Newest session block first (s1: seq 1,2), then s2: seq 1.
+	if feed[0].SessionID != "s1" || feed[0].Seq != 1 ||
+		feed[1].SessionID != "s1" || feed[1].Seq != 2 ||
+		feed[2].SessionID != "s2" || feed[2].Seq != 1 {
+		t.Fatalf("ordering wrong: %+v", feed)
+	}
+
+	// Truncation: cap at 2 events keeps the newest session block first.
+	feed2 := buildAgentFeed(context.Background(), reg, client, "a", 10, 2)
+	if len(feed2) != 2 || feed2[0].SessionID != "s1" || feed2[1].Seq != 2 {
+		t.Fatalf("truncation wrong: %+v", feed2)
+	}
+}
+
+func TestBuildAgentFeed_SnippetForError(t *testing.T) {
+	reg := obsTestReg(t)
+	client := &fakeAgentClient{
+		sessions: map[string][]sessionRow{"a": {{ID: "s1"}}},
+		events:   map[string][]eventRow{"s1": {{Seq: 1, Type: "error", Err: "kaboom"}}},
+	}
+	feed := buildAgentFeed(context.Background(), reg, client, "a", 10, 50)
+	if len(feed) != 1 || feed[0].Snippet != "error: kaboom" {
+		t.Fatalf("error snippet wrong: %+v", feed)
+	}
+}
+
+func TestBuildAgentFeed_NoSessionsEmpty(t *testing.T) {
+	reg := obsTestReg(t)
+	client := &fakeAgentClient{} // no sessions for "a"
+	feed := buildAgentFeed(context.Background(), reg, client, "a", 10, 50)
+	if len(feed) != 0 {
+		t.Fatalf("want empty feed, got %+v", feed)
+	}
+}
+
 func TestObservabilityPageRenders(t *testing.T) {
 	st := store.NewMemStore()
 	id, _ := st.CreateSession(context.Background(), "a", 0)
