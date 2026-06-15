@@ -76,6 +76,11 @@ func Handler(reg *controlplane.Registry, oidc OIDCConfig, onb *Onboarding) http.
 		http.Redirect(w, r, "/ui", http.StatusSeeOther)
 	})
 
+	mux.HandleFunc("POST /ui/logout", func(w http.ResponseWriter, r *http.Request) {
+		clearSessionCookie(w)
+		http.Redirect(w, r, "/ui/login", http.StatusSeeOther)
+	})
+
 	mux.HandleFunc("GET /ui/callback", func(w http.ResponseWriter, r *http.Request) {
 		if oidc.Exchange == nil {
 			http.Error(w, "oidc not configured", http.StatusBadRequest)
@@ -276,6 +281,15 @@ func setSessionCookie(w http.ResponseWriter, value string) {
 	http.SetCookie(w, &http.Cookie{
 		Name: "runtime_token", Value: value,
 		Path: "/", HttpOnly: true, SameSite: http.SameSiteLaxMode,
+	})
+}
+
+// clearSessionCookie expires the runtime_token cookie, logging the user out. The
+// Name/Path must match setSessionCookie so the browser overwrites the same cookie.
+func clearSessionCookie(w http.ResponseWriter) {
+	http.SetCookie(w, &http.Cookie{
+		Name: "runtime_token", Value: "",
+		Path: "/", HttpOnly: true, SameSite: http.SameSiteLaxMode, MaxAge: -1,
 	})
 }
 
