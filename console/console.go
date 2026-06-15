@@ -175,6 +175,29 @@ func Handler(reg *controlplane.Registry, oidc OIDCConfig, onb *Onboarding) http.
 			flashRedirect(w, r, "key:"+plaintext)
 		}))
 
+		mux.HandleFunc("POST /ui/onboarding/users", guard(func(p identity.Principal, w http.ResponseWriter, r *http.Request) {
+			subject := r.FormValue("subject")
+			if subject == "" {
+				http.Error(w, "subject required", http.StatusBadRequest)
+				return
+			}
+			role, err := identity.RoleFromString(r.FormValue("role"))
+			if err != nil {
+				http.Error(w, "valid role required", http.StatusBadRequest)
+				return
+			}
+			// Anti-lockout: an admin must not demote their own subject below admin.
+			if subject == p.Subject && role != identity.RoleAdmin {
+				http.Error(w, "cannot demote yourself", http.StatusBadRequest)
+				return
+			}
+			if err := onb.Admin.UpsertUser(r.Context(), p.TenantID, subject, role); err != nil {
+				http.Error(w, "upsert user failed", http.StatusInternalServerError)
+				return
+			}
+			flashRedirect(w, r, "user saved")
+		}))
+
 		mux.HandleFunc("POST /ui/onboarding/secrets", guard(func(p identity.Principal, w http.ResponseWriter, r *http.Request) {
 			if onb.Secrets == nil {
 				http.Error(w, "secrets broker not configured (set RUNTIME_SECRETS_KEYS)", http.StatusServiceUnavailable)

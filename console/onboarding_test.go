@@ -250,3 +250,69 @@ func TestOnboardingPOSTRequiresCSRF(t *testing.T) {
 		t.Fatalf("POST without csrf: want 403 got %d", w.Code)
 	}
 }
+
+func TestOnboardingAddUser(t *testing.T) {
+	h, _, admin := newTestConsoleWithAdmin()
+	token := issuedCSRF(t, h)
+	form := url.Values{"csrf_token": {token}, "subject": {"bob@example.com"}, "role": {"operator"}}
+	r := adminReq("POST", "/ui/onboarding/users", form)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	if w.Code != http.StatusSeeOther {
+		t.Fatalf("add user: want 303 got %d", w.Code)
+	}
+	got, _ := admin.ListUsers(context.Background(), "t1")
+	if len(got) != 1 || got[0].Subject != "bob@example.com" || got[0].Role != identity.RoleOperator {
+		t.Fatalf("user not upserted: %+v", got)
+	}
+}
+
+func TestOnboardingAddUserInvalidRole(t *testing.T) {
+	h, _, _ := newTestConsoleWithAdmin()
+	token := issuedCSRF(t, h)
+	form := url.Values{"csrf_token": {token}, "subject": {"x@y.com"}, "role": {"superhero"}}
+	r := adminReq("POST", "/ui/onboarding/users", form)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("invalid role: want 400 got %d", w.Code)
+	}
+}
+
+func TestOnboardingAddUserEmptySubject(t *testing.T) {
+	h, _, _ := newTestConsoleWithAdmin()
+	token := issuedCSRF(t, h)
+	form := url.Values{"csrf_token": {token}, "subject": {""}, "role": {"viewer"}}
+	r := adminReq("POST", "/ui/onboarding/users", form)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("empty subject: want 400 got %d", w.Code)
+	}
+}
+
+func TestOnboardingAddUserRequiresCSRF(t *testing.T) {
+	h, _, _ := newTestConsoleWithAdmin()
+	form := url.Values{"subject": {"x@y.com"}, "role": {"viewer"}}
+	r := adminReq("POST", "/ui/onboarding/users", form)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("no csrf: want 403 got %d", w.Code)
+	}
+}
+
+func TestOnboardingSelfDemoteRejected(t *testing.T) {
+	h, _, _ := newTestConsoleWithAdmin()
+	token := issuedCSRF(t, h)
+	// adminReq's principal has Subject == "" and Role == admin; demoting "" to
+	// viewer is self-demotion. (Empty-subject validation also returns 400 here,
+	// which is consistent — both assert 400.)
+	form := url.Values{"csrf_token": {token}, "subject": {""}, "role": {"viewer"}}
+	r := adminReq("POST", "/ui/onboarding/users", form)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("self-demote: want 400 got %d", w.Code)
+	}
+}
