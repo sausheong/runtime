@@ -134,7 +134,8 @@ func Handler(reg *controlplane.Registry, st store.Store, oidc OIDCConfig, onb *O
 		obs := buildAgentObs(r.Context(), reg, aclient, httpProbe, controlplane.AgentInfo{
 			ID: ap.AgentID, Tenant: ap.Tenant,
 		})
-		render(w, "agent.html", map[string]any{"AgentID": id, "Obs": obs})
+		feed := buildAgentFeed(r.Context(), reg, aclient, ap.AgentID, 10, 50)
+		render(w, "agent.html", map[string]any{"AgentID": id, "Obs": obs, "Feed": feed})
 	})
 
 	mux.HandleFunc("GET /ui/agents/{id}/sessions/{sid}", func(w http.ResponseWriter, r *http.Request) {

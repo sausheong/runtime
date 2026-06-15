@@ -26,6 +26,26 @@
       <div class="stat"><div class="stat-num">{{.Obs.Sessions.Total}}</div><div class="stat-label">Total</div></div>
     </div>
   </section>
+  <section class="card">
+    <h2>Activity</h2>
+    <p class="card-desc">Most recent events across this agent's sessions.</p>
+    {{if .Feed}}
+    <table>
+      <thead><tr><th>Session</th><th>Event</th><th>Detail</th></tr></thead>
+      <tbody>
+      {{range .Feed}}
+        <tr>
+          <td><a class="mono" href="/ui/agents/{{$.AgentID}}/sessions/{{.SessionID}}">{{.SessionID}}</a></td>
+          <td><span class="badge">{{.Type}}</span></td>
+          <td>{{.Snippet}}</td>
+        </tr>
+      {{end}}
+      </tbody>
+    </table>
+    {{else}}
+    <p class="empty">No recent activity.</p>
+    {{end}}
+  </section>
   <div class="card">
     <table id="sessions">
       <thead><tr><th>Session</th><th>Status</th><th>Turns</th></tr></thead>
