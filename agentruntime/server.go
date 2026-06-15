@@ -162,6 +162,43 @@ func (m *Manager) newMux() *http.ServeMux {
 			}
 		}
 	})
+	mux.HandleFunc("GET /sessions/{id}/events", func(w http.ResponseWriter, r *http.Request) {
+		id := r.PathValue("id")
+		var since int64
+		if s := r.URL.Query().Get("since"); s != "" {
+			since, _ = strconv.ParseInt(s, 10, 64)
+		}
+		limit := 50
+		if s := r.URL.Query().Get("limit"); s != "" {
+			if n, err := strconv.Atoi(s); err == nil && n > 0 {
+				limit = n
+			}
+		}
+		// Non-blocking, unlike the SSE stream: a pure read of stored events. A
+		// non-terminal session returns whatever is buffered so far and returns
+		// immediately (no subscribe).
+		evs, err := m.st.EventsSince(r.Context(), id, since)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if len(evs) > limit {
+			evs = evs[len(evs)-limit:] // events are seq-ascending; keep the most recent
+		}
+		type evOut struct {
+			Seq  int64  `json:"seq"`
+			Type string `json:"type"`
+			Text string `json:"text,omitempty"`
+			Err  string `json:"error,omitempty"`
+		}
+		out := make([]evOut, 0, len(evs))
+		for _, e := range evs {
+			var ev WireEvent
+			_ = json.Unmarshal(e.Payload, &ev) // bad/empty payload → empty fields, never a 500
+			out = append(out, evOut{Seq: e.Seq, Type: ev.Type, Text: ev.Text, Err: ev.Err})
+		}
+		_ = json.NewEncoder(w).Encode(out)
+	})
 	mux.HandleFunc("GET /sessions/{id}", func(w http.ResponseWriter, r *http.Request) {
 		row, err := m.st.GetSession(r.Context(), r.PathValue("id"))
 		if err != nil {

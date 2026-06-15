@@ -2,6 +2,7 @@ package agentruntime
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -206,5 +207,57 @@ func TestHandler_ContinuesInboundTrace(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("no agentd server span continued the inbound trace id")
+	}
+}
+
+func TestEventsEndpointNonBlocking(t *testing.T) {
+	m := newTestManager()
+	ctx := context.Background()
+	id, _ := m.st.CreateSession(ctx, "a", 0)
+	_, _ = m.st.AppendEvent(ctx, id, "text", []byte(`{"type":"text","text":"one"}`))
+	_, _ = m.st.AppendEvent(ctx, id, "text", []byte(`{"type":"text","text":"two"}`))
+	_, _ = m.st.AppendEvent(ctx, id, "text", []byte(`{"type":"text","text":"three"}`))
+	// Note: session is NOT terminal (no done/error). The endpoint must still
+	// return promptly — it must not block waiting for live events.
+
+	srv := httptest.NewServer(m.newMux())
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/sessions/" + id + "/events?limit=2")
+	if err != nil {
+		t.Fatalf("GET events: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("code=%d want 200", resp.StatusCode)
+	}
+	var got []struct {
+		Seq  int64  `json:"seq"`
+		Type string `json:"type"`
+		Text string `json:"text"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("len=%d want 2 (limit honored, last 2)", len(got))
+	}
+	if got[0].Text != "two" || got[1].Text != "three" {
+		t.Fatalf("want last two in seq order [two,three], got %+v", got)
+	}
+}
+
+func TestEventsEndpointUnknownSessionEmptyArray(t *testing.T) {
+	m := newTestManager()
+	srv := httptest.NewServer(m.newMux())
+	defer srv.Close()
+	resp, err := http.Get(srv.URL + "/sessions/nope/events")
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if strings.TrimSpace(string(body)) != "[]" {
+		t.Fatalf("unknown session should yield [], got %q", string(body))
 	}
 }
