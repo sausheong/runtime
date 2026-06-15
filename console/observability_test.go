@@ -2,6 +2,7 @@ package console
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -11,6 +12,27 @@ import (
 	"github.com/sausheong/runtime/internal/config"
 	"github.com/sausheong/runtime/internal/store"
 )
+
+// fakeAgentClient serves canned sessions/events per agent for hermetic tests.
+type fakeAgentClient struct {
+	sessions  map[string][]sessionRow // keyed by ap.AgentID
+	events    map[string][]eventRow   // keyed by sessionID
+	errAgents map[string]bool         // ap.AgentID -> ListSessions errors
+}
+
+func (f *fakeAgentClient) ListSessions(_ context.Context, ap controlplane.AgentProcess) ([]sessionRow, error) {
+	if f.errAgents[ap.AgentID] {
+		return nil, fmt.Errorf("boom")
+	}
+	return f.sessions[ap.AgentID], nil
+}
+func (f *fakeAgentClient) ListEvents(_ context.Context, _ controlplane.AgentProcess, sid string, limit int) ([]eventRow, error) {
+	evs := f.events[sid]
+	if len(evs) > limit {
+		evs = evs[len(evs)-limit:]
+	}
+	return evs, nil
+}
 
 func obsTestReg(t *testing.T) *controlplane.Registry {
 	t.Helper()
@@ -22,16 +44,15 @@ func obsTestReg(t *testing.T) *controlplane.Registry {
 
 func TestBuildAgentObs_TalliesAndHealth(t *testing.T) {
 	reg := obsTestReg(t)
-	st := store.NewMemStore()
 	ctx := context.Background()
-	for _, s := range []string{"created", "running", "completed", "error"} {
-		id, _ := st.CreateSession(ctx, "a", 0)
-		_ = st.SetSessionStatus(ctx, id, s)
-	}
+	client := &fakeAgentClient{sessions: map[string][]sessionRow{
+		"a": {{ID: "s1", Status: "created"}, {ID: "s2", Status: "running"},
+			{ID: "s3", Status: "completed"}, {ID: "s4", Status: "error"}},
+	}}
 	info := controlplane.AgentInfo{ID: "a", Name: "AlphaAgent", Model: "m", Tenant: "acme"}
 	probe := func(ap controlplane.AgentProcess) bool { return true }
 
-	obs := buildAgentObs(ctx, reg, st, probe, info)
+	obs := buildAgentObs(ctx, reg, client, probe, info)
 	if obs.Sessions.Created != 1 || obs.Sessions.Running != 1 || obs.Sessions.Completed != 1 || obs.Sessions.Error != 1 {
 		t.Fatalf("tally wrong: %+v", obs.Sessions)
 	}
@@ -43,23 +64,24 @@ func TestBuildAgentObs_TalliesAndHealth(t *testing.T) {
 	}
 }
 
-func TestBuildAgentObs_NilStoreNoPanic(t *testing.T) {
+func TestBuildAgentObs_ClientErrorZeroTally(t *testing.T) {
 	reg := obsTestReg(t)
+	client := &fakeAgentClient{errAgents: map[string]bool{"a": true}}
 	info := controlplane.AgentInfo{ID: "a", Name: "AlphaAgent", Tenant: "acme"}
-	obs := buildAgentObs(context.Background(), reg, nil, func(controlplane.AgentProcess) bool { return false }, info)
+	obs := buildAgentObs(context.Background(), reg, client, func(controlplane.AgentProcess) bool { return false }, info)
 	if obs.Sessions.Total != 0 || obs.Healthy != 0 {
-		t.Fatalf("nil store should give zero tally and unhealthy: %+v", obs)
+		t.Fatalf("client error should give zero tally and unhealthy: %+v", obs)
 	}
 }
 
 func TestBuildFleetObs_AggregatesActiveAndHealthy(t *testing.T) {
 	reg := obsTestReg(t)
-	st := store.NewMemStore()
 	ctx := context.Background()
-	id, _ := st.CreateSession(ctx, "a", 0)
-	_ = st.SetSessionStatus(ctx, id, "running")
+	client := &fakeAgentClient{sessions: map[string][]sessionRow{
+		"a": {{ID: "s1", Status: "running"}},
+	}}
 	infos := []controlplane.AgentInfo{{ID: "a", Name: "AlphaAgent", Tenant: "acme"}}
-	fleet := buildFleetObs(ctx, reg, st, func(controlplane.AgentProcess) bool { return true }, infos)
+	fleet := buildFleetObs(ctx, reg, client, func(controlplane.AgentProcess) bool { return true }, infos)
 	if fleet.TotalAgents != 1 || fleet.HealthyAgents != 1 {
 		t.Fatalf("fleet agents: total=%d healthy=%d", fleet.TotalAgents, fleet.HealthyAgents)
 	}

@@ -52,11 +52,12 @@ type Onboarding struct {
 // agents overview from the registry and link to the control-plane API + SSE
 // endpoints it is mounted beside. When onb is non-nil it additionally mounts the
 // self-service onboarding page and its CSRF-guarded, admin-gated POST handlers.
-// st (the control-plane store) backs the observability views; it may be nil
-// (session tallies render as "—").
+// st (the control-plane store) is retained for compatibility; observability
+// tallies and the activity feed now read each agent's own HTTP API.
 func Handler(reg *controlplane.Registry, st store.Store, oidc OIDCConfig, onb *Onboarding) http.Handler {
 	mux := http.NewServeMux()
 	csrf := newCSRF()
+	var aclient agentClient = httpAgentClient{}
 
 	mux.Handle("GET /ui/static/", http.StripPrefix("/ui/static/", http.FileServerFS(staticFS)))
 
@@ -104,7 +105,7 @@ func Handler(reg *controlplane.Registry, st store.Store, oidc OIDCConfig, onb *O
 
 	mux.HandleFunc("GET /ui/observability", func(w http.ResponseWriter, r *http.Request) {
 		agents := visibleAgents(r, reg)
-		fleet := buildFleetObs(r.Context(), reg, st, httpProbe, agents)
+		fleet := buildFleetObs(r.Context(), reg, aclient, httpProbe, agents)
 		if onb != nil {
 			// onb is non-nil only when identity is on, and IdentityMiddleware then
 			// always injects a principal on a successful request — so the else
@@ -130,7 +131,7 @@ func Handler(reg *controlplane.Registry, st store.Store, oidc OIDCConfig, onb *O
 		// name), and the agent panel renders health/sessions, not the name. The
 		// page heading already shows the id. Avoid setting Name to the id, which
 		// would mislead any future template that surfaces Obs.Name.
-		obs := buildAgentObs(r.Context(), reg, st, httpProbe, controlplane.AgentInfo{
+		obs := buildAgentObs(r.Context(), reg, aclient, httpProbe, controlplane.AgentInfo{
 			ID: ap.AgentID, Tenant: ap.Tenant,
 		})
 		render(w, "agent.html", map[string]any{"AgentID": id, "Obs": obs})

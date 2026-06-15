@@ -8,7 +8,6 @@ import (
 
 	"github.com/sausheong/runtime/controlplane"
 	"github.com/sausheong/runtime/internal/gateway"
-	"github.com/sausheong/runtime/internal/store"
 )
 
 // SessionTally counts a single agent's sessions by status.
@@ -54,14 +53,12 @@ func httpProbe(ap controlplane.AgentProcess) bool {
 	return resp.StatusCode == 200
 }
 
-// tally reads an agent's sessions from the store and counts them by status. A nil
-// store or a store error yields a zero tally (the page still renders).
-func tally(ctx context.Context, st store.Store, agentID string) SessionTally {
+// tallyHTTP reads an agent's sessions from its own HTTP API and counts them by
+// status. A client error yields a zero tally (the page still renders), matching
+// the previous store-error behaviour.
+func tallyHTTP(ctx context.Context, client agentClient, ap controlplane.AgentProcess) SessionTally {
 	var t SessionTally
-	if st == nil {
-		return t
-	}
-	rows, err := st.ListSessions(ctx, agentID)
+	rows, err := client.ListSessions(ctx, ap)
 	if err != nil {
 		return t
 	}
@@ -82,8 +79,8 @@ func tally(ctx context.Context, st store.Store, agentID string) SessionTally {
 }
 
 // buildAgentObs assembles the snapshot for one agent: replica health (via probe)
-// and session tally (via store).
-func buildAgentObs(ctx context.Context, reg *controlplane.Registry, st store.Store, probe probeFunc, info controlplane.AgentInfo) AgentObs {
+// and session tally (via the agent's own HTTP API).
+func buildAgentObs(ctx context.Context, reg *controlplane.Registry, client agentClient, probe probeFunc, info controlplane.AgentInfo) AgentObs {
 	o := AgentObs{ID: info.ID, Name: info.Name, Model: info.Model, Tenant: info.Tenant}
 	replicas, _ := reg.Replicas(info.ID)
 	o.Replicas = len(replicas)
@@ -92,23 +89,27 @@ func buildAgentObs(ctx context.Context, reg *controlplane.Registry, st store.Sto
 			o.Healthy++
 		}
 	}
-	o.Sessions = tally(ctx, st, info.ID)
+	// Tally against replica 0 (the proxy's attach target; all replicas of an
+	// agent share that agent's session store). Absent replica 0 → zero tally.
+	if ap, ok := reg.Replica(info.ID, 0); ok {
+		o.Sessions = tallyHTTP(ctx, client, ap)
+	}
 	return o
 }
 
 // buildFleetObs assembles the fleet snapshot across the given (already
 // tenant-filtered) agents. Agents are probed concurrently; each goroutine writes
 // its own pre-allocated slice slot and aggregation runs after Wait, so the only
-// shared reads are reg + st, which must be safe for concurrent reads (the PG and
-// in-memory stores and the Registry all are).
-func buildFleetObs(ctx context.Context, reg *controlplane.Registry, st store.Store, probe probeFunc, infos []controlplane.AgentInfo) FleetObs {
+// shared reads are reg + client, which must be safe for concurrent reads (the
+// Registry and httpAgentClient both are).
+func buildFleetObs(ctx context.Context, reg *controlplane.Registry, client agentClient, probe probeFunc, infos []controlplane.AgentInfo) FleetObs {
 	f := FleetObs{Agents: make([]AgentObs, len(infos)), TotalAgents: len(infos)}
 	var wg sync.WaitGroup
 	for i := range infos {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			f.Agents[i] = buildAgentObs(ctx, reg, st, probe, infos[i])
+			f.Agents[i] = buildAgentObs(ctx, reg, client, probe, infos[i])
 		}(i)
 	}
 	wg.Wait()
