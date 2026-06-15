@@ -45,19 +45,45 @@ func (f *fakeMut2) Add(cfg config.GatewayServer) error            { return nil }
 func (f *fakeMut2) Remove(name string)                            {}
 func (f *fakeMut2) Status(tenant string) []gateway.UpstreamStatus { return nil }
 
-// fakeAdmin2 implements controlplane.AdminStore with zero-value stubs.
-type fakeAdmin2 struct{}
+// fakeAdmin2 implements controlplane.AdminStore. User methods are stateful so
+// tests can observe add/update/remove; the rest are zero-value stubs.
+type fakeAdmin2 struct {
+	users     map[string]identity.UserRow // subject -> row
+	userOrder []string                    // subjects in insertion order
+}
 
 func (f *fakeAdmin2) CreateTenant(ctx context.Context, id, name string) error { return nil }
 func (f *fakeAdmin2) TenantExists(ctx context.Context, id string) (bool, error) {
 	return false, nil
 }
 func (f *fakeAdmin2) UpsertUser(ctx context.Context, tenantID, subject string, role identity.Role) error {
+	if f.users == nil {
+		f.users = map[string]identity.UserRow{}
+	}
+	if _, exists := f.users[subject]; !exists {
+		f.userOrder = append(f.userOrder, subject)
+	}
+	f.users[subject] = identity.UserRow{TenantID: tenantID, Subject: subject, Role: role}
 	return nil
 }
-func (f *fakeAdmin2) DeleteUser(ctx context.Context, tenantID, subject string) error { return nil }
+func (f *fakeAdmin2) DeleteUser(ctx context.Context, tenantID, subject string) error {
+	delete(f.users, subject)
+	for i, s := range f.userOrder {
+		if s == subject {
+			f.userOrder = append(f.userOrder[:i], f.userOrder[i+1:]...)
+			break
+		}
+	}
+	return nil
+}
 func (f *fakeAdmin2) ListUsers(ctx context.Context, tenantID string) ([]identity.UserRow, error) {
-	return nil, nil
+	var out []identity.UserRow
+	for _, s := range f.userOrder {
+		if f.users[s].TenantID == tenantID {
+			out = append(out, f.users[s])
+		}
+	}
+	return out, nil
 }
 func (f *fakeAdmin2) InsertServiceKey(ctx context.Context, id, tenantID, hash string, role identity.Role, label string) error {
 	return nil
@@ -103,14 +129,20 @@ func adminReq(method, path string, body url.Values) *http.Request {
 }
 
 func newTestConsole() (http.Handler, *fakeUpstreamStore2) {
+	h, us, _ := newTestConsoleWithAdmin()
+	return h, us
+}
+
+func newTestConsoleWithAdmin() (http.Handler, *fakeUpstreamStore2, *fakeAdmin2) {
 	us := &fakeUpstreamStore2{}
+	admin := &fakeAdmin2{}
 	deps := &Onboarding{
 		Upstreams: us,
 		Mutator:   &fakeMut2{},
-		Admin:     &fakeAdmin2{},
+		Admin:     admin,
 		Secrets:   &fakeSec2{},
 	}
-	return Handler(nil, OIDCConfig{}, deps), us
+	return Handler(nil, OIDCConfig{}, deps), us, admin
 }
 
 func TestOnboardingGETRendersForAdmin(t *testing.T) {
