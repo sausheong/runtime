@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/sausheong/runtime/controlplane"
 	"github.com/sausheong/runtime/internal/config"
@@ -132,6 +133,18 @@ func TestBuildAgentFeed_SnippetForError(t *testing.T) {
 	feed := buildAgentFeed(context.Background(), reg, client, "a", 10, 50)
 	if len(feed) != 1 || feed[0].Snippet != "error: kaboom" {
 		t.Fatalf("error snippet wrong: %+v", feed)
+	}
+}
+
+func TestSnippetOf_MultibyteTruncationStaysValidUTF8(t *testing.T) {
+	long := strings.Repeat("世", 200) // 200 runes, 600 bytes
+	s := snippetOf(eventRow{Type: "text", Text: long})
+	if !utf8.ValidString(s) {
+		t.Fatalf("snippet is not valid UTF-8: %q", s)
+	}
+	// 140 runes kept + the ellipsis rune = 141 runes.
+	if n := utf8.RuneCountInString(s); n != 141 {
+		t.Fatalf("rune count = %d, want 141 (140 + ellipsis)", n)
 	}
 }
 

@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/sausheong/runtime/controlplane"
 	"github.com/sausheong/runtime/internal/gateway"
@@ -113,8 +114,8 @@ func snippetOf(e eventRow) string {
 	if e.Err != "" {
 		s = "error: " + e.Err
 	}
-	if len(s) > 140 {
-		s = strings.TrimSpace(s[:140]) + "…"
+	if utf8.RuneCountInString(s) > 140 {
+		s = strings.TrimSpace(string([]rune(s)[:140])) + "…"
 	}
 	return s
 }
