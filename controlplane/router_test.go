@@ -160,3 +160,57 @@ func httpGetCode(t *testing.T, url string) int {
 	resp.Body.Close()
 	return resp.StatusCode
 }
+
+// TestAPI_RemoteAgentSessionRoutesWithoutLocalStore reproduces the C3 remote-agent
+// bug: a remote agent owns its OWN session store (a separate Postgres on its
+// instance), so the session id it returns from POST /sessions is NOT recorded in
+// the control plane's store. A session-scoped follow-up (stream/get) must still
+// proxy to the remote — the control plane cannot resolve affinity from its store
+// and must NOT 404 "unknown session" for a remote. (Local agents share the
+// control plane's store, so their affinity lookup is unaffected.)
+func TestAPI_RemoteAgentSessionRoutesWithoutLocalStore(t *testing.T) {
+	var streamHit int32
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/sessions" && r.Method == "POST" {
+			_ = json.NewEncoder(w).Encode(map[string]string{"session_id": "ses-remote-123"})
+			return
+		}
+		// Any session-scoped path (the remote owns this session).
+		if strings.HasPrefix(r.URL.Path, "/sessions/") {
+			atomic.AddInt32(&streamHit, 1)
+		}
+		w.WriteHeader(200)
+	}))
+	defer backend.Close()
+
+	reg := remoteRegistry(t, "rem", backend.URL)
+
+	// Control-plane store is EMPTY — it never saw this remote's session, exactly
+	// as in a separate-instance deployment.
+	srv := httptest.NewServer(NewAPI(reg, nil, store.NewMemStore()))
+	defer srv.Close()
+
+	// A session-scoped GET for a session the control-plane store has never heard
+	// of must still proxy to the remote (not 404).
+	code := httpGetCode(t, srv.URL+"/agents/rem/sessions/ses-remote-123/stream?since=0")
+	if code != http.StatusOK {
+		t.Fatalf("remote session-scoped request: got %d, want 200 (must proxy, not 'unknown session')", code)
+	}
+	if atomic.LoadInt32(&streamHit) != 1 {
+		t.Fatalf("remote session-scoped request did not reach the backend (hits=%d)", streamHit)
+	}
+}
+
+// remoteRegistry builds a registry for one REMOTE agent (single attach target)
+// whose dial base is the given full URL (an httptest server).
+func remoteRegistry(t *testing.T, id, base string) *Registry {
+	t.Helper()
+	cfg := &config.Config{Agents: []config.AgentConfig{
+		{ID: id, Name: id, Model: "m", URL: base, Tenant: "default"},
+	}}
+	r := NewRegistry(cfg, "/bin/agentd", "dsn")
+	r.sets[id] = []AgentProcess{
+		{AgentID: id, BaseURL: base, Remote: true, ReplicaIndex: 0, Tenant: "default"},
+	}
+	return r
+}

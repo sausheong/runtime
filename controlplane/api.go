@@ -115,7 +115,17 @@ func pickReplica(r *http.Request, reg *Registry, st store.Store, id string) (Age
 	if sid, ok := sessionID(path); ok {
 		i, err := st.SessionReplica(r.Context(), sid)
 		if err != nil {
-			return AgentProcess{}, false // session truly unknown
+			// A REMOTE agent owns its own session store (a separate Postgres on
+			// its instance), so the control plane's store never recorded this
+			// session — a miss here is expected, not "unknown". Route to the
+			// remote's single attach target (replica 0) and let the remote
+			// resolve the session itself (it 404s if it truly doesn't exist).
+			// Local agents share the control plane's store, so for them a miss is
+			// a genuinely unknown session and we keep the honest 404.
+			if ap, ok := reg.Replica(id, 0); ok && ap.Remote {
+				return ap, true
+			}
+			return AgentProcess{}, false // local agent: session truly unknown
 		}
 		// A known session whose stored owner index is now out of range (e.g. the
 		// agent was reconfigured to fewer replicas than when this session was
