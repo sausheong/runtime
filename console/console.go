@@ -102,6 +102,23 @@ func Handler(reg *controlplane.Registry, st store.Store, oidc OIDCConfig, onb *O
 		render(w, "overview.html", map[string]any{"Agents": visibleAgents(r, reg)})
 	})
 
+	mux.HandleFunc("GET /ui/observability", func(w http.ResponseWriter, r *http.Request) {
+		agents := visibleAgents(r, reg)
+		fleet := buildFleetObs(r.Context(), reg, st, httpProbe, agents)
+		if onb != nil {
+			// onb is non-nil only when identity is on, and IdentityMiddleware then
+			// always injects a principal on a successful request — so the else
+			// (open-mode, all tenants) branch is effectively unreachable here;
+			// kept for safety and to mirror principalCanSeeTenant's open-mode rule.
+			if p, ok := controlplane.PrincipalFromContext(r.Context()); ok {
+				fleet.Upstreams = onb.Mutator.Status(p.TenantID)
+			} else {
+				fleet.Upstreams = onb.Mutator.Status("")
+			}
+		}
+		render(w, "observability.html", map[string]any{"Fleet": fleet})
+	})
+
 	mux.HandleFunc("GET /ui/agents/{id}", func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
 		ap, ok := reg.Get(id)

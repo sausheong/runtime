@@ -1,0 +1,65 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Runtime — Observability</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="/ui/static/style.css"></head><body>
+<header class="topbar">
+  <a class="brand" href="/ui"><span class="logo">R</span> Runtime</a>
+  <nav>
+    <a href="/ui">Agents</a>
+    <a href="/ui/observability">Observability</a>
+    <a href="/ui/onboarding">Onboarding</a>
+    <form method="post" action="/ui/logout"><button type="submit" class="navbtn">Sign out</button></form>
+  </nav>
+</header>
+<main class="container">
+  <div class="page-head">
+    <h1>Observability</h1>
+    <p class="subtitle">Live snapshot of agents, sessions, and gateway upstreams.</p>
+  </div>
+
+  <section class="card">
+    <h2>Fleet summary</h2>
+    <div class="row">
+      <div class="stat"><div class="stat-num">{{.Fleet.TotalAgents}}</div><div class="stat-label">Agents</div></div>
+      <div class="stat"><div class="stat-num">{{.Fleet.HealthyAgents}}</div><div class="stat-label">Healthy</div></div>
+      <div class="stat"><div class="stat-num">{{.Fleet.ActiveSessions}}</div><div class="stat-label">Active sessions</div></div>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>Agents</h2>
+    <table>
+      <thead><tr><th>Agent</th><th>Replicas</th><th>Sessions</th></tr></thead>
+      <tbody>
+      {{range .Fleet.Agents}}<tr>
+        <td><a href="/ui/agents/{{.ID}}" class="mono">{{.ID}}</a> <span class="subtitle">{{.Name}}</span></td>
+        <td>{{if gt .Healthy 0}}<span class="dot dot-ok"></span>{{else}}<span class="dot dot-off"></span>{{end}}{{.Healthy}}/{{.Replicas}}</td>
+        <td>
+          <span class="badge badge-ok">{{.Sessions.Running}} running</span>
+          <span class="badge badge-muted">{{.Sessions.Completed}} done</span>
+          {{if gt .Sessions.Error 0}}<span class="badge badge-role">{{.Sessions.Error}} error</span>{{end}}
+        </td>
+      </tr>{{else}}
+        <tr><td colspan="3" class="empty">No agents in this tenant.</td></tr>
+      {{end}}
+      </tbody>
+    </table>
+  </section>
+
+  {{if .Fleet.Upstreams}}
+  <section class="card">
+    <h2>Gateway upstreams</h2>
+    <table>
+      <thead><tr><th>Name</th><th>Transport</th><th>State</th><th>Tools</th></tr></thead>
+      <tbody>
+      {{range .Fleet.Upstreams}}<tr>
+        <td>{{.Name}}</td>
+        <td><span class="badge badge-muted">{{.Transport}}</span></td>
+        <td>{{if eq .State "up"}}<span class="dot dot-ok"></span>up{{else}}<span class="dot dot-off"></span>down{{end}}</td>
+        <td>{{.ToolCount}}</td>
+      </tr>{{end}}
+      </tbody>
+    </table>
+  </section>
+  {{end}}
+</main>
+</body></html>

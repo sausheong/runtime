@@ -2,6 +2,9 @@ package console
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/sausheong/runtime/controlplane"
@@ -65,5 +68,33 @@ func TestBuildFleetObs_AggregatesActiveAndHealthy(t *testing.T) {
 	}
 	if len(fleet.Agents) != 1 || fleet.Agents[0].ID != "a" {
 		t.Fatalf("fleet.Agents wrong: %+v", fleet.Agents)
+	}
+}
+
+func TestObservabilityPageRenders(t *testing.T) {
+	st := store.NewMemStore()
+	id, _ := st.CreateSession(context.Background(), "a", 0)
+	_ = st.SetSessionStatus(context.Background(), id, "running")
+	h := Handler(obsTestReg(t), st, OIDCConfig{}, nil) // open mode → all agents visible
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest("GET", "/ui/observability", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /ui/observability: code=%d want 200", rec.Code)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "Fleet summary") {
+		t.Fatal("missing Fleet summary section")
+	}
+	if !strings.Contains(body, "AlphaAgent") {
+		t.Fatal("missing agent row")
+	}
+}
+
+func TestObservabilityNavLinkPresent(t *testing.T) {
+	h := Handler(obsTestReg(t), store.NewMemStore(), OIDCConfig{}, nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest("GET", "/ui", nil))
+	if !strings.Contains(rec.Body.String(), `href="/ui/observability"`) {
+		t.Fatal("overview topbar missing Observability nav link")
 	}
 }
