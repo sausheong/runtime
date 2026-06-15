@@ -2,15 +2,38 @@ package console
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/sausheong/runtime/controlplane"
 	"github.com/sausheong/runtime/internal/config"
 	"github.com/sausheong/runtime/internal/store"
 )
+
+// fakeAgentClient serves canned sessions/events per agent for hermetic tests.
+type fakeAgentClient struct {
+	sessions  map[string][]sessionRow // keyed by ap.AgentID
+	events    map[string][]eventRow   // keyed by sessionID
+	errAgents map[string]bool         // ap.AgentID -> ListSessions errors
+}
+
+func (f *fakeAgentClient) ListSessions(_ context.Context, ap controlplane.AgentProcess) ([]sessionRow, error) {
+	if f.errAgents[ap.AgentID] {
+		return nil, fmt.Errorf("boom")
+	}
+	return f.sessions[ap.AgentID], nil
+}
+func (f *fakeAgentClient) ListEvents(_ context.Context, _ controlplane.AgentProcess, sid string, limit int) ([]eventRow, error) {
+	evs := f.events[sid]
+	if len(evs) > limit {
+		evs = evs[len(evs)-limit:]
+	}
+	return evs, nil
+}
 
 func obsTestReg(t *testing.T) *controlplane.Registry {
 	t.Helper()
@@ -22,16 +45,15 @@ func obsTestReg(t *testing.T) *controlplane.Registry {
 
 func TestBuildAgentObs_TalliesAndHealth(t *testing.T) {
 	reg := obsTestReg(t)
-	st := store.NewMemStore()
 	ctx := context.Background()
-	for _, s := range []string{"created", "running", "completed", "error"} {
-		id, _ := st.CreateSession(ctx, "a", 0)
-		_ = st.SetSessionStatus(ctx, id, s)
-	}
+	client := &fakeAgentClient{sessions: map[string][]sessionRow{
+		"a": {{ID: "s1", Status: "created"}, {ID: "s2", Status: "running"},
+			{ID: "s3", Status: "completed"}, {ID: "s4", Status: "error"}},
+	}}
 	info := controlplane.AgentInfo{ID: "a", Name: "AlphaAgent", Model: "m", Tenant: "acme"}
 	probe := func(ap controlplane.AgentProcess) bool { return true }
 
-	obs := buildAgentObs(ctx, reg, st, probe, info)
+	obs := buildAgentObs(ctx, reg, client, probe, info)
 	if obs.Sessions.Created != 1 || obs.Sessions.Running != 1 || obs.Sessions.Completed != 1 || obs.Sessions.Error != 1 {
 		t.Fatalf("tally wrong: %+v", obs.Sessions)
 	}
@@ -43,23 +65,24 @@ func TestBuildAgentObs_TalliesAndHealth(t *testing.T) {
 	}
 }
 
-func TestBuildAgentObs_NilStoreNoPanic(t *testing.T) {
+func TestBuildAgentObs_ClientErrorZeroTally(t *testing.T) {
 	reg := obsTestReg(t)
+	client := &fakeAgentClient{errAgents: map[string]bool{"a": true}}
 	info := controlplane.AgentInfo{ID: "a", Name: "AlphaAgent", Tenant: "acme"}
-	obs := buildAgentObs(context.Background(), reg, nil, func(controlplane.AgentProcess) bool { return false }, info)
+	obs := buildAgentObs(context.Background(), reg, client, func(controlplane.AgentProcess) bool { return false }, info)
 	if obs.Sessions.Total != 0 || obs.Healthy != 0 {
-		t.Fatalf("nil store should give zero tally and unhealthy: %+v", obs)
+		t.Fatalf("client error should give zero tally and unhealthy: %+v", obs)
 	}
 }
 
 func TestBuildFleetObs_AggregatesActiveAndHealthy(t *testing.T) {
 	reg := obsTestReg(t)
-	st := store.NewMemStore()
 	ctx := context.Background()
-	id, _ := st.CreateSession(ctx, "a", 0)
-	_ = st.SetSessionStatus(ctx, id, "running")
+	client := &fakeAgentClient{sessions: map[string][]sessionRow{
+		"a": {{ID: "s1", Status: "running"}},
+	}}
 	infos := []controlplane.AgentInfo{{ID: "a", Name: "AlphaAgent", Tenant: "acme"}}
-	fleet := buildFleetObs(ctx, reg, st, func(controlplane.AgentProcess) bool { return true }, infos)
+	fleet := buildFleetObs(ctx, reg, client, func(controlplane.AgentProcess) bool { return true }, infos)
 	if fleet.TotalAgents != 1 || fleet.HealthyAgents != 1 {
 		t.Fatalf("fleet agents: total=%d healthy=%d", fleet.TotalAgents, fleet.HealthyAgents)
 	}
@@ -68,6 +91,69 @@ func TestBuildFleetObs_AggregatesActiveAndHealthy(t *testing.T) {
 	}
 	if len(fleet.Agents) != 1 || fleet.Agents[0].ID != "a" {
 		t.Fatalf("fleet.Agents wrong: %+v", fleet.Agents)
+	}
+}
+
+func TestBuildAgentFeed_OrderingAndTruncation(t *testing.T) {
+	reg := obsTestReg(t)
+	// /sessions returns newest-first: S1 then S2.
+	client := &fakeAgentClient{
+		sessions: map[string][]sessionRow{
+			"a": {{ID: "s1", Status: "running"}, {ID: "s2", Status: "completed"}},
+		},
+		events: map[string][]eventRow{
+			"s1": {{Seq: 1, Type: "text", Text: "one"}, {Seq: 2, Type: "text", Text: "two"}},
+			"s2": {{Seq: 1, Type: "done"}},
+		},
+	}
+	feed := buildAgentFeed(context.Background(), reg, client, "a", 10, 50)
+	if len(feed) != 3 {
+		t.Fatalf("len=%d want 3: %+v", len(feed), feed)
+	}
+	// Newest session block first (s1: seq 1,2), then s2: seq 1.
+	if feed[0].SessionID != "s1" || feed[0].Seq != 1 ||
+		feed[1].SessionID != "s1" || feed[1].Seq != 2 ||
+		feed[2].SessionID != "s2" || feed[2].Seq != 1 {
+		t.Fatalf("ordering wrong: %+v", feed)
+	}
+
+	// Truncation: cap at 2 events keeps the newest session block first.
+	feed2 := buildAgentFeed(context.Background(), reg, client, "a", 10, 2)
+	if len(feed2) != 2 || feed2[0].SessionID != "s1" || feed2[1].Seq != 2 {
+		t.Fatalf("truncation wrong: %+v", feed2)
+	}
+}
+
+func TestBuildAgentFeed_SnippetForError(t *testing.T) {
+	reg := obsTestReg(t)
+	client := &fakeAgentClient{
+		sessions: map[string][]sessionRow{"a": {{ID: "s1"}}},
+		events:   map[string][]eventRow{"s1": {{Seq: 1, Type: "error", Err: "kaboom"}}},
+	}
+	feed := buildAgentFeed(context.Background(), reg, client, "a", 10, 50)
+	if len(feed) != 1 || feed[0].Snippet != "error: kaboom" {
+		t.Fatalf("error snippet wrong: %+v", feed)
+	}
+}
+
+func TestSnippetOf_MultibyteTruncationStaysValidUTF8(t *testing.T) {
+	long := strings.Repeat("世", 200) // 200 runes, 600 bytes
+	s := snippetOf(eventRow{Type: "text", Text: long})
+	if !utf8.ValidString(s) {
+		t.Fatalf("snippet is not valid UTF-8: %q", s)
+	}
+	// 140 runes kept + the ellipsis rune = 141 runes.
+	if n := utf8.RuneCountInString(s); n != 141 {
+		t.Fatalf("rune count = %d, want 141 (140 + ellipsis)", n)
+	}
+}
+
+func TestBuildAgentFeed_NoSessionsEmpty(t *testing.T) {
+	reg := obsTestReg(t)
+	client := &fakeAgentClient{} // no sessions for "a"
+	feed := buildAgentFeed(context.Background(), reg, client, "a", 10, 50)
+	if len(feed) != 0 {
+		t.Fatalf("want empty feed, got %+v", feed)
 	}
 }
 

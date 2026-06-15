@@ -190,3 +190,19 @@ func TestConsole_CallbackNoExchangeIs400(t *testing.T) {
 		t.Fatalf("no exchange configured: code=%d want 400", rec.Code)
 	}
 }
+
+func TestAgentPageHasActivityCard(t *testing.T) {
+	h := Handler(obsTestReg(t), nil, OIDCConfig{}, nil) // open mode, nil store
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest("GET", "/ui/agents/a", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /ui/agents/a: code=%d want 200", rec.Code)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "Activity") {
+		t.Fatal("agent page missing Activity card heading")
+	}
+	if !strings.Contains(body, "No recent activity.") {
+		t.Fatal("agent page missing empty-state for activity (registry addrs unreachable → empty feed)")
+	}
+}
