@@ -119,6 +119,34 @@ func TestConsole_UnknownAgent404(t *testing.T) {
 	resp.Body.Close()
 }
 
+func TestConsole_PostLoginForbiddenWhenOIDCEnabled(t *testing.T) {
+	h := Handler(testReg(t), nil, OIDCConfig{
+		Enabled:     true,
+		AuthCodeURL: func(state string) string { return "https://idp.example/authorize?state=" + state },
+	}, nil)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("POST", "/ui/login", strings.NewReader("token=svk-abc.def"))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("POST /ui/login with OIDC on: code=%d want 403", rec.Code)
+	}
+	if c := rec.Result().Cookies(); len(c) != 0 {
+		t.Fatalf("no session cookie should be set; got %d", len(c))
+	}
+}
+
+func TestConsole_PostLoginWorksWhenOIDCDisabled(t *testing.T) {
+	h := Handler(testReg(t), nil, OIDCConfig{Enabled: false}, nil)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("POST", "/ui/login", strings.NewReader("token=svk-abc.def"))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("POST /ui/login with OIDC off: code=%d want 303", rec.Code)
+	}
+}
+
 func TestConsole_LoginShowsPasteWhenOIDCDisabled(t *testing.T) {
 	h := Handler(testReg(t), nil, OIDCConfig{Enabled: false}, nil)
 	rec := httptest.NewRecorder()

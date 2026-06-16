@@ -51,7 +51,7 @@ func (a *Authenticator) Authenticate(ctx context.Context, r *http.Request) (Prin
 	// 1. Bootstrap superuser key (constant-time compare).
 	if a.bootstrapKey != "" &&
 		subtle.ConstantTimeCompare([]byte(cred), []byte(a.bootstrapKey)) == 1 {
-		return Principal{Subject: "bootstrap", Role: RoleAdmin, Superuser: true}, nil
+		return Principal{Subject: "bootstrap", Role: RoleAdmin, Superuser: true, Kind: KindBootstrap}, nil
 	}
 
 	// 1b. Legacy M3 token (deprecated): maps to a default-tenant superuser so
@@ -60,7 +60,7 @@ func (a *Authenticator) Authenticate(ctx context.Context, r *http.Request) (Prin
 	// not constant-time: these tokens are an opt-in, deprecated compat shim, and
 	// the cost of hardening a feature slated for removal isn't worth it.
 	if lbl, ok := a.legacy[cred]; ok {
-		return Principal{Subject: "legacy:" + lbl, Role: RoleAdmin, Superuser: true}, nil
+		return Principal{Subject: "legacy:" + lbl, Role: RoleAdmin, Superuser: true, Kind: KindLegacy}, nil
 	}
 
 	// 2. Service key.
@@ -72,7 +72,7 @@ func (a *Authenticator) Authenticate(ctx context.Context, r *http.Request) (Prin
 		if !VerifyKey(k.Hash, secret) {
 			return Principal{}, ErrUnauthenticated
 		}
-		return Principal{TenantID: k.TenantID, Subject: id, Role: k.Role}, nil
+		return Principal{TenantID: k.TenantID, Subject: id, Role: k.Role, Kind: KindServiceKey}, nil
 	}
 
 	// 3. OIDC token.
@@ -88,7 +88,7 @@ func (a *Authenticator) Authenticate(ctx context.Context, r *http.Request) (Prin
 		if err != nil {
 			return Principal{}, err
 		}
-		return Principal{TenantID: u.TenantID, Subject: u.Subject, Role: u.Role}, nil
+		return Principal{TenantID: u.TenantID, Subject: u.Subject, Role: u.Role, Kind: KindOIDC}, nil
 	}
 
 	return Principal{}, ErrUnauthenticated

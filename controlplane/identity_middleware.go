@@ -26,6 +26,21 @@ type authenticator interface {
 // path — rejected requests never reach the inner handler chain, so this hook is
 // the only way edge metrics can observe them.
 func IdentityMiddleware(next http.Handler, a authenticator, az *identity.Authorizer, onReject func(status int)) http.Handler {
+	return identityMiddleware(next, a, az, onReject, false)
+}
+
+// IdentityMiddlewareConsoleOIDCOnly is IdentityMiddleware with the console
+// restricted to OIDC sessions: an authenticated request to a /ui path whose
+// principal did not come from the IdP (service key, bootstrap, legacy — e.g. a
+// manually-set runtime_token cookie) is bounced to /ui/login. API paths are
+// unaffected, so service keys and the break-glass bootstrap key still work for
+// scripts. Only meaningful when OIDC is enabled; otherwise there is no way to
+// obtain a console session and the UI would be unreachable.
+func IdentityMiddlewareConsoleOIDCOnly(next http.Handler, a authenticator, az *identity.Authorizer, onReject func(status int)) http.Handler {
+	return identityMiddleware(next, a, az, onReject, true)
+}
+
+func identityMiddleware(next http.Handler, a authenticator, az *identity.Authorizer, onReject func(status int), consoleOIDCOnly bool) http.Handler {
 	reject := func(status int) {
 		if onReject != nil {
 			onReject(status)
@@ -55,6 +70,16 @@ func IdentityMiddleware(next http.Handler, a authenticator, az *identity.Authori
 				reject(http.StatusUnauthorized)
 				http.Error(w, "unauthorized", http.StatusUnauthorized)
 			}
+			return
+		}
+
+		// Console is OIDC-only: a valid non-OIDC credential (service-key/bootstrap
+		// cookie) authenticates for the API but must not drive the browser console.
+		// Bounce to /ui/login, which renders the Google sign-in (it is exempt, so
+		// this does not loop).
+		if consoleOIDCOnly && strings.HasPrefix(cleanPath, "/ui") && p.Kind != identity.KindOIDC {
+			reject(http.StatusSeeOther)
+			http.Redirect(w, r, "/ui/login", http.StatusSeeOther)
 			return
 		}
 

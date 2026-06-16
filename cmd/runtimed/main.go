@@ -303,10 +303,18 @@ func main() {
 			}
 		}
 		root := buildRoot(reg, idStore, consoleOIDC, secretAdmin, gwHandler, gwStore, gwMut, onb, cm, ctlStore) // mounts /admin since the store is non-nil
-		handler = obs.RequestID(tracedHandler(controlplane.IdentityMiddleware(accessLog(root, cm), authr, azr, func(status int) {
-			cm.AuthRejected(status)
-		})))
-		slog.Info("identity enabled", "oidc", oidcIssuer != "", "bootstrap", bootstrapKey != "", "legacy_tokens", len(legacyTokens))
+		onReject := func(status int) { cm.AuthRejected(status) }
+		// When OIDC login is available, lock the browser console to OIDC sessions:
+		// a service-key/bootstrap cookie authenticates the API but is bounced from
+		// /ui to the Google sign-in. Without OIDC there is no console session to
+		// require, so fall back to the standard middleware (token cookie still works
+		// for the UI) — otherwise the console would be unreachable.
+		mw := controlplane.IdentityMiddleware
+		if consoleOIDC.Enabled {
+			mw = controlplane.IdentityMiddlewareConsoleOIDCOnly
+		}
+		handler = obs.RequestID(tracedHandler(mw(accessLog(root, cm), authr, azr, onReject)))
+		slog.Info("identity enabled", "oidc", oidcIssuer != "", "console_oidc_only", consoleOIDC.Enabled, "bootstrap", bootstrapKey != "", "legacy_tokens", len(legacyTokens))
 	}
 
 	// Mounted OUTSIDE the identity/access-log chain (like /healthz — standard

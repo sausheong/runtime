@@ -81,6 +81,14 @@ func Handler(reg *controlplane.Registry, st store.Store, oidc OIDCConfig, onb *O
 	mux.HandleFunc("GET /ui/login", landing)
 
 	mux.HandleFunc("POST /ui/login", func(w http.ResponseWriter, r *http.Request) {
+		// Console is OIDC-only when an IdP is configured: the paste-a-token path is
+		// disabled so a service key can't be turned into a browser session here.
+		// (The edge middleware also rejects non-OIDC cookies on /ui; this closes
+		// the door at the setter too.) Service keys remain valid for the API.
+		if oidc.Enabled {
+			http.Error(w, "token login disabled; sign in with Google", http.StatusForbidden)
+			return
+		}
 		_ = r.ParseForm()
 		setSessionCookie(w, r.FormValue("token"))
 		http.Redirect(w, r, "/ui", http.StatusSeeOther)

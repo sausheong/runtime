@@ -79,6 +79,43 @@ func TestIdentityMW_OperatorInvokeOK(t *testing.T) {
 	}
 }
 
+func TestIdentityMW_ConsoleOIDCOnly_BouncesServiceKeyFromUI(t *testing.T) {
+	// A valid service-key principal authenticates, but on /ui it must be bounced
+	// to the Google sign-in (303 -> /ui/login), not allowed into the console.
+	mw := IdentityMiddlewareConsoleOIDCOnly(okPrincipalHandler(),
+		stubAuthndr{p: identity.Principal{TenantID: "alpha", Role: identity.RoleAdmin, Kind: identity.KindServiceKey}},
+		testAZ(), nil)
+	rec := httptest.NewRecorder()
+	mw.ServeHTTP(rec, httptest.NewRequest("GET", "/ui", nil))
+	if rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != "/ui/login" {
+		t.Fatalf("service-key on /ui: code=%d loc=%q want 303 -> /ui/login", rec.Code, rec.Header().Get("Location"))
+	}
+}
+
+func TestIdentityMW_ConsoleOIDCOnly_AllowsOIDCOnUI(t *testing.T) {
+	mw := IdentityMiddlewareConsoleOIDCOnly(okPrincipalHandler(),
+		stubAuthndr{p: identity.Principal{TenantID: "alpha", Role: identity.RoleViewer, Kind: identity.KindOIDC}},
+		testAZ(), nil)
+	rec := httptest.NewRecorder()
+	mw.ServeHTTP(rec, httptest.NewRequest("GET", "/ui", nil))
+	if rec.Code != 200 {
+		t.Fatalf("oidc on /ui: code=%d want 200", rec.Code)
+	}
+}
+
+func TestIdentityMW_ConsoleOIDCOnly_ServiceKeyStillWorksOnAPI(t *testing.T) {
+	// The OIDC-only restriction is console-scoped: a service key must still drive
+	// the API (here, an authorized read).
+	mw := IdentityMiddlewareConsoleOIDCOnly(okPrincipalHandler(),
+		stubAuthndr{p: identity.Principal{TenantID: "alpha", Role: identity.RoleOperator, Kind: identity.KindServiceKey}},
+		testAZ(), nil)
+	rec := httptest.NewRecorder()
+	mw.ServeHTTP(rec, httptest.NewRequest("POST", "/agents/a1/sessions", nil))
+	if rec.Code != 200 {
+		t.Fatalf("service-key on API: code=%d want 200", rec.Code)
+	}
+}
+
 func TestIdentityMW_HealthzExempt(t *testing.T) {
 	mw := IdentityMiddleware(okPrincipalHandler(), stubAuthndr{err: identity.ErrUnauthenticated}, testAZ(), nil)
 	rec := httptest.NewRecorder()
