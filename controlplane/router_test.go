@@ -201,6 +201,60 @@ func TestAPI_RemoteAgentSessionRoutesWithoutLocalStore(t *testing.T) {
 	}
 }
 
+// TestAPI_CommandAgentSessionRoutesWithoutLocalStore reproduces the foreign-shim
+// bug: a command-spawned agent (the Python contract shim) is LOCAL but owns its
+// OWN session store (SQLite in its workdir), so the session id it returns from
+// POST /sessions is NOT in the control plane's store — exactly like a remote.
+// A session-scoped follow-up must still proxy to it, not 404 "unknown session".
+// Before the fix, pickReplica treated every non-remote local agent as sharing
+// the CP store and returned a hard 404, making shim agents uninvokable.
+func TestAPI_CommandAgentSessionRoutesWithoutLocalStore(t *testing.T) {
+	var streamHit int32
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/sessions" && r.Method == "POST" {
+			_ = json.NewEncoder(w).Encode(map[string]string{"session_id": "ses-shim-123"})
+			return
+		}
+		if strings.HasPrefix(r.URL.Path, "/sessions/") {
+			atomic.AddInt32(&streamHit, 1)
+		}
+		w.WriteHeader(200)
+	}))
+	defer backend.Close()
+
+	reg := commandRegistry(t, "shim", backend.URL)
+
+	// Control-plane store is EMPTY — the shim wrote the session to its own SQLite.
+	srv := httptest.NewServer(NewAPI(reg, nil, store.NewMemStore()))
+	defer srv.Close()
+
+	code := httpGetCode(t, srv.URL+"/agents/shim/sessions/ses-shim-123/stream?since=0")
+	if code != http.StatusOK {
+		t.Fatalf("command-agent session-scoped request: got %d, want 200 (must proxy, not 'unknown session')", code)
+	}
+	if atomic.LoadInt32(&streamHit) != 1 {
+		t.Fatalf("command-agent session-scoped request did not reach the backend (hits=%d)", streamHit)
+	}
+}
+
+// commandRegistry builds a registry for one LOCAL command-spawned agent (a
+// foreign-process shim) whose dial base is the given full URL. It is not remote
+// (no url:), but it owns its own session store, signalled by a non-empty Command.
+func commandRegistry(t *testing.T, id, base string) *Registry {
+	t.Helper()
+	host := strings.TrimPrefix(base, "http://")
+	cfg := &config.Config{Agents: []config.AgentConfig{
+		{ID: id, Name: id, Model: "m", ListenAddr: host, Tenant: "default",
+			Command: []string{"uv", "run", "python", "serve.py"}},
+	}}
+	r := NewRegistry(cfg, "/bin/agentd", "dsn")
+	r.sets[id] = []AgentProcess{
+		{AgentID: id, Addr: host, BaseURL: base, ReplicaIndex: 0,
+			Command: []string{"uv", "run", "python", "serve.py"}, Tenant: "default"},
+	}
+	return r
+}
+
 // remoteRegistry builds a registry for one REMOTE agent (single attach target)
 // whose dial base is the given full URL (an httptest server).
 func remoteRegistry(t *testing.T, id, base string) *Registry {
