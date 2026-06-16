@@ -27,6 +27,27 @@ func TestOIDC_VerifierContract(t *testing.T) {
 	}
 }
 
+func TestResolveSubject(t *testing.T) {
+	const sub = "108273645"
+	cases := []struct {
+		name   string
+		claims emailClaims
+		want   string
+	}{
+		{"verified email wins", emailClaims{Email: "admin@acme.com", EmailVerified: true}, "admin@acme.com"},
+		{"unverified email falls back to sub", emailClaims{Email: "spoof@acme.com", EmailVerified: false}, sub},
+		{"empty email falls back to sub", emailClaims{}, sub},
+		{"verified but empty email falls back to sub", emailClaims{Email: "", EmailVerified: true}, sub},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := resolveSubject(sub, c.claims); got != c.want {
+				t.Errorf("resolveSubject(%q, %+v) = %q, want %q", sub, c.claims, got, c.want)
+			}
+		})
+	}
+}
+
 func TestLooksLikeJWT(t *testing.T) {
 	if !looksLikeJWT("aaa.bbb.ccc") {
 		t.Error("three-segment dotted string should look like a JWT")

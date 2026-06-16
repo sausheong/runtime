@@ -88,6 +88,19 @@ func TestIdentityMW_HealthzExempt(t *testing.T) {
 	}
 }
 
+func TestIdentityMW_CallbackExempt(t *testing.T) {
+	// The OIDC callback arrives with ?code=... and NO cookie yet (the cookie is
+	// set by the callback handler). If the middleware gated it, an unauthenticated
+	// callback would redirect to /ui/login, which (OIDC on) bounces back to the
+	// IdP — an infinite loop. The callback must reach the inner handler.
+	mw := IdentityMiddleware(okPrincipalHandler(), stubAuthndr{err: identity.ErrUnauthenticated}, testAZ(), nil)
+	rec := httptest.NewRecorder()
+	mw.ServeHTTP(rec, httptest.NewRequest("GET", "/ui/callback?code=abc", nil))
+	if rec.Code != 200 {
+		t.Fatalf("callback must be exempt: code=%d", rec.Code)
+	}
+}
+
 func TestIdentityMW_UIRedirectsWhenUnauthenticated(t *testing.T) {
 	mw := IdentityMiddleware(okPrincipalHandler(), stubAuthndr{err: identity.ErrUnauthenticated}, testAZ(), nil)
 	rec := httptest.NewRecorder()

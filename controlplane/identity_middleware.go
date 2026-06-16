@@ -73,7 +73,12 @@ func IdentityMiddleware(next http.Handler, a authenticator, az *identity.Authori
 }
 
 func isExempt(path string) bool {
-	return path == "/healthz" || path == "/ui/login" || strings.HasPrefix(path, "/ui/static/")
+	// /ui/callback is exempt because the OIDC redirect lands here with ?code=...
+	// and no session cookie yet (the callback handler sets it after exchanging the
+	// code). Gating it would redirect to /ui/login, which re-initiates OIDC — an
+	// infinite loop. The handler validates the code itself, so this is safe.
+	return path == "/healthz" || path == "/ui/login" || path == "/ui/callback" ||
+		strings.HasPrefix(path, "/ui/static/")
 }
 
 // authzStatus maps Authorizer errors to HTTP codes (404 hides cross-tenant

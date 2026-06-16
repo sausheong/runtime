@@ -33,12 +33,39 @@ func NewOIDCVerifier(ctx context.Context, issuerURL, clientID string) (OIDCVerif
 	return &coreOIDCVerifier{v: provider.Verifier(&oidc.Config{ClientID: clientID})}, nil
 }
 
+// emailClaims is the subset of ID-token claims we resolve a Principal subject
+// from. We prefer a verified email over the opaque `sub` so the onboarding
+// allow-list can be keyed by human-readable email (e.g. admin@acme.com) — for
+// providers like Google, `sub` is an opaque numeric ID that no admin would ever
+// type into the Users form.
+type emailClaims struct {
+	Email         string `json:"email"`
+	EmailVerified bool   `json:"email_verified"`
+}
+
+// resolveSubject decides the Principal subject from a token's `sub` and its
+// email claims. It returns the email ONLY when the provider asserts it is
+// verified — an unverified (or absent) email falls back to `sub`, so a provider
+// that lets users set an arbitrary unverified address can never impersonate
+// another user's email-keyed grant. Matching against the onboarding rows is
+// case-sensitive; both Google's email claim and the existing rows are lowercase.
+func resolveSubject(sub string, c emailClaims) string {
+	if c.Email != "" && c.EmailVerified {
+		return c.Email
+	}
+	return sub
+}
+
 func (c *coreOIDCVerifier) Verify(ctx context.Context, raw string) (string, error) {
 	tok, err := c.v.Verify(ctx, raw)
 	if err != nil {
 		return "", err
 	}
-	return tok.Subject, nil
+	var claims emailClaims
+	// A token that verified cryptographically but has no/garbled claims body is
+	// not fatal: fall back to the always-present `sub`.
+	_ = tok.Claims(&claims)
+	return resolveSubject(tok.Subject, claims), nil
 }
 
 // looksLikeJWT is the cheap discriminator the authenticator uses to decide
