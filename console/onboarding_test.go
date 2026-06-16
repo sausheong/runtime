@@ -394,12 +394,13 @@ func TestOnboardingRevokeKeyRequiresAdmin(t *testing.T) {
 }
 
 // The keys table renders a Remove button for active keys and a Revoked badge
-// (no button) for already-revoked ones.
-func TestOnboardingKeysTableShowsRevokeAndStatus(t *testing.T) {
+// Active keys render with a Remove button; revoked keys are hidden entirely
+// (they stay auditable via the GET /admin/keys API, just not in the console).
+func TestOnboardingKeysTableHidesRevoked(t *testing.T) {
 	h, _, admin := newTestConsoleWithAdmin()
 	admin.keys = []identity.KeyRow{
 		{ID: "svk-active1", TenantID: "t1", Role: identity.RoleAdmin, Label: "live", Revoked: false},
-		{ID: "svk-dead1", TenantID: "t1", Role: identity.RoleViewer, Label: "old", Revoked: true},
+		{ID: "svk-dead1", TenantID: "t1", Role: identity.RoleViewer, Label: "oldlabel", Revoked: true},
 	}
 	r := adminReq("GET", "/ui/onboarding", nil)
 	w := httptest.NewRecorder()
@@ -408,11 +409,8 @@ func TestOnboardingKeysTableShowsRevokeAndStatus(t *testing.T) {
 	if !strings.Contains(body, "/ui/onboarding/keys/svk-active1/delete") {
 		t.Fatal("active key must have a Remove form")
 	}
-	if strings.Contains(body, "/ui/onboarding/keys/svk-dead1/delete") {
-		t.Fatal("revoked key must NOT have a Remove form")
-	}
-	if !strings.Contains(body, "Revoked") {
-		t.Fatal("revoked key should show a Revoked status")
+	if strings.Contains(body, "svk-dead1") || strings.Contains(body, "oldlabel") {
+		t.Fatal("revoked key must not appear in the table at all")
 	}
 }
 

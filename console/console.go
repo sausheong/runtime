@@ -196,7 +196,15 @@ func Handler(reg *controlplane.Registry, st store.Store, oidc OIDCConfig, onb *O
 			if onb.Secrets != nil {
 				secs, _ = onb.Secrets.ListSecretNames(r.Context(), p.TenantID)
 			}
-			keys, _ := onb.Admin.ListKeys(r.Context(), p.TenantID)
+			allKeys, _ := onb.Admin.ListKeys(r.Context(), p.TenantID)
+			// Show only active keys: a revoked key is dead and only clutters the
+			// list. It stays auditable via the API (GET /admin/keys returns it).
+			keys := make([]identity.KeyRow, 0, len(allKeys))
+			for _, k := range allKeys {
+				if !k.Revoked {
+					keys = append(keys, k)
+				}
+			}
 			users, _ := onb.Admin.ListUsers(r.Context(), p.TenantID)
 			render(w, "onboarding.html", map[string]any{
 				"CSRF": csrf.issue(sessionValue(r)), "Tenant": p.TenantID,

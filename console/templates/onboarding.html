@@ -60,10 +60,9 @@
         <td><span class="badge badge-role">{{.Role}}</span></td>
         <td>{{.Label}}</td>
         <td class="actions">
-          {{if .Revoked}}<span class="badge badge-muted">Revoked</span>
-          {{else}}<form method="post" action="/ui/onboarding/keys/{{.ID}}/delete">
+          <form method="post" action="/ui/onboarding/keys/{{.ID}}/delete">
             <input type="hidden" name="csrf_token" value="{{$.CSRF}}"><button type="submit" class="danger">Remove</button>
-          </form>{{end}}
+          </form>
         </td>
       </tr>{{else}}
         <tr><td colspan="4" class="empty">No keys yet.</td></tr>
