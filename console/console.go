@@ -63,17 +63,20 @@ func Handler(reg *controlplane.Registry, st store.Store, oidc OIDCConfig, onb *O
 
 	// landing renders the public front door (hero + Google sign-in, or a token
 	// form when OIDC is off). Served at both / and /ui/login. With OIDC on, the
-	// Google button links to the IdP authorize URL.
-	//
-	// M1 limitation: the OAuth `state` is a fixed placeholder and is not validated
-	// in the callback, so this flow does not yet protect against login-CSRF.
-	// Acceptable for a console behind edge auth; a later milestone should generate
-	// a random state (+ nonce) and verify it in /ui/callback.
+	// Google button links to the IdP authorize URL carrying a random `state`,
+	// which is also set in a short-lived cookie and verified in /ui/callback to
+	// defeat login-CSRF (see oauthstate.go).
 	landing := func(w http.ResponseWriter, r *http.Request) {
 		data := map[string]any{"GoogleEnabled": false, "GoogleURL": ""}
 		if oidc.Enabled && oidc.AuthCodeURL != nil {
+			state, err := newOAuthState()
+			if err != nil {
+				http.Error(w, "login init failed", http.StatusInternalServerError)
+				return
+			}
+			setOAuthStateCookie(w, state)
 			data["GoogleEnabled"] = true
-			data["GoogleURL"] = oidc.AuthCodeURL("state")
+			data["GoogleURL"] = oidc.AuthCodeURL(state)
 		}
 		render(w, "landing.html", data)
 	}
@@ -104,6 +107,15 @@ func Handler(reg *controlplane.Registry, st store.Store, oidc OIDCConfig, onb *O
 			http.Error(w, "oidc not configured", http.StatusBadRequest)
 			return
 		}
+		// Login-CSRF defense: the ?state= echoed by the IdP must match the
+		// rt_oauth_state cookie set when we issued the authorize URL. Reject
+		// before spending the code. Clear the one-time cookie either way.
+		if !validOAuthState(r) {
+			clearOAuthStateCookie(w)
+			http.Error(w, "invalid login state", http.StatusBadRequest)
+			return
+		}
+		clearOAuthStateCookie(w)
 		idToken, err := oidc.Exchange(r.Context(), r.URL.Query().Get("code"))
 		if err != nil {
 			http.Error(w, "login failed", http.StatusUnauthorized)
