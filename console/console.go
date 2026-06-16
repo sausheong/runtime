@@ -235,6 +235,19 @@ func Handler(reg *controlplane.Registry, st store.Store, oidc OIDCConfig, onb *O
 			flashRedirect(w, r, "key:"+plaintext)
 		}))
 
+		mux.HandleFunc("POST /ui/onboarding/keys/{id}/delete", guard(func(p identity.Principal, w http.ResponseWriter, r *http.Request) {
+			id := r.PathValue("id")
+			// RevokeKey is tenant-scoped, so an admin can only revoke keys in their
+			// own tenant; a cross-tenant id is a silent no-op. (The console is
+			// OIDC-only, so the caller is never authenticated by a service key — there
+			// is no "current key" to self-revoke and lock out.)
+			if err := onb.Admin.RevokeKey(r.Context(), p.TenantID, id); err != nil {
+				http.Error(w, "revoke key failed", http.StatusInternalServerError)
+				return
+			}
+			flashRedirect(w, r, "key revoked")
+		}))
+
 		mux.HandleFunc("POST /ui/onboarding/users", guard(func(p identity.Principal, w http.ResponseWriter, r *http.Request) {
 			subject := r.FormValue("subject")
 			if subject == "" {

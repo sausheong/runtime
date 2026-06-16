@@ -50,6 +50,8 @@ func (f *fakeMut2) Status(tenant string) []gateway.UpstreamStatus { return nil }
 type fakeAdmin2 struct {
 	users     map[string]identity.UserRow // subject -> row
 	userOrder []string                    // subjects in insertion order
+	keys      []identity.KeyRow           // returned by ListKeys
+	revoked   []string                    // ids passed to RevokeKey
 }
 
 func (f *fakeAdmin2) CreateTenant(ctx context.Context, id, name string) error { return nil }
@@ -88,9 +90,12 @@ func (f *fakeAdmin2) ListUsers(ctx context.Context, tenantID string) ([]identity
 func (f *fakeAdmin2) InsertServiceKey(ctx context.Context, id, tenantID, hash string, role identity.Role, label string) error {
 	return nil
 }
-func (f *fakeAdmin2) RevokeKey(ctx context.Context, tenantID, id string) error { return nil }
+func (f *fakeAdmin2) RevokeKey(ctx context.Context, tenantID, id string) error {
+	f.revoked = append(f.revoked, id)
+	return nil
+}
 func (f *fakeAdmin2) ListKeys(ctx context.Context, tenantID string) ([]identity.KeyRow, error) {
-	return nil, nil
+	return f.keys, nil
 }
 func (f *fakeAdmin2) ListTenants(ctx context.Context) ([]identity.TenantRow, error) {
 	return nil, nil
@@ -342,6 +347,72 @@ func TestOnboardingRemoveUserRequiresCSRF(t *testing.T) {
 	h.ServeHTTP(w, r)
 	if w.Code != http.StatusForbidden {
 		t.Fatalf("remove without csrf: want 403 got %d", w.Code)
+	}
+}
+
+func TestOnboardingRevokeKey(t *testing.T) {
+	h, _, admin := newTestConsoleWithAdmin()
+	token := issuedCSRF(t, h)
+	form := url.Values{"csrf_token": {token}}
+	r := adminReq("POST", "/ui/onboarding/keys/svk-abc123/delete", form)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	if w.Code != http.StatusSeeOther {
+		t.Fatalf("revoke key: want 303 got %d", w.Code)
+	}
+	if len(admin.revoked) != 1 || admin.revoked[0] != "svk-abc123" {
+		t.Fatalf("RevokeKey not called with svk-abc123: %+v", admin.revoked)
+	}
+}
+
+func TestOnboardingRevokeKeyRequiresCSRF(t *testing.T) {
+	h, _, admin := newTestConsoleWithAdmin()
+	r := adminReq("POST", "/ui/onboarding/keys/svk-abc123/delete", url.Values{})
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("revoke without csrf: want 403 got %d", w.Code)
+	}
+	if len(admin.revoked) != 0 {
+		t.Fatalf("RevokeKey must not run without csrf: %+v", admin.revoked)
+	}
+}
+
+func TestOnboardingRevokeKeyRequiresAdmin(t *testing.T) {
+	h, _, admin := newTestConsoleWithAdmin()
+	token := issuedCSRF(t, h)
+	form := url.Values{"csrf_token": {token}}
+	r := nonAdminReq("POST", "/ui/onboarding/keys/svk-abc123/delete", form)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("non-admin revoke: want 403 got %d", w.Code)
+	}
+	if len(admin.revoked) != 0 {
+		t.Fatalf("RevokeKey must not run for non-admin: %+v", admin.revoked)
+	}
+}
+
+// The keys table renders a Remove button for active keys and a Revoked badge
+// (no button) for already-revoked ones.
+func TestOnboardingKeysTableShowsRevokeAndStatus(t *testing.T) {
+	h, _, admin := newTestConsoleWithAdmin()
+	admin.keys = []identity.KeyRow{
+		{ID: "svk-active1", TenantID: "t1", Role: identity.RoleAdmin, Label: "live", Revoked: false},
+		{ID: "svk-dead1", TenantID: "t1", Role: identity.RoleViewer, Label: "old", Revoked: true},
+	}
+	r := adminReq("GET", "/ui/onboarding", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	body := w.Body.String()
+	if !strings.Contains(body, "/ui/onboarding/keys/svk-active1/delete") {
+		t.Fatal("active key must have a Remove form")
+	}
+	if strings.Contains(body, "/ui/onboarding/keys/svk-dead1/delete") {
+		t.Fatal("revoked key must NOT have a Remove form")
+	}
+	if !strings.Contains(body, "Revoked") {
+		t.Fatal("revoked key should show a Revoked status")
 	}
 }
 

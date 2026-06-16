@@ -53,14 +53,20 @@
     <h2>Agent keys</h2>
     <p class="card-desc">Service keys for machines and agents. The full key is shown once, on creation.</p>
     <table>
-      <thead><tr><th>ID</th><th>Role</th><th>Label</th></tr></thead>
+      <thead><tr><th>ID</th><th>Role</th><th>Label</th><th></th></tr></thead>
       <tbody>
       {{range .Keys}}<tr>
         <td class="mono">{{.ID}}</td>
         <td><span class="badge badge-role">{{.Role}}</span></td>
         <td>{{.Label}}</td>
+        <td class="actions">
+          {{if .Revoked}}<span class="badge badge-muted">Revoked</span>
+          {{else}}<form method="post" action="/ui/onboarding/keys/{{.ID}}/delete">
+            <input type="hidden" name="csrf_token" value="{{$.CSRF}}"><button type="submit" class="danger">Remove</button>
+          </form>{{end}}
+        </td>
       </tr>{{else}}
-        <tr><td colspan="3" class="empty">No keys yet.</td></tr>
+        <tr><td colspan="4" class="empty">No keys yet.</td></tr>
       {{end}}
       </tbody>
     </table>
