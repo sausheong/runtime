@@ -178,6 +178,8 @@ build-from-source dance), follow the turnkey guides:
   persistence/reset, security posture, observability.
 - **[Tenant guide](docs/tenant-guide.md)** — onboard a tenant in the console UI
   and exercise all six pillars.
+- **[Deploying SDK agents](docs/deploying-sdk-agents.md)** — host an agent built
+  with the OpenAI Agents SDK or Claude Agent SDK, from adapter to GCP.
 
 The capstone proof `deploy/compose/v1-proof.sh` brings the stack up and asserts
 every pillar end-to-end.
