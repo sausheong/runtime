@@ -128,18 +128,43 @@ func TestConsole_LoginShowsPasteWhenOIDCDisabled(t *testing.T) {
 	}
 }
 
-func TestConsole_LoginRedirectsToIdPWhenEnabled(t *testing.T) {
+func TestConsole_LandingAtRoot(t *testing.T) {
+	h := Handler(testReg(t), nil, OIDCConfig{
+		Enabled:     true,
+		AuthCodeURL: func(state string) string { return "https://idp.example/authorize?state=" + state },
+	}, nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest("GET", "/", nil))
+	if rec.Code != 200 {
+		t.Fatalf("landing at /: code=%d want 200", rec.Code)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "Sign in with Google") || !strings.Contains(body, "six pillars") {
+		t.Fatalf("expected landing hero + Google button at /")
+	}
+}
+
+func TestConsole_LoginRendersGoogleButtonWhenOIDCEnabled(t *testing.T) {
 	h := Handler(testReg(t), nil, OIDCConfig{
 		Enabled:     true,
 		AuthCodeURL: func(state string) string { return "https://idp.example/authorize?state=" + state },
 	}, nil)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest("GET", "/ui/login", nil))
-	if rec.Code != http.StatusSeeOther {
-		t.Fatalf("oidc login: code=%d want 303", rec.Code)
+	// OIDC on: render the landing page with a Google sign-in link to the IdP,
+	// NOT an instant redirect and NOT a paste-token form.
+	if rec.Code != 200 {
+		t.Fatalf("oidc login: code=%d want 200", rec.Code)
 	}
-	if !strings.HasPrefix(rec.Header().Get("Location"), "https://idp.example/authorize") {
-		t.Fatalf("redirect to %q", rec.Header().Get("Location"))
+	body := rec.Body.String()
+	if !strings.Contains(body, "Sign in with Google") {
+		t.Fatalf("expected Google sign-in button in body")
+	}
+	if !strings.Contains(body, "https://idp.example/authorize") {
+		t.Fatalf("expected IdP authorize URL in body")
+	}
+	if strings.Contains(body, `name="token"`) {
+		t.Fatalf("token form must not show when OIDC is enabled")
 	}
 }
 

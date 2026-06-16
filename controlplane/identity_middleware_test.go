@@ -88,6 +88,17 @@ func TestIdentityMW_HealthzExempt(t *testing.T) {
 	}
 }
 
+func TestIdentityMW_RootExempt(t *testing.T) {
+	// "/" is the public landing page; an unauthenticated visitor must reach the
+	// inner handler, not get a 401.
+	mw := IdentityMiddleware(okPrincipalHandler(), stubAuthndr{err: identity.ErrUnauthenticated}, testAZ(), nil)
+	rec := httptest.NewRecorder()
+	mw.ServeHTTP(rec, httptest.NewRequest("GET", "/", nil))
+	if rec.Code != 200 {
+		t.Fatalf("root must be exempt: code=%d", rec.Code)
+	}
+}
+
 func TestIdentityMW_CallbackExempt(t *testing.T) {
 	// The OIDC callback arrives with ?code=... and NO cookie yet (the cookie is
 	// set by the callback handler). If the middleware gated it, an unauthenticated

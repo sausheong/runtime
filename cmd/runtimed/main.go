@@ -520,6 +520,10 @@ func buildRoot(reg *controlplane.Registry, adminS controlplane.AdminStore, conso
 	root := http.NewServeMux()
 	root.Handle("/ui", consoleH)
 	root.Handle("/ui/", consoleH)
+	// Exact root → the console landing page (a browser's front door). Bare "/"
+	// has no API route (it 404s), so repurposing only the exact path leaves every
+	// other API path on apiMux untouched. "/{$}" matches "/" only, not the catch-all.
+	root.Handle("/{$}", consoleH)
 	root.Handle("/", apiMux)
 	return root
 }

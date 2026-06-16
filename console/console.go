@@ -61,18 +61,24 @@ func Handler(reg *controlplane.Registry, st store.Store, oidc OIDCConfig, onb *O
 
 	mux.Handle("GET /ui/static/", http.StripPrefix("/ui/static/", http.FileServerFS(staticFS)))
 
-	mux.HandleFunc("GET /ui/login", func(w http.ResponseWriter, r *http.Request) {
+	// landing renders the public front door (hero + Google sign-in, or a token
+	// form when OIDC is off). Served at both / and /ui/login. With OIDC on, the
+	// Google button links to the IdP authorize URL.
+	//
+	// M1 limitation: the OAuth `state` is a fixed placeholder and is not validated
+	// in the callback, so this flow does not yet protect against login-CSRF.
+	// Acceptable for a console behind edge auth; a later milestone should generate
+	// a random state (+ nonce) and verify it in /ui/callback.
+	landing := func(w http.ResponseWriter, r *http.Request) {
+		data := map[string]any{"GoogleEnabled": false, "GoogleURL": ""}
 		if oidc.Enabled && oidc.AuthCodeURL != nil {
-			// M1 limitation: the OAuth `state` is a fixed placeholder and is not
-			// validated in the callback, so this flow does not yet protect against
-			// login-CSRF. Acceptable for a read-only console behind edge auth; a
-			// later milestone should generate a random state (+ nonce) and verify
-			// it in /ui/callback.
-			http.Redirect(w, r, oidc.AuthCodeURL("state"), http.StatusSeeOther)
-			return
+			data["GoogleEnabled"] = true
+			data["GoogleURL"] = oidc.AuthCodeURL("state")
 		}
-		render(w, "login.html", nil)
-	})
+		render(w, "landing.html", data)
+	}
+	mux.HandleFunc("GET /{$}", landing)
+	mux.HandleFunc("GET /ui/login", landing)
 
 	mux.HandleFunc("POST /ui/login", func(w http.ResponseWriter, r *http.Request) {
 		_ = r.ParseForm()
