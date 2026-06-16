@@ -53,7 +53,7 @@ through:
 |---|---|---|
 | `RUNTIME_LISTEN_ADDR` | `host:port` to bind | injected by `runtimed` |
 | `RUNTIME_AGENT_ID` | agent id on `/meta` | injected by `runtimed` |
-| `RUNTIME_SHIM_DB` | SQLite path for Level-1 durability | optional; defaults under `workdir` |
+| `RUNTIME_SHIM_DB` | SQLite path for the durable session store | optional; defaults under `workdir` |
 | `OPENAI_*` / `ANTHROPIC_*` | your model credentials | inherited from `runtimed`'s env |
 
 ---
@@ -168,14 +168,14 @@ contract holds.
 ## 4. Ship to production (GCP, as a remote agent)
 
 In the GCP distributed deployment, an SDK agent runs on its **own VM** and the
-control plane attaches to it over the VPC as a **C3 remote agent** — `runtimed`
+control plane attaches to it over the VPC as a **remote agent** — `runtimed`
 health-checks and proxies to it, but never spawns it. The OpenAI example is
 deployed exactly this way as instance **C**; the bundle is
 [`deploy/gcp/agent-python/`](../deploy/gcp/agent-python).
 
 ### a. Containerize
 
-The agent ships as a self-contained image (SQLite for Level-1 durability, no
+The agent ships as a self-contained image (SQLite for durable sessions, no
 external DB). Build for **amd64** from the **projects root** (parent of
 `runtime/`), since the GCP VMs are x86-64:
 
@@ -256,16 +256,16 @@ at each agent — the same model as Go `agentd` agents.
 
 ## 5. Durability caveats
 
-These Python-hosted agents get **Level 1** durability: after a restart, prior
-sessions remain **listable** (`GET /sessions`) and their events **replayable**
-(`GET /sessions/{id}/stream?since=N`), persisted in `shim.db`. Conversation
-memory continues across restarts when the adapter keys its own per-session store
-on the runtime session id (both examples do).
+These Python-hosted agents persist sessions across restarts: prior sessions
+remain **listable** (`GET /sessions`) and their events **replayable**
+(`GET /sessions/{id}/stream?since=N`), stored in `shim.db`. Conversation memory
+continues across restarts when the adapter keys its own per-session store on the
+runtime session id (both examples do).
 
-**Level 2 (in-flight crash resume) is NOT implemented.** A run killed
-*mid-execution* is lost — there is no checkpoint/replay of a partial run, unlike
-Go/harness agents' DBOS-backed per-turn durability. Tracked as future work in
-[`ROADMAP.md`](../ROADMAP.md) (§C1, Level 2).
+**A run killed mid-execution is not resumed.** There is no checkpoint/replay of
+a partial run, unlike Go/harness agents' DBOS-backed per-turn durability — a
+process killed during a run loses that in-flight turn (completed sessions and
+events remain intact).
 
 ---
 

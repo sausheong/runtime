@@ -64,7 +64,7 @@ make sessions                 # list this agent's sessions
 ```
 
 Requires Postgres for the control plane (`make -C ../.. pg-up`, or Postgres.app).
-Durability is Level 1 (sessions/events persist in `shim.db`, replayable via
-`?since=N`; conversation memory via `SQLiteSession`); plus the agent's own
-`agent_memory.json` learned aliases + product verdicts. Level 2 (in-flight crash
-resume) is out of scope — see the repo `ROADMAP.md` §C1.
+Sessions and their events persist in `shim.db` and replay after a restart (via
+`?since=N`); conversation memory survives restarts via `SQLiteSession`, plus the
+agent's own `agent_memory.json` learned aliases + product verdicts. A run killed
+mid-execution is not resumed.

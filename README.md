@@ -257,19 +257,19 @@ agents:
 
 > **Upgrading from a pre-pools deployment:** single-replica agents now run as DBOS
 > executor `<id>#0` rather than the old `local`. A *fresh* deploy needs nothing,
-> but a pre-A1 deployment with in-flight sessions should drain them before
+> but a pre-pools deployment with in-flight sessions should drain them before
 > upgrading (or remap `executor_id` in `dbos.workflow_status` from `local` to
 > `<id>#0`), since DBOS recovers only workflows stamped with the process's own
 > executor id.
 
 **Deferred:** health-aware (skip-down) new-session routing and remote-agent
-pools. (Autoscaling and graceful drain landed in A2, below.)
+pools. (Autoscaling and graceful drain are covered below.)
 
-### Autoscaling (A2)
+### Autoscaling
 
 A pooled agent can **float** its replica count with load instead of pinning it.
 Replace `replicas:` with an `autoscale:` block; when it's absent the agent keeps
-the static `replicas:` pool above (byte-for-byte A1):
+the static `replicas:` pool described above:
 
 ```yaml
 agents:
@@ -300,7 +300,7 @@ agents:
 - **Suffix-only mutation.** The pool only ever appends at the top index or removes
   the highest replica; a session pins to its owner replica (executor
   `<id>#<i>`) for life, so a middle replica is never removed and **only the owning
-  DBOS executor can resume a session's workflow**. This preserves the A1
+  DBOS executor can resume a session's workflow**. This preserves the
   executor-id invariant — and the `session_events` single-writer invariant — by
   construction.
 - **Metrics:** `runtime_agent_replicas_desired{agent}`,
@@ -317,7 +317,7 @@ agents:
 
 **Deferred:** scale-down force-kill deadline, richer signals (CPU/queue/latency),
 per-agent cooldown config, and a signal-only mode (emit the desired count and let
-an external orchestrator actuate — the seam toward Kubernetes/C2).
+an external orchestrator actuate — the seam toward Kubernetes).
 
 ### Remote agents (attach instead of spawn)
 
@@ -452,7 +452,7 @@ which is not mounted in open mode. With a master key set but identity open,
 runtimed logs a warning and brokering into spawns still works, but no secret can
 be created. A tenant admin manages its own tenant's secrets; a superuser can
 `set` a secret for a target tenant via `--tenant`, but `ls`/`rm` are scoped to
-the caller's own tenant (cross-tenant `ls`/`rm` is tracked in `ROADMAP.md` §B3).
+the caller's own tenant.
 
 Manage secrets with `runtimectl` (admin role, scoped to your tenant):
 
@@ -527,10 +527,10 @@ agents:
     memory: true        # opt in to durable per-tenant memory
 ```
 
-Retrieval in this milestone is by tag and by id (the durable store). Semantic
-recall (embeddings + vector search) is a planned follow-up via harness's
-`KnowledgeGraph` seam. Memory is disabled by default; agents without the flag are
-unaffected. The platform injects `RUNTIME_AGENT_TENANT` (and, when enabled,
+Retrieval is by tag and by id (the durable store), plus semantic recall
+(embeddings + vector search over pgvector) through harness's `KnowledgeGraph`
+seam. Memory is disabled by default; agents without the flag are unaffected. The
+platform injects `RUNTIME_AGENT_TENANT` (and, when enabled,
 `RUNTIME_AGENT_MEMORY=1`) into the agent subprocess; agentd constructs a
 tenant-pinned store so memory is isolated by construction.
 
@@ -625,16 +625,16 @@ embeddings — no new egress.
   legacy `tokens:`) ⇒ **open mode**: every request passes, with a startup
   warning. Keeps local development friction-free. `GET /healthz` is always
   exempt, as are the console login page and static assets.
-- **Legacy `tokens:`** from M3 still work (deprecated): each maps to a
+- **Legacy `tokens:`** still work (deprecated): each maps to a
   `default`-tenant superuser so existing deployments keep running after upgrade.
-  Prefer service keys; `tokens:` will be removed in a later milestone.
+  Prefer service keys; `tokens:` will be removed in a future release.
 
 > Service-key secrets and OIDC tokens travel as bearer credentials — terminate
 > TLS upstream. Service-key verification is constant-time (bcrypt) and hashed at
 > rest. Per-tenant secrets brokering and key rotation are implemented (see above).
 > The console's mutating onboarding flow is CSRF-protected (HMAC-of-session
-> synchronizer token); OIDC login-flow `state`/`nonce` hardening is tracked for
-> later Identity milestones (see `ROADMAP.md` §B3).
+> synchronizer token), and the OIDC login flow is protected against login-CSRF by
+> a random `state` validated on callback.
 
 ---
 
@@ -842,7 +842,7 @@ traversal/header-override rejections, transport failures, and timeouts.
   alive — only transport errors mark the upstream down. Reconnect re-fetches
   the spec, so spec drift heals on the next redial.
 
-**Limitations (this milestone):** JSON request bodies only (a required
+**Limitations:** JSON request bodies only (a required
 form/multipart body skips the operation); arrays serialize comma-joined (no
 `explode`); credentials are shared per upstream (per-tenant credentials need
 secrets-broker integration); OpenAPI 3.x only (no Swagger 2.0 conversion); no
@@ -869,7 +869,7 @@ backoff) owning its lifecycle. A call against a down upstream returns an MCP
   disallowed (it would let a tenant run commands on the host).
 - **Tools only** — no resources or prompts federation yet.
 - **REST upstreams: JSON bodies, shared credentials** — see
-  [REST / OpenAPI upstreams](#rest--openapi-upstreams) for the per-milestone
+  [REST / OpenAPI upstreams](#rest--openapi-upstreams) for the current
   limitations (JSON-only request bodies, comma-joined arrays, per-upstream
   shared credentials, OpenAPI 3.x only, no OAuth2 flow).
 - **Operator-managed agent keys** — `agent_keys` maps tenants to service keys
@@ -985,7 +985,8 @@ reaping clears orphans.
 - **Python variables don't persist across calls** — files do; a kernel-mode
   backend (variables persist) is the planned upgrade, same tool surface.
 - **No network egress, ever** — `pip install` at runtime doesn't work; bake
-  packages into the image instead. An egress-policy milestone may relax this.
+  packages into the image instead. A configurable egress policy may relax this
+  in future.
 - **Docker required** — the engine socket (or `DOCKER_HOST`) must be reachable
   from `sandboxd`; gVisor is optional hardening on Linux.
 - **One sandboxd per host** — startup reaping is host-global by label.
@@ -1199,7 +1200,7 @@ nested tree. Spans carry IDs and structural attributes only
 
 - **sandboxd internals are not directly instrumented** — sandbox activity is
   visible only as gateway tool-call series (`server="sandbox"`); per-container
-  detail belongs with Sandboxes M2.
+  detail is not yet exposed.
 - **No per-tenant token accounting** — `agent_tokens_total` is per-agent; the
   tenant dimension is deliberately excluded (see the cardinality promise).
 
@@ -1600,7 +1601,7 @@ deployment parameters — exactly the same separation as the Go SDK. Adding
 another framework is one new adapter file.
 
 TWO worked examples host the SG Nutrition Investigator on different foreign
-frameworks through the SAME shim — the reuse proof for the adapter seam:
+frameworks through the SAME shim, demonstrating the adapter seam:
 
 - `examples/nutrition-label-openai/` — OpenAI Agents SDK (adapter: 39 code lines).
   Memory via the SDK's `SQLiteSession`; typed verdict via `output_type=`.
@@ -1621,16 +1622,15 @@ make conformance              # runtimectl conformance --agent nutrition-claude
 make demo-image IMAGE=milo.jpeg   # base64 a label photo → POST → stream the verdict
 ```
 
-The shim provides **Level-1 durability** (sessions and their event logs persist
-in `shim.db`, so after a restart sessions are listable, replayable, and
-conversation memory continues) — but **not** Level-2 in-flight crash resume,
-which remains the Go agents' DBOS-backed advantage. The shim also serves
-`POST /sessions/{id}/messages` for follow-up turns on an existing session —
-an extension the Go agent contract does not have yet (Go sessions are
-single-turn workflows); reconciling it into the Go contract + conformance
-suite is tracked in the ROADMAP. See
+The shim persists sessions and their event logs in `shim.db`, so after a restart
+sessions are listable, replayable, and conversation memory continues — but a run
+killed mid-execution is not resumed, which remains the Go agents' DBOS-backed
+advantage. The shim also serves `POST /sessions/{id}/messages` for follow-up
+turns on an existing session — an extension the Go agent contract does not have
+yet (Go sessions are single-turn workflows). See
 [`contrib/shims/python/README.md`](contrib/shims/python/README.md) for the full
-walkthrough, the adapter seam, and standalone-dev instructions.
+walkthrough, the adapter seam, and standalone-dev instructions, and
+[Deploying SDK agents](docs/deploying-sdk-agents.md) for the deploy path.
 
 ---
 
@@ -1825,7 +1825,7 @@ unaffected.
 | `RUNTIME_GATEWAY_SEARCH_FLOOR` | runtimed | `0.2` | Minimum cosine similarity for a `search_tools` match. |
 | `RUNTIME_GATEWAY_SEARCH_K` | runtimed | `5` | Default `search_tools` result count (cap 20). |
 | `RUNTIME_SANDBOX_*` | sandboxd | (see [sandbox](#code-interpreter-sandbox)) | Code-interpreter sandbox tuning: image, per-tenant cap, TTLs, workspace/memory/CPU limits, gVisor runtime, direct mode. |
-| `RUNTIME_SHIM_DB` | (python shim) | `./shim.db` | SQLite path for the polyglot shim's Level-1 store (not used by runtimed). |
+| `RUNTIME_SHIM_DB` | (python shim) | `./shim.db` | SQLite path for the polyglot shim's durable session store (not used by runtimed). |
 
 `runtimed` injects `RUNTIME_LISTEN_ADDR` and `RUNTIME_AGENT_ID` into each agent
 subprocess from `runtime.yaml`; you don't set them by hand.
@@ -1914,112 +1914,84 @@ single host, a stranger can self-serve onboard a tenant through the console UI,
 and the capstone proof (`deploy/compose/v1-proof.sh`) exercises every pillar
 end-to-end. See [v1.0 — turnkey self-host](#v10--turnkey-self-host).
 
-It got there in milestones. **Milestone 1** delivered the durable single-agent
-spine; **Milestone 2** added the multi-agent platform (config-driven registry,
-path routing, per-agent supervision, session status, full CLI); **Milestone 3**
-added the operability layer (the read-only web console, structured logging, the
-contract conformance suite, bounded shutdown, 503-on-restart, per-agent health,
-full-stack Docker build). Then the six AgentCore pillars, each with multiple
-live-proven milestones:
+### What's implemented
 
-- **Spine hardening** — per-agent replica **pools** with session affinity and
-  **load-based autoscaling** with graceful drain (see [Replica pools](#replica-pools--session-affinity) and [Autoscaling](#autoscaling-a2)).
-- **Identity** (three milestones) — multi-tenant access control, per-tenant
-  secrets brokering, and secrets key rotation (see [Authentication & multi-tenancy](#authentication--multi-tenancy)).
-- **Memory** (three milestones) — durable per-tenant store, semantic recall, and
-  auto-ingestion, wired into the live turn path (see [agent memory](#per-tenant-agent-memory)).
-- **Gateway** (three milestones) — MCP federation core, semantic tool search, and
-  REST/OpenAPI→tool adapters (see [MCP Gateway](#mcp-gateway)).
-- **Sandboxes** (two milestones) — the Docker-backed code interpreter **and** the
-  egress-policed browser, both delivered through the gateway (see
-  [Code-interpreter sandbox](#code-interpreter-sandbox) and [Browser sandbox](#browser-sandbox)).
-- **Observability** (two milestones) — fleet-wide Prometheus metrics with
-  request-id correlation, plus OpenTelemetry distributed tracing (see
-  [Observability](#observability)).
-- **Polyglot hosting** (two milestones) — the Python contract shim hosting the
-  OpenAI Agents SDK and the Claude Agent SDK (see the [Python shim](#hosting-a-foreign-sdk-agent-python-shim)).
+The durable agent spine (per-turn checkpointing) and the multi-agent platform
+(config-driven registry, path routing, per-agent supervision, session status,
+full CLI, web console, structured logging, contract conformance suite, bounded
+shutdown, per-agent health, full-stack Docker build), plus the six pillars:
+
+- **Spine** — per-agent replica **pools** with session affinity and **load-based
+  autoscaling** with graceful drain (see [Replica pools](#replica-pools--session-affinity) and [Autoscaling](#autoscaling)).
+- **Identity** — multi-tenant access control with OIDC human login, bcrypt-hashed
+  service keys (constant-time verify), per-agent admin/operator/viewer roles,
+  per-tenant secrets brokering (AES-256-GCM at rest, injected into the tenant's
+  agents at spawn), and secrets key rotation (a multi-key keyring with
+  self-describing, AAD-bound blobs + an explicit re-encrypt command). See
+  [Authentication & multi-tenancy](#authentication--multi-tenancy).
+- **Memory** — durable per-tenant `MemoryStore`, semantic recall (pgvector), and
+  auto-ingestion (background LLM fact extraction + semantic dedup), with recall
+  and ingest wired into the live turn path (see [agent memory](#per-tenant-agent-memory)).
+- **Gateway** — MCP federation core (tenant-filtered via service keys), semantic
+  tool search (embedding-ranked discovery, callable-but-unlisted catalog),
+  REST/OpenAPI→tool adapters (one generated tool per spec operation, no MCP
+  server required), and self-service dynamic upstream registration via the
+  console UI / `/admin/upstreams` API / `runtimectl`, with per-tenant upstream
+  credentials brokered into the upstream's headers at dial (see [MCP Gateway](#mcp-gateway)).
+- **Sandboxes** — the isolated, stateful, Docker-backed code interpreter **and**
+  the egress-policed Chromium browser, both federated behind the gateway with
+  tenant-scoped ownership (see [Code-interpreter sandbox](#code-interpreter-sandbox)
+  and [Browser sandbox](#browser-sandbox)).
+- **Observability** — fleet-wide Prometheus metrics (control-plane + per-agent
+  series merged behind one auth-free `/metrics`), `X-Request-ID` correlation
+  end-to-end, a provisioned Grafana dashboard, and OpenTelemetry distributed
+  tracing (correlated runtimed↔agentd traces, bundled OTel Collector + Jaeger).
+  See [Observability](#observability).
+- **Polyglot hosting** — the Python contract shim hosting the OpenAI Agents SDK
+  and the Claude Agent SDK, each running the full nutrition investigator (see the
+  [Python shim](#hosting-a-foreign-sdk-agent-python-shim) and
+  [Deploying SDK agents](docs/deploying-sdk-agents.md)).
 - **Containers / Kubernetes** — a container image + Helm chart, per-agent-pod
-  scheduling, and **remote agents** (attach instead of spawn) with a registration
-  handshake (see [Remote agents](#remote-agents-attach-instead-of-spawn) and [Kubernetes / Helm](#kubernetes--helm)).
+  scheduling (each agent its own StatefulSet attached as a remote pool), and
+  **remote agents** (attach instead of spawn) with a registration handshake that
+  pulls a per-agent env-delta from `POST /register`. Local subprocesses remain
+  the default single-node mode. See [Kubernetes / Helm](#kubernetes--helm) and
+  [Remote agents](#remote-agents-attach-instead-of-spawn).
 
-**Deliberately not yet implemented** (each is planned, scoped to a later
-milestone or sub-project):
+### Not yet implemented
 
-- **Identity — first three milestones DONE** (see [Authentication & multi-tenancy](#authentication--multi-tenancy)):
-  M1 multi-tenant access control with OIDC human login, bcrypt-hashed service keys
-  (constant-time verify), and per-agent admin/operator/viewer roles; M2 per-tenant
-  **secrets brokering** (AES-256-GCM at rest, injected into the tenant's agents at
-  spawn); M3 **secrets key rotation** (a multi-key keyring with self-describing,
-  AAD-bound blobs + an explicit re-encrypt command). **Still to come:**
-  fine-grained/custom RBAC, cross-tenant users + self-service, an admin console UI,
-  optional local password accounts, and console CSRF (`state`/`nonce`) hardening.
-- **Memory — first three milestones DONE** (see [agent memory](#per-tenant-agent-memory)):
-  M1 durable per-tenant `MemoryStore`, M2 semantic recall (pgvector), and M3
-  auto-ingestion (background LLM fact extraction + semantic dedup), with recall and
-  ingest wired into the live turn path. **Still to come:** compaction/TTL/GC of
-  dead rows, finer (per-agent/per-user) scoping, per-tenant embedding models,
-  refinement/merge dedup, and session-level synthesis.
-- **Observability — first two milestones DONE** (see [Observability](#observability)):
-  M1 Prometheus metrics (control-plane + per-agent series merged behind one
-  auth-free `/metrics` via a hardened fan-out scrape), `X-Request-ID`
-  correlation end-to-end (edge → proxy → agent logs → DBOS workflow input),
-  and the Prometheus + Grafana compose overlay with a provisioned dashboard;
-  M2 **OpenTelemetry distributed tracing** (OTLP/HTTP push, correlated
-  runtimed↔agentd traces joined by `request.id`, bundled OTel Collector +
-  Jaeger). **Still to come:** sandboxd-internal metrics, per-tenant token
-  accounting, alerting/recording rules, a console `/ui` metrics panel, log
-  shipping, and DBOS-internal metrics.
+Each of these is a known gap, planned for a future release:
+
+- **Identity** — fine-grained/custom RBAC, cross-tenant users + self-service, and
+  optional local password accounts.
+- **Memory** — compaction/TTL/GC of dead rows, finer (per-agent/per-user)
+  scoping, per-tenant embedding models, refinement/merge dedup, and session-level
+  synthesis.
+- **Observability** — sandboxd-internal metrics, per-tenant token accounting,
+  alerting/recording rules, a console `/ui` metrics panel, log shipping, and
+  DBOS-internal metrics.
 - **Agent lifecycle from the console** — the console drives tenant onboarding
-  (keys + gateway upstreams) but cannot deploy/stop/invoke agents from the UI;
-  that remains future work.
-- **Autoscaling** — per-agent replica **pools** (`replicas: N`) and **load-based
-  autoscaling** with graceful drain are done (`autoscale: {min, max,
-  target_sessions_per_replica}`, see [Autoscaling (A2)](#autoscaling-a2)); what's
-  still missing is a scale-down force-kill deadline, richer signals (CPU/queue/
+  (keys + gateway upstreams) but cannot deploy/stop/invoke agents from the UI.
+- **Autoscaling** — a scale-down force-kill deadline, richer signals (CPU/queue/
   latency), and a signal-only mode that hands actuation to an external
   orchestrator.
 - **Dynamic deploy** — agents come from `runtime.yaml` at startup; no runtime
   `POST /agents` registration or rollback yet (tokens are config-only too).
-- **Gateway — first three milestones DONE** (see [MCP Gateway](#mcp-gateway)):
-  M1 MCP federation core (one endpoint federating upstream MCP servers,
-  tenant-filtered via Identity service keys), M2 semantic tool search
-  (`gateway: search` / `?mode=search` — one listed `search_tools` tool,
-  embedding-ranked discovery, callable-but-unlisted catalog), and M3
-  REST/OpenAPI→tool adapters (`openapi:` upstreams — one generated tool per
-  spec operation, no MCP server required). v1.0-M1 added **self-service dynamic
-  upstream registration** (HTTP/OpenAPI upstreams via the console UI +
-  `/admin/upstreams` API + `runtimectl`, persisted in `gateway_upstreams`) and
-  **per-tenant upstream credentials** (brokered into the upstream's headers at
-  dial time). **Still to come:** resources/prompts passthrough, OAuth2
-  upstream auth, auto-minted agent keys, and rate limits.
-- **Polyglot hosting — first two milestones DONE** (see
-  [the Python shim](#hosting-a-foreign-sdk-agent-python-shim)): the OpenAI
-  Agents SDK and Claude Agent SDK adapters, each hosting the full nutrition
-  investigator. **Still to come:** Level-2 in-flight crash resume, a TS shim,
-  further adapters (PydanticAI is the next candidate), and reconciling the
-  shim's follow-up-messages endpoint into the Go contract + conformance suite.
-- **Sandboxes — first two milestones DONE** (see
-  [Code-interpreter sandbox](#code-interpreter-sandbox) and
-  [Browser sandbox](#browser-sandbox)): the isolated, stateful, Docker-backed
-  code interpreter **and** the egress-policed Chromium browser, both federated
-  behind the gateway with tenant-scoped ownership. **Still to come:** kernel-mode
-  variable persistence (same tool surface, persistent interpreter), runtime
-  `pip install` / relaxed egress for the code interpreter, per-user scoping, and
-  a console panel.
-- **Containers / Kubernetes — DONE** (see [Kubernetes / Helm](#kubernetes--helm)
-  and [Remote agents](#remote-agents-attach-instead-of-spawn)): a container image
-  + Helm chart, per-agent-pod scheduling (each agent its own StatefulSet attached
-  as a remote pool), and **remote agents** (attach instead of spawn) with a
-  registration handshake that pulls a per-agent env-delta from `POST /register`.
-  Local subprocesses remain the default single-node mode. **Still to come:** a
-  K8s operator/CRDs and mTLS between control plane and remote agents.
+- **Gateway** — resources/prompts passthrough, OAuth2 upstream auth,
+  auto-minted agent keys, and rate limits.
+- **Polyglot hosting** — in-flight crash resume for shim-hosted agents, a
+  TypeScript shim, further adapters (PydanticAI is the next candidate), and a
+  follow-up-messages endpoint in the Go agent contract.
+- **Sandboxes** — kernel-mode variable persistence (same tool surface, persistent
+  interpreter), runtime `pip install` / relaxed egress for the code interpreter,
+  per-user scoping, and a console panel.
+- **Containers / Kubernetes** — a K8s operator/CRDs and mTLS between the control
+  plane and remote agents.
 - **Cross-agent aggregate views** — session listing is per-agent; a fleet-wide
   session view is future console work.
-- **Minor hardening**: `session_events` sequence allocation assumes one writer
-  per session (true today, since one replica owns a session for life); the console
-  cookie is not `Secure` (terminate TLS upstream).
-
-See `docs/superpowers/specs/` for the full design and milestone specs.
+- **Minor hardening** — `session_events` sequence allocation assumes one writer
+  per session (true today, since one replica owns a session for life); the
+  console cookie is not `Secure` (terminate TLS upstream).
 
 ## License
 

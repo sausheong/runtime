@@ -1,20 +1,19 @@
 # Claude Agent SDK — SG Nutrition Investigator (hosted on runtime)
 
-The **third** implementation of the SG Nutrition Investigator (after the
+Another implementation of the SG Nutrition Investigator (alongside the
 Go/harness original and the [OpenAI Agents SDK port](../nutrition-label-openai/)),
 built on the [Claude Agent SDK](https://docs.claude.com/en/api/agent-sdk/python)
 and hosted on the runtime platform through the Python contract shim
 (`../../contrib/shims/python`, the reusable `runtime_contract` library).
 
-This is the **C1-M2 "thin adapter" reuse proof**: hosting a second, maximally
-different foreign SDK required **zero Claude-specific shim changes** —
-`runtime_contract` is consumed unchanged as the same editable path dependency
-the OpenAI example uses. (One framework-agnostic addition landed alongside
-this milestone: a `POST /sessions/{id}/messages` follow-up endpoint, which
-benefits every adapter equally.) Everything Claude-specific lives in this
-directory: `adapter.py` (139 lines, 100 of code), plus the SDK-free domain
-port (`agent.py`), the five MCP tools (`tools.py`), and the session map
-(`sessions.py`).
+It demonstrates the **thin-adapter** model: hosting a second, maximally
+different foreign SDK requires **zero shim changes** — `runtime_contract` is
+consumed unchanged as the same editable path dependency the OpenAI example uses.
+Everything Claude-specific lives in this directory: `adapter.py` (139 lines,
+100 of code), plus the SDK-free domain port (`agent.py`), the five MCP tools
+(`tools.py`), and the session map (`sessions.py`). The shim's
+`POST /sessions/{id}/messages` follow-up endpoint, used here for multi-turn
+conversations, is framework-agnostic and benefits every adapter equally.
 
 ## Prerequisites
 
@@ -44,8 +43,8 @@ make sessions                 # list this agent's sessions
   restarts — resume is keyed by config dir + cwd). A one-table runtime→SDK
   session-id map in the shim's SQLite (`sessions.py`) ties the platform's
   session id to the SDK's, so a follow-up message in the same runtime session
-  resumes the right SDK conversation. This is Level-1 durability via the
-  SDK's *native* persistence — an honest test of it, not a re-implementation.
+  resumes the right SDK conversation. Durability comes from the SDK's *native*
+  persistence — an honest test of it, not a re-implementation.
 - **Five in-process MCP tools** (`@tool` + `create_sdk_mcp_server`):
   `recall_product`, `check_sfa_additive`, `check_hcs`,
   `calculate_nutri_grade`, and `submit_verdict`. The SDK has no
@@ -63,7 +62,7 @@ make sessions                 # list this agent's sessions
   Only the first contract image is sent (parity with the OpenAI adapter).
 - **Subprocess per turn.** `query()` spawns the Claude Code CLI per call —
   simple and restart-survivable, but each turn pays process startup. Keeping
-  a warm `ClaudeSDKClient` is the Level-2-era optimization, deliberately not
+  a warm `ClaudeSDKClient` is a possible future optimization, deliberately not
   taken now.
 
 ## Three implementations, one agent
@@ -88,7 +87,7 @@ verdict block — so the three can be compared side by side on identical labels.
 - **Subprocess-per-turn latency.** Every turn spawns the CLI; vision turns
   through the proxy can take 60–120 s. A warm client is the known upgrade.
 
-Durability is Level 1 (sessions/events persist in `shim.db`, replayable via
-`?since=N`; conversation memory via the SDK's transcripts + `resume=`); plus
-the agent's own `agent_memory.json` learned aliases + product verdicts.
-Level 2 (in-flight crash resume) is out of scope — see the repo `ROADMAP.md` §C1.
+Sessions and their events persist in `shim.db` and replay after a restart (via
+`?since=N`); conversation memory survives restarts via the SDK's transcripts +
+`resume=`, plus the agent's own `agent_memory.json` learned aliases + product
+verdicts. A run killed mid-execution is not resumed.

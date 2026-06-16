@@ -33,11 +33,11 @@ The library is two layers:
   (`/healthz`, `/meta`, `POST /sessions`, `GET /sessions/{id}/stream?since=N`,
   `GET /sessions/{id}`, `GET /sessions`) plus one shim extension —
   `POST /sessions/{id}/messages` for follow-up turns on an existing session
-  (not yet in the Go agent contract; reconciliation tracked in the ROADMAP) —
-  frames events as SSE (`id: <seq>\ndata: <compact-json>\n\n`), replays
-  buffered events on `?since=N`, and persists sessions + an append-only event
-  log to a SQLite store (`shim.db`) for Level-1 durability. It knows nothing
-  about any agent framework.
+  (not yet in the Go agent contract) — frames events as SSE
+  (`id: <seq>\ndata: <compact-json>\n\n`), replays buffered events on
+  `?since=N`, and persists sessions + an append-only event log to a SQLite store
+  (`shim.db`) so they survive a restart. It knows nothing about any agent
+  framework.
 - **A thin per-framework adapter** — a small object implementing the
   `AgentAdapter` protocol that drives the actual SDK and translates its stream
   into contract events. The adapter lives with the consumer, not in this library;
@@ -53,7 +53,7 @@ author. The adapter author never handles them:
 |---|---|---|
 | `RUNTIME_LISTEN_ADDR` | `host:port` to bind (required) | injected by `runtimed` |
 | `RUNTIME_AGENT_ID` | agent id surfaced on `/meta` (default `agent`) | injected by `runtimed` |
-| `RUNTIME_SHIM_DB` | SQLite path for the Level-1 store (default `./shim.db`) | optional; *not* injected — defaults under the agent's workdir |
+| `RUNTIME_SHIM_DB` | SQLite path for the durable store (default `./shim.db`) | optional; *not* injected — defaults under the agent's workdir |
 
 `serve()` resolves those, builds the `Store` and the FastAPI app, and runs
 uvicorn. The Runtime config's `command:` points at the entrypoint (e.g.
@@ -155,8 +155,8 @@ adapter; no API key or network required).
 
 ## Durability
 
-**Level 1 is implemented.** The library persists, in `shim.db` (path overridable
-via `RUNTIME_SHIM_DB`):
+**Sessions and events survive a restart.** The library persists, in `shim.db`
+(path overridable via `RUNTIME_SHIM_DB`):
 
 - the **session list** and per-session **status / turn count**, and
 - an **append-only event log** per session.
@@ -167,10 +167,10 @@ Conversation memory can also continue across restarts when an adapter keys its
 own per-session store (e.g. an SDK's `SQLiteSession`) on the runtime session id,
 so a follow-up turn sees the prior turns.
 
-**Level 2 (in-flight crash resume) is NOT implemented.** A run that is killed
-*mid-execution* is lost — there is no checkpoint/replay of a partially completed
-run, unlike Go agents' DBOS-backed per-turn durability. This is documented as
-future work in the repo `ROADMAP.md` (§C1, Level 2).
+**A run killed mid-execution is not resumed.** There is no checkpoint/replay of
+a partially completed run, unlike Go agents' DBOS-backed per-turn durability — a
+process killed during a run loses that in-flight turn (its prior sessions and
+completed events remain intact).
 
 ---
 

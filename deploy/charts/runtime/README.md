@@ -71,7 +71,7 @@ config:
 
 ### 1. BYO Postgres (recommended for production)
 
-Point the chart at an existing Postgres. For semantic memory (Memory M2/M3) the
+Point the chart at an existing Postgres. For semantic memory the
 `pgvector` extension must be pre-created by a DB superuser.
 
 Inline DSN:
@@ -96,7 +96,7 @@ helm install runtime deploy/charts/runtime --set postgresql.enabled=true
 
 The chart synthesizes the in-cluster DSN automatically. **Caveat:** the Bitnami
 Postgres image does **not** include the `pgvector` extension, so semantic memory
-(Memory M2/M3) will not work against the bundled DB. Everything else works. For
+will not work against the bundled DB. Everything else works. For
 memory, use a BYO `pgvector`-enabled Postgres (mode 1).
 
 ### 3. Dev-insecure (local / demo only)
@@ -340,7 +340,7 @@ make helm-deps        # vendor + unpack the Postgres subchart
 make helm-package     # → dist/runtime-0.1.0.tgz
 ```
 
-There is **no CI in this milestone** — publishing is manual:
+There is **no CI for chart publishing** — it is manual:
 
 ```bash
 docker push <registry>/runtime:0.1.0
@@ -390,24 +390,23 @@ is handled live: runtimed skips ordinals whose health probe fails. Scaling *up*
 beyond the configured `replicas` requires `helm upgrade` (re-render the config so
 runtimed learns the higher ordinal count).
 
-**Known limitation — brokered secrets.** Per-agent-pod agents receive provider
-credentials from the chart Secret (env), not from runtimed's Identity-M2 secrets
-broker, which decrypts and injects only at spawn time (and runtimed does not spawn
-these pods). Supply provider keys via `secrets.existingSecret`/the chart Secret.
-Brokered-secrets delivery to scheduled pods is backlogged (its natural home is the
-C3 M2 registration handshake, where a pod pulls decrypted secrets over an
-authenticated channel).
+**Known limitation — brokered secrets.** Without the registration handshake
+(below), per-agent-pod agents receive provider credentials from the chart Secret
+(env), not from runtimed's secrets broker, which decrypts and injects only at
+spawn time (and runtimed does not spawn these pods). Supply provider keys via
+`secrets.existingSecret`/the chart Secret, or turn on the registration handshake
+so a pod pulls decrypted secrets over an authenticated channel.
 
-### Registration handshake (C3 M2)
+### Registration handshake
 
 In `perAgentPods` mode, set `secrets.registrationToken` (or supply an
-`existingSecret` carrying a `RUNTIME_REGISTRATION_TOKEN` key) to turn on the **C3
-M2 registration handshake**. Each agent pod then **pulls its full config from the
+`existingSecret` carrying a `RUNTIME_REGISTRATION_TOKEN` key) to turn on the
+**registration handshake**. Each agent pod then **pulls its full config from the
 control plane at boot** — DSN, identity, opt-in feature env, and the tenant's
 **brokered (decrypted) per-tenant secrets** — instead of reading provider
-credentials from the static chart Secret. This retires the C2 M2 limitation that
-brokered secrets could not reach scheduled pods (they are spawn-time-only for
-local children, and runtimed does not spawn these pods).
+credentials from the static chart Secret. This closes the gap where brokered
+secrets could not reach scheduled pods (they are spawn-time-only for local
+children, and runtimed does not spawn these pods).
 
 How it works: when the token is present the chart adds `RUNTIME_REGISTRATION_URL`
 (the control-plane Service + `/register`) and a `RUNTIME_REGISTRATION_TOKEN`
@@ -460,4 +459,4 @@ Notes:
   secrets DO arrive), but gateway-enabled agents remain monolith-only; per-agent-pod
   gateway stays backlogged.
 - **mTLS is still deferred.** The registration token is a bearer over
-  operator-terminated TLS (same trust model as the M1 runtimed→agent bearer).
+  operator-terminated TLS (same trust model as the runtimed→agent bearer).
