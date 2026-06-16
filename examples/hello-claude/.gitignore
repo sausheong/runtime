@@ -1,0 +1,7 @@
+.env
+.venv/
+__pycache__/
+shim.db
+shim.db-wal
+shim.db-shm
+claude-config/

@@ -1,0 +1,13 @@
+# Host the minimal Claude Agent SDK assistant via the Python contract shim.
+# Driven by this directory's Makefile (`make run`), which runs runtimed from the
+# repo root, so `workdir` is repo-root-relative.
+#
+#   cp .env.example .env   # fill in your proxy key
+#   make run               # builds binaries, uv sync, runs the control plane
+agents:
+  - id: hello-claude
+    name: Hello (Claude Agent SDK)
+    model: claude-sonnet-4-6
+    listen_addr: 127.0.0.1:8310
+    workdir: ./examples/hello-claude
+    command: ["uv", "run", "python", "serve.py"]

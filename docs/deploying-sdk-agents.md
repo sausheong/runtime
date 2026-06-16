@@ -137,6 +137,14 @@ inheriting the parent environment so your `OPENAI_*` / `ANTHROPIC_*` flow
 through. Credentials themselves go in a local `.env` next to the agent
 (gitignored) — see each example's `.env.example`.
 
+> **Session ownership.** A `command:`-spawned shim agent keeps its sessions in
+> its own SQLite store (`RUNTIME_SHIM_DB`), not the control plane's Postgres — so
+> the control plane routes session-scoped requests (stream/get) straight to it
+> rather than resolving affinity from its own store. This works out of the box;
+> it requires `runtimed` built at the commit that taught `pickReplica` to treat
+> command-spawned agents like remotes (they own their sessions). Older `runtimed`
+> 404s "unknown session" on the stream after a successful `POST /sessions`.
+
 ---
 
 ## 3. Run and gate it locally
@@ -167,11 +175,27 @@ contract holds.
 
 ## 4. Ship to production (GCP, as a remote agent)
 
-In the GCP distributed deployment, an SDK agent runs on its **own VM** and the
+In the GCP distributed deployment, an SDK agent runs in a container and the
 control plane attaches to it over the VPC as a **remote agent** — `runtimed`
-health-checks and proxies to it, but never spawns it. The OpenAI example is
-deployed exactly this way as instance **C**; the bundle is
-[`deploy/gcp/agent-python/`](../deploy/gcp/agent-python).
+health-checks and proxies to it, but never spawns it.
+
+The deploy bundle is **per agent** (image, env vars, and port all differ by SDK).
+Two bundles ship as templates — copy whichever matches your SDK:
+
+| SDK | Bundle | Env | Port |
+|---|---|---|---|
+| OpenAI Agents SDK | [`deploy/gcp/agent-python/`](../deploy/gcp/agent-python) | `OPENAI_*` | 8302 |
+| Claude Agent SDK | [`deploy/gcp/agent-claude/`](../deploy/gcp/agent-claude) | `ANTHROPIC_*` | 8080 |
+
+> **Claude Agent SDK specifics.** The SDK bundles its CLI inside the platform
+> wheel (`claude_agent_sdk-*-manylinux_2_17_x86_64.whl`), so an amd64 `uv sync`
+> pulls the correct Linux binary automatically — **no node, no manual install**.
+> The agent reads `ANTHROPIC_API_KEY` / `ANTHROPIC_BASE_URL` / `ANTHROPIC_MODEL`
+> (not `OPENAI_*`). Behind a litellm-style proxy these are the same one key the
+> OpenAI agent uses, just under the `ANTHROPIC_*` names.
+
+The examples below show the Claude path; the OpenAI path is identical with
+`agent-python/`, `OPENAI_*`, and port 8302 substituted.
 
 ### a. Containerize
 
@@ -182,12 +206,12 @@ external DB). Build for **amd64** from the **projects root** (parent of
 ```bash
 cd /path/to/projects                   # contains runtime/ and harness/
 docker build --platform linux/amd64 \
-  -f runtime/deploy/gcp/agent-python/Dockerfile \
-  -t nutrition-openai:latest .
+  -f runtime/deploy/gcp/agent-claude/Dockerfile \
+  -t hello-claude:latest .
 ```
 
 The Dockerfile (see
-[`deploy/gcp/agent-python/Dockerfile`](../deploy/gcp/agent-python/Dockerfile))
+[`deploy/gcp/agent-claude/Dockerfile`](../deploy/gcp/agent-claude/Dockerfile))
 copies both `contrib/shims/python` and the example dir so the
 `runtime-contract = { path = "../../contrib/shims/python" }` path dependency
 resolves, then `uv sync --no-dev`. To containerize your own agent, copy this
@@ -195,19 +219,23 @@ Dockerfile and swap the example path.
 
 ### b. Run it on its VM
 
-`deploy/gcp/agent-python/docker-compose.yml` runs the image with the env it
+`deploy/gcp/agent-claude/docker-compose.yml` runs the image with the env it
 needs. Two things matter:
 
-- **Bind `0.0.0.0`, not loopback.** Set `RUNTIME_LISTEN_ADDR: "0.0.0.0:8302"`.
-  With a bare `":8302"` the shim's host parsing yields an empty host and uvicorn
+- **Bind `0.0.0.0`, not loopback.** Set `RUNTIME_LISTEN_ADDR: "0.0.0.0:8080"`.
+  With a bare `":8080"` the shim's host parsing yields an empty host and uvicorn
   falls back to `127.0.0.1`, unreachable through Docker's port publish. (The Go
   `agentd` binds all interfaces on `:port`; uvicorn needs the host spelled out.)
-- **Inject the model credentials** (`OPENAI_*` / `ANTHROPIC_*`) and a persistent
+- **Inject the model credentials** (`ANTHROPIC_*`) and a persistent
   `RUNTIME_SHIM_DB` on a volume.
 
+The compose file uses a distinct project `name:` and port, so the agent can run
+as a **second container alongside another shim agent on the same VM** (e.g. an
+OpenAI agent on 8302 and this Claude agent on 8080).
+
 ```bash
-cd ~/deploy/agent-python
-cp .env.example .env                   # OPENAI_API_KEY / OPENAI_BASE_URL / OPENAI_MODEL
+cd ~/deploy/agent-claude
+cp .env.example .env                   # ANTHROPIC_API_KEY / ANTHROPIC_BASE_URL / ANTHROPIC_MODEL
 sudo docker compose up -d
 ```
 
@@ -220,11 +248,11 @@ Spawn-time fields (`kind/command/workdir`) are rejected on a remote entry. From
 
 ```yaml
 agents:
-  - id: nutrition-openai
-    name: SG Nutrition Investigator (OpenAI SDK)
-    model: openai/gpt-5.4              # display only; C's OPENAI_MODEL is authoritative
+  - id: hello-claude
+    name: Hello (Claude Agent SDK)
+    model: claude-sonnet-4-6           # display only; the agent's ANTHROPIC_MODEL is authoritative
     tenant: acme                       # MUST match your console users' tenant
-    url: http://10.10.0.AGENT_PY_IP:8302
+    url: http://10.10.0.AGENT_IP:8080
 ```
 
 > **`tenant` matters.** With identity ON, the console only shows agents in the
