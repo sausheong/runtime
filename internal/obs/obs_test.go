@@ -53,6 +53,26 @@ func TestControlMetricsAgentAndGateway(t *testing.T) {
 	}
 }
 
+func TestControlMetricsProxyCall(t *testing.T) {
+	c := NewControlMetrics()
+	c.ProxyCall("support", ProxyNewSession)
+	c.ProxyCall("support", ProxyNewSession)
+	c.ProxyCall("support", ProxyStream)
+	c.ProxyCall("research", ProxyMessage)
+	if v := testutil.ToFloat64(c.agentProxyCalls.WithLabelValues("support", ProxyNewSession)); v != 2 {
+		t.Fatalf("proxy new_session = %v, want 2", v)
+	}
+	if v := testutil.ToFloat64(c.agentProxyCalls.WithLabelValues("support", ProxyStream)); v != 1 {
+		t.Fatalf("proxy stream = %v, want 1", v)
+	}
+	if v := testutil.ToFloat64(c.agentProxyCalls.WithLabelValues("research", ProxyMessage)); v != 1 {
+		t.Fatalf("proxy message = %v, want 1", v)
+	}
+	// Nil-safe.
+	var n *ControlMetrics
+	n.ProxyCall("x", ProxyOther)
+}
+
 func TestControlMetrics_ReplicaLabels(t *testing.T) {
 	c := NewControlMetrics()
 	// New signatures take a replica index; must not panic and must register.

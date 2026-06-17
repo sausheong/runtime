@@ -60,8 +60,37 @@ class NutritionAdapter:
             # Non-streamed: with output_type=NutritionVerdict the SDK returns the
             # validated structured object at the end (not output_text deltas).
             result = await Runner.run(self._agent, input=user_input, session=session)
+            # Telemetry (metrics only; never reaches the client stream). Extraction
+            # is best-effort: a change in the SDK result shape must never break the
+            # turn, so it's wrapped and yielded before the text result.
+            for ev in _telemetry_events(result):
+                yield ev
             v: NutritionVerdict = result.final_output
             remember_verdict(v)  # learn across sessions, like the CLI across runs
             yield ContractEvent(type="text", text=render_verdict(v))
         except Exception as e:  # never raise out of run(); surface as one error
             yield ContractEvent(type="error", error=str(e))
+
+
+def _telemetry_events(result) -> list[ContractEvent]:
+    """Best-effort tool_call + usage telemetry from a RunResult. Returns [] on any
+    shape mismatch — telemetry must never break a turn."""
+    out: list[ContractEvent] = []
+    try:
+        for item in getattr(result, "new_items", []) or []:
+            # ToolCallItem exposes .tool_name; other run items are skipped.
+            name = getattr(item, "tool_name", None)
+            if name:
+                out.append(ContractEvent(type="tool_call", tool=name))
+    except Exception:
+        pass
+    try:
+        usage = getattr(getattr(result, "context_wrapper", None), "usage", None)
+        if usage is not None:
+            out.append(ContractEvent(type="usage", usage={
+                "input": int(getattr(usage, "input_tokens", 0) or 0),
+                "output": int(getattr(usage, "output_tokens", 0) or 0),
+            }))
+    except Exception:
+        pass
+    return out

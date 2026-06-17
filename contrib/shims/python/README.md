@@ -36,8 +36,10 @@ The library is two layers:
   (not yet in the Go agent contract) — frames events as SSE
   (`id: <seq>\ndata: <compact-json>\n\n`), replays buffered events on
   `?since=N`, and persists sessions + an append-only event log to a SQLite store
-  (`shim.db`) so they survive a restart. It knows nothing about any agent
-  framework.
+  (`shim.db`) so they survive a restart. It also serves Prometheus `/metrics`
+  (turns, turn duration, tokens, tool calls) wire-compatible with the Go
+  `agentruntime` emitter, so the control plane fan-out scrape picks it up
+  automatically. It knows nothing about any agent framework.
 - **A thin per-framework adapter** — a small object implementing the
   `AgentAdapter` protocol that drives the actual SDK and translates its stream
   into contract events. The adapter lives with the consumer, not in this library;
@@ -99,6 +101,26 @@ class MyFrameworkAdapter:
 Then point your entrypoint at the new adapter (`serve(MyFrameworkAdapter)`). The
 library handles persistence, SSE fan-out, `?since=N` replay, and the terminal
 event.
+
+### Metrics (optional telemetry)
+
+The library records one turn per invocation — count, outcome, and wall-clock
+duration — automatically. To also surface **token usage** and **tool calls**, an
+adapter may yield two extra telemetry events. They feed Prometheus only; they are
+**never** sent to the client SSE stream or persisted:
+
+```python
+# one per tool the framework invoked this turn
+yield ContractEvent(type="tool_call", tool="check_additive")
+# token counts for the turn (yield at most one; the last wins)
+yield ContractEvent(type="usage", usage={"input": 1234, "output": 567,
+                                          "cache_creation": 0, "cache_read": 0})
+```
+
+These become `agent_tool_calls_total{tool=...}` and
+`agent_tokens_total{direction=...}` on `/metrics`. An adapter that yields neither
+still reports turn count and duration. See the OpenAI and Claude SDK examples for
+how to extract these from each SDK's run result.
 
 ---
 

@@ -103,10 +103,28 @@ func NewAPI(reg *Registry, m *obs.ControlMetrics, st store.Store) *http.ServeMux
 			http.Error(w, "unknown session", http.StatusNotFound)
 			return
 		}
+		m.ProxyCall(id, proxyKind(r.Method, r.URL.Path))
 		reverseProxy(ap.baseURL(), ap.AuthToken, func() { m.ProxyError(id) }).ServeHTTP(w, r)
 	})
 
 	return mux
+}
+
+// proxyKind classifies a prefix-stripped agent request path+method into the
+// obs.Proxy* kind label. Mirrors the routing intent in pickReplica.
+func proxyKind(method, path string) string {
+	if method == "POST" && path == "/sessions" {
+		return obs.ProxyNewSession
+	}
+	if _, ok := sessionID(path); ok {
+		if strings.HasSuffix(path, "/messages") {
+			return obs.ProxyMessage
+		}
+		if strings.HasSuffix(path, "/stream") {
+			return obs.ProxyStream
+		}
+	}
+	return obs.ProxyOther
 }
 
 // pickReplica chooses which replica serves this (already-prefix-stripped)

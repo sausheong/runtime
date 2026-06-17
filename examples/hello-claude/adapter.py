@@ -99,7 +99,30 @@ class HelloClaudeAdapter:
                     error=f"agent run failed ({result.subtype}): {result.result or ''}",
                 )
                 return
+            # Token telemetry (metrics only; never reaches the client stream).
+            # Best-effort: a usage-shape change must never break the turn. No
+            # tool_call events — this agent runs with tools=[].
+            usage_ev = _usage_event(result)
+            if usage_ev is not None:
+                yield usage_ev
             text = "".join(text_parts) or (result.result if result and result.result else "")
             yield ContractEvent(type="text", text=text or "(no output)")
         except Exception as e:  # never raise out of run()
             yield ContractEvent(type="error", error=str(e))
+
+
+def _usage_event(result) -> ContractEvent | None:
+    """Best-effort token-usage telemetry from a ResultMessage.usage dict (standard
+    Anthropic shape). Returns None on any mismatch — telemetry never breaks a turn."""
+    try:
+        u = getattr(result, "usage", None)
+        if not u:
+            return None
+        return ContractEvent(type="usage", usage={
+            "input": int(u.get("input_tokens", 0) or 0),
+            "output": int(u.get("output_tokens", 0) or 0),
+            "cache_creation": int(u.get("cache_creation_input_tokens", 0) or 0),
+            "cache_read": int(u.get("cache_read_input_tokens", 0) or 0),
+        })
+    except Exception:
+        return None

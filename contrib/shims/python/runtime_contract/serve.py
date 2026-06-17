@@ -24,6 +24,7 @@ import uvicorn
 
 from .adapter import AgentAdapter
 from .app import create_app
+from .metrics import Metrics
 from .store import Store
 
 # An adapter may be supplied directly, or as a factory taking the resolved
@@ -56,7 +57,11 @@ def serve(adapter: AdapterOrFactory) -> None:
         resolved = adapter  # type: ignore[assignment]
 
     store = Store(db)
-    app = create_app(resolved, store, agent_id)
+    # Always-on Prometheus metrics: in-process and cheap, served at /metrics on
+    # the agent's own port and scraped by the control plane over the VPC — same
+    # trust model as the Go agentruntime emitter.
+    metrics = Metrics(agent_id)
+    app = create_app(resolved, store, agent_id, metrics=metrics)
     uvicorn.run(app, host=host or "127.0.0.1", port=int(port or "8000"), log_level="info")
 
 

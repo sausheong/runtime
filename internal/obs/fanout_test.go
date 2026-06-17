@@ -72,6 +72,61 @@ func TestFanoutMergesHealthyAgents(t *testing.T) {
 	}
 }
 
+// pythonShimTokens mimics the Python contract shim's /metrics for the
+// agent_tokens_total family: same name/type as the Go emitter, label `direction`,
+// and CRUCIALLY no `agent`/`replica` label (the shim omits them; the control
+// plane injects them). This is the wire-contract the shim's metrics.py must keep.
+func pythonShimTokens() string {
+	return `# HELP agent_tokens_total LLM tokens consumed, by direction (input/output/cache_creation/cache_read).
+# TYPE agent_tokens_total counter
+agent_tokens_total{direction="input"} 100
+agent_tokens_total{direction="output"} 20
+`
+}
+
+// goAgentTokens mimics the Go agentruntime emitter for the same family (it sets
+// an agent label, which fanout overwrites with the registered id).
+func goAgentTokens(agent string) string {
+	return fmt.Sprintf(`# HELP agent_tokens_total LLM tokens consumed, by direction (input/output/cache_creation/cache_read).
+# TYPE agent_tokens_total counter
+agent_tokens_total{agent=%q,direction="input"} 5
+`, agent)
+}
+
+// TestFanoutMergesGoAndPythonTokenFamily guards the cross-language wire contract:
+// a Go agent and a Python-shim agent both expose agent_tokens_total; the merge
+// must produce ONE family (no type_conflict, no duplicate TYPE), with each
+// agent's series carrying the injected agent label.
+func TestFanoutMergesGoAndPythonTokenFamily(t *testing.T) {
+	goAgent := fakeAgent(t, func(w http.ResponseWriter, _ *http.Request) { fmt.Fprint(w, goAgentTokens("nutrition-go")) })
+	pyAgent := fakeAgent(t, func(w http.ResponseWriter, _ *http.Request) { fmt.Fprint(w, pythonShimTokens()) })
+	c := NewControlMetrics()
+	h := FanoutHandler(c, func() []ScrapeTarget {
+		return []ScrapeTarget{
+			{Agent: "nutrition-go", BaseURL: "http://" + goAgent},
+			{Agent: "nutrition-openai", BaseURL: "http://" + pyAgent},
+		}
+	})
+	body := scrapeHandler(t, h)
+	mustParseClean(t, body)
+	// One TYPE line despite two agents of two implementations (merge, not concat).
+	if n := strings.Count(body, "# TYPE agent_tokens_total counter"); n != 1 {
+		t.Fatalf("TYPE lines = %d, want 1\n%s", n, body)
+	}
+	// Python shim series gained the injected agent label.
+	if !strings.Contains(body, `agent_tokens_total{agent="nutrition-openai",direction="input",replica="0"} 100`) {
+		t.Fatalf("python shim input-tokens series missing/unlabeled:\n%s", body)
+	}
+	// Go agent series' self-claimed agent label was overwritten by the target id.
+	if !strings.Contains(body, `agent_tokens_total{agent="nutrition-go",direction="input",replica="0"} 5`) {
+		t.Fatalf("go agent input-tokens series missing:\n%s", body)
+	}
+	// No type_conflict skip was recorded (same TYPE on both sides).
+	if v := testutil.ToFloat64(c.scrapeSkips.WithLabelValues("nutrition-openai", "0", "type_conflict")); v != 0 {
+		t.Fatalf("unexpected type_conflict skip: %v", v)
+	}
+}
+
 func TestFanoutInjectsNonZeroReplicaLabel(t *testing.T) {
 	// Every other fanout test uses Replica=0 (the zero value), so the
 	// strconv.Itoa(replica) injection is only proven for "0". Prove a non-zero

@@ -130,6 +130,15 @@
         { "expr": "sum by (agent) (rate(runtime_proxy_errors_total[5m]))", "refId": "A", "legendFormat": "proxy errors {{agent}}" },
         { "expr": "sum by (agent, reason) (rate(runtime_metrics_scrape_skips_total[5m]))", "refId": "B", "legendFormat": "scrape skips {{agent}} {{reason}}" }
       ]
+    },
+    {
+      "id": 13,
+      "type": "timeseries",
+      "title": "Proxy calls by agent",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 36 },
+      "targets": [
+        { "expr": "sum by (agent, kind) (rate(runtime_agent_proxy_calls_total[5m]))", "refId": "A", "legendFormat": "{{agent}} {{kind}}" }
+      ]
     }
   ]
 }

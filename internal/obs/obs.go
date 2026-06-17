@@ -28,21 +28,22 @@ var turnBuckets = []float64{0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60, 120}
 // ControlMetrics is runtimed's registry: HTTP edge, agent supervision,
 // reverse proxy, gateway federation, and fan-out scrape bookkeeping.
 type ControlMetrics struct {
-	reg            *prometheus.Registry
-	httpRequests   *prometheus.CounterVec
-	httpDuration   *prometheus.HistogramVec
-	agentUp        *prometheus.GaugeVec
-	agentReachable *prometheus.GaugeVec
-	agentRestarts  *prometheus.CounterVec
-	proxyErrors    *prometheus.CounterVec
-	gwCalls        *prometheus.CounterVec
-	gwDuration     *prometheus.HistogramVec
-	gwUp           *prometheus.GaugeVec
-	scrapeSkips    *prometheus.CounterVec
-	asDesired      *prometheus.GaugeVec
-	asCurrent      *prometheus.GaugeVec
-	asActive       *prometheus.GaugeVec
-	asEvents       *prometheus.CounterVec
+	reg             *prometheus.Registry
+	httpRequests    *prometheus.CounterVec
+	httpDuration    *prometheus.HistogramVec
+	agentUp         *prometheus.GaugeVec
+	agentReachable  *prometheus.GaugeVec
+	agentRestarts   *prometheus.CounterVec
+	proxyErrors     *prometheus.CounterVec
+	agentProxyCalls *prometheus.CounterVec
+	gwCalls         *prometheus.CounterVec
+	gwDuration      *prometheus.HistogramVec
+	gwUp            *prometheus.GaugeVec
+	scrapeSkips     *prometheus.CounterVec
+	asDesired       *prometheus.GaugeVec
+	asCurrent       *prometheus.GaugeVec
+	asActive        *prometheus.GaugeVec
+	asEvents        *prometheus.CounterVec
 }
 
 func NewControlMetrics() *ControlMetrics {
@@ -75,6 +76,10 @@ func NewControlMetrics() *ControlMetrics {
 		Name: "runtime_proxy_errors_total",
 		Help: "Reverse-proxy failures (503s served) per agent.",
 	}, []string{"agent"})
+	c.agentProxyCalls = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "runtime_agent_proxy_calls_total",
+		Help: "Requests the control plane proxied to an agent, by agent and kind (new_session/message/stream/other).",
+	}, []string{"agent", "kind"})
 	c.gwCalls = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "runtime_gateway_tool_calls_total",
 		Help: "Federated gateway tool calls by upstream, tool, and outcome.",
@@ -109,7 +114,7 @@ func NewControlMetrics() *ControlMetrics {
 		Help: "Autoscale actions by agent and action (up/down/undrain/reap/blocked).",
 	}, []string{"agent", "action"})
 	c.reg.MustRegister(c.httpRequests, c.httpDuration, c.agentUp, c.agentReachable, c.agentRestarts,
-		c.proxyErrors, c.gwCalls, c.gwDuration, c.gwUp, c.scrapeSkips,
+		c.proxyErrors, c.agentProxyCalls, c.gwCalls, c.gwDuration, c.gwUp, c.scrapeSkips,
 		c.asDesired, c.asCurrent, c.asActive, c.asEvents)
 	return c
 }
@@ -172,6 +177,25 @@ func (c *ControlMetrics) ProxyError(agent string) {
 		return
 	}
 	c.proxyErrors.WithLabelValues(agent).Inc()
+}
+
+// Proxy-call kind label values for ProxyCall. Classified from the (already
+// prefix-stripped) request method+path in the /agents/{id}/ handler.
+const (
+	ProxyNewSession = "new_session" // POST /sessions
+	ProxyMessage    = "message"     // POST /sessions/{sid}/messages
+	ProxyStream     = "stream"      // GET  /sessions/{sid}/stream
+	ProxyOther      = "other"       // healthz, list, get, meta, etc.
+)
+
+// ProxyCall counts one request the control plane proxied to an agent, broken
+// down by agent id and kind. Complements runtime_http_requests_total, whose
+// route label (the normalized mux pattern) cannot distinguish individual agents.
+func (c *ControlMetrics) ProxyCall(agent, kind string) {
+	if c == nil {
+		return
+	}
+	c.agentProxyCalls.WithLabelValues(agent, kind).Inc()
 }
 
 func (c *ControlMetrics) GatewayCall(server, tool, outcome string, dur time.Duration) {

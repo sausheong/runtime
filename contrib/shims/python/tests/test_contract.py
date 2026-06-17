@@ -4,6 +4,7 @@ from fastapi.testclient import TestClient
 
 from runtime_contract.app import create_app
 from runtime_contract.events import ContractEvent
+from runtime_contract.metrics import Metrics
 from runtime_contract.store import Store
 
 
@@ -72,6 +73,65 @@ def test_replay_since(tmp_path):
     tail = c.get(f"/sessions/{sid}/stream?since=1").text
     assert "hello x" not in tail
     assert '"type":"done"' in tail
+
+
+class TelemetryAdapter:
+    """Yields telemetry events (usage/tool_call) interleaved with output. The
+    telemetry must feed metrics but never reach the client stream."""
+
+    async def run(self, session_id, message, images, history) -> AsyncIterator[ContractEvent]:
+        yield ContractEvent(type="tool_call", tool="search")
+        yield ContractEvent(type="tool_call", tool="search")
+        yield ContractEvent(type="text", text="answer")
+        yield ContractEvent(type="usage", usage={"input": 50, "output": 10})
+
+
+def test_telemetry_events_not_in_client_stream(tmp_path):
+    store = Store(str(tmp_path / "db.sqlite"))
+    metrics = Metrics("tele")
+    c = TestClient(create_app(TelemetryAdapter(), store, "tele", metrics=metrics))
+    sid = c.post("/sessions", json={"message": "q"}).json()["session_id"]
+    body = c.get(f"/sessions/{sid}/stream?since=0").text
+    # Client sees only text + done; telemetry types are stripped.
+    assert '"type":"text"' in body and "answer" in body
+    assert '"type":"done"' in body
+    assert '"type":"tool_call"' not in body
+    assert '"type":"usage"' not in body
+    # done seq = 2 (text, done) — telemetry events were not persisted, so they
+    # did not consume sequence numbers.
+    assert "id: 2" in body
+    assert "id: 3" not in body
+
+
+def test_telemetry_events_recorded_in_metrics(tmp_path):
+    store = Store(str(tmp_path / "db.sqlite"))
+    metrics = Metrics("tele")
+    c = TestClient(create_app(TelemetryAdapter(), store, "tele", metrics=metrics))
+    sid = c.post("/sessions", json={"message": "q"}).json()["session_id"]
+    c.get(f"/sessions/{sid}/stream?since=0").text  # drive the turn to completion
+    m = c.get("/metrics").text
+    assert 'agent_tool_calls_total{tool="search"} 2.0' in m
+    assert 'agent_tokens_total{direction="input"} 50.0' in m
+    assert 'agent_tokens_total{direction="output"} 10.0' in m
+    assert 'agent_turns_total{outcome="completed"} 1.0' in m
+
+
+def test_metrics_404_when_disabled(tmp_path):
+    # No metrics passed ⇒ /metrics 404s ⇒ fanout treats it as no_metrics.
+    store = Store(str(tmp_path / "db.sqlite"))
+    c = TestClient(create_app(FakeAdapter(), store, "nometrics"))
+    assert c.get("/metrics").status_code == 404
+
+
+def test_metrics_served_at_exact_path_no_redirect(tmp_path):
+    # The fan-out scraper GETs /metrics and does NOT follow redirects. A
+    # app.mount("/metrics") would 307 -> /metrics/; assert we serve 200 directly.
+    store = Store(str(tmp_path / "db.sqlite"))
+    metrics = Metrics("exact")
+    c = TestClient(create_app(FakeAdapter(), store, "exact", metrics=metrics))
+    r = c.get("/metrics", follow_redirects=False)
+    assert r.status_code == 200, f"want direct 200, got {r.status_code}"
+    assert "agent_turns_total" in r.text
 
 
 def test_image_decoded(tmp_path):

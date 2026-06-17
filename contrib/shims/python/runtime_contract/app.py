@@ -2,22 +2,47 @@
 from __future__ import annotations
 import asyncio
 import base64
+import time
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
 
 from .adapter import AgentAdapter
 from .events import ContractEvent, Image
+from .metrics import Metrics
 from .sse import frame
 from .store import Store
 
 CONTRACT_VERSION = "v1"
 
+# Telemetry events an adapter may yield for metrics only; never published to the
+# client SSE stream nor persisted (see events.py).
+_TELEMETRY_TYPES = ("usage", "tool_call")
 
-def create_app(adapter: AgentAdapter, store: Store, agent_id: str) -> FastAPI:
+
+def create_app(
+    adapter: AgentAdapter,
+    store: Store,
+    agent_id: str,
+    metrics: Metrics | None = None,
+) -> FastAPI:
     app = FastAPI()
     live: dict[str, list[asyncio.Queue]] = {}
     live_lock = asyncio.Lock()
+    # Per-session token usage buffered from a "usage" telemetry event until the
+    # turn completes, so each turn records one duration sample carrying its tokens.
+    _pending_usage: dict[str, dict | None] = {}
+
+    # /metrics: served at EXACTLY /metrics (a plain route, not app.mount, which
+    # would 307-redirect /metrics -> /metrics/ — the fan-out scraper GETs
+    # /metrics and does not follow redirects). Only registered when metrics is
+    # enabled; otherwise /metrics 404s, which the scraper treats as "no_metrics"
+    # (the agent serves HTTP but exposes no metrics), leaving its up gauge at 1.
+    if metrics is not None:
+        @app.get("/metrics")
+        async def metrics_endpoint():  # noqa: ANN202 (FastAPI route)
+            body, content_type = metrics.render()
+            return Response(content=body, media_type=content_type)
 
     async def publish(sid: str, ev: ContractEvent) -> None:
         seq = store.append_event(sid, ev)
@@ -29,9 +54,21 @@ def create_app(adapter: AgentAdapter, store: Store, agent_id: str) -> FastAPI:
     async def run_session(sid: str, message: str, images: list[Image]) -> None:
         store.set_status(sid, "running")
         terminal = ContractEvent(type="done")
+        start = time.monotonic()
         try:
             history = [ev for _, ev in store.events_since(sid, 0)]
             async for ev in adapter.run(sid, message, images, history):
+                # Telemetry events (usage/tool_call) feed metrics ONLY — they are
+                # not published to the client stream nor persisted.
+                if ev.type in _TELEMETRY_TYPES:
+                    if metrics is not None:
+                        if ev.type == "tool_call":
+                            metrics.observe_tool(ev.tool)
+                        elif ev.type == "usage":
+                            # Buffer usage for the single observe_turn below, so a
+                            # turn yields exactly one duration sample with tokens.
+                            _pending_usage[sid] = ev.usage
+                    continue
                 await publish(sid, ev)
                 if ev.type == "error":
                     terminal = ContractEvent(type="error", error=ev.error or "agent error")
@@ -40,6 +77,9 @@ def create_app(adapter: AgentAdapter, store: Store, agent_id: str) -> FastAPI:
         store.set_status(sid, "completed" if terminal.type == "done" else "error")
         row = store.get_session(sid)
         store.set_turn_count(sid, (row["turn_count"] if row else 0) + 1)
+        if metrics is not None:
+            outcome = "completed" if terminal.type == "done" else "error"
+            metrics.observe_turn(outcome, time.monotonic() - start, _pending_usage.pop(sid, None))
         await publish(sid, terminal)
 
     def parse_images(body: dict) -> list[Image]:
