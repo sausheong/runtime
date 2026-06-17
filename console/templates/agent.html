@@ -17,7 +17,7 @@
     <p class="subtitle">Conversations handled by <span class="mono">{{.AgentID}}</span>.</p>
   </div>
   <section class="card">
-    <h2>Metrics</h2>
+    <h2>Health &amp; sessions</h2>
     <div class="row">
       <div class="stat"><div class="stat-num">{{.Obs.Healthy}}/{{.Obs.Replicas}}</div><div class="stat-label">Health</div></div>
       <div class="stat"><div class="stat-num">{{.Obs.Sessions.Running}}</div><div class="stat-label">Running</div></div>
@@ -25,6 +25,29 @@
       <div class="stat"><div class="stat-num">{{.Obs.Sessions.Error}}</div><div class="stat-label">Error</div></div>
       <div class="stat"><div class="stat-num">{{.Obs.Sessions.Total}}</div><div class="stat-label">Total</div></div>
     </div>
+  </section>
+  <section class="card">
+    <h2>Tool use &amp; tokens</h2>
+    <p class="card-desc">Lifetime totals reported by the agent since it last started.</p>
+    <div class="row">
+      <div class="stat"><div class="stat-num">{{.Metrics.TokensIn}}</div><div class="stat-label">Tokens in</div></div>
+      <div class="stat"><div class="stat-num">{{.Metrics.TokensOut}}</div><div class="stat-label">Tokens out</div></div>
+      <div class="stat"><div class="stat-num">{{printf "%.1f" .Metrics.AvgTurnSeconds}}s</div><div class="stat-label">Avg turn</div></div>
+      <div class="stat"><div class="stat-num">{{.Metrics.TurnsCompleted}}</div><div class="stat-label">Turns done</div></div>
+      {{if gt .Metrics.TurnsError 0}}<div class="stat"><div class="stat-num">{{.Metrics.TurnsError}}</div><div class="stat-label">Turns error</div></div>{{end}}
+      {{if gt .Metrics.CacheRead 0}}<div class="stat"><div class="stat-num">{{.Metrics.CacheRead}}</div><div class="stat-label">Cache read</div></div>{{end}}
+      {{if gt .Metrics.CacheCreation 0}}<div class="stat"><div class="stat-num">{{.Metrics.CacheCreation}}</div><div class="stat-label">Cache create</div></div>{{end}}
+    </div>
+    <table>
+      <thead><tr><th>Tool</th><th>Calls</th></tr></thead>
+      <tbody>
+      {{range .Metrics.Tools}}
+        <tr><td class="mono">{{.Name}}</td><td>{{.Count}}</td></tr>
+      {{else}}
+        <tr><td colspan="2" class="empty">No tool calls recorded.</td></tr>
+      {{end}}
+      </tbody>
+    </table>
   </section>
   <section class="card">
     <h2>Activity</h2>

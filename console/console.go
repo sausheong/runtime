@@ -47,7 +47,7 @@ type Onboarding struct {
 	Mutator   controlplane.GatewayMutator
 	Admin     controlplane.AdminStore
 	Secrets   controlplane.SecretAdmin
-	Agents    controlplane.AgentStore   // dynamic managed-agent persistence; nil ⇒ section hidden
+	Agents    controlplane.AgentStore    // dynamic managed-agent persistence; nil ⇒ section hidden
 	AgentMgr  *controlplane.AgentManager // live attach/detach; nil ⇒ section hidden
 }
 
@@ -164,7 +164,8 @@ func Handler(reg *controlplane.Registry, st store.Store, oidc OIDCConfig, onb *O
 			ID: ap.AgentID, Tenant: ap.Tenant,
 		})
 		feed := buildAgentFeed(r.Context(), reg, aclient, ap.AgentID, 10, 50)
-		render(w, "agent.html", map[string]any{"AgentID": id, "Obs": obs, "Feed": feed})
+		metrics := buildAgentMetrics(r.Context(), reg, aclient, ap.AgentID)
+		render(w, "agent.html", map[string]any{"AgentID": id, "Obs": obs, "Feed": feed, "Metrics": metrics})
 	})
 
 	mux.HandleFunc("GET /ui/agents/{id}/sessions/{sid}", func(w http.ResponseWriter, r *http.Request) {

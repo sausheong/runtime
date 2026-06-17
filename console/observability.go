@@ -99,6 +99,23 @@ func buildAgentObs(ctx context.Context, reg *controlplane.Registry, client agent
 	return o
 }
 
+// buildAgentMetrics fetches an agent's lifetime telemetry snapshot (tokens, tool
+// calls, turn duration/outcome) from its own /metrics, via replica 0 — the same
+// attach target buildAgentObs/buildAgentFeed use. Any error (no /metrics, parse
+// failure, no replicas) yields a zero snapshot so the page still renders. For a
+// multi-replica agent this is replica-0's process totals, not the fleet sum.
+func buildAgentMetrics(ctx context.Context, reg *controlplane.Registry, client agentClient, agentID string) AgentMetrics {
+	ap, ok := reg.Replica(agentID, 0)
+	if !ok {
+		return AgentMetrics{TurnsByOutcome: map[string]int64{}}
+	}
+	m, err := client.Metrics(ctx, ap)
+	if err != nil {
+		return AgentMetrics{TurnsByOutcome: map[string]int64{}}
+	}
+	return m
+}
+
 // FeedEntry is one row in an agent's activity feed.
 type FeedEntry struct {
 	SessionID string

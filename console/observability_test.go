@@ -19,6 +19,8 @@ type fakeAgentClient struct {
 	sessions  map[string][]sessionRow // keyed by ap.AgentID
 	events    map[string][]eventRow   // keyed by sessionID
 	errAgents map[string]bool         // ap.AgentID -> ListSessions errors
+	metrics   map[string]AgentMetrics // ap.AgentID -> canned metrics
+	metricErr map[string]bool         // ap.AgentID -> Metrics errors
 }
 
 func (f *fakeAgentClient) ListSessions(_ context.Context, ap controlplane.AgentProcess) ([]sessionRow, error) {
@@ -33,6 +35,12 @@ func (f *fakeAgentClient) ListEvents(_ context.Context, _ controlplane.AgentProc
 		evs = evs[len(evs)-limit:]
 	}
 	return evs, nil
+}
+func (f *fakeAgentClient) Metrics(_ context.Context, ap controlplane.AgentProcess) (AgentMetrics, error) {
+	if f.metricErr[ap.AgentID] {
+		return AgentMetrics{}, fmt.Errorf("boom")
+	}
+	return f.metrics[ap.AgentID], nil
 }
 
 func obsTestReg(t *testing.T) *controlplane.Registry {
@@ -133,6 +141,34 @@ func TestBuildAgentFeed_SnippetForError(t *testing.T) {
 	feed := buildAgentFeed(context.Background(), reg, client, "a", 10, 50)
 	if len(feed) != 1 || feed[0].Snippet != "error: kaboom" {
 		t.Fatalf("error snippet wrong: %+v", feed)
+	}
+}
+
+func TestBuildAgentMetrics_MapsAndDegrades(t *testing.T) {
+	reg := obsTestReg(t)
+	want := AgentMetrics{
+		TokensIn: 100, TokensOut: 20,
+		Tools:          []ToolCount{{Name: "search", Count: 3}},
+		TurnsByOutcome: map[string]int64{"completed": 1},
+		TurnCount:      1, TurnSumSeconds: 2.0,
+	}
+	client := &fakeAgentClient{metrics: map[string]AgentMetrics{"a": want}}
+	got := buildAgentMetrics(context.Background(), reg, client, "a")
+	if got.TokensIn != 100 || got.TokensOut != 20 || got.TurnsCompleted() != 1 || got.AvgTurnSeconds() != 2.0 {
+		t.Fatalf("mapping wrong: %+v", got)
+	}
+
+	// Metrics error ⇒ zero snapshot (page still renders).
+	errClient := &fakeAgentClient{metricErr: map[string]bool{"a": true}}
+	z := buildAgentMetrics(context.Background(), reg, errClient, "a")
+	if z.TokensIn != 0 || len(z.Tools) != 0 || z.TurnsByOutcome == nil {
+		t.Fatalf("error path should yield zero snapshot with non-nil map: %+v", z)
+	}
+
+	// Unknown agent (no replica) ⇒ zero snapshot.
+	u := buildAgentMetrics(context.Background(), reg, client, "nope")
+	if u.TokensIn != 0 {
+		t.Fatalf("unknown agent should be zero: %+v", u)
 	}
 }
 
