@@ -14,7 +14,7 @@ import (
 // TestLiveOneTurn drives a single real turn against the configured proxy.
 // Skips unless OPENAI_API_KEY is set. Run:
 //
-//	OPENAI_API_KEY=... OPENAI_BASE_URL=https://litellm-stg.aip.gov.sg OPENAI_MODEL=gpt-5.4 \
+//	OPENAI_API_KEY=... OPENAI_BASE_URL=https://your-llm-proxy.example.com OPENAI_MODEL=gpt-5.4 \
 //	  go test -tags live ./examples/nutrition-label-go/ -run TestLiveOneTurn -v
 func TestLiveOneTurn(t *testing.T) {
 	if os.Getenv("OPENAI_API_KEY") == "" {

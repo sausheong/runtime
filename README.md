@@ -1478,7 +1478,7 @@ subprocess environment; `runtimed` also injects `RUNTIME_PG_DSN`,
 
 ```bash
 export OPENAI_API_KEY=sk-...                          # your LiteLLM key
-export OPENAI_BASE_URL=https://litellm-stg.aip.gov.sg # LiteLLM proxy base URL
+export OPENAI_BASE_URL=https://your-llm-proxy.example.com # LiteLLM proxy base URL
 export OPENAI_MODEL=gpt-5.4                            # model name on the proxy
 export RUNTIME_PG_DSN=postgres://runtime:runtime@localhost:5432/runtime?sslmode=disable
 export RUNTIME_CONFIG=runtime.nutrition.yaml          # this config

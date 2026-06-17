@@ -36,7 +36,7 @@ CONFIG    ?= $(ROOT)/examples/nutrition-label-openai/runtime.nutrition-openai.ya
 IMAGE     ?= $(ROOT)/examples/nutrition-label-openai/milo.jpeg
 
 # ---- LLM config (LiteLLM proxy by default; override in .env or on the CLI) ----
-OPENAI_BASE_URL ?= https://litellm-stg.aip.gov.sg
+OPENAI_BASE_URL ?= https://your-llm-proxy.example.com
 OPENAI_MODEL    ?= gpt-5.4
 # OPENAI_API_KEY has no default — set it in .env (see check-env).
 

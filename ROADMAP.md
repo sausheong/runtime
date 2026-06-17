@@ -884,8 +884,8 @@ aliases, and Level-1 resume across a full platform restart via the SDK-native
 runtime→SDK session-id map in the shim SQLite. Security posture: built-ins
 disabled via `tools=[]` (primary) + a `disallowed_tools` deny-list (backup) +
 `permission_mode` dontAsk — the agent has ONLY the nutrition tools. Proxy
-wiring: `ANTHROPIC_BASE_URL` → LiteLLM with namespaced model ids
-(`claude-sonnet-4-6-asia-southeast1`); `spike_vision.py` stays in-repo as living
+wiring: `ANTHROPIC_BASE_URL` → LiteLLM with the proxy's namespaced model ids;
+`spike_vision.py` stays in-repo as living
 documentation of the proven shapes. Live proof: `runtimectl conformance` PASSED
 (6 checks, via the `--agent` flag + `RUNTIME_CTL_URL`); a FizzPop text verdict
 with the E211+ascorbic-acid benzene interaction correctly connected; the MILO

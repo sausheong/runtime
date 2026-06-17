@@ -37,8 +37,8 @@ CONFIG    ?= $(ROOT)/examples/nutrition-label-claude/runtime.nutrition-claude.ya
 IMAGE     ?= $(ROOT)/examples/nutrition-label-claude/milo.jpeg
 
 # ---- LLM config (LiteLLM proxy by default; override in .env or on the CLI) ----
-ANTHROPIC_BASE_URL ?= https://litellm-stg.aip.gov.sg
-ANTHROPIC_MODEL    ?= claude-sonnet-4-6-asia-southeast1
+ANTHROPIC_BASE_URL ?= https://your-llm-proxy.example.com
+ANTHROPIC_MODEL    ?= claude-sonnet-4-6
 # ANTHROPIC_API_KEY has no default — set it in .env (see check-env).
 
 # Export so the serve.py subprocess (spawned by runtimed) inherits them.
