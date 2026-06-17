@@ -19,9 +19,10 @@ CREATE TABLE IF NOT EXISTS service_keys (
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     revoked_at TIMESTAMPTZ
 );
--- A subject must be globally unique in M1 (one tenant per identity), so OIDC
--- login can resolve subject -> (tenant, role) without ambiguity.
-CREATE UNIQUE INDEX IF NOT EXISTS identity_users_subject_uq ON identity_users (subject);
+-- A subject MAY belong to multiple tenants (one row per (tenant_id, subject), the
+-- table PK). The old global-unique index on subject is dropped here so existing
+-- databases migrate on boot; the apply is idempotent.
+DROP INDEX IF EXISTS identity_users_subject_uq;
 CREATE TABLE IF NOT EXISTS secrets (
     tenant_id  TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
     name       TEXT NOT NULL,

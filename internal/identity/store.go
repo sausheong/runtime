@@ -89,11 +89,12 @@ func (s *Store) ListTenants(ctx context.Context) ([]TenantRow, error) {
 	return out, rows.Err()
 }
 
-// UpsertUser provisions (subject -> tenant, role). Subject is globally unique.
+// UpsertUser provisions (tenant, subject) -> role. A subject may belong to many
+// tenants; re-upserting the same (tenant, subject) updates the role in place.
 func (s *Store) UpsertUser(ctx context.Context, tenantID, subject string, role Role) error {
 	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO identity_users (tenant_id, subject, role) VALUES ($1,$2,$3)
-		 ON CONFLICT (subject) DO UPDATE SET tenant_id=EXCLUDED.tenant_id, role=EXCLUDED.role`,
+		 ON CONFLICT (tenant_id, subject) DO UPDATE SET role=EXCLUDED.role`,
 		tenantID, subject, string(role))
 	return err
 }
@@ -105,21 +106,27 @@ func (s *Store) DeleteUser(ctx context.Context, tenantID, subject string) error 
 	return err
 }
 
-// UserBySubject resolves an OIDC subject to its tenant+role.
-func (s *Store) UserBySubject(ctx context.Context, subject string) (UserRow, error) {
-	var u UserRow
-	var role string
-	err := s.db.QueryRowContext(ctx,
-		`SELECT tenant_id, subject, role FROM identity_users WHERE subject=$1`, subject).
-		Scan(&u.TenantID, &u.Subject, &role)
-	if errors.Is(err, sql.ErrNoRows) {
-		return UserRow{}, ErrNoUser
-	}
+// UsersBySubject lists every (tenant, role) the subject belongs to, ordered by
+// tenant id. Empty slice (no error) when the subject is unprovisioned anywhere —
+// the OIDC authenticator distinguishes 0/1/many to drive tenant selection.
+func (s *Store) UsersBySubject(ctx context.Context, subject string) ([]UserRow, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT tenant_id, subject, role FROM identity_users WHERE subject=$1 ORDER BY tenant_id`, subject)
 	if err != nil {
-		return UserRow{}, err
+		return nil, err
 	}
-	u.Role = Role(role)
-	return u, nil
+	defer rows.Close()
+	var out []UserRow
+	for rows.Next() {
+		var u UserRow
+		var role string
+		if err := rows.Scan(&u.TenantID, &u.Subject, &role); err != nil {
+			return nil, err
+		}
+		u.Role = Role(role)
+		out = append(out, u)
+	}
+	return out, rows.Err()
 }
 
 // ListUsers returns users in a tenant.

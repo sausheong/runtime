@@ -54,12 +54,12 @@ func TestStore_TenantsUsersKeys(t *testing.T) {
 	if err := s.UpsertUser(ctx, "alpha", "alice@corp", RoleOperator); err != nil {
 		t.Fatal(err)
 	}
-	u, err := s.UserBySubject(ctx, "alice@corp")
-	if err != nil || u.TenantID != "alpha" || u.Role != RoleOperator {
-		t.Fatalf("UserBySubject = %+v, %v", u, err)
+	rows, err := s.UsersBySubject(ctx, "alice@corp")
+	if err != nil || len(rows) != 1 || rows[0].TenantID != "alpha" || rows[0].Role != RoleOperator {
+		t.Fatalf("UsersBySubject = %+v, %v", rows, err)
 	}
-	if _, err := s.UserBySubject(ctx, "ghost"); err != ErrNoUser {
-		t.Fatalf("ghost: err=%v want ErrNoUser", err)
+	if rows, err := s.UsersBySubject(ctx, "ghost"); err != nil || len(rows) != 0 {
+		t.Fatalf("ghost: rows=%v err=%v want empty,nil", rows, err)
 	}
 
 	mk, err := MintServiceKey()
@@ -106,22 +106,53 @@ func TestStore_AnyConfigured(t *testing.T) {
 	}
 }
 
-func TestStore_UpsertUserRehomes(t *testing.T) {
+func TestStore_UpsertUserMultiTenant(t *testing.T) {
 	ctx := context.Background()
 	s, db := freshStore(t)
 	defer db.Close()
 	_ = s.CreateTenant(ctx, "alpha", "A")
 	_ = s.CreateTenant(ctx, "beta", "B")
-	if err := s.UpsertUser(ctx, "alpha", "alice@corp", RoleViewer); err != nil {
+	if err := s.UpsertUser(ctx, "alpha", "alice@corp", RoleAdmin); err != nil {
 		t.Fatal(err)
 	}
-	// Re-home the same subject to a new tenant + role (the point of upsert).
-	if err := s.UpsertUser(ctx, "beta", "alice@corp", RoleAdmin); err != nil {
+	// Same subject into a SECOND tenant must ADD, not rehome.
+	if err := s.UpsertUser(ctx, "beta", "alice@corp", RoleViewer); err != nil {
 		t.Fatal(err)
 	}
-	u, err := s.UserBySubject(ctx, "alice@corp")
-	if err != nil || u.TenantID != "beta" || u.Role != RoleAdmin {
-		t.Fatalf("after re-home: u=%+v err=%v want beta/admin", u, err)
+	rows, err := s.UsersBySubject(ctx, "alice@corp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("memberships = %d, want 2", len(rows))
+	}
+	got := map[string]Role{}
+	for _, r := range rows {
+		got[r.TenantID] = r.Role
+	}
+	if got["alpha"] != RoleAdmin || got["beta"] != RoleViewer {
+		t.Fatalf("memberships = %v, want alpha=admin beta=viewer", got)
+	}
+	// Re-upsert into alpha updates role in place, no extra row.
+	if err := s.UpsertUser(ctx, "alpha", "alice@corp", RoleOperator); err != nil {
+		t.Fatal(err)
+	}
+	rows, _ = s.UsersBySubject(ctx, "alice@corp")
+	if len(rows) != 2 {
+		t.Fatalf("after role update memberships = %d, want 2", len(rows))
+	}
+}
+
+func TestStore_UsersBySubjectEmpty(t *testing.T) {
+	ctx := context.Background()
+	s, db := freshStore(t)
+	defer db.Close()
+	rows, err := s.UsersBySubject(ctx, "nobody@nowhere")
+	if err != nil {
+		t.Fatalf("UsersBySubject empty must not error: %v", err)
+	}
+	if len(rows) != 0 {
+		t.Fatalf("rows = %d, want 0", len(rows))
 	}
 }
 
