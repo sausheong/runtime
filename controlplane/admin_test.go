@@ -52,6 +52,12 @@ func (f *fakeAdminStore) ListUsers(_ context.Context, tid string) ([]identity.Us
 	}
 	return out, nil
 }
+func (f *fakeAdminStore) UsersBySubject(_ context.Context, sub string) ([]identity.UserRow, error) {
+	if u, ok := f.users[sub]; ok {
+		return []identity.UserRow{u}, nil
+	}
+	return nil, nil
+}
 func (f *fakeAdminStore) InsertServiceKey(_ context.Context, id, tid, hash string, role identity.Role, label string) error {
 	f.keys[id] = identity.KeyRow{ID: id, TenantID: tid, Role: role, Label: label}
 	return nil
