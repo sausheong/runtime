@@ -31,20 +31,20 @@
     <h2>Tool use &amp; tokens</h2>
     <p class="card-desc">Lifetime totals reported by the agent since it last started.</p>
     <div class="row">
-      <div class="stat"><div class="stat-num">{{.Metrics.TokensIn}}</div><div class="stat-label">Tokens in</div></div>
-      <div class="stat"><div class="stat-num">{{.Metrics.TokensOut}}</div><div class="stat-label">Tokens out</div></div>
+      <div class="stat"><div class="stat-num" title="{{.Metrics.TokensIn}}">{{comma .Metrics.TokensIn}}</div><div class="stat-label">Tokens in</div></div>
+      <div class="stat"><div class="stat-num" title="{{.Metrics.TokensOut}}">{{comma .Metrics.TokensOut}}</div><div class="stat-label">Tokens out</div></div>
       <div class="stat"><div class="stat-num">{{if gt .Metrics.TurnsCompleted 0}}{{printf "%.1f" .Metrics.AvgTurnSeconds}}s{{else}}&mdash;{{end}}</div><div class="stat-label">Avg turn</div></div>
       <div class="stat"><div class="stat-num">{{.Metrics.TurnsCompleted}}</div><div class="stat-label">Turns done</div></div>
       {{if gt .Metrics.TurnsError 0}}<div class="stat stat-warn"><div class="stat-num">{{.Metrics.TurnsError}}</div><div class="stat-label">Turns error</div></div>{{end}}
-      {{if gt .Metrics.CacheRead 0}}<div class="stat"><div class="stat-num">{{.Metrics.CacheRead}}</div><div class="stat-label">Cache read</div></div>{{end}}
-      {{if gt .Metrics.CacheCreation 0}}<div class="stat"><div class="stat-num">{{.Metrics.CacheCreation}}</div><div class="stat-label">Cache create</div></div>{{end}}
+      {{if gt .Metrics.CacheRead 0}}<div class="stat"><div class="stat-num" title="{{.Metrics.CacheRead}}">{{comma .Metrics.CacheRead}}</div><div class="stat-label">Cache read</div></div>{{end}}
+      {{if gt .Metrics.CacheCreation 0}}<div class="stat"><div class="stat-num" title="{{.Metrics.CacheCreation}}">{{comma .Metrics.CacheCreation}}</div><div class="stat-label">Cache create</div></div>{{end}}
     </div>
     <div class="table-wrap">
       <table>
         <thead><tr><th scope="col">Tool</th><th scope="col">Calls</th></tr></thead>
         <tbody>
         {{range .Metrics.Tools}}
-          <tr><td class="mono">{{.Name}}</td><td>{{.Count}}</td></tr>
+          <tr><td class="mono">{{.Name}}</td><td>{{comma .Count}}</td></tr>
         {{else}}
           <tr><td colspan="2" class="empty">No tool calls recorded.</td></tr>
         {{end}}

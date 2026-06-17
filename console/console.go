@@ -7,6 +7,7 @@ import (
 	"html/template"
 	"io/fs"
 	"net/http"
+	"strconv"
 
 	"github.com/sausheong/runtime/controlplane"
 	"github.com/sausheong/runtime/internal/agentstore"
@@ -17,7 +18,32 @@ import (
 //go:embed templates/*.html static/*
 var assets embed.FS
 
-var tmpl = template.Must(template.ParseFS(assets, "templates/*.html"))
+// tmplFuncs are the helpers available in every template.
+var tmplFuncs = template.FuncMap{
+	// comma groups an integer with thousands separators: 1234567 -> "1,234,567".
+	// Keeps large token counts legible in the narrow stat tiles.
+	"comma": comma,
+}
+
+var tmpl = template.Must(template.New("").Funcs(tmplFuncs).ParseFS(assets, "templates/*.html"))
+
+// comma formats an int64 with thousands separators.
+func comma(n int64) string {
+	s := strconv.FormatInt(n, 10)
+	neg := ""
+	if n < 0 {
+		neg, s = "-", s[1:]
+	}
+	// Insert a comma every 3 digits from the right.
+	out := make([]byte, 0, len(s)+len(s)/3)
+	for i, d := range []byte(s) {
+		if i > 0 && (len(s)-i)%3 == 0 {
+			out = append(out, ',')
+		}
+		out = append(out, d)
+	}
+	return neg + string(out)
+}
 
 // staticFS scopes the static file server to the static/ subtree only, so an
 // encoded path-traversal request (e.g. /ui/static/..%2ftemplates/...) cannot
