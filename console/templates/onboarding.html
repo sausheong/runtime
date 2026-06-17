@@ -19,6 +19,12 @@
   </div>
 
   {{if .Flash}}<p class="flash">{{.Flash}}</p>{{end}}
+  {{if .NewKey}}
+  <div class="key-reveal">
+    <p class="key-reveal-head">New key created. Copy it now, it will not be shown again.</p>
+    <code class="key-reveal-value">{{.NewKey}}</code>
+  </div>
+  {{end}}
 
   <!-- ===== Users ===== -->
   <section class="card">

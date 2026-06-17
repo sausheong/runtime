@@ -203,6 +203,27 @@ button.danger:hover { background: var(--danger-soft); border-color: var(--danger
   word-break: break-all;
 }
 
+/* ---- New-key reveal (shown once, on creation) ---- */
+.key-reveal {
+  border: 1px solid var(--accent);
+  background: var(--accent-soft);
+  border-radius: var(--radius);
+  padding: .9rem 1rem;
+  margin-bottom: 1.25rem;
+}
+.key-reveal-head { margin: 0 0 .5rem; font-size: .85rem; font-weight: 600; color: var(--accent-hover); }
+.key-reveal-value {
+  display: block;
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: .9rem;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  padding: .55rem .7rem;
+  overflow-wrap: anywhere;
+  user-select: all;
+}
+
 /* ---- Empty state ---- */
 .empty { color: var(--muted); font-size: .9rem; padding: .6rem .75rem; }
 

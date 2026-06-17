@@ -35,8 +35,8 @@
         <td>{{if gt .Healthy 0}}<span class="dot dot-ok"></span>{{else}}<span class="dot dot-off"></span>{{end}}{{.Healthy}}/{{.Replicas}}</td>
         <td>
           <span class="badge badge-ok">{{.Sessions.Running}} running</span>
-          <span class="badge badge-muted">{{.Sessions.Completed}} done</span>
-          {{if gt .Sessions.Error 0}}<span class="badge badge-role">{{.Sessions.Error}} error</span>{{end}}
+          <span class="badge badge-muted">{{.Sessions.Completed}} completed</span>
+          {{if gt .Sessions.Error 0}}<span class="badge badge-danger">{{.Sessions.Error}} errored</span>{{end}}
         </td>
       </tr>{{else}}
         <tr><td colspan="3" class="empty">No agents in this tenant.</td></tr>

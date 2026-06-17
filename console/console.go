@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/sausheong/runtime/controlplane"
 	"github.com/sausheong/runtime/internal/agentstore"
@@ -240,9 +241,18 @@ func Handler(reg *controlplane.Registry, st store.Store, oidc OIDCConfig, onb *O
 			if onb.Agents != nil {
 				agents, _ = onb.Agents.List(r.Context(), p.TenantID)
 			}
+			// A freshly minted key arrives as "key:<plaintext>" — the one time it
+			// is ever shown. Split it out so the template can give it a distinct,
+			// copy-it-now treatment instead of a generic success flash.
+			newKey := ""
+			if k, ok := strings.CutPrefix(flash, "key:"); ok {
+				newKey = k
+				flash = ""
+			}
 			render(w, "onboarding.html", map[string]any{
 				"CSRF": csrf.issue(sessionValue(r)), "Tenant": p.TenantID,
-				"Upstreams": ups, "Secrets": secs, "Keys": keys, "Users": users, "Flash": flash,
+				"Upstreams": ups, "Secrets": secs, "Keys": keys, "Users": users,
+				"Flash": flash, "NewKey": newKey,
 				"SecretsEnabled": onb.Secrets != nil,
 				"Agents":         agents, "AgentsEnabled": onb.Agents != nil && onb.AgentMgr != nil,
 			})
@@ -288,7 +298,7 @@ func Handler(reg *controlplane.Registry, st store.Store, oidc OIDCConfig, onb *O
 				http.Error(w, "revoke key failed", http.StatusInternalServerError)
 				return
 			}
-			flashRedirect(w, r, "key revoked")
+			flashRedirect(w, r, "Key "+id+" revoked. Anything using it can no longer authenticate.")
 		}))
 
 		mux.HandleFunc("POST /ui/onboarding/users", guard(func(p identity.Principal, w http.ResponseWriter, r *http.Request) {
@@ -311,7 +321,7 @@ func Handler(reg *controlplane.Registry, st store.Store, oidc OIDCConfig, onb *O
 				http.Error(w, "upsert user failed", http.StatusInternalServerError)
 				return
 			}
-			flashRedirect(w, r, "user saved")
+			flashRedirect(w, r, "User "+subject+" saved as "+string(role)+".")
 		}))
 
 		mux.HandleFunc("POST /ui/onboarding/users/{subject}/delete", guard(func(p identity.Principal, w http.ResponseWriter, r *http.Request) {
@@ -325,7 +335,7 @@ func Handler(reg *controlplane.Registry, st store.Store, oidc OIDCConfig, onb *O
 				http.Error(w, "delete user failed", http.StatusInternalServerError)
 				return
 			}
-			flashRedirect(w, r, "user removed")
+			flashRedirect(w, r, "User "+subject+" removed.")
 		}))
 
 		mux.HandleFunc("POST /ui/onboarding/secrets", guard(func(p identity.Principal, w http.ResponseWriter, r *http.Request) {
@@ -337,7 +347,7 @@ func Handler(reg *controlplane.Registry, st store.Store, oidc OIDCConfig, onb *O
 				http.Error(w, "set secret failed", http.StatusBadRequest)
 				return
 			}
-			flashRedirect(w, r, "secret set")
+			flashRedirect(w, r, "Credential "+r.FormValue("name")+" saved.")
 		}))
 
 		mux.HandleFunc("POST /ui/onboarding/upstreams", guard(func(p identity.Principal, w http.ResponseWriter, r *http.Request) {
@@ -350,7 +360,7 @@ func Handler(reg *controlplane.Registry, st store.Store, oidc OIDCConfig, onb *O
 				http.Error(w, err.Error(), http.StatusBadRequest)
 				return
 			}
-			flashRedirect(w, r, "upstream registered")
+			flashRedirect(w, r, "Upstream "+params.Name+" registered. Its tools are now federated into the gateway.")
 		}))
 
 		mux.HandleFunc("POST /ui/onboarding/upstreams/{id}/delete", guard(func(p identity.Principal, w http.ResponseWriter, r *http.Request) {
@@ -358,7 +368,7 @@ func Handler(reg *controlplane.Registry, st store.Store, oidc OIDCConfig, onb *O
 				http.Error(w, "remove failed", http.StatusInternalServerError)
 				return
 			}
-			flashRedirect(w, r, "upstream removed")
+			flashRedirect(w, r, "Upstream "+r.PathValue("id")+" removed.")
 		}))
 
 		// Managed agents: register/deregister/enable/disable/re-attach remote
@@ -374,7 +384,7 @@ func Handler(reg *controlplane.Registry, st store.Store, oidc OIDCConfig, onb *O
 					http.Error(w, err.Error(), http.StatusBadRequest)
 					return
 				}
-				flashRedirect(w, r, "agent registered")
+				flashRedirect(w, r, "Agent "+params.ID+" registered. The control plane is now health-checking and routing to it.")
 			}))
 
 			mux.HandleFunc("POST /ui/onboarding/agents/{id}/delete", guard(func(p identity.Principal, w http.ResponseWriter, r *http.Request) {
@@ -382,10 +392,10 @@ func Handler(reg *controlplane.Registry, st store.Store, oidc OIDCConfig, onb *O
 					http.Error(w, err.Error(), http.StatusBadRequest)
 					return
 				}
-				flashRedirect(w, r, "agent deregistered")
+				flashRedirect(w, r, "Agent "+r.PathValue("id")+" deregistered. The control plane no longer manages it; its process keeps running on its host.")
 			}))
 
-			setAgentEnabled := func(enabled bool, msg string) http.HandlerFunc {
+			setAgentEnabled := func(enabled bool, outcome string) http.HandlerFunc {
 				return guard(func(p identity.Principal, w http.ResponseWriter, r *http.Request) {
 					id := r.PathValue("id")
 					if !onb.AgentMgr.IsManaged(id) {
@@ -397,11 +407,11 @@ func Handler(reg *controlplane.Registry, st store.Store, oidc OIDCConfig, onb *O
 						return
 					}
 					onb.AgentMgr.SetEnabled(id, enabled)
-					flashRedirect(w, r, msg)
+					flashRedirect(w, r, "Agent "+id+" "+outcome)
 				})
 			}
-			mux.HandleFunc("POST /ui/onboarding/agents/{id}/enable", setAgentEnabled(true, "agent enabled"))
-			mux.HandleFunc("POST /ui/onboarding/agents/{id}/disable", setAgentEnabled(false, "agent disabled"))
+			mux.HandleFunc("POST /ui/onboarding/agents/{id}/enable", setAgentEnabled(true, "enabled. It is back in routing."))
+			mux.HandleFunc("POST /ui/onboarding/agents/{id}/disable", setAgentEnabled(false, "disabled. It is out of routing but still managed; its process keeps running."))
 
 			mux.HandleFunc("POST /ui/onboarding/agents/{id}/restart", guard(func(p identity.Principal, w http.ResponseWriter, r *http.Request) {
 				id := r.PathValue("id")
@@ -410,7 +420,7 @@ func Handler(reg *controlplane.Registry, st store.Store, oidc OIDCConfig, onb *O
 					return
 				}
 				onb.AgentMgr.Reattach(id)
-				flashRedirect(w, r, "agent re-attached")
+				flashRedirect(w, r, "Agent "+id+" re-attached. Its health is being re-checked now.")
 			}))
 		}
 	}
