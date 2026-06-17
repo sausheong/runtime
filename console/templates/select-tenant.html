@@ -28,7 +28,7 @@
         <td class="actions"><form method="post" action="/ui/select-tenant">
           <input type="hidden" name="csrf_token" value="{{$.CSRF}}">
           <input type="hidden" name="tenant" value="{{.TenantID}}">
-          <button type="submit">Work in {{.TenantID}}</button>
+          <button type="submit" class="play" aria-label="Work in {{.TenantID}}" title="Work in {{.TenantID}}">&#9654;</button>
         </form></td>
       </tr>{{else}}
         <tr><td colspan="3" class="empty">No tenant memberships.</td></tr>
