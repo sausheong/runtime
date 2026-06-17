@@ -10,6 +10,9 @@ As the superuser (operator), then as the tenant-admin:
 1. **Create a tenant.** In the console, create a tenant (id + name).
 2. **Mint an agent key.** On the onboarding page, mint a service key for the
    tenant — copy the one-time plaintext shown (it is not displayable again).
+   Pick the **role** by what the key will do (see [Roles](#roles-and-keys)
+   below): `operator` to invoke agents, `viewer` for read-only, `admin` to
+   manage the tenant's users and keys.
 3. **Set a credential.** Add a tenant secret (name + value) — this is the
    per-tenant upstream credential, sealed in the secrets broker. The name must
    be an env-style identifier (e.g. `ORDERS_API_KEY`).
@@ -26,6 +29,48 @@ As the superuser (operator), then as the tenant-admin:
      upstream running on the host, not in the compose network, needs this.)
    - credential: select the secret you set; header `Authorization`
 5. Watch the upstream reach **up** on the onboarding page.
+
+## Roles and keys
+
+Every request to the control plane carries a bearer — a human's OIDC cookie or a
+machine **service key** — scoped to one tenant with one of three fixed roles. The
+action you need decides the minimum role:
+
+| Role | Can do | Use it for |
+|---|---|---|
+| `viewer` | list/get/stream sessions and agents (read only) | dashboards, reading verdicts |
+| `operator` | viewer **+** invoke (`POST /sessions`) | **triggering agents** |
+| `admin` | operator **+** manage its tenant's users and keys | onboarding, minting keys |
+
+To **trigger an agent** you need an **`operator`** key; a `viewer` key gets `403`
+on `POST /agents/{id}/sessions`. Reserve `admin` for tenant administration —
+don't hand an `admin` key to a script whose only job is to invoke.
+
+### Mint a key from the CLI
+
+The onboarding page (above) is the click path. To mint from a terminal, use
+`runtimectl admin key create`. Minting hits the admin-only `/admin/keys`
+endpoint, so you must already hold an **admin** bearer — the first one comes from
+the console or the one-time bootstrap key (`RUNTIME_ADMIN_BOOTSTRAP`); after that
+the CLI mints everything else.
+
+`runtimectl` reads `RUNTIME_CTL_URL` (base URL) and `RUNTIME_TOKEN` (the admin
+bearer it sends automatically):
+
+```bash
+RUNTIME_CTL_URL=http://localhost:8080 \
+RUNTIME_TOKEN="$RUNTIME_ADMIN_BOOTSTRAP" \
+  runtimectl admin key create --role operator --label ci-runner --tenant <your-tenant>
+#   → svk-<id>.<secret>   (shown once — store it now; only a hash is kept)
+
+runtimectl admin key ls                 # list keys (id + role + label)
+runtimectl admin key revoke svk-<id>    # revoke instantly
+```
+
+A normal admin key is already pinned to its own tenant, so `--tenant` is ignored
+for it (harmless to include); the **bootstrap superuser** is tenantless and
+*must* name a tenant. The raw-HTTP equivalent is a `POST /admin/keys` with body
+`{"role":"operator","label":"ci-runner","tenant":"<your-tenant>"}`.
 
 ## The six pillars, exercised
 
@@ -66,3 +111,22 @@ autonomously discover and call these tools, point an agent at a real model by
 setting its `model:` (e.g. `claude-opus-4-8`) and the provider API key in the
 environment, then drive it from the console or `runtimectl invoke`. This is
 optional and not required for the turnkey proof.
+
+Triggering an agent is two requests — create a session, then stream its events —
+both with an **`operator`** (or `admin`) bearer (see [Roles and
+keys](#roles-and-keys)):
+
+```bash
+export BASE=http://localhost:8080
+export KEY=<operator-key>
+
+# 1) create a session → returns {"session_id": "ses-..."}
+SID=$(curl -s -H "Authorization: Bearer $KEY" "$BASE/agents/<id>/sessions" \
+  -d '{"message":"..."}' | jq -r .session_id)
+
+# 2) stream events until {"type":"done"}
+curl -sN -H "Authorization: Bearer $KEY" "$BASE/agents/<id>/sessions/$SID/stream?since=0"
+```
+
+`runtimectl invoke --agent <id> "..."` does both in one command (it reads the
+same `RUNTIME_CTL_URL` / `RUNTIME_TOKEN` env vars).
