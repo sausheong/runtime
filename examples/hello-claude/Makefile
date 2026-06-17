@@ -68,8 +68,20 @@ check-env: ## Verify ANTHROPIC_API_KEY is set (the agent needs a real model)
 	fi
 	@echo "LLM config: model=$(ANTHROPIC_MODEL) base_url=$(ANTHROPIC_BASE_URL)"
 
+# ---- Standalone agent (no control plane, no Postgres) ----
+# Where this agent process listens, and its SQLite store. Override as needed.
+LISTEN_ADDR ?= 127.0.0.1:8310
+SHIM_DB     ?= $(ROOT)/examples/hello-claude/shim.db
+
+.PHONY: serve
+serve: sync check-env ## Run JUST this agent (standalone; attach a running control plane to it)
+	RUNTIME_LISTEN_ADDR="$(LISTEN_ADDR)" \
+	RUNTIME_AGENT_ID="$(AGENT)" \
+	RUNTIME_SHIM_DB="$(SHIM_DB)" \
+	uv run python serve.py
+
 .PHONY: run
-run: build sync check-env ## Build, sync, then run the control plane hosting this agent
+run: build sync check-env ## All-in-one local dev: start a control plane that spawns this agent (needs Postgres)
 	cd $(ROOT) && \
 	RUNTIME_PG_DSN="$(PG_DSN)" \
 	RUNTIME_CTL_ADDR="$(CTL_ADDR)" \
