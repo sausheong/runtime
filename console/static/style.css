@@ -426,7 +426,7 @@ pre {
 }
 .status-strip .status-health { display: inline-flex; align-items: center; font-weight: 600; }
 .status-strip .status-sep { width: 1px; height: 1.1rem; background: var(--border); }
-.status-strip .status-item { color: var(--muted); }
+.status-strip .status-item { color: var(--muted-strong); }
 .status-strip .status-item b { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
 .status-strip .status-item.is-error b { color: var(--danger); }
 

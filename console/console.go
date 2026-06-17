@@ -28,8 +28,18 @@ var tmplFuncs = template.FuncMap{
 
 var tmpl = template.Must(template.New("").Funcs(tmplFuncs).ParseFS(assets, "templates/*.html"))
 
-// comma formats an int64 with thousands separators.
-func comma(n int64) string {
+// comma formats any integer with thousands separators. Accepts int/int64 (the
+// two width types the templates pass: SessionTally is int, AgentMetrics is int64).
+func comma(v any) string {
+	var n int64
+	switch x := v.(type) {
+	case int64:
+		n = x
+	case int:
+		n = int64(x)
+	default:
+		return ""
+	}
 	s := strconv.FormatInt(n, 10)
 	neg := ""
 	if n < 0 {

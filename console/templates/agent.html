@@ -21,10 +21,10 @@
     {{if gt .Obs.Healthy 0}}<span class="status-health"><span class="dot dot-ok"></span>Healthy</span>{{else}}<span class="status-health"><span class="dot dot-off"></span>Unreachable</span>{{end}}
     <span class="status-sep"></span>
     <span class="status-item"><b>{{.Obs.Healthy}}/{{.Obs.Replicas}}</b> replicas</span>
-    <span class="status-item"><b>{{.Obs.Sessions.Running}}</b> running</span>
-    <span class="status-item"><b>{{.Obs.Sessions.Completed}}</b> completed</span>
-    <span class="status-item {{if gt .Obs.Sessions.Error 0}}is-error{{end}}"><b>{{.Obs.Sessions.Error}}</b> errored</span>
-    <span class="status-item"><b>{{.Obs.Sessions.Total}}</b> total</span>
+    <span class="status-item"><b>{{comma .Obs.Sessions.Running}}</b> running</span>
+    <span class="status-item"><b>{{comma .Obs.Sessions.Completed}}</b> completed</span>
+    {{if gt .Obs.Sessions.Error 0}}<span class="status-item is-error"><b>&#9888; {{comma .Obs.Sessions.Error}}</b> errored</span>{{else}}<span class="status-item"><b>0</b> errored</span>{{end}}
+    <span class="status-item"><b>{{comma .Obs.Sessions.Total}}</b> total</span>
   </div>
 
   <section class="card">
@@ -34,8 +34,8 @@
       <div class="stat"><div class="stat-num" title="{{.Metrics.TokensIn}}">{{comma .Metrics.TokensIn}}</div><div class="stat-label">Tokens in</div></div>
       <div class="stat"><div class="stat-num" title="{{.Metrics.TokensOut}}">{{comma .Metrics.TokensOut}}</div><div class="stat-label">Tokens out</div></div>
       <div class="stat"><div class="stat-num">{{if gt .Metrics.TurnsCompleted 0}}{{printf "%.1f" .Metrics.AvgTurnSeconds}}s{{else}}&mdash;{{end}}</div><div class="stat-label">Avg turn</div></div>
-      <div class="stat"><div class="stat-num">{{.Metrics.TurnsCompleted}}</div><div class="stat-label">Turns done</div></div>
-      {{if gt .Metrics.TurnsError 0}}<div class="stat stat-warn"><div class="stat-num">{{.Metrics.TurnsError}}</div><div class="stat-label">Turns error</div></div>{{end}}
+      <div class="stat"><div class="stat-num">{{comma .Metrics.TurnsCompleted}}</div><div class="stat-label">Turns done</div></div>
+      {{if gt .Metrics.TurnsError 0}}<div class="stat stat-warn"><div class="stat-num">{{comma .Metrics.TurnsError}}</div><div class="stat-label">Turns error</div></div>{{end}}
       {{if gt .Metrics.CacheRead 0}}<div class="stat"><div class="stat-num" title="{{.Metrics.CacheRead}}">{{comma .Metrics.CacheRead}}</div><div class="stat-label">Cache read</div></div>{{end}}
       {{if gt .Metrics.CacheCreation 0}}<div class="stat"><div class="stat-num" title="{{.Metrics.CacheCreation}}">{{comma .Metrics.CacheCreation}}</div><div class="stat-label">Cache create</div></div>{{end}}
     </div>
