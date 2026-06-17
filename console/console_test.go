@@ -321,7 +321,7 @@ func TestAgentPageHasActivityCard(t *testing.T) {
 	if !strings.Contains(body, "Activity") {
 		t.Fatal("agent page missing Activity card heading")
 	}
-	if !strings.Contains(body, "No recent activity.") {
+	if !strings.Contains(body, "No recent activity yet.") {
 		t.Fatal("agent page missing empty-state for activity (registry addrs unreachable → empty feed)")
 	}
 }

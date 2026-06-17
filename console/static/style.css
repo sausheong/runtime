@@ -6,14 +6,18 @@
   --border-strong: #d1d5db;
   --text: #111827;
   --muted: #6b7280;
+  /* Darker muted for small text (labels, badges, table headers) where #6b7280
+     falls below the 4.5:1 WCAG bar on tinted backgrounds. ~7:1 on white. */
+  --muted-strong: #4b5563;
   --accent: #4f46e5;
   --accent-hover: #4338ca;
   --accent-soft: #eef2ff;
   --success-bg: #ecfdf5;
   --success-border: #a7f3d0;
   --success-text: #065f46;
-  --danger: #dc2626;
+  --danger: #b91c1c;
   --danger-soft: #fef2f2;
+  --danger-border: #f4c9c9;
   --shadow: 0 1px 2px rgba(16, 24, 40, .04), 0 1px 3px rgba(16, 24, 40, .08);
   --radius: 10px;
 }
@@ -108,7 +112,7 @@ thead th {
   font-size: .72rem;
   text-transform: uppercase;
   letter-spacing: .04em;
-  color: var(--muted);
+  color: var(--muted-strong);
   font-weight: 600;
   padding: .5rem .75rem;
   border-bottom: 1px solid var(--border);
@@ -130,13 +134,20 @@ td.actions { text-align: right; width: 1%; white-space: nowrap; }
 }
 .badge-role { background: var(--accent-soft); color: var(--accent); }
 .badge-ok { background: var(--success-bg); color: var(--success-text); }
-.badge-muted { background: #f3f4f6; color: var(--muted); }
+.badge-muted { background: #f3f4f6; color: var(--muted-strong); }
+.badge-danger { background: var(--danger-soft); color: var(--danger); }
 .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: .4rem; vertical-align: middle; }
 .dot-ok { background: #10b981; }
 .dot-off { background: #9ca3af; }
 
+/* ---- Row (1D flex group: stat tiles, inline controls) ---- */
+/* Base rule: any .row is a wrapping flex line. Without this, bare .row
+   containers (stat tiles on the agent + observability pages) have no flex
+   context and their children collapse to a vertical stack. */
+.row { display: flex; flex-wrap: wrap; gap: .75rem; }
+
 /* ---- Forms ---- */
-form .row { display: flex; flex-wrap: wrap; gap: .6rem; align-items: center; }
+form .row { gap: .6rem; align-items: center; }
 label { font-size: .85rem; font-weight: 500; color: var(--text); }
 input[type=text], input[type=password], input:not([type]), select {
   font: inherit;
@@ -339,6 +350,10 @@ pre {
   .hero-title { font-size: 2rem; }
   .pillar-grid { grid-template-columns: 1fr; }
   .hero { padding-top: 3rem; }
+  /* Stat tiles: two-up grid so they wrap evenly instead of leaving an orphan. */
+  .row .stat { flex: 1 1 calc(50% - .75rem); min-width: 0; }
+  .container { padding: 1.25rem 1rem 3rem; }
+  .status-strip { gap: .4rem .75rem; }
 }
 
 /* ---- Stat tiles (observability) ---- */
@@ -351,5 +366,32 @@ pre {
   border-radius: 10px;
   text-align: center;
 }
-.stat-num { font-size: 1.6rem; font-weight: 650; letter-spacing: -.02em; color: var(--text); }
-.stat-label { font-size: .75rem; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin-top: .2rem; }
+.stat-num { font-size: 1.6rem; font-weight: 650; letter-spacing: -.02em; color: var(--text); font-variant-numeric: tabular-nums; }
+.stat-label { font-size: .75rem; text-transform: uppercase; letter-spacing: .04em; color: var(--muted-strong); margin-top: .2rem; }
+/* A stat tile that carries a warning signal (e.g. non-zero error count). */
+.stat-warn { border-color: var(--danger-border); background: var(--danger-soft); }
+.stat-warn .stat-num { color: var(--danger); }
+
+/* ---- Status strip (compact health line; not a metric tile) ---- */
+.status-strip {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: .5rem 1.1rem;
+  padding: .7rem 1rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  margin-bottom: 1.25rem;
+  font-size: .9rem;
+}
+.status-strip .status-health { display: inline-flex; align-items: center; font-weight: 600; }
+.status-strip .status-sep { width: 1px; height: 1.1rem; background: var(--border); }
+.status-strip .status-item { color: var(--muted); }
+.status-strip .status-item b { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
+.status-strip .status-item.is-error b { color: var(--danger); }
+
+/* ---- Table overflow guard (long mono IDs on narrow screens) ---- */
+.table-wrap { overflow-x: auto; }
+td .mono, .mono { overflow-wrap: anywhere; }

@@ -232,13 +232,17 @@ func TestAgentPageHasMetricsPanel(t *testing.T) {
 		t.Fatalf("GET /ui/agents/a: code=%d want 200", rec.Code)
 	}
 	body := rec.Body.String()
-	// Anchor on the tile markup (not the bare word "Health") so this asserts the
-	// metrics panel specifically, and on the Health value tile reflecting the
-	// single replica (0/1, since the loopback probe fails in tests).
-	if !strings.Contains(body, `<div class="stat-label">Health</div>`) {
-		t.Fatal("agent page missing metrics panel Health tile")
+	// Health moved from a stat tile to the status strip. Anchor on the strip and
+	// the replica count, which reflects the single replica probed as unreachable
+	// in tests (loopback probe fails → 0/1, "Unreachable").
+	if !strings.Contains(body, `class="status-strip"`) {
+		t.Fatal("agent page missing status strip")
 	}
-	if !strings.Contains(body, `<div class="stat-num">0/1</div>`) {
-		t.Fatal("metrics panel missing Health value tile (want 0/1)")
+	if !strings.Contains(body, "Unreachable") || !strings.Contains(body, "<b>0/1</b> replicas") {
+		t.Fatal("status strip missing health/replica state (want Unreachable, 0/1 replicas)")
+	}
+	// The Tool use & tokens metrics panel still renders its tiles.
+	if !strings.Contains(body, `<div class="stat-label">Tokens in</div>`) {
+		t.Fatal("agent page missing Tool use & tokens panel")
 	}
 }
