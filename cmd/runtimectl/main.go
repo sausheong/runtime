@@ -330,13 +330,61 @@ func runAdmin(base string, args []string) {
 		}
 		mustAdminDelete(base, "/admin/upstreams/"+args[2])
 		fmt.Printf("upstream %s removed\n", args[2])
+	case "agent add":
+		// admin agent add --id <id> --url <u> [--name n] [--model m] [--cred-secret s] [--tenant t]
+		id := flagValue(args[2:], "--id", "")
+		url := flagValue(args[2:], "--url", "")
+		if id == "" || url == "" {
+			adminUsage()
+		}
+		body := map[string]string{
+			"id":          id,
+			"url":         url,
+			"name":        flagValue(args[2:], "--name", id),
+			"model":       flagValue(args[2:], "--model", ""),
+			"auth_secret": flagValue(args[2:], "--cred-secret", ""),
+			"tenant":      flagValue(args[2:], "--tenant", ""),
+		}
+		out := mustAdminPost(base, "/admin/agents", body)
+		var resp struct{ ID string }
+		if err := json.Unmarshal(out, &resp); err != nil || resp.ID == "" {
+			fmt.Fprintf(os.Stderr, "agent registered but response malformed: %s\n", out)
+			os.Exit(1)
+		}
+		fmt.Printf("agent %s registered\n", resp.ID)
+	case "agent ls":
+		fmt.Print(string(mustAdminGet(base, "/admin/agents")))
+	case "agent rm":
+		if len(args) < 3 {
+			adminUsage()
+		}
+		mustAdminDelete(base, "/admin/agents/"+args[2])
+		fmt.Printf("agent %s deregistered\n", args[2])
+	case "agent enable":
+		if len(args) < 3 {
+			adminUsage()
+		}
+		mustAdminPost(base, "/admin/agents/"+args[2]+"/enable", map[string]string{})
+		fmt.Printf("agent %s enabled\n", args[2])
+	case "agent disable":
+		if len(args) < 3 {
+			adminUsage()
+		}
+		mustAdminPost(base, "/admin/agents/"+args[2]+"/disable", map[string]string{})
+		fmt.Printf("agent %s disabled\n", args[2])
+	case "agent restart":
+		if len(args) < 3 {
+			adminUsage()
+		}
+		mustAdminPost(base, "/admin/agents/"+args[2]+"/restart", map[string]string{})
+		fmt.Printf("agent %s re-attached (health re-probed)\n", args[2])
 	default:
 		adminUsage()
 	}
 }
 
 func adminUsage() {
-	fmt.Fprintln(os.Stderr, "usage: runtimectl admin <tenant create <id> [--name n]|user add <subject> --role r [--tenant t]|user ls|key create --role r [--label l] [--tenant t]|key ls|key revoke <id>|secret set <name> <value> [--tenant t]|secret ls|secret rm <name>|secret rotate [--tenant t]|upstream add --name n (--url u|--openapi spec) [--base-url b] [--cred-secret s] [--cred-header h] [--tenant t]|upstream ls|upstream rm <id>>")
+	fmt.Fprintln(os.Stderr, "usage: runtimectl admin <tenant create <id> [--name n]|user add <subject> --role r [--tenant t]|user ls|key create --role r [--label l] [--tenant t]|key ls|key revoke <id>|secret set <name> <value> [--tenant t]|secret ls|secret rm <name>|secret rotate [--tenant t]|upstream add --name n (--url u|--openapi spec) [--base-url b] [--cred-secret s] [--cred-header h] [--tenant t]|upstream ls|upstream rm <id>|agent add --id i --url u [--name n] [--model m] [--cred-secret s] [--tenant t]|agent ls|agent rm <id>|agent enable <id>|agent disable <id>|agent restart <id>>")
 	os.Exit(2)
 }
 

@@ -28,6 +28,16 @@ type Registry struct {
 	broker SecretBroker              // optional; injected into each AgentProcess on read.
 	pools  map[string]*PoolManager   // id -> manager (autoscaled agents only)
 
+	// mu guards the agent set (order/sets/infos/rr/managed/disabled) for runtime
+	// mutation. The file-config set is built once in NewRegistry and was
+	// historically read lock-free; dynamically-managed agents (AddRemote/
+	// RemoveAgent, called while serving) make concurrent reads+writes possible, so
+	// the set readers below take RLock. SetBroker/SetGateway still run before
+	// serving starts and are not locked.
+	mu       sync.RWMutex
+	managed  map[string]bool // id -> registered dynamically (DB-backed), not file config
+	disabled map[string]bool // id -> administratively disabled (kept, but out of routing/listing)
+
 	// reachMu guards reach: id → (replicaIndex → reachable). Absent entry ⇒
 	// "unknown", treated as reachable until the first health probe reports.
 	// Written by main's per-ordinal HealthMonitor OnChange; read by NextReplica.
@@ -41,11 +51,13 @@ type Registry struct {
 // agent (url:) is a single attach-only entry.
 func NewRegistry(cfg *config.Config, binPath, dsn string) *Registry {
 	r := &Registry{
-		sets:  map[string][]AgentProcess{},
-		infos: map[string]AgentInfo{},
-		rr:    map[string]*atomic.Uint64{},
-		pools: map[string]*PoolManager{},
-		reach: map[string]map[int]bool{},
+		sets:     map[string][]AgentProcess{},
+		infos:    map[string]AgentInfo{},
+		rr:       map[string]*atomic.Uint64{},
+		pools:    map[string]*PoolManager{},
+		reach:    map[string]map[int]bool{},
+		managed:  map[string]bool{},
+		disabled: map[string]bool{},
 	}
 	for _, a := range cfg.Agents {
 		r.order = append(r.order, a.ID)
@@ -144,6 +156,8 @@ func (r *Registry) SetGateway(url string, keys map[string]string) {
 
 // AgentTenants returns agentID→tenantID for all registered agents.
 func (r *Registry) AgentTenants() map[string]string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	m := make(map[string]string, len(r.order))
 	for _, id := range r.order {
 		m[id] = r.infos[id].Tenant
@@ -161,6 +175,8 @@ func (r *Registry) withBroker(ap AgentProcess) AgentProcess {
 // Get returns replica 0 of id (agent-level info: tenant, gateway, broker),
 // preserving callers that want "the agent" rather than a specific replica.
 func (r *Registry) Get(id string) (AgentProcess, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	if pm, ok := r.pools[id]; ok {
 		ap, ok := pm.replica0Info()
 		if !ok {
@@ -177,6 +193,8 @@ func (r *Registry) Get(id string) (AgentProcess, bool) {
 
 // Replicas returns the ordered replica set for id (broker attached to each).
 func (r *Registry) Replicas(id string) ([]AgentProcess, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	if pm, ok := r.pools[id]; ok {
 		reps := pm.Replicas()
 		out := make([]AgentProcess, len(reps))
@@ -199,6 +217,8 @@ func (r *Registry) Replicas(id string) ([]AgentProcess, bool) {
 // Replica returns one replica by index (broker attached). false if id unknown
 // or i out of range.
 func (r *Registry) Replica(id string, i int) (AgentProcess, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	if pm, ok := r.pools[id]; ok {
 		ap, ok := pm.Replica(i)
 		if !ok {
@@ -211,6 +231,15 @@ func (r *Registry) Replica(id string, i int) (AgentProcess, bool) {
 		return AgentProcess{}, false
 	}
 	return r.withBroker(set[i]), true
+}
+
+// ResetReachable clears all recorded reachability for id, returning it to the
+// "unknown" (treated as reachable) state until the next probe reports. Used by
+// a monitor restart / re-attach.
+func (r *Registry) ResetReachable(id string) {
+	r.reachMu.Lock()
+	defer r.reachMu.Unlock()
+	delete(r.reach, id)
 }
 
 // SetReachable records a replica's reachability (called by main's per-ordinal
@@ -248,6 +277,8 @@ func (r *Registry) reachableOrUnknown(id string, i int) bool {
 // unreachable. Falls back to 0 if every ordinal is unreachable. Autoscaled
 // agents delegate to their PoolManager (which skips draining replicas).
 func (r *Registry) NextReplica(id string) int {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	if pm, ok := r.pools[id]; ok {
 		return pm.NextReplica()
 	}
@@ -268,11 +299,98 @@ func (r *Registry) NextReplica(id string) int {
 // Pools returns the autoscaled agents' managers, keyed by id. main.go starts each.
 func (r *Registry) Pools() map[string]*PoolManager { return r.pools }
 
-// List returns agent infos in config order.
+// List returns agent infos in registration order, INCLUDING administratively
+// disabled ones (callers that present the public agent list — /agents, the
+// console overview — filter with Disabled; startup/monitor loops want them all).
 func (r *Registry) List() []AgentInfo {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	out := make([]AgentInfo, 0, len(r.order))
 	for _, id := range r.order {
 		out = append(out, r.infos[id])
 	}
 	return out
+}
+
+// AddRemote registers a remote (attach-only) agent at runtime: a single
+// replica-0 entry dialing ap.BaseURL. Idempotent on id (a re-add replaces the
+// entry). managed marks it DB-backed so deregister can distinguish it from a
+// file-config agent. Safe for concurrent use with reads.
+func (r *Registry) AddRemote(info AgentInfo, ap AgentProcess, managed bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, exists := r.infos[info.ID]; !exists {
+		r.order = append(r.order, info.ID)
+	}
+	r.infos[info.ID] = info
+	if r.rr[info.ID] == nil {
+		r.rr[info.ID] = &atomic.Uint64{}
+	}
+	ap.Remote = true
+	ap.ReplicaIndex = 0
+	r.sets[info.ID] = []AgentProcess{ap}
+	r.managed[info.ID] = managed
+	delete(r.disabled, info.ID)
+}
+
+// RemoveAgent drops an agent from the registry entirely (all maps + order).
+// Idempotent. Used by deregister; the caller stops the agent's health monitor.
+func (r *Registry) RemoveAgent(id string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	delete(r.sets, id)
+	delete(r.infos, id)
+	delete(r.rr, id)
+	delete(r.managed, id)
+	delete(r.disabled, id)
+	for i, x := range r.order {
+		if x == id {
+			r.order = append(r.order[:i], r.order[i+1:]...)
+			break
+		}
+	}
+	r.reachMu.Lock()
+	delete(r.reach, id)
+	r.reachMu.Unlock()
+}
+
+// TenantOf returns the tenant that owns id from the LIVE registry (covers
+// dynamically-added agents), ok=false if unknown. Used as the authorizer's live
+// lookup so dynamic agents are authorizable without rebuilding it.
+func (r *Registry) TenantOf(id string) (string, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	info, ok := r.infos[id]
+	if !ok {
+		return "", false
+	}
+	return info.Tenant, true
+}
+
+// IsManaged reports whether id was registered dynamically (DB-backed) rather
+// than from file config. Deregister/enable/disable are managed-only.
+func (r *Registry) IsManaged(id string) bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.managed[id]
+}
+
+// SetEnabled administratively enables/disables an agent. A disabled agent stays
+// registered and monitored but is dropped from new-session routing and the
+// public listing. Safe for concurrent use.
+func (r *Registry) SetEnabled(id string, enabled bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if enabled {
+		delete(r.disabled, id)
+	} else {
+		r.disabled[id] = true
+	}
+}
+
+// Disabled reports whether id is administratively disabled.
+func (r *Registry) Disabled(id string) bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.disabled[id]
 }

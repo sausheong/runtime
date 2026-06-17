@@ -42,6 +42,9 @@ func NewAPI(reg *Registry, m *obs.ControlMetrics, st store.Store) *http.ServeMux
 			if hasP && !p.Superuser && info.Tenant != p.TenantID {
 				continue
 			}
+			if reg.Disabled(info.ID) {
+				continue // administratively disabled: hidden from the public listing
+			}
 			replicas, _ := reg.Replicas(info.ID)
 			wg.Add(1)
 			go func(info AgentInfo, replicas []AgentProcess) {
@@ -79,6 +82,12 @@ func NewAPI(reg *Registry, m *obs.ControlMetrics, st store.Store) *http.ServeMux
 	mux.HandleFunc("/agents/{id}/", func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
 		if _, ok := reg.Get(id); !ok {
+			http.Error(w, "unknown agent "+id, http.StatusNotFound)
+			return
+		}
+		if reg.Disabled(id) {
+			// Administratively disabled: the agent process may still be up, but
+			// the control plane does not route to it. 404, same as an unknown id.
 			http.Error(w, "unknown agent "+id, http.StatusNotFound)
 			return
 		}

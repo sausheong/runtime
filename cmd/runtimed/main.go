@@ -18,6 +18,7 @@ import (
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/sausheong/runtime/console"
 	"github.com/sausheong/runtime/controlplane"
+	"github.com/sausheong/runtime/internal/agentstore"
 	"github.com/sausheong/runtime/internal/config"
 	"github.com/sausheong/runtime/internal/gateway"
 	"github.com/sausheong/runtime/internal/identity"
@@ -126,6 +127,15 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Managed-agent store: persists dynamically-registered remote agents so the
+	// control plane can add/remove/enable/disable agents at runtime (admin API +
+	// console) and have them survive a restart. Mirrors gwStore.
+	agentStore, err := agentstore.New(ctx, identityDB)
+	if err != nil {
+		slog.Error("managed-agent store init failed", "err", err)
+		os.Exit(1)
+	}
+
 	ctlStore, err := store.NewPGStore(ctx, dsn)
 	if err != nil {
 		slog.Error("control store init failed", "err", err)
@@ -224,6 +234,43 @@ func main() {
 	}
 	identityOn := configured || oidcIssuer != "" || bootstrapKey != "" || len(legacyTokens) > 0
 
+	// Dynamic managed agents: a MonitorSet owns runtime-mutable health monitors,
+	// and an AgentManager attaches/detaches stored rows to the live registry.
+	// Both file-config remotes (the startup loop below) and dynamically-registered
+	// agents go through the MonitorSet, so there is one monitor code path. The
+	// credential resolver mirrors the gateway one: an optional per-tenant secret
+	// NAME → bearer (nil when no broker, matching the shim's no-bearer default).
+	monitors := controlplane.NewMonitorSet(ctx, reg, cm.AgentReachable)
+	var agentCredResolver func(context.Context, string, string) (string, error)
+	if secretBroker != nil {
+		agentCredResolver = func(rctx context.Context, tenant, name string) (string, error) {
+			m, serr := secretBroker.SecretsFor(rctx, tenant)
+			if serr != nil {
+				return "", fmt.Errorf("required credential could not be resolved for tenant")
+			}
+			v, ok := m[name]
+			if !ok {
+				return "", fmt.Errorf("required credential not found for tenant")
+			}
+			return v, nil
+		}
+	}
+	agentManager := controlplane.NewAgentManager(reg, monitors, agentCredResolver)
+	// Boot-merge: attach persisted managed agents (all tenants) into the live
+	// registry + monitors, the same way DB upstreams merge into the gateway.
+	if dbAgents, lerr := agentStore.List(ctx, ""); lerr != nil {
+		slog.Error("managed agents: load failed", "err", lerr)
+		os.Exit(1)
+	} else {
+		for _, row := range dbAgents {
+			if aerr := agentManager.Attach(ctx, row); aerr != nil {
+				slog.Warn("managed agent attach failed at boot", "agent", row.ID, "err", aerr)
+				continue
+			}
+			slog.Info("attached managed agent", "agent", row.ID, "url", row.URL, "enabled", row.Enabled)
+		}
+	}
+
 	// Fail-closed: identity on + a gateway:true agent whose tenant has no
 	// agent key would spawn an agent that can never authenticate to the
 	// gateway. Refuse to start instead.
@@ -247,7 +294,7 @@ func main() {
 		}
 		// Open mode: no admin store ⇒ no /admin, no onboarding API, no onboarding
 		// page. Pass literal nil for the interface params (true nil interface).
-		handler = obs.RequestID(tracedHandler(accessLog(buildRoot(reg, nil, console.OIDCConfig{}, secretAdmin, gwHandler, nil, nil, nil, cm, ctlStore), cm)))
+		handler = obs.RequestID(tracedHandler(accessLog(buildRoot(reg, nil, console.OIDCConfig{}, secretAdmin, gwHandler, nil, nil, nil, nil, nil, cm, ctlStore), cm)))
 	} else {
 		oidcVerifier, verr := identity.NewOIDCVerifier(ctx, oidcIssuer, oidcClientID)
 		if verr != nil {
@@ -284,7 +331,7 @@ func main() {
 			}
 		}
 		authr := identity.NewAuthenticator(idStore, oidcVerifier, bootstrapKey, legacyTokens)
-		azr := identity.NewAuthorizer(reg.AgentTenants())
+		azr := identity.NewAuthorizer(reg.AgentTenants()).WithLiveLookup(reg.TenantOf)
 		if gwHandler != nil {
 			gwHandler.PrincipalFor = controlplane.PrincipalFromContext
 		}
@@ -300,9 +347,11 @@ func main() {
 				Mutator:   gwManager,
 				Admin:     idStore,
 				Secrets:   secretAdmin,
+				Agents:    agentStore,
+				AgentMgr:  agentManager,
 			}
 		}
-		root := buildRoot(reg, idStore, consoleOIDC, secretAdmin, gwHandler, gwStore, gwMut, onb, cm, ctlStore) // mounts /admin since the store is non-nil
+		root := buildRoot(reg, idStore, consoleOIDC, secretAdmin, gwHandler, gwStore, gwMut, agentStore, agentManager, onb, cm, ctlStore) // mounts /admin since the store is non-nil
 		onReject := func(status int) { cm.AuthRejected(status) }
 		// When OIDC login is available, lock the browser console to OIDC sessions:
 		// a service-key/bootstrap cookie authenticates the API but is bounced from
@@ -383,20 +432,17 @@ func main() {
 		if _, isPool := reg.Pools()[info.ID]; isPool {
 			continue // autoscaled: started above via its PoolManager
 		}
+		if reg.IsManaged(info.ID) {
+			continue // dynamically-managed: already attached + monitored at boot-merge
+		}
 		replicas, _ := reg.Replicas(info.ID)
 		for _, ap := range replicas {
 			if ap.Remote {
-				id := ap.AgentID
-				idx := ap.ReplicaIndex
-				hm := &controlplane.HealthMonitor{
-					BaseURL: ap.DialBase(), Token: ap.AuthToken,
-					OnChange: func(ok bool) {
-						cm.AgentReachable(id, idx, ok)
-						reg.SetReachable(id, idx, ok)
-					},
-				}
-				go hm.Run(ctx)
-				slog.Info("monitoring remote agent", "agent", ap.AgentID, "replica", idx, "url", ap.DialBase())
+				// File-config remote: monitor it through the MonitorSet so the
+				// startup path and dynamic add/remove share one code path. (The
+				// MonitorSet reports replica 0; file remotes are single-replica.)
+				monitors.Start(ap)
+				slog.Info("monitoring remote agent", "agent", ap.AgentID, "replica", ap.ReplicaIndex, "url", ap.DialBase())
 				continue
 			}
 			idx := ap.ReplicaIndex
@@ -508,7 +554,7 @@ func mountMetrics(inner http.Handler, cm *obs.ControlMetrics, targets func() []o
 // A nil gw leaves /gateway/* unmounted (stdlib mux → 404). The self-service
 // onboarding API (/admin/upstreams) mounts only when adminS, us, and gwMut are
 // all non-nil; onb (when non-nil) enables the console onboarding page.
-func buildRoot(reg *controlplane.Registry, adminS controlplane.AdminStore, consoleOIDC console.OIDCConfig, secretBroker controlplane.SecretAdmin, gw *gateway.Handler, us controlplane.UpstreamStore, gwMut controlplane.GatewayMutator, onb *console.Onboarding, cm *obs.ControlMetrics, ctlStore store.Store) http.Handler {
+func buildRoot(reg *controlplane.Registry, adminS controlplane.AdminStore, consoleOIDC console.OIDCConfig, secretBroker controlplane.SecretAdmin, gw *gateway.Handler, us controlplane.UpstreamStore, gwMut controlplane.GatewayMutator, agentStore controlplane.AgentStore, agentMgr *controlplane.AgentManager, onb *console.Onboarding, cm *obs.ControlMetrics, ctlStore store.Store) http.Handler {
 	apiMux := controlplane.NewAPI(reg, cm, ctlStore)
 	if adminS != nil {
 		controlplane.RegisterAdmin(apiMux, adminS, reg.AgentTenants())
@@ -518,6 +564,11 @@ func buildRoot(reg *controlplane.Registry, adminS controlplane.AdminStore, conso
 		// manager to add the upstream to.
 		if us != nil && gwMut != nil {
 			controlplane.RegisterUpstreamAdmin(apiMux, adminS, us, gwMut)
+		}
+		// Dynamic managed-agent admin: add/remove/enable/disable/restart remote
+		// agents at runtime. Needs the store + live manager.
+		if agentStore != nil && agentMgr != nil {
+			controlplane.RegisterAgentAdmin(apiMux, agentStore, adminS, agentMgr)
 		}
 	}
 	if gw != nil {

@@ -79,6 +79,51 @@
     </form>
   </section>
 
+  {{if .AgentsEnabled}}
+  <!-- ===== Managed agents ===== -->
+  <section class="card">
+    <h2>Managed agents</h2>
+    <p class="card-desc">Remote agents the control plane attaches to (a URL it dials). Disable drops an agent from routing without removing it; Re-attach re-checks its health now. The agent's own process is started/stopped on its host.</p>
+    <table>
+      <thead><tr><th>ID</th><th>URL</th><th>Status</th><th></th></tr></thead>
+      <tbody>
+      {{range .Agents}}<tr>
+        <td class="mono">{{.ID}}</td>
+        <td class="mono">{{.URL}}</td>
+        <td>{{if .Enabled}}<span class="badge badge-ok">enabled</span>{{else}}<span class="badge badge-muted">disabled</span>{{end}}</td>
+        <td class="actions">
+          {{if .Enabled}}<form method="post" action="/ui/onboarding/agents/{{.ID}}/disable" style="display:inline">
+            <input type="hidden" name="csrf_token" value="{{$.CSRF}}"><button type="submit" class="ghost">Disable</button>
+          </form>{{else}}<form method="post" action="/ui/onboarding/agents/{{.ID}}/enable" style="display:inline">
+            <input type="hidden" name="csrf_token" value="{{$.CSRF}}"><button type="submit" class="ghost">Enable</button>
+          </form>{{end}}
+          <form method="post" action="/ui/onboarding/agents/{{.ID}}/restart" style="display:inline">
+            <input type="hidden" name="csrf_token" value="{{$.CSRF}}"><button type="submit" class="ghost">Re-attach</button>
+          </form>
+          <form method="post" action="/ui/onboarding/agents/{{.ID}}/delete" style="display:inline">
+            <input type="hidden" name="csrf_token" value="{{$.CSRF}}"><button type="submit" class="danger">Remove</button>
+          </form>
+        </td>
+      </tr>{{else}}
+        <tr><td colspan="4" class="empty">No managed agents.</td></tr>
+      {{end}}
+      </tbody>
+    </table>
+    <form method="post" action="/ui/onboarding/agents">
+      <input type="hidden" name="csrf_token" value="{{.CSRF}}">
+      <div class="row" style="margin-top:1rem">
+        <input name="id" placeholder="agent id (e.g. hello-claude)" style="flex:1">
+        <input name="name" placeholder="display name" style="flex:1">
+      </div>
+      <div class="row" style="margin-top:.5rem">
+        <input name="url" placeholder="http://10.0.0.4:8080" style="flex:2">
+        <input name="model" placeholder="model (display)" style="flex:1">
+        <button type="submit">Register agent</button>
+      </div>
+    </form>
+  </section>
+  {{end}}
+
   {{if .SecretsEnabled}}
   <!-- ===== Credentials ===== -->
   <section class="card">

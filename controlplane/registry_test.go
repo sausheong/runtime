@@ -334,3 +334,68 @@ func TestRegistry_RemoteAgentDialIdentity(t *testing.T) {
 		t.Fatalf("remote Addr should be empty, got %q", r.Addr)
 	}
 }
+
+func TestRegistry_AddRemoveDynamic(t *testing.T) {
+	r := NewRegistry(&config.Config{}, "/bin/agentd", "dsn")
+	if _, ok := r.Get("dyn"); ok {
+		t.Fatal("dyn should not exist yet")
+	}
+	r.AddRemote(
+		AgentInfo{ID: "dyn", Name: "Dyn", Model: "m", Tenant: "acme"},
+		AgentProcess{AgentID: "dyn", BaseURL: "http://127.0.0.1:9", Tenant: "acme"},
+		true,
+	)
+	ap, ok := r.Get("dyn")
+	if !ok || !ap.Remote || ap.BaseURL != "http://127.0.0.1:9" {
+		t.Fatalf("after AddRemote: ok=%v remote=%v base=%q", ok, ap.Remote, ap.BaseURL)
+	}
+	if !r.IsManaged("dyn") {
+		t.Fatal("dyn should be managed")
+	}
+	if got := r.AgentTenants()["dyn"]; got != "acme" {
+		t.Fatalf("tenant=%q want acme", got)
+	}
+	r.RemoveAgent("dyn")
+	if _, ok := r.Get("dyn"); ok {
+		t.Fatal("dyn should be gone after RemoveAgent")
+	}
+	if r.IsManaged("dyn") {
+		t.Fatal("dyn should no longer be managed")
+	}
+}
+
+func TestRegistry_EnableDisable(t *testing.T) {
+	r := NewRegistry(&config.Config{}, "/bin/agentd", "dsn")
+	r.AddRemote(AgentInfo{ID: "a"}, AgentProcess{AgentID: "a", BaseURL: "http://x"}, true)
+	if r.Disabled("a") {
+		t.Fatal("freshly added agent must be enabled")
+	}
+	r.SetEnabled("a", false)
+	if !r.Disabled("a") {
+		t.Fatal("SetEnabled(false) should disable")
+	}
+	r.SetEnabled("a", true)
+	if r.Disabled("a") {
+		t.Fatal("SetEnabled(true) should re-enable")
+	}
+}
+
+func TestRegistry_AddRemoteIdempotentReplace(t *testing.T) {
+	r := NewRegistry(&config.Config{}, "/bin/agentd", "dsn")
+	r.AddRemote(AgentInfo{ID: "a"}, AgentProcess{AgentID: "a", BaseURL: "http://one"}, true)
+	r.AddRemote(AgentInfo{ID: "a"}, AgentProcess{AgentID: "a", BaseURL: "http://two"}, true)
+	ap, _ := r.Get("a")
+	if ap.BaseURL != "http://two" {
+		t.Fatalf("re-add should replace; base=%q", ap.BaseURL)
+	}
+	// order must not gain a duplicate entry
+	n := 0
+	for _, info := range r.List() {
+		if info.ID == "a" {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Fatalf("duplicate order entry: %d", n)
+	}
+}

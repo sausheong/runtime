@@ -9,6 +9,7 @@ import (
 	"net/http"
 
 	"github.com/sausheong/runtime/controlplane"
+	"github.com/sausheong/runtime/internal/agentstore"
 	"github.com/sausheong/runtime/internal/identity"
 	"github.com/sausheong/runtime/internal/store"
 )
@@ -46,6 +47,8 @@ type Onboarding struct {
 	Mutator   controlplane.GatewayMutator
 	Admin     controlplane.AdminStore
 	Secrets   controlplane.SecretAdmin
+	Agents    controlplane.AgentStore   // dynamic managed-agent persistence; nil ⇒ section hidden
+	AgentMgr  *controlplane.AgentManager // live attach/detach; nil ⇒ section hidden
 }
 
 // Handler returns the console's HTTP handler. The read-only views render the
@@ -206,10 +209,15 @@ func Handler(reg *controlplane.Registry, st store.Store, oidc OIDCConfig, onb *O
 				}
 			}
 			users, _ := onb.Admin.ListUsers(r.Context(), p.TenantID)
+			var agents []agentstore.AgentRow
+			if onb.Agents != nil {
+				agents, _ = onb.Agents.List(r.Context(), p.TenantID)
+			}
 			render(w, "onboarding.html", map[string]any{
 				"CSRF": csrf.issue(sessionValue(r)), "Tenant": p.TenantID,
 				"Upstreams": ups, "Secrets": secs, "Keys": keys, "Users": users, "Flash": flash,
 				"SecretsEnabled": onb.Secrets != nil,
+				"Agents":         agents, "AgentsEnabled": onb.Agents != nil && onb.AgentMgr != nil,
 			})
 		})
 
@@ -325,6 +333,59 @@ func Handler(reg *controlplane.Registry, st store.Store, oidc OIDCConfig, onb *O
 			}
 			flashRedirect(w, r, "upstream removed")
 		}))
+
+		// Managed agents: register/deregister/enable/disable/re-attach remote
+		// agents at runtime. Mounted only when the store + live manager exist.
+		if onb.Agents != nil && onb.AgentMgr != nil {
+			mux.HandleFunc("POST /ui/onboarding/agents", guard(func(p identity.Principal, w http.ResponseWriter, r *http.Request) {
+				params := controlplane.AgentParams{
+					ID: r.FormValue("id"), Name: r.FormValue("name"),
+					Model: r.FormValue("model"), URL: r.FormValue("url"),
+					AuthSecret: r.FormValue("auth_secret"),
+				}
+				if _, err := controlplane.RegisterAgentShared(r.Context(), onb.Agents, onb.AgentMgr, p.TenantID, params); err != nil {
+					http.Error(w, err.Error(), http.StatusBadRequest)
+					return
+				}
+				flashRedirect(w, r, "agent registered")
+			}))
+
+			mux.HandleFunc("POST /ui/onboarding/agents/{id}/delete", guard(func(p identity.Principal, w http.ResponseWriter, r *http.Request) {
+				if err := controlplane.DeregisterAgentShared(r.Context(), onb.Agents, onb.AgentMgr, p.TenantID, r.PathValue("id")); err != nil {
+					http.Error(w, err.Error(), http.StatusBadRequest)
+					return
+				}
+				flashRedirect(w, r, "agent deregistered")
+			}))
+
+			setAgentEnabled := func(enabled bool, msg string) http.HandlerFunc {
+				return guard(func(p identity.Principal, w http.ResponseWriter, r *http.Request) {
+					id := r.PathValue("id")
+					if !onb.AgentMgr.IsManaged(id) {
+						http.Error(w, "agent is not dynamically managed", http.StatusBadRequest)
+						return
+					}
+					if err := onb.Agents.SetEnabled(r.Context(), p.TenantID, id, enabled); err != nil {
+						http.Error(w, "update failed", http.StatusInternalServerError)
+						return
+					}
+					onb.AgentMgr.SetEnabled(id, enabled)
+					flashRedirect(w, r, msg)
+				})
+			}
+			mux.HandleFunc("POST /ui/onboarding/agents/{id}/enable", setAgentEnabled(true, "agent enabled"))
+			mux.HandleFunc("POST /ui/onboarding/agents/{id}/disable", setAgentEnabled(false, "agent disabled"))
+
+			mux.HandleFunc("POST /ui/onboarding/agents/{id}/restart", guard(func(p identity.Principal, w http.ResponseWriter, r *http.Request) {
+				id := r.PathValue("id")
+				if !onb.AgentMgr.IsManaged(id) {
+					http.Error(w, "agent is not dynamically managed", http.StatusBadRequest)
+					return
+				}
+				onb.AgentMgr.Reattach(id)
+				flashRedirect(w, r, "agent re-attached")
+			}))
+		}
 	}
 
 	return mux

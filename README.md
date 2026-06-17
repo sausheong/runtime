@@ -1957,6 +1957,12 @@ shutdown, per-agent health, full-stack Docker build), plus the six pillars:
   pulls a per-agent env-delta from `POST /register`. Local subprocesses remain
   the default single-node mode. See [Kubernetes / Helm](#kubernetes--helm) and
   [Remote agents](#remote-agents-attach-instead-of-spawn).
+- **Dynamic remote-agent management** — register, enable, disable, re-attach, and
+  deregister remote agents **at runtime** (no restart), DB-backed so they persist.
+  Driven from the admin API (`POST/DELETE /admin/agents`, enable/disable/restart),
+  `runtimectl admin agent …`, or the console's **Managed agents** card. Disable
+  drops an agent from routing without stopping its process; re-attach re-probes
+  its health. (Starting/stopping the agent's actual process stays a host concern.)
 
 ### Not yet implemented
 
@@ -1970,13 +1976,19 @@ Each of these is a known gap, planned for a future release:
 - **Observability** — sandboxd-internal metrics, per-tenant token accounting,
   alerting/recording rules, a console `/ui` metrics panel, log shipping, and
   DBOS-internal metrics.
-- **Agent lifecycle from the console** — the console drives tenant onboarding
-  (keys + gateway upstreams) but cannot deploy/stop/invoke agents from the UI.
+- **Remote-agent process actuation** — the control plane can register, enable,
+  disable, re-attach, and deregister **remote** agents at runtime (via
+  `/admin/agents`, `runtimectl admin agent …`, and the console's Managed agents
+  card; DB-backed, so they persist across restarts). What it does NOT do is start
+  or stop the agent's actual OS process on another host — that stays a
+  Docker/Kubernetes/`restart:` concern on the agent's host. Dynamic management of
+  `command:`-spawned **local** agents is also not yet supported.
 - **Autoscaling** — a scale-down force-kill deadline, richer signals (CPU/queue/
   latency), and a signal-only mode that hands actuation to an external
   orchestrator.
-- **Dynamic deploy** — agents come from `runtime.yaml` at startup; no runtime
-  `POST /agents` registration or rollback yet (tokens are config-only too).
+- **Dynamic deploy of file/local agents** — `runtime.yaml` agents are still
+  startup-only (no live reload). Remote agents can be added/removed at runtime
+  (above); local `command:`/`agentd` agents cannot yet.
 - **Gateway** — resources/prompts passthrough, OAuth2 upstream auth,
   auto-minted agent keys, and rate limits.
 - **Polyglot hosting** — in-flight crash resume for shim-hosted agents, a
