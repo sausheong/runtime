@@ -172,6 +172,53 @@ func TestIdentityMW_OnRejectFiresForUnauthenticated(t *testing.T) {
 	}
 }
 
+func TestMiddleware_SelectionRequired_PickerPathProceeds(t *testing.T) {
+	var gotSub string
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		p, _ := PrincipalFromContext(r.Context())
+		gotSub = p.Subject
+		w.WriteHeader(http.StatusOK)
+	})
+	mw := IdentityMiddleware(next,
+		stubAuthndr{p: identity.Principal{Subject: "alice@corp", Kind: identity.KindOIDC}, err: identity.ErrTenantSelectionRequired},
+		testAZ(), nil)
+	rec := httptest.NewRecorder()
+	mw.ServeHTTP(rec, httptest.NewRequest("GET", "/ui/select-tenant", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (picker proceeds)", rec.Code)
+	}
+	if gotSub != "alice@corp" {
+		t.Fatalf("subject in context = %q, want alice@corp", gotSub)
+	}
+}
+
+func TestMiddleware_SelectionRequired_OtherUIRedirectsToPicker(t *testing.T) {
+	mw := IdentityMiddleware(
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { t.Fatal("next should not be reached") }),
+		stubAuthndr{p: identity.Principal{Subject: "alice@corp", Kind: identity.KindOIDC}, err: identity.ErrTenantSelectionRequired},
+		testAZ(), nil)
+	rec := httptest.NewRecorder()
+	mw.ServeHTTP(rec, httptest.NewRequest("GET", "/ui", nil))
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("status = %d, want 303", rec.Code)
+	}
+	if loc := rec.Header().Get("Location"); loc != "/ui/select-tenant" {
+		t.Fatalf("Location = %q, want /ui/select-tenant", loc)
+	}
+}
+
+func TestMiddleware_SelectionRequired_APIForbidden(t *testing.T) {
+	mw := IdentityMiddleware(
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { t.Fatal("next should not be reached") }),
+		stubAuthndr{p: identity.Principal{Subject: "alice@corp", Kind: identity.KindOIDC}, err: identity.ErrTenantSelectionRequired},
+		testAZ(), nil)
+	rec := httptest.NewRecorder()
+	mw.ServeHTTP(rec, httptest.NewRequest("GET", "/agents", nil))
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403", rec.Code)
+	}
+}
+
 func TestActionForRequest(t *testing.T) {
 	cases := []struct {
 		method, path string

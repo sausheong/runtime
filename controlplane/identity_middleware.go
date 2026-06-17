@@ -10,6 +10,10 @@ import (
 	"github.com/sausheong/runtime/internal/identity"
 )
 
+// selectTenantPath is the console tenant picker; the only /ui path reachable
+// while a multi-tenant OIDC session has no tenant selected.
+const selectTenantPath = "/ui/select-tenant"
+
 // authenticator is the subset of *identity.Authenticator the middleware needs
 // (an interface so tests can stub it).
 type authenticator interface {
@@ -57,6 +61,25 @@ func identityMiddleware(next http.Handler, a authenticator, az *identity.Authori
 		}
 		p, err := a.Authenticate(r.Context(), r)
 		if err != nil {
+			// Multi-tenant OIDC user who hasn't picked a tenant: the picker page
+			// itself must proceed (it needs only the subject, which the partial
+			// principal carries); every other /ui path redirects to it; API gets
+			// 403 (tenant selection is a console concern).
+			if errors.Is(err, identity.ErrTenantSelectionRequired) {
+				if cleanPath == selectTenantPath {
+					ctx := context.WithValue(r.Context(), principalKey, p)
+					next.ServeHTTP(w, r.WithContext(ctx))
+					return
+				}
+				if strings.HasPrefix(cleanPath, "/ui") {
+					reject(http.StatusSeeOther)
+					http.Redirect(w, r, selectTenantPath, http.StatusSeeOther)
+					return
+				}
+				reject(http.StatusForbidden)
+				http.Error(w, "forbidden", http.StatusForbidden)
+				return
+			}
 			if strings.HasPrefix(cleanPath, "/ui") {
 				reject(http.StatusSeeOther)
 				http.Redirect(w, r, "/ui/login", http.StatusSeeOther)
