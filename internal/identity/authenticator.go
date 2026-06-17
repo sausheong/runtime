@@ -15,10 +15,22 @@ var (
 	ErrNotProvisioned  = errors.New("identity: subject not provisioned")
 )
 
+// ErrTenantSelectionRequired: a valid OIDC subject that belongs to more than one
+// tenant, with no (or a non-member) runtime_tenant selection cookie. The caller
+// should send the user to the tenant picker. Authenticate returns a partial
+// Principal (Subject + KindOIDC, empty TenantID) alongside this error so the
+// picker can identify the user without re-verifying the token.
+var ErrTenantSelectionRequired = errors.New("identity: tenant selection required")
+
+// TenantCookieName holds the console's selected tenant. It is a HINT: the
+// authenticator only honors it when the value is one of the subject's actual
+// memberships, so a forged/stale value cannot grant access.
+const TenantCookieName = "runtime_tenant"
+
 // principalSource is the subset of *Store the Authenticator needs (so tests can
 // substitute an in-memory fake).
 type principalSource interface {
-	UserBySubject(ctx context.Context, subject string) (UserRow, error)
+	UsersBySubject(ctx context.Context, subject string) ([]UserRow, error)
 	ActiveKeyByID(ctx context.Context, id string) (activeKey, error)
 }
 
@@ -81,14 +93,30 @@ func (a *Authenticator) Authenticate(ctx context.Context, r *http.Request) (Prin
 		if err != nil {
 			return Principal{}, ErrUnauthenticated
 		}
-		u, err := a.src.UserBySubject(ctx, sub)
-		if errors.Is(err, ErrNoUser) {
-			return Principal{}, ErrNotProvisioned
-		}
+		rows, err := a.src.UsersBySubject(ctx, sub)
 		if err != nil {
 			return Principal{}, err
 		}
-		return Principal{TenantID: u.TenantID, Subject: u.Subject, Role: u.Role, Kind: KindOIDC}, nil
+		switch len(rows) {
+		case 0:
+			return Principal{}, ErrNotProvisioned
+		case 1:
+			u := rows[0]
+			return Principal{TenantID: u.TenantID, Subject: u.Subject, Role: u.Role, Kind: KindOIDC}, nil
+		default:
+			// Multi-tenant: honor the selection cookie only if it names a tenant the
+			// subject actually belongs to. Otherwise require (re)selection.
+			if sel := selectedTenant(r); sel != "" {
+				for _, u := range rows {
+					if u.TenantID == sel {
+						return Principal{TenantID: u.TenantID, Subject: u.Subject, Role: u.Role, Kind: KindOIDC}, nil
+					}
+				}
+			}
+			// Partial principal: subject known, tenant pending. The middleware uses it
+			// to drive the picker.
+			return Principal{Subject: sub, Kind: KindOIDC}, ErrTenantSelectionRequired
+		}
 	}
 
 	return Principal{}, ErrUnauthenticated
@@ -101,6 +129,14 @@ func extractCredential(r *http.Request) string {
 		return strings.TrimPrefix(h, "Bearer ")
 	}
 	if c, err := r.Cookie("runtime_token"); err == nil {
+		return c.Value
+	}
+	return ""
+}
+
+// selectedTenant returns the runtime_tenant cookie value ("" if absent).
+func selectedTenant(r *http.Request) string {
+	if c, err := r.Cookie(TenantCookieName); err == nil {
 		return c.Value
 	}
 	return ""

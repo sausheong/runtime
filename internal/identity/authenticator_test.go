@@ -2,6 +2,7 @@ package identity
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -9,16 +10,12 @@ import (
 
 // memSource is a hermetic stand-in for the store methods Authenticator needs.
 type memSource struct {
-	users map[string]UserRow   // subject -> user
+	users map[string][]UserRow // subject -> memberships
 	keys  map[string]activeKey // id -> active key
 }
 
-func (m memSource) UserBySubject(_ context.Context, sub string) (UserRow, error) {
-	u, ok := m.users[sub]
-	if !ok {
-		return UserRow{}, ErrNoUser
-	}
-	return u, nil
+func (m memSource) UsersBySubject(_ context.Context, sub string) ([]UserRow, error) {
+	return m.users[sub], nil
 }
 func (m memSource) ActiveKeyByID(_ context.Context, id string) (activeKey, error) {
 	k, ok := m.keys[id]
@@ -32,6 +29,14 @@ func req(auth string) *http.Request {
 	r := httptest.NewRequest("GET", "/agents", nil)
 	if auth != "" {
 		r.Header.Set("Authorization", "Bearer "+auth)
+	}
+	return r
+}
+
+func reqCookie(auth, tenant string) *http.Request {
+	r := req(auth)
+	if tenant != "" {
+		r.AddCookie(&http.Cookie{Name: TenantCookieName, Value: tenant})
 	}
 	return r
 }
@@ -62,7 +67,7 @@ func TestAuthenticate_ServiceKeyWrongSecret(t *testing.T) {
 }
 
 func TestAuthenticate_OIDCUser(t *testing.T) {
-	src := memSource{users: map[string]UserRow{"alice@corp": {TenantID: "beta", Subject: "alice@corp", Role: RoleViewer}}}
+	src := memSource{users: map[string][]UserRow{"alice@corp": {{TenantID: "beta", Subject: "alice@corp", Role: RoleViewer}}}}
 	a := NewAuthenticator(src, fakeVerifier{good: "jwt.aaa.bbb", sub: "alice@corp"}, "", nil)
 	p, err := a.Authenticate(context.Background(), req("jwt.aaa.bbb"))
 	if err != nil {
@@ -79,6 +84,48 @@ func TestAuthenticate_OIDCValidButNotProvisioned(t *testing.T) {
 	_, err := a.Authenticate(context.Background(), req("jwt.aaa.bbb"))
 	if err != ErrNotProvisioned {
 		t.Fatalf("err=%v want ErrNotProvisioned", err)
+	}
+}
+
+func TestAuthenticate_OIDCMultiTenantNoSelection(t *testing.T) {
+	src := memSource{users: map[string][]UserRow{"alice@corp": {
+		{TenantID: "alpha", Subject: "alice@corp", Role: RoleAdmin},
+		{TenantID: "beta", Subject: "alice@corp", Role: RoleViewer},
+	}}}
+	a := NewAuthenticator(src, fakeVerifier{good: "jwt.aaa.bbb", sub: "alice@corp"}, "", nil)
+	p, err := a.Authenticate(context.Background(), req("jwt.aaa.bbb"))
+	if !errors.Is(err, ErrTenantSelectionRequired) {
+		t.Fatalf("err=%v want ErrTenantSelectionRequired", err)
+	}
+	if p.Subject != "alice@corp" || p.Kind != KindOIDC || p.TenantID != "" {
+		t.Fatalf("partial principal = %+v", p)
+	}
+}
+
+func TestAuthenticate_OIDCMultiTenantValidSelection(t *testing.T) {
+	src := memSource{users: map[string][]UserRow{"alice@corp": {
+		{TenantID: "alpha", Subject: "alice@corp", Role: RoleAdmin},
+		{TenantID: "beta", Subject: "alice@corp", Role: RoleViewer},
+	}}}
+	a := NewAuthenticator(src, fakeVerifier{good: "jwt.aaa.bbb", sub: "alice@corp"}, "", nil)
+	p, err := a.Authenticate(context.Background(), reqCookie("jwt.aaa.bbb", "beta"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.TenantID != "beta" || p.Role != RoleViewer {
+		t.Fatalf("principal = %+v want beta/viewer", p)
+	}
+}
+
+func TestAuthenticate_OIDCMultiTenantStaleSelectionRejected(t *testing.T) {
+	src := memSource{users: map[string][]UserRow{"alice@corp": {
+		{TenantID: "alpha", Subject: "alice@corp", Role: RoleAdmin},
+		{TenantID: "beta", Subject: "alice@corp", Role: RoleViewer},
+	}}}
+	a := NewAuthenticator(src, fakeVerifier{good: "jwt.aaa.bbb", sub: "alice@corp"}, "", nil)
+	_, err := a.Authenticate(context.Background(), reqCookie("jwt.aaa.bbb", "gamma")) // not a member
+	if !errors.Is(err, ErrTenantSelectionRequired) {
+		t.Fatalf("stale/foreign selection must not be honored; err=%v", err)
 	}
 }
 
@@ -132,7 +179,7 @@ func TestAuthenticate_OIDCDisabledRejectsJWT(t *testing.T) {
 
 func TestAuthenticate_HeaderBeatsCookie(t *testing.T) {
 	// A valid bearer header must win over a stale/garbage cookie.
-	src := memSource{users: map[string]UserRow{"alice@corp": {TenantID: "beta", Subject: "alice@corp", Role: RoleViewer}}}
+	src := memSource{users: map[string][]UserRow{"alice@corp": {{TenantID: "beta", Subject: "alice@corp", Role: RoleViewer}}}}
 	a := NewAuthenticator(src, fakeVerifier{good: "jwt.aaa.bbb", sub: "alice@corp"}, "", nil)
 	r := httptest.NewRequest("GET", "/agents", nil)
 	r.Header.Set("Authorization", "Bearer jwt.aaa.bbb")
@@ -144,7 +191,7 @@ func TestAuthenticate_HeaderBeatsCookie(t *testing.T) {
 }
 
 func TestAuthenticate_CookieFallback(t *testing.T) {
-	src := memSource{users: map[string]UserRow{"alice@corp": {TenantID: "beta", Subject: "alice@corp", Role: RoleViewer}}}
+	src := memSource{users: map[string][]UserRow{"alice@corp": {{TenantID: "beta", Subject: "alice@corp", Role: RoleViewer}}}}
 	a := NewAuthenticator(src, fakeVerifier{good: "jwt.aaa.bbb", sub: "alice@corp"}, "", nil)
 	r := httptest.NewRequest("GET", "/ui", nil)
 	r.AddCookie(&http.Cookie{Name: "runtime_token", Value: "jwt.aaa.bbb"})
