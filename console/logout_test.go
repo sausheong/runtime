@@ -30,4 +30,15 @@ func TestLogoutClearsCookieAndRedirects(t *testing.T) {
 	if !cleared {
 		t.Fatal("logout did not expire the runtime_token cookie")
 	}
+	// Logout must also expire the selected-tenant cookie so the next login
+	// re-prompts the tenant picker.
+	var tenantCleared bool
+	for _, c := range w.Result().Cookies() {
+		if c.Name == "runtime_tenant" && (c.Value == "" || c.MaxAge < 0) {
+			tenantCleared = true
+		}
+	}
+	if !tenantCleared {
+		t.Fatal("logout did not expire the runtime_tenant cookie")
+	}
 }

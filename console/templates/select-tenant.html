@@ -1,0 +1,40 @@
+{{define "select-tenant.html"}}<!doctype html>
+<html><head><meta charset="utf-8"><title>Choose a tenant — Runtime</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="/ui/static/style.css"></head>
+<body>
+<header class="topbar">
+  <a class="brand" href="/ui"><span class="logo">R</span> Runtime</a>
+  <nav>
+    <a href="/ui">Agents</a>
+    <a href="/ui/observability">Observability</a>
+    <a href="/ui/onboarding">Onboarding</a>
+    <a href="/ui/select-tenant">Switch tenant</a>
+    <form method="post" action="/ui/logout"><button type="submit" class="navbtn">Sign out</button></form>
+  </nav>
+</header>
+<main class="container">
+  <div class="page-head">
+    <h1>Choose a tenant</h1>
+    <p class="subtitle">Your account has access to more than one tenant. Pick which to work in.</p>
+  </div>
+  <section class="card">
+    <table>
+      <thead><tr><th>Tenant</th><th>Role</th><th></th></tr></thead>
+      <tbody>
+      {{range .Memberships}}<tr>
+        <td class="mono">{{.TenantID}}</td>
+        <td><span class="badge badge-role">{{.Role}}</span></td>
+        <td class="actions"><form method="post" action="/ui/select-tenant">
+          <input type="hidden" name="csrf_token" value="{{$.CSRF}}">
+          <input type="hidden" name="tenant" value="{{.TenantID}}">
+          <button type="submit">Work in {{.TenantID}}</button>
+        </form></td>
+      </tr>{{else}}
+        <tr><td colspan="3" class="empty">No tenant memberships.</td></tr>
+      {{end}}
+      </tbody>
+    </table>
+  </section>
+</main>
+</body></html>{{end}}

@@ -87,6 +87,12 @@ func (f *fakeAdmin2) ListUsers(ctx context.Context, tenantID string) ([]identity
 	}
 	return out, nil
 }
+func (f *fakeAdmin2) UsersBySubject(ctx context.Context, subject string) ([]identity.UserRow, error) {
+	if u, ok := f.users[subject]; ok {
+		return []identity.UserRow{u}, nil
+	}
+	return nil, nil
+}
 func (f *fakeAdmin2) InsertServiceKey(ctx context.Context, id, tenantID, hash string, role identity.Role, label string) error {
 	return nil
 }

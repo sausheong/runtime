@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -323,5 +324,130 @@ func TestAgentPageHasActivityCard(t *testing.T) {
 	}
 	if !strings.Contains(body, "No recent activity yet.") {
 		t.Fatal("agent page missing empty-state for activity (registry addrs unreachable → empty feed)")
+	}
+}
+
+// multiAdmin embeds fakeAdmin2 (a full AdminStore) but overrides UsersBySubject
+// to return a fixed multi-membership set — fakeAdmin2 itself stores one row per
+// subject, which can't model a subject belonging to multiple tenants.
+type multiAdmin struct {
+	*fakeAdmin2
+	memberships []identity.UserRow
+}
+
+func (m *multiAdmin) UsersBySubject(_ context.Context, _ string) ([]identity.UserRow, error) {
+	return m.memberships, nil
+}
+
+// consoleWithMemberships builds a console whose Onboarding.Admin reports the
+// given memberships for any subject. Mirrors newTestConsoleWithAdmin's dep set.
+func consoleWithMemberships(rows []identity.UserRow) http.Handler {
+	admin := &multiAdmin{fakeAdmin2: &fakeAdmin2{}, memberships: rows}
+	deps := &Onboarding{Upstreams: &fakeUpstreamStore2{}, Mutator: &fakeMut2{}, Admin: admin, Secrets: &fakeSec2{}}
+	return Handler(nil, nil, OIDCConfig{}, deps)
+}
+
+// pickerReq builds a request carrying a session cookie and a principal WITH a
+// Subject (adminReq's principal has no Subject), so the picker handlers and CSRF
+// (bound to the runtime_token value) both work.
+func pickerReq(method, path string, body url.Values) *http.Request {
+	var r *http.Request
+	if body != nil {
+		r = httptest.NewRequest(method, path, strings.NewReader(body.Encode()))
+		r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	} else {
+		r = httptest.NewRequest(method, path, nil)
+	}
+	r.AddCookie(&http.Cookie{Name: "runtime_token", Value: "sess-1"})
+	p := identity.Principal{Subject: "alice@corp", Kind: identity.KindOIDC}
+	return r.WithContext(controlplane.WithPrincipal(r.Context(), p))
+}
+
+// csrfFor fetches the picker page (multi-membership) via pickerReq and extracts a
+// CSRF token bound to session "sess-1", valid for any pickerReq POST.
+func csrfFor(t *testing.T, h http.Handler) string {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, pickerReq("GET", "/ui/select-tenant", nil))
+	body := rec.Body.String()
+	const marker = `name="csrf_token" value="`
+	i := strings.Index(body, marker)
+	if i < 0 {
+		t.Fatalf("no csrf_token field in picker page: %s", body)
+	}
+	rest := body[i+len(marker):]
+	j := strings.Index(rest, `"`)
+	if j < 0 {
+		t.Fatal("malformed csrf_token field")
+	}
+	return rest[:j]
+}
+
+// cookieSet reports whether the recorder set a cookie with the given name and value.
+func cookieSet(rec *httptest.ResponseRecorder, name, val string) bool {
+	for _, c := range rec.Result().Cookies() {
+		if c.Name == name && c.Value == val {
+			return true
+		}
+	}
+	return false
+}
+
+func TestSelectTenant_GET_ListsMemberships(t *testing.T) {
+	h := consoleWithMemberships([]identity.UserRow{
+		{TenantID: "alpha", Subject: "alice@corp", Role: identity.RoleAdmin},
+		{TenantID: "beta", Subject: "alice@corp", Role: identity.RoleViewer},
+	})
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, pickerReq("GET", "/ui/select-tenant", nil))
+	body := rec.Body.String()
+	if rec.Code != 200 || !strings.Contains(body, "alpha") || !strings.Contains(body, "beta") {
+		t.Fatalf("picker missing tenants: code=%d body=%s", rec.Code, body)
+	}
+}
+
+func TestSelectTenant_GET_SingleMembershipAutoRedirects(t *testing.T) {
+	h := consoleWithMemberships([]identity.UserRow{
+		{TenantID: "alpha", Subject: "alice@corp", Role: identity.RoleAdmin},
+	})
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, pickerReq("GET", "/ui/select-tenant", nil))
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("single membership: code=%d want 303", rec.Code)
+	}
+	if !cookieSet(rec, identity.TenantCookieName, "alpha") {
+		t.Fatalf("single membership should set tenant cookie to alpha")
+	}
+}
+
+func TestSelectTenant_POST_SetsCookieAndRedirects(t *testing.T) {
+	rows := []identity.UserRow{
+		{TenantID: "alpha", Subject: "alice@corp", Role: identity.RoleAdmin},
+		{TenantID: "beta", Subject: "alice@corp", Role: identity.RoleViewer},
+	}
+	h := consoleWithMemberships(rows)
+	tok := csrfFor(t, h)
+	form := url.Values{"tenant": {"beta"}, "csrf_token": {tok}}
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, pickerReq("POST", "/ui/select-tenant", form))
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("code=%d want 303", rec.Code)
+	}
+	if !cookieSet(rec, identity.TenantCookieName, "beta") {
+		t.Fatalf("runtime_tenant=beta not set: %v", rec.Result().Cookies())
+	}
+}
+
+func TestSelectTenant_POST_RejectsNonMember(t *testing.T) {
+	h := consoleWithMemberships([]identity.UserRow{
+		{TenantID: "alpha", Subject: "alice@corp", Role: identity.RoleAdmin},
+		{TenantID: "beta", Subject: "alice@corp", Role: identity.RoleViewer},
+	})
+	tok := csrfFor(t, h)
+	form := url.Values{"tenant": {"gamma"}, "csrf_token": {tok}}
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, pickerReq("POST", "/ui/select-tenant", form))
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("non-member tenant: code=%d want 403", rec.Code)
 	}
 }

@@ -139,7 +139,62 @@ func Handler(reg *controlplane.Registry, st store.Store, oidc OIDCConfig, onb *O
 
 	mux.HandleFunc("POST /ui/logout", func(w http.ResponseWriter, r *http.Request) {
 		clearSessionCookie(w)
+		clearTenantCookie(w)
 		http.Redirect(w, r, "/ui/login", http.StatusSeeOther)
+	})
+
+	// Tenant picker for multi-tenant OIDC users. Reachable pending (partial
+	// principal, middleware lets this path through) or resolved (Switch tenant).
+	mux.HandleFunc("GET /ui/select-tenant", func(w http.ResponseWriter, r *http.Request) {
+		p, ok := controlplane.PrincipalFromContext(r.Context())
+		if !ok || onb == nil || onb.Admin == nil {
+			http.Redirect(w, r, "/ui/login", http.StatusSeeOther)
+			return
+		}
+		rows, err := onb.Admin.UsersBySubject(r.Context(), p.Subject)
+		if err != nil {
+			http.Error(w, "could not load tenants", http.StatusInternalServerError)
+			return
+		}
+		if len(rows) == 1 {
+			setTenantCookie(w, rows[0].TenantID)
+			http.Redirect(w, r, "/ui", http.StatusSeeOther)
+			return
+		}
+		render(w, "select-tenant.html", map[string]any{
+			"Memberships": rows, "CSRF": csrf.issue(sessionValue(r)),
+		})
+	})
+
+	mux.HandleFunc("POST /ui/select-tenant", func(w http.ResponseWriter, r *http.Request) {
+		p, ok := controlplane.PrincipalFromContext(r.Context())
+		if !ok || onb == nil || onb.Admin == nil {
+			http.Redirect(w, r, "/ui/login", http.StatusSeeOther)
+			return
+		}
+		if !csrf.verify(sessionValue(r), r.FormValue("csrf_token")) {
+			http.Error(w, "invalid csrf token", http.StatusForbidden)
+			return
+		}
+		want := r.FormValue("tenant")
+		rows, err := onb.Admin.UsersBySubject(r.Context(), p.Subject)
+		if err != nil {
+			http.Error(w, "could not load tenants", http.StatusInternalServerError)
+			return
+		}
+		member := false
+		for _, u := range rows {
+			if u.TenantID == want {
+				member = true
+				break
+			}
+		}
+		if !member {
+			http.Error(w, "not a member of that tenant", http.StatusForbidden)
+			return
+		}
+		setTenantCookie(w, want)
+		http.Redirect(w, r, "/ui", http.StatusSeeOther)
 	})
 
 	mux.HandleFunc("GET /ui/callback", func(w http.ResponseWriter, r *http.Request) {

@@ -20,6 +20,7 @@ type AdminStore interface {
 	UpsertUser(ctx context.Context, tenantID, subject string, role identity.Role) error
 	DeleteUser(ctx context.Context, tenantID, subject string) error
 	ListUsers(ctx context.Context, tenantID string) ([]identity.UserRow, error)
+	UsersBySubject(ctx context.Context, subject string) ([]identity.UserRow, error)
 	InsertServiceKey(ctx context.Context, id, tenantID, hash string, role identity.Role, label string) error
 	RevokeKey(ctx context.Context, tenantID, id string) error
 	ListKeys(ctx context.Context, tenantID string) ([]identity.KeyRow, error)
