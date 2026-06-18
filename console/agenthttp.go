@@ -19,9 +19,11 @@ import (
 
 // sessionRow mirrors one element of the agent runtime's GET /sessions response.
 type sessionRow struct {
-	ID        string `json:"id"`
-	Status    string `json:"status"`
-	TurnCount int    `json:"turn_count"`
+	ID          string `json:"id"`
+	Status      string `json:"status"`
+	TurnCount   int    `json:"turn_count"`
+	CompletedAt string `json:"completed_at"` // RFC3339 UTC, empty if still running
+	DurationMs  *int   `json:"duration_ms"`  // nil if still running
 }
 
 // eventRow mirrors one element of the agent runtime's GET /sessions/{id}/events

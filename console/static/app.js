@@ -12,11 +12,29 @@ function sessionsStateRow(tb, text) {
   tb.replaceChildren();
   const tr = document.createElement('tr');
   const td = document.createElement('td');
-  td.colSpan = 3;
+  td.colSpan = 5;
   td.className = 'empty';
   td.textContent = text;
   tr.appendChild(td);
   tb.appendChild(tr);
+}
+
+function fmtCompleted(iso) {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  const dd  = String(d.getDate()).padStart(2, '0');
+  const mmm = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][d.getMonth()];
+  const yyyy = d.getFullYear();
+  const hh  = String(d.getHours()).padStart(2, '0');
+  const min = String(d.getMinutes()).padStart(2, '0');
+  const ss  = String(d.getSeconds()).padStart(2, '0');
+  return `${dd}/${mmm}/${yyyy} ${hh}:${min}:${ss}`;
+}
+
+function fmtDuration(ms) {
+  if (ms == null) return '—';
+  if (ms < 1000) return ms + ' ms';
+  return (ms / 1000).toFixed(1) + ' s';
 }
 
 async function loadSessions() {
@@ -49,7 +67,13 @@ async function loadSessions() {
       const turnsCell = document.createElement('td');
       turnsCell.textContent = (s.turn_count ?? 0);
 
-      tr.append(idCell, statusCell, turnsCell);
+      const completedCell = document.createElement('td');
+      completedCell.textContent = fmtCompleted(s.completed_at);
+
+      const durationCell = document.createElement('td');
+      durationCell.textContent = fmtDuration(s.duration_ms);
+
+      tr.append(idCell, statusCell, turnsCell, completedCell, durationCell);
       tb.appendChild(tr);
     });
   } catch (e) {

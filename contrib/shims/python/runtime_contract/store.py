@@ -25,8 +25,16 @@ class Store:
         self._db.execute(
             "CREATE TABLE IF NOT EXISTS sessions ("
             "id TEXT PRIMARY KEY, status TEXT NOT NULL DEFAULT 'running', "
-            "turn_count INTEGER NOT NULL DEFAULT 0)"
+            "turn_count INTEGER NOT NULL DEFAULT 0, "
+            "completed_at TEXT, duration_ms INTEGER)"
         )
+        # Migrate existing DBs that predate the completed_at/duration_ms columns.
+        for col, defn in [("completed_at", "TEXT"), ("duration_ms", "INTEGER")]:
+            try:
+                self._db.execute(f"ALTER TABLE sessions ADD COLUMN {col} {defn}")
+                self._db.commit()
+            except sqlite3.OperationalError:
+                pass  # column already exists
         self._db.execute(
             "CREATE TABLE IF NOT EXISTS events ("
             "session_id TEXT NOT NULL, seq INTEGER NOT NULL, payload TEXT NOT NULL, "
@@ -69,22 +77,32 @@ class Store:
     def get_session(self, sid: str) -> Optional[dict]:
         with self._lock:
             row = self._db.execute(
-                "SELECT id, status, turn_count FROM sessions WHERE id=?", (sid,)
+                "SELECT id, status, turn_count, completed_at, duration_ms FROM sessions WHERE id=?", (sid,)
             ).fetchone()
         if not row:
             return None
-        return {"id": row[0], "status": row[1], "turn_count": row[2]}
+        return {"id": row[0], "status": row[1], "turn_count": row[2],
+                "completed_at": row[3], "duration_ms": row[4]}
 
     def list_sessions(self) -> list[dict]:
         with self._lock:
             rows = self._db.execute(
-                "SELECT id, status, turn_count FROM sessions ORDER BY rowid"
+                "SELECT id, status, turn_count, completed_at, duration_ms FROM sessions ORDER BY rowid"
             ).fetchall()
-        return [{"id": r[0], "status": r[1], "turn_count": r[2]} for r in rows]
+        return [{"id": r[0], "status": r[1], "turn_count": r[2],
+                 "completed_at": r[3], "duration_ms": r[4]} for r in rows]
 
     def set_status(self, sid: str, status: str) -> None:
         with self._lock:
             self._db.execute("UPDATE sessions SET status=? WHERE id=?", (status, sid))
+            self._db.commit()
+
+    def set_completed(self, sid: str, status: str, completed_at: str, duration_ms: int) -> None:
+        with self._lock:
+            self._db.execute(
+                "UPDATE sessions SET status=?, completed_at=?, duration_ms=? WHERE id=?",
+                (status, completed_at, duration_ms, sid),
+            )
             self._db.commit()
 
     def set_turn_count(self, sid: str, n: int) -> None:

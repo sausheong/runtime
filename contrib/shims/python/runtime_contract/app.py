@@ -2,6 +2,7 @@
 from __future__ import annotations
 import asyncio
 import base64
+import datetime
 import time
 
 from fastapi import FastAPI, Request, Response
@@ -74,7 +75,10 @@ def create_app(
                     terminal = ContractEvent(type="error", error=ev.error or "agent error")
         except Exception as e:  # never crash the server
             terminal = ContractEvent(type="error", error=str(e))
-        store.set_status(sid, "completed" if terminal.type == "done" else "error")
+        duration_ms = int((time.monotonic() - start) * 1000)
+        completed_at = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        final_status = "completed" if terminal.type == "done" else "error"
+        store.set_completed(sid, final_status, completed_at, duration_ms)
         row = store.get_session(sid)
         store.set_turn_count(sid, (row["turn_count"] if row else 0) + 1)
         if metrics is not None:
@@ -84,10 +88,16 @@ def create_app(
 
     def parse_images(body: dict) -> list[Image]:
         images: list[Image] = []
+        # Single-image legacy form: image_b64 + image_mime
         b64 = body.get("image_b64")
         if b64:
             images.append(Image(mime=body.get("image_mime") or "image/jpeg",
                                 data=base64.b64decode(b64)))
+        # Multi-image form: images=[{data: <b64>, mime: <mime>}, ...]
+        for img in body.get("images") or []:
+            if img.get("data"):
+                images.append(Image(mime=img.get("mime") or "image/jpeg",
+                                    data=base64.b64decode(img["data"])))
         return images
 
     @app.get("/healthz", response_class=PlainTextResponse)

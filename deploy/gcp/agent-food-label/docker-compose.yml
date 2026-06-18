@@ -1,0 +1,25 @@
+# Food Label Advisor — third agent container on VM C (runtime-agent-python).
+# Port 8310 so it does not collide with hello-claude (8080) or nutrition-openai (8302).
+# Control plane (instance A) dials http://<C-internal-ip>:8310.
+#
+#   cp .env.example .env        # set ANTHROPIC_API_KEY
+#   docker compose up -d
+name: runtime-agent-food-label
+
+services:
+  food-label-advisor:
+    image: ${FOOD_LABEL_IMAGE:-asia-southeast1-docker.pkg.dev/mhi-exp-chang-sau-sheong/runtime/food-label-advisor:latest}
+    env_file:
+      - ../llm.env               # ANTHROPIC_BASE_URL + ANTHROPIC_MODEL
+    environment:
+      RUNTIME_AGENT_ID: food-label-advisor
+      RUNTIME_LISTEN_ADDR: "0.0.0.0:8310"
+      RUNTIME_SHIM_DB: /data/shim.db
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+    volumes:
+      - food-label-data:/data
+    ports:
+      - "8310:8310"              # VPC-internal only; A dials this
+
+volumes:
+  food-label-data:
