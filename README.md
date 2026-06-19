@@ -1291,8 +1291,8 @@ them with `/agents/{id}`.
 | `GET /meta` | `{agent_id, contract_version}`. The versioned agent contract. |
 | `GET /metrics` | *Optional.* Prometheus text exposition for this agent. An agent without it (e.g. a foreign-SDK shim) is skipped by the fan-out scrape (reason `no_metrics`) and is **not** marked down. |
 | `POST /sessions` | Body `{"message": "..."}`. Creates a session, starts the durable workflow, returns `{"session_id": "..."}`. |
-| `GET /sessions` | List this agent's sessions: `[{id,status,turn_count}]`. |
-| `GET /sessions/{id}` | One session's status snapshot: `{id,status,turn_count}`. |
+| `GET /sessions` | List this agent's sessions: `[{id,status,turn_count,completed_at,duration_ms}]`. `completed_at` is a UTC ISO-8601 string (null if still running); `duration_ms` is the turn wall time in milliseconds (null if still running). |
+| `GET /sessions/{id}` | One session's status snapshot: `{id,status,turn_count,completed_at,duration_ms}`. |
 | `GET /sessions/{id}/stream?since=<seq>` | **SSE stream** of the session's events. Replays buffered events after `since` (default 0), then streams live until a terminal `done`/`error`. Each event carries an SSE `id:` line (its sequence number) so a client can resume with `?since=`. |
 
 **Event types** (the `type` field in each SSE `data:` payload): `text`,
@@ -1600,8 +1600,8 @@ optional `RUNTIME_SHIM_DB`) itself, so the adapter author never handles
 deployment parameters — exactly the same separation as the Go SDK. Adding
 another framework is one new adapter file.
 
-TWO worked examples host the SG Nutrition Investigator on different foreign
-frameworks through the SAME shim, demonstrating the adapter seam:
+THREE worked examples demonstrate the adapter seam across different frameworks and
+problem shapes:
 
 - `examples/nutrition-label-openai/` — OpenAI Agents SDK (adapter: 39 code lines).
   Memory via the SDK's `SQLiteSession`; typed verdict via `output_type=`.
@@ -1609,8 +1609,20 @@ frameworks through the SAME shim, demonstrating the adapter seam:
   Memory via SDK-native `resume=` transcripts + a runtime→SDK session-id map;
   typed verdict via a `submit_verdict` in-process MCP tool (tool-as-output);
   all built-in tools disabled (`tools=[]` + deny-list + `dontAsk`).
+- `examples/food-label-advisor/` — **multi-product comparison** agent on the Claude
+  Agent SDK. Takes photos of nutrition/ingredient labels for two or more similar
+  products, extracts and normalises values to per-100g/ml and per-serving (scaling
+  raw label figures to a common basis), then ranks by user goal:
+  `healthiest_overall`, `lowest_sugar`, `highest_protein`, `lowest_sodium`,
+  `least_processed`, `best_for_children`, or `allergen_safe`. Three in-process MCP
+  tools (`extract_label`, `compare_products`, `submit_advice`) drive the pipeline;
+  the adapter passes **all images in one multi-image turn** (using the shim's
+  `images:[{data,mime}]` array field, extended for this agent). Deployed on
+  `runtime.sausheong.com` under the `giantrobots` tenant. See
+  `examples/food-label-advisor/run_local.py` for a local runner that exercises
+  the agent directly against `food_label_images/` without the HTTP server.
 
-Both boot under `runtimed` via their Makefiles:
+The nutrition examples boot under `runtimed` via their Makefiles:
 
 ```bash
 cd examples/nutrition-label-claude   # or examples/nutrition-label-openai
@@ -1627,8 +1639,25 @@ sessions are listable, replayable, and conversation memory continues — but a r
 killed mid-execution is not resumed, which remains the Go agents' DBOS-backed
 advantage. The shim also serves `POST /sessions/{id}/messages` for follow-up
 turns on an existing session — an extension the Go agent contract does not have
-yet (Go sessions are single-turn workflows). See
-[`contrib/shims/python/README.md`](contrib/shims/python/README.md) for the full
+yet (Go sessions are single-turn workflows).
+
+**Session timing.** The shim store records `completed_at` (UTC ISO-8601) and
+`duration_ms` on every completed turn. These fields are returned by `GET
+/sessions` and `GET /sessions/{id}`, and the console's Sessions table renders
+them as **Completed** (local `dd/Mmm/yyyy hh:mm:ss`) and **Duration** columns.
+Existing rows before this change show `null` / `—` for both fields.
+
+**Multi-image sessions.** `POST /sessions` (and `/messages`) accepts an
+`images` array alongside the legacy single-image `image_b64`/`image_mime`
+fields: `{"message":"...", "images":[{"data":"<b64>","mime":"image/jpeg"},…]}`.
+All images are passed through to the adapter's `run()` unchanged.
+
+**Token telemetry.** Adapters that yield a `usage` event should roll
+`cache_read_input_tokens` into the `input` counter so the console's **Tokens In**
+widget reflects total tokens the model read, not just the non-cached fraction
+(which can be near zero for agents with many internal turns under heavy caching).
+
+See [`contrib/shims/python/README.md`](contrib/shims/python/README.md) for the full
 walkthrough, the adapter seam, and standalone-dev instructions, and
 [Deploying SDK agents](docs/deploying-sdk-agents.md) for the deploy path.
 
