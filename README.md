@@ -1657,9 +1657,14 @@ All images are passed through to the adapter's `run()` unchanged.
 widget reflects total tokens the model read, not just the non-cached fraction
 (which can be near zero for agents with many internal turns under heavy caching).
 
-See [`contrib/shims/python/README.md`](contrib/shims/python/README.md) for the full
-walkthrough, the adapter seam, and standalone-dev instructions, and
-[Deploying SDK agents](docs/deploying-sdk-agents.md) for the deploy path.
+See the following references for the full picture:
+
+| Document | What it covers |
+|---|---|
+| [`hello-claude.md`](hello-claude.md) | **Human tutorial** — Part A (write the four files) + Part B (build the image, ship the bundle, register the agent, invoke through the public edge). The narrative companion to `instruction.md`. |
+| [`instruction.md`](instruction.md) | **Machine-readable build spec** — exact file contents, verification gates, and deploy steps for building a Claude Agent SDK agent and hosting it on runtime. Intended as a ground-truth reference for LLM-assisted development. |
+| [`contrib/shims/python/README.md`](contrib/shims/python/README.md) | Shim internals, the `AgentAdapter` protocol, the `ContractEvent` vocabulary, and standalone-dev instructions. |
+| [`docs/deploying-sdk-agents.md`](docs/deploying-sdk-agents.md) | SDK-agnostic deploy path (any framework, any host). |
 
 ---
 
