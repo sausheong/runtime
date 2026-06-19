@@ -12,8 +12,6 @@ takes **two or more label photos** in a single turn, normalises every value to a
 common basis (per 100 g/ml and per serving), and ranks the products by a
 user-specified goal.
 
----
-
 ## What it does
 
 1. **Reads the user's goal** from the message — one of:
@@ -33,8 +31,6 @@ user-specified goal.
 The rendered output shows the goal, step-by-step reasoning, ranked list with
 per-product score notes, winner explanation, and trade-offs to watch for.
 
----
-
 ## Project layout
 
 ```
@@ -50,8 +46,6 @@ food-label-advisor/
 └── .gitignore
 ```
 
----
-
 ## Prerequisites
 
 - **Python 3.12+** and [`uv`](https://docs.astral.sh/uv/).
@@ -61,8 +55,6 @@ food-label-advisor/
   photos at the repo root (`../../../food_label_images/` relative to this dir).
 - For deploy: a VM the control plane can reach, Docker, and an admin service key
   for `runtime.sausheong.com`.
-
----
 
 ## Quick start — run locally (no HTTP server)
 
@@ -78,8 +70,6 @@ uv run python run_local.py healthiest_overall
 `run_local.py` loads every image from `food_label_images/`, calls the adapter
 directly (no HTTP server, no control plane), and prints the ranked comparison to
 stdout.
-
----
 
 ## Quick start — run as an HTTP agent
 
@@ -111,8 +101,6 @@ curl -s  "127.0.0.1:8310/healthz"    # -> ok
 
 The shim accepts images as an array (`images:[{data,mime},…]`) alongside the
 legacy single-image `image_b64`/`image_mime` form.
-
----
 
 ## How it works
 
@@ -157,8 +145,6 @@ The adapter rolls `cache_read_input_tokens` into the `input` counter of the
 tool call) with aggressive SDK caching, the raw `input_tokens` is nearly zero by
 the final turn — rolling cache reads in makes the console's **Tokens In** widget
 reflect the total tokens the model actually read.
-
----
 
 ## Deployment on runtime.sausheong.com
 
@@ -247,8 +233,6 @@ curl -sN -H "Authorization: Bearer $KEY" \
 **Tenant isolation:** the `giantrobots` operator key is required; an `acme` key
 returns `not found`. A `viewer` key returns `403` on `POST /sessions`.
 
----
-
 ## Limitations
 
 - **No cross-run memory** — the agent doesn't persist past comparisons. Each
@@ -261,8 +245,6 @@ returns `not found`. A `viewer` key returns `403` on `POST /sessions`.
 - **Subprocess per turn** — `query()` spawns the Claude Code CLI on every
   internal tool-call turn; a 4-image comparison with ~10 tool calls takes
   60–180 s end-to-end.
-
----
 
 ## References
 

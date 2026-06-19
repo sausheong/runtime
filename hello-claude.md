@@ -22,8 +22,6 @@ control plane. Authentication is enforced at the control-plane edge (a service
 key); the agent's own port is protected by the network (a firewall that admits
 only the control plane).
 
----
-
 ## Who writes what
 
 The platform ships a **Python contract shim** — the installed package
@@ -69,8 +67,6 @@ Four files. Two carry real logic, two are essentially config/boilerplate.
 The sections below (§2-§6) walk each written file in detail, and call out exactly
 which lines are design decisions you own versus required scaffolding.
 
----
-
 ## Prerequisites
 
 - A clone of the `runtime` repo (the shim lives in it), with the projects laid
@@ -83,8 +79,6 @@ which lines are design decisions you own versus required scaffolding.
 - For deploy: an **agent VM** the control plane can reach on port 8080, and an
   **admin service key** for your tenant on `runtime.sausheong.com` (to register
   and invoke the agent — see Part B, step 5).
-
----
 
 # Part A — Write the agent
 
@@ -147,7 +141,6 @@ shim's storage. Three methods: ensure-table (`__init__`), `lookup`, `store`
 from __future__ import annotations
 
 import sqlite3
-
 
 class SessionMap:
     def __init__(self, db_path: str):
@@ -217,7 +210,6 @@ BUILTINS_OFF = [
     "Bash", "Read", "Write", "Edit", "Glob", "Grep",
     "WebFetch", "WebSearch", "NotebookEdit", "TodoWrite", "Task",
 ]
-
 
 class HelloClaudeAdapter:
     """AgentAdapter backed by the Claude Agent SDK (no tools)."""
@@ -322,7 +314,6 @@ load_dotenv()  # .env: ANTHROPIC_API_KEY / ANTHROPIC_BASE_URL / ANTHROPIC_MODEL
 from runtime_contract import serve          # noqa: E402
 from adapter import HelloClaudeAdapter      # noqa: E402
 
-
 def main() -> None:
     print(
         f"serving agent {os.environ.get('RUNTIME_AGENT_ID', 'hello-claude')} "
@@ -330,7 +321,6 @@ def main() -> None:
         flush=True,
     )
     serve(HelloClaudeAdapter)
-
 
 if __name__ == "__main__":
     main()
@@ -363,8 +353,6 @@ curl -s 127.0.0.1:8310/healthz     # -> ok
 ```
 
 You should see a `text` event with the reply, then a `done` event.
-
----
 
 # Part B — Deploy to runtime.sausheong.com
 
@@ -513,8 +501,6 @@ curl -sN -H "Authorization: Bearer $KEY" "$BASE/agents/hello-claude/sessions/$SI
 
 The agent also shows up in the console (**Agents → hello-claude**) with health,
 sessions, and the tool-use/token metrics card.
-
----
 
 ## How it all fits together
 

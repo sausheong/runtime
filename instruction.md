@@ -10,8 +10,6 @@ verification gates. Each gate that fails STOPS you — fix it before continuing.
 ever conflicts with those directories, the directories win — re-read them and
 match. The file contents embedded below are exact copies as of this writing.
 
----
-
 ## 0. Invariants (non-negotiable)
 
 1. **You write four files only:** `adapter.py`, `sessions.py`, `serve.py`,
@@ -25,8 +23,6 @@ match. The file contents embedded below are exact copies as of this writing.
 4. **Never log a secret value or a secret name.** `.env` is gitignored; never
    print `ANTHROPIC_API_KEY`.
 5. **No placeholders in committed code.** Every file must be complete and runnable.
-
----
 
 ## 1. Create the project
 
@@ -45,8 +41,6 @@ hello-claude/
 ├── .env.example        # ANTHROPIC_* creds template
 └── .gitignore          # at minimum: .env, .venv, __pycache__, shim.db
 ```
-
----
 
 ## 2. Write the files (exact contents)
 
@@ -102,7 +96,6 @@ no schema interference.
 from __future__ import annotations
 
 import sqlite3
-
 
 class SessionMap:
     def __init__(self, db_path: str):
@@ -181,7 +174,6 @@ BUILTINS_OFF = [
     "WebFetch", "WebSearch", "NotebookEdit", "TodoWrite", "Task",
 ]
 
-
 class HelloClaudeAdapter:
     """AgentAdapter backed by the Claude Agent SDK (no tools)."""
 
@@ -251,7 +243,6 @@ class HelloClaudeAdapter:
         except Exception as e:  # never raise out of run()
             yield ContractEvent(type="error", error=str(e))
 
-
 def _usage_event(result) -> ContractEvent | None:
     """Best-effort token-usage telemetry from a ResultMessage.usage dict (standard
     Anthropic shape). Returns None on any mismatch — telemetry never breaks a turn."""
@@ -305,7 +296,6 @@ from runtime_contract import serve  # noqa: E402
 
 from adapter import HelloClaudeAdapter  # noqa: E402
 
-
 def main() -> None:
     print(
         f"serving agent {os.environ.get('RUNTIME_AGENT_ID', 'hello-claude')} "
@@ -313,7 +303,6 @@ def main() -> None:
         flush=True,
     )
     serve(HelloClaudeAdapter)
-
 
 if __name__ == "__main__":
     main()
@@ -351,8 +340,6 @@ __pycache__/
 *.db
 ```
 
----
-
 ## 3. The shim contract (reference — do not implement)
 
 `serve(HelloClaudeAdapter)` stands up these HTTP endpoints on the agent's own
@@ -370,8 +357,6 @@ port (the value of `RUNTIME_LISTEN_ADDR`):
 
 The agent's port enforces **no** bearer auth — it trusts that only the control
 plane can reach it (network firewall). Platform auth is at the control-plane edge.
-
----
 
 ## 4. Verify locally (GATE 1 — must pass before deploy)
 
@@ -404,8 +389,6 @@ event with a non-empty reply followed by `"type":"done"`; the follow-up reply
 demonstrates memory. If any check fails, fix and re-run before continuing.
 
 If `examples/hello-claude/tests/` exists, also run `uv run pytest` and require green.
-
----
 
 ## 5. Deploy to runtime.sausheong.com
 
@@ -564,8 +547,6 @@ RUNTIME_TOKEN="<an admin key>" \
 #   -> svk-<id>.<secret>   (shown ONCE — capture it now; never log it)
 ```
 
----
-
 ## 6. Verify end-to-end through the public edge (GATE 3 — acceptance)
 
 ```bash
@@ -605,8 +586,6 @@ curl -s "$CTL/metrics" | grep '^agent_' | head
 4. `GET /metrics` shows non-zero `agent_turns_total` / `agent_tokens_total` for the agent.
 5. The agent appears healthy in the console (**Agents → $AGENT_ID**).
 
----
-
 ## 7. Common failure modes
 
 | Symptom | Cause | Fix |
@@ -617,8 +596,6 @@ curl -s "$CTL/metrics" | grep '^agent_' | head
 | `403` invoking | key is `viewer`, or wrong tenant | Mint an `operator` key for the agent's tenant. |
 | Memory not working across turns | `CLAUDE_CONFIG_DIR`/`cwd` not stable | Keep the `__init__` pinning; don't randomize the workdir. |
 | Metrics all zero | agent restarted (counters are in-memory) | Expected after restart; fire one invocation to repopulate. |
-
----
 
 ## 8. References (in this repo)
 

@@ -22,8 +22,6 @@ that argv in `workdir` instead of the bundled `agentd` binary, injecting
 `RUNTIME_LISTEN_ADDR`, `RUNTIME_AGENT_ID`, etc., and inheriting the parent
 environment (so the framework's own credentials, e.g. `OPENAI_*`, flow through).
 
----
-
 ## Architecture
 
 The library is two layers:
@@ -122,8 +120,6 @@ These become `agent_tool_calls_total{tool=...}` and
 still reports turn count and duration. See the OpenAI and Claude SDK examples for
 how to extract these from each SDK's run result.
 
----
-
 ## Prerequisites
 
 - [`uv`](https://docs.astral.sh/uv/) (installs Python + deps from `pyproject.toml`).
@@ -138,8 +134,6 @@ uv sync
 The agent's own runtime environment (model credentials, base URLs, etc.) is the
 consumer's concern — it flows through from `runtimed` to the supervised
 subprocess. See the example for a concrete `.env` setup.
-
----
 
 ## Run it
 
@@ -161,8 +155,6 @@ To wire your own consumer, follow the same shape: an entrypoint that builds an
 adapter and calls `serve(adapter)`, plus a Runtime config whose `command:` points
 at it.
 
----
-
 ## Tests
 
 ```bash
@@ -172,8 +164,6 @@ uv run pytest
 
 The tests are hermetic (they exercise the contract library + store with a stub
 adapter; no API key or network required).
-
----
 
 ## Durability
 
@@ -193,8 +183,6 @@ so a follow-up turn sees the prior turns.
 a partially completed run, unlike Go agents' DBOS-backed per-turn durability — a
 process killed during a run loses that in-flight turn (its prior sessions and
 completed events remain intact).
-
----
 
 ## A note on trust
 

@@ -8,8 +8,6 @@ secure-by-default, with optional bundled or BYO Postgres.
 - **Image:** one image bundling `runtimed`, `agentd`, `sandboxd`, `browserd`, and
   `runtimectl`, running as non-root uid `10001`.
 
----
-
 ## Quick start (kind)
 
 This runs a smoke test with **scripted agents** (`model: test/scripted`), so no LLM
@@ -65,8 +63,6 @@ config:
       listen_addr: 127.0.0.1:8102
 ```
 
----
-
 ## Deploy modes
 
 ### 1. BYO Postgres (recommended for production)
@@ -119,8 +115,6 @@ If **none** of `postgresql.enabled`, `secrets.pgDsn`, or `secrets.existingSecret
 is set, `helm template` / `helm install` fails at render with a clear message.
 This is intentional — the control plane has no usable database otherwise.
 
----
-
 ## Secure-by-default posture
 
 The chart ships locked down. Defaults:
@@ -138,8 +132,6 @@ The chart ships locked down. Defaults:
 
 A `checksum/config` pod annotation rolls the pod automatically on `helm upgrade`
 whenever the rendered config changes.
-
----
 
 ## Secrets
 
@@ -170,8 +162,6 @@ kubectl create secret generic runtime-secrets \
 
 helm install runtime deploy/charts/runtime --set secrets.existingSecret=runtime-secrets
 ```
-
----
 
 ## Configuration
 
@@ -206,8 +196,6 @@ helm install runtime deploy/charts/runtime \
 These map to `RUNTIME_OIDC_ISSUER`, `RUNTIME_OIDC_CLIENT_ID`, and
 `RUNTIME_OIDC_REDIRECT_URL`.
 
----
-
 ## Observability
 
 ```bash
@@ -220,8 +208,6 @@ helm install runtime deploy/charts/runtime --set obs.enabled=true
   installed in the cluster.
 - a **`grafana_dashboard`-labeled ConfigMap** carrying the runtime overview
   dashboard — requires a **Grafana sidecar** configured to watch that label.
-
----
 
 ## Ingress / NetworkPolicy
 
@@ -239,8 +225,6 @@ helm install runtime deploy/charts/runtime --set networkPolicy.enabled=true
 
 `networkPolicy.enabled=true` allows ingress to port `8080` and **all** egress —
 `runtimed` needs to reach Postgres, the LLM proxy, and gateway upstreams.
-
----
 
 ## Docker-dependent features (sandbox / browser)
 
@@ -280,8 +264,6 @@ In addition:
   DinD daemon.
 - The agent `runtime.yaml` (`config:`) must declare the upstreams with
   `command: /app/sandboxd` / `command: /app/browserd`.
-
----
 
 ## Values reference
 
@@ -329,8 +311,6 @@ In addition:
 | `nodeSelector` / `tolerations` / `affinity` | `{}` / `[]` / `{}` | Scheduling. |
 | `podAnnotations` | `{}` | Extra pod annotations. |
 
----
-
 ## Building & publishing
 
 ```bash
@@ -347,8 +327,6 @@ docker push <registry>/runtime:0.1.0
 helm push dist/runtime-0.1.0.tgz oci://<registry>
 ```
 
----
-
 ## Limitations / non-goals
 
 - **Single replica.** The control plane is not HA — `replicaCount` is fixed at 1.
@@ -358,8 +336,6 @@ helm push dist/runtime-0.1.0.tgz oci://<registry>
 - **No operator** yet — lifecycle is plain Helm.
 - **Bundled Postgres lacks `pgvector`** — use a BYO `pgvector` Postgres for
   semantic memory.
-
----
 
 ## Per-agent-pod scheduling (`scheduling.mode: perAgentPods`)
 

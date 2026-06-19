@@ -12,8 +12,6 @@ no lost work, no duplicated committed tool calls.
 
 **Single binary + Postgres. Many agents. Durable by default.**
 
----
-
 ## Table of contents
 
 - [What Runtime gives you](#what-runtime-gives-you)
@@ -41,8 +39,6 @@ no lost work, no duplicated committed tool calls.
 - [Project layout](#project-layout)
 - [Status, scope & limitations](#status-scope--limitations)
 
----
-
 ## What Runtime gives you
 
 | Capability | What it means |
@@ -64,8 +60,6 @@ no lost work, no duplicated committed tool calls.
 | **Observability** | One Prometheus `/metrics` endpoint for the whole fleet (control plane + every agent, merged), `X-Request-ID` correlation end-to-end, **OpenTelemetry distributed tracing** (OTLP push, correlated runtimed↔agentd traces), and a bundled Prometheus + Grafana + Jaeger compose overlay with a provisioned dashboard. |
 | **Turnkey self-host** | One `docker compose up` brings up all six AgentCore pillars on a single host — bundled air-gap embedder, auto pgvector, identity on. Go binaries + Postgres; no cloud, no Kubernetes required, air-gap friendly. Helm chart for K8s when you want it. |
 
----
-
 ## Architecture
 
 ![Runtime architecture: runtimectl drives runtimed (the control plane), which spawns and supervises one agentd subprocess per agent; each agentd runs agentruntime.Serve and checkpoints to Postgres.](docs/images/architecture.png)
@@ -84,8 +78,6 @@ no lost work, no duplicated committed tool calls.
 - **`agentruntime`** — what an agent author links. `Serve(ctx, Config)` turns a
   harness agent into a durable, contract-speaking subprocess.
 
----
-
 ## Concepts
 
 - **Agent** — a hosted LLM agent, declared in `runtime.yaml` with an `id`, a
@@ -99,8 +91,6 @@ no lost work, no duplicated committed tool calls.
 - **Event** — a streamed unit of session output (`text`, `tool_result`,
   `done`, `error`), delivered over SSE and persisted to an append-only log so
   clients can re-attach and replay.
-
----
 
 ## Quick start
 
@@ -165,8 +155,6 @@ RUNTIME_AGENTD_BIN=./agentd ./runtimed
 ./runtimectl logs --agent support ses-…   # replay a session's events
 ```
 
----
-
 ## v1.0 — turnkey self-host
 
 For a one-command, all-six-pillars deployment on a single host (no
@@ -183,8 +171,6 @@ build-from-source dance), follow the turnkey guides:
 
 The capstone proof `deploy/compose/v1-proof.sh` brings the stack up and asserts
 every pillar end-to-end.
-
----
 
 ## Configuring agents (`runtime.yaml`)
 
@@ -351,8 +337,6 @@ agents:
   `runtime_agent_reachable`) and proxying it returns `503` until it returns.
 - **Spawn-time-only fields** (`command`, `kind`, `memory`, `gateway`) are
   rejected on a remote agent.
-
----
 
 ## Authentication & multi-tenancy
 
@@ -636,8 +620,6 @@ embeddings — no new egress.
 > synchronizer token), and the OIDC login flow is protected against login-CSRF by
 > a random `state` validated on callback.
 
----
-
 ## MCP Gateway
 
 The platform can host a **central MCP endpoint** — `/gateway/mcp`, speaking
@@ -878,8 +860,6 @@ backoff) owning its lifecycle. A call against a down upstream returns an MCP
   escape for a literal `$` in `headers`/`env`/`agent_keys`/`openapi`/`base_url`
   values.
 
----
-
 ## Code-interpreter sandbox
 
 The platform ships an isolated **code interpreter** any agent can use: a
@@ -991,8 +971,6 @@ reaping clears orphans.
   from `sandboxd`; gVisor is optional hardening on Linux.
 - **One sandboxd per host** — startup reaping is host-global by label.
 
----
-
 ## Browser sandbox
 
 Alongside the code interpreter, the platform ships an isolated **browser** any
@@ -1067,8 +1045,6 @@ go test ./internal/browser/...              # hermetic unit tests (fake backend)
 go test -tags live ./internal/browser/...   # real-Chrome test: needs `make browser-image` + Docker
 go test -tags integration ./test/ -run TestGatewayBrowserE2E   # through-serve e2e: needs Postgres
 ```
-
----
 
 ## Observability
 
@@ -1204,8 +1180,6 @@ nested tree. Spans carry IDs and structural attributes only
 - **No per-tenant token accounting** — `agent_tokens_total` is per-agent; the
   tenant dimension is deliberately excluded (see the cardinality promise).
 
----
-
 ## The CLI (`runtimectl`)
 
 `runtimectl` talks to the control plane at `RUNTIME_CTL_URL` (default
@@ -1236,8 +1210,6 @@ nested tree. Spans carry IDs and structural attributes only
 it's required when there are several. The `admin` commands require an `admin`
 principal (send it via `RUNTIME_TOKEN`).
 
----
-
 ## Web console
 
 `runtimed` serves an operator console at **`/ui`** (same port as the API). Open
@@ -1261,8 +1233,6 @@ console is **observe-and-onboard**: it views agents and sessions and drives
 tenant onboarding (keys + gateway upstreams), but cannot deploy, stop, or invoke
 agents. Server-rendered Go templates with a tiny vanilla-JS/SSE layer — no build
 step, embedded in the binary.
-
----
 
 ## HTTP API reference
 
@@ -1314,8 +1284,6 @@ curl -N localhost:8080/agents/support/sessions/$SID/stream?since=0
 # data: {"type":"done"}
 ```
 
----
-
 ## Contract conformance
 
 The `conformance` package is an executable definition of the agent contract: it
@@ -1350,8 +1318,6 @@ and the CLI adapter), so the same checks gate CI for new agent binaries and
 serve as the operator's live smoke test. This is what makes the contract a gate
 rather than prose — and the same suite will validate containerized agents when
 those land.
-
----
 
 ## Writing your own agent (the SDK)
 
@@ -1427,8 +1393,6 @@ workflows on restart. Point `runtime.yaml`'s `model`/`name` at your agent and se
 `Serve` additionally reads two operator-injected environment variables (set by
 `runtimed`, not by the agent author): `RUNTIME_PG_DSN` (DBOS system DB +
 control-plane store) and `RUNTIME_LISTEN_ADDR` (HTTP bind address).
-
----
 
 ## Deploying an example agent (SG Nutrition Investigator)
 
@@ -1666,8 +1630,6 @@ See the following references for the full picture:
 | [`contrib/shims/python/README.md`](contrib/shims/python/README.md) | Shim internals, the `AgentAdapter` protocol, the `ContractEvent` vocabulary, and standalone-dev instructions. |
 | [`docs/deploying-sdk-agents.md`](docs/deploying-sdk-agents.md) | SDK-agnostic deploy path (any framework, any host). |
 
----
-
 ## How durability works
 
 1. A session is a **DBOS workflow** whose id equals the session id.
@@ -1693,8 +1655,6 @@ workflow only for a matching executor + application version (the agentd binary
 hash). Recovering the *same* binary across a crash/restart — the normal case —
 works as shown by the resume integration test. Recovering across a recompiled
 binary would require pinning `DBOS__APPVERSION`.
-
----
 
 ## Deployment
 
@@ -1817,8 +1777,6 @@ unaffected.
 - **Graceful shutdown**: SIGINT/SIGTERM to `runtimed` cancels all supervisors;
   agents drain via DBOS shutdown.
 
----
-
 ## Configuration reference
 
 ### Environment variables
@@ -1872,8 +1830,6 @@ don't race): `agents`, `sessions` (with `agent_id`, `status`, `turn_count`,
 pgvector backs [semantic recall](#semantic-recall) (the Compose image
 provisions it; on your own Postgres a superuser must `CREATE EXTENSION vector`
 once per database).
-
----
 
 ## Testing
 
@@ -1932,13 +1888,9 @@ with `make sandbox-image`):
 go test -tags live ./internal/sandbox/ -v   # real containers: file round-trip, 8 MiB write
 ```
 
----
-
 ## Project layout
 
 ![Runtime project layout: top-level packages under runtime/ and their responsibilities.](docs/images/project-layout.png)
-
----
 
 ## Status, scope & limitations
 

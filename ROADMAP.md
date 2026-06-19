@@ -41,8 +41,6 @@ This file is the parking lot for everything *not yet built*. Each item below is 
 future unit of work (its own brainstorm → spec → plan → execute cycle, the same
 flow used for M1–M3). Design specs and plans live in `docs/superpowers/`.
 
----
-
 ## 🎯 v1.0 Acceptance Bar — ✅ MET (tag `v1.0` created 2026-06-14, local pending push)
 
 **The promise:** a stranger can clone the repo, run one `docker compose up` on a
@@ -207,8 +205,6 @@ OAuth2/quotas/resources-prompts, non-onboarding console panels, mTLS, C1
 PydanticAI. Full spec + Definition-of-Done checklist:
 `docs/superpowers/specs/2026-06-14-v1.0-acceptance-bar-design.md`.
 
----
-
 ## ✅ Done — the Runtime spine (sub-project 1 of 6)
 
 The first sub-project from the original decomposition is complete, in three
@@ -228,8 +224,6 @@ milestones (all merged to `master`):
 Reference docs: `docs/superpowers/specs/2026-06-07-runtime-spine-design.md` (the
 overall Approach-2 design + the 6-sub-project decomposition) and the per-milestone
 specs/plans dated 2026-06-07/08.
-
----
 
 ## 🔜 Remaining work
 
@@ -1169,8 +1163,6 @@ via existingSecret, per-agent-pod gateway (still blocked — remote agents rejec
   agents whose lifecycle is owned by the orchestrator". (Backlogged 2026-06-11
   after confirming the workaround — a placeholder `command:` plus a manually
   started remote agentd — works but loses secrets brokering and supervision.)
-
----
 
 ## How to resume a piece
 

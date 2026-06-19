@@ -19,8 +19,6 @@ Two complete worked agents ship in the repo and are the templates to copy:
 
 The deployment mechanism is **identical** for both; only the adapter differs.
 
----
-
 ## 1. The agent contract (what runtime needs)
 
 Runtime supervises any process that serves these endpoints over HTTP:
@@ -55,8 +53,6 @@ through:
 | `RUNTIME_AGENT_ID` | agent id on `/meta` | injected by `runtimed` |
 | `RUNTIME_SHIM_DB` | SQLite path for the durable session store | optional; defaults under `workdir` |
 | `OPENAI_*` / `ANTHROPIC_*` | your model credentials | inherited from `runtimed`'s env |
-
----
 
 ## 2. The adapter + entrypoint
 
@@ -145,8 +141,6 @@ through. Credentials themselves go in a local `.env` next to the agent
 > command-spawned agents like remotes (they own their sessions). Older `runtimed`
 > 404s "unknown session" on the stream after a successful `POST /sessions`.
 
----
-
 ## 3. Run and gate it locally
 
 Each example has a `Makefile` that wires this up:
@@ -170,8 +164,6 @@ make sessions                          # list this agent's sessions
 agent and verifies every contract endpoint behaves correctly. **If conformance
 fails, fix the adapter before deploying** — the control plane assumes the
 contract holds.
-
----
 
 ## 4. Ship to production (GCP, as a remote agent)
 
@@ -280,8 +272,6 @@ entry omits `auth_token` so the config doesn't imply protection the shim doesn't
 provide. Platform authentication is enforced at the **control-plane edge**, not
 at each agent — the same model as Go `agentd` agents.
 
----
-
 ## 5. Durability caveats
 
 These Python-hosted agents persist sessions across restarts: prior sessions
@@ -294,8 +284,6 @@ runtime session id (both examples do).
 a partial run, unlike Go/harness agents' DBOS-backed per-turn durability — a
 process killed during a run loses that in-flight turn (completed sessions and
 events remain intact).
-
----
 
 ## Summary — porting your own SDK agent
 
