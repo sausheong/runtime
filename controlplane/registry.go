@@ -69,6 +69,7 @@ func NewRegistry(cfg *config.Config, binPath, dsn string) *Registry {
 			Kind: a.Kind, Command: a.Command, WorkDir: a.WorkDir, Tenant: a.Tenant,
 			Memory: a.Memory, GatewayOn: a.Gateway.Enabled(),
 			GatewaySearch: a.Gateway == config.GatewaySearch,
+			LimitsJSON:    a.Limits.JSON(),
 		}
 		if a.URL != "" {
 			n := a.RemotePoolSize()

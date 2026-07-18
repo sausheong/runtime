@@ -114,6 +114,44 @@ func TestEnvDeltaBrokeredValueShadowsInheritedEnv(t *testing.T) {
 	}
 }
 
+func envValue(t *testing.T, env []string, key string) (string, bool) {
+	t.Helper()
+	prefix := key + "="
+	for _, e := range env {
+		if strings.HasPrefix(e, prefix) {
+			return strings.TrimPrefix(e, prefix), true
+		}
+	}
+	return "", false
+}
+
+func TestEnvDeltaCarriesLimits(t *testing.T) {
+	ap := AgentProcess{AgentID: "a", PGDSN: "dsn", Addr: ":1", Kind: "k", Tenant: "t",
+		LimitsJSON: `{"max_turns":5}`}
+	env, err := ap.envDelta(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, ok := envValue(t, env, "RUNTIME_AGENT_LIMITS")
+	if !ok || got != `{"max_turns":5}` {
+		t.Errorf("RUNTIME_AGENT_LIMITS = %q ok=%v, want the JSON", got, ok)
+	}
+}
+
+func TestEnvDeltaEmptyLimitsIsExplicitEmpty(t *testing.T) {
+	// No limits ⇒ explicit empty entry so an inherited operator var can't
+	// smuggle limits in (same pattern as RUNTIME_AGENT_MEMORY).
+	ap := AgentProcess{AgentID: "a", PGDSN: "dsn", Addr: ":1", Kind: "k", Tenant: "t"}
+	env, err := ap.envDelta(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, ok := envValue(t, env, "RUNTIME_AGENT_LIMITS")
+	if !ok || got != "" {
+		t.Errorf("RUNTIME_AGENT_LIMITS = %q ok=%v, want explicit empty", got, ok)
+	}
+}
+
 func TestBuildEnvIsEnvironPlusDelta(t *testing.T) {
 	t.Setenv("RUNTIME_C3M2_SENTINEL2", "keep")
 	ap := AgentProcess{AgentID: "a1", Addr: "127.0.0.1:8081", PGDSN: "dsn://x", Tenant: "t1"}

@@ -56,6 +56,10 @@ type AgentProcess struct {
 
 	GatewaySearch bool // search-mode opt-in: appends ?mode=search to the injected gateway URL.
 
+	// LimitsJSON is the resolved lifecycle-limit set (config.Limits.JSON()),
+	// injected as RUNTIME_AGENT_LIMITS. "" ⇒ no limits.
+	LimitsJSON string
+
 	broker SecretBroker // optional; injected by the Registry. nil ⇒ no secret brokering.
 }
 
@@ -77,6 +81,9 @@ func (a AgentProcess) envDelta(ctx context.Context) ([]string, error) {
 		// restarted replica recovers exactly its own in-flight workflows.
 		"RUNTIME_AGENT_REPLICA=" + strconv.Itoa(a.ReplicaIndex),
 		"DBOS__VMID=" + a.DBOSVMID,
+		// Resolved lifecycle limits (P1.2). Always emitted — explicit empty when
+		// no limits, so an inherited operator var can't smuggle limits in.
+		"RUNTIME_AGENT_LIMITS=" + a.LimitsJSON,
 	}
 	// Agents that did NOT opt in get explicit empty-value entries so an
 	// inherited operator var (e.g. a leaked RUNTIME_GATEWAY_URL) can't enable
