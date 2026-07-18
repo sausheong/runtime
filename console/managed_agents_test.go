@@ -14,7 +14,9 @@ import (
 )
 
 // fakeAgentStore3 implements controlplane.AgentStore in-memory for console tests.
-type fakeAgentStore3 struct{ rows map[string]agentstore.AgentRow }
+type fakeAgentStore3 struct {
+	rows map[string]agentstore.AgentRow
+}
 
 func newFakeAgentStore3() *fakeAgentStore3 {
 	return &fakeAgentStore3{rows: map[string]agentstore.AgentRow{}}

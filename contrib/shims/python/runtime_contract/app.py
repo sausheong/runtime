@@ -3,9 +3,10 @@ from __future__ import annotations
 import asyncio
 import base64
 import datetime
+import json
 import time
 
-from fastapi import FastAPI, Request, Response
+from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
 
 from .adapter import AgentAdapter
@@ -15,6 +16,7 @@ from .sse import frame
 from .store import Store
 
 CONTRACT_VERSION = "v1"
+MAX_SESSION_BODY_BYTES = 16 << 20
 
 # Telemetry events an adapter may yield for metrics only; never published to the
 # client SSE stream nor persisted (see events.py).
@@ -33,6 +35,25 @@ def create_app(
     # Per-session token usage buffered from a "usage" telemetry event until the
     # turn completes, so each turn records one duration sample carrying its tokens.
     _pending_usage: dict[str, dict | None] = {}
+
+    async def read_session_json(req: Request) -> dict:
+        """Read a bounded JSON object without letting Starlette buffer an
+        arbitrary chunked upload first."""
+        content_length = req.headers.get("content-length")
+        if content_length and content_length.isdigit() and int(content_length) > MAX_SESSION_BODY_BYTES:
+            raise HTTPException(status_code=413, detail="request body too large")
+        raw = bytearray()
+        async for chunk in req.stream():
+            if len(raw) + len(chunk) > MAX_SESSION_BODY_BYTES:
+                raise HTTPException(status_code=413, detail="request body too large")
+            raw.extend(chunk)
+        try:
+            body = json.loads(raw)
+        except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+            raise HTTPException(status_code=400, detail="invalid JSON") from exc
+        if not isinstance(body, dict):
+            raise HTTPException(status_code=400, detail="JSON body must be an object")
+        return body
 
     # /metrics: served at EXACTLY /metrics (a plain route, not app.mount, which
     # would 307-redirect /metrics -> /metrics/ — the fan-out scraper GETs
@@ -110,7 +131,7 @@ def create_app(
 
     @app.post("/sessions")
     async def create_session(req: Request) -> JSONResponse:
-        body = await req.json()
+        body = await read_session_json(req)
         sid = store.create_session()
         asyncio.create_task(run_session(sid, body.get("message", ""), parse_images(body)))
         return JSONResponse({"session_id": sid})
@@ -123,7 +144,7 @@ def create_app(
         # (conformance does not require it).
         if not store.get_session(sid):
             return JSONResponse({"error": "not found"}, status_code=404)
-        body = await req.json()
+        body = await read_session_json(req)
         asyncio.create_task(run_session(sid, body.get("message", ""), parse_images(body)))
         return JSONResponse({"session_id": sid})
 

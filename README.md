@@ -18,7 +18,7 @@ no lost work, no duplicated committed tool calls.
 - [Architecture](#architecture)
 - [Concepts](#concepts)
 - [Quick start](#quick-start)
-- [v1.0 — turnkey self-host](#v10--turnkey-self-host)
+- [v1.0 release candidate — turnkey self-host](#v10-release-candidate--turnkey-self-host)
 - [Configuring agents (`runtime.yaml`)](#configuring-agents-runtimeyaml)
 - [Authentication & multi-tenancy](#authentication--multi-tenancy)
 - [MCP Gateway](#mcp-gateway)
@@ -94,9 +94,9 @@ no lost work, no duplicated committed tool calls.
 
 ## Quick start
 
-**Prerequisites:** Go 1.25.1+, a reachable Postgres, and a local checkout of
-[harness](https://github.com/sausheong/harness) as a sibling directory
-(`../harness`) — wired via a `replace` directive in `go.mod` during the v0.x line.
+**Prerequisites:** Go 1.25.1+ and a reachable Postgres. The
+[harness](https://github.com/sausheong/harness) dependency is version-pinned in
+`go.mod`; a standalone clone of Runtime is sufficient to build the binaries.
 
 ### 1. Start Postgres
 
@@ -155,12 +155,16 @@ RUNTIME_AGENTD_BIN=./agentd ./runtimed
 ./runtimectl logs --agent support ses-…   # replay a session's events
 ```
 
-## v1.0 — turnkey self-host
+## v1.0 release candidate — turnkey self-host
+
+The turnkey feature set has met the project's v1.0 acceptance bar, but the
+latest release tag in this repository is currently **v0.2.0**. Treat the
+turnkey deployment as a release candidate until a formal `v1.0` tag is cut.
 
 For a one-command, all-six-pillars deployment on a single host (no
 build-from-source dance), follow the turnkey guides:
 
-- **[Quickstart](docs/quickstart.md)** — clone both repos, `make compose-init`,
+- **[Quickstart](docs/quickstart.md)** — clone this repository, `make compose-init`,
   `make compose-build`, `docker compose up`.
 - **[Operator guide](docs/operator-guide.md)** — bootstrap login, ports,
   persistence/reset, security posture, observability.
@@ -1260,9 +1264,9 @@ them with `/agents/{id}`.
 | `GET /healthz` | Agent liveness/readiness. |
 | `GET /meta` | `{agent_id, contract_version}`. The versioned agent contract. |
 | `GET /metrics` | *Optional.* Prometheus text exposition for this agent. An agent without it (e.g. a foreign-SDK shim) is skipped by the fan-out scrape (reason `no_metrics`) and is **not** marked down. |
-| `POST /sessions` | Body `{"message": "..."}`. Creates a session, starts the durable workflow, returns `{"session_id": "..."}`. |
-| `GET /sessions` | List this agent's sessions: `[{id,status,turn_count,completed_at,duration_ms}]`. `completed_at` is a UTC ISO-8601 string (null if still running); `duration_ms` is the turn wall time in milliseconds (null if still running). |
-| `GET /sessions/{id}` | One session's status snapshot: `{id,status,turn_count,completed_at,duration_ms}`. |
+| `POST /sessions` | Body `{"message": "..."}` (optionally with inline image data; maximum body 16 MiB). Creates a session, starts the durable workflow, returns `{"session_id": "..."}`. |
+| `GET /sessions` | List this agent's sessions: `[{id,status,turn_count}]`. Foreign-SDK shims may add timing fields. |
+| `GET /sessions/{id}` | One session's status snapshot: `{id,status,turn_count}`. Foreign-SDK shims may add timing fields. |
 | `GET /sessions/{id}/stream?since=<seq>` | **SSE stream** of the session's events. Replays buffered events after `since` (default 0), then streams live until a terminal `done`/`error`. Each event carries an SSE `id:` line (its sequence number) so a client can resume with `?since=`. |
 
 **Event types** (the `type` field in each SSE `data:` payload): `text`,
@@ -1704,7 +1708,7 @@ cd runtime && make compose-init
 cd deploy/compose && docker compose --profile build-only build && docker compose up
 ```
 
-This is the path the [v1.0 turnkey guides](#v10--turnkey-self-host) and the
+This is the path the [v1.0 turnkey guides](#v10-release-candidate--turnkey-self-host) and the
 capstone proof (`deploy/compose/v1-proof.sh`) document.
 
 ### Docker Compose (control plane only)
@@ -1713,14 +1717,12 @@ capstone proof (`deploy/compose/v1-proof.sh`) document.
 sandboxes/embedder/observability) with one command. It builds `runtimed` +
 `agentd` via `deploy/Dockerfile` (a multi-stage Go build).
 
-> **Build context:** the `runtime` module depends on `../harness` via a `replace`
-> directive, so the Docker build context must contain BOTH `runtime/` and
-> `harness/`. The compose file sets `context: ../..` (the projects root). Run it
-> from that root:
+> **Build context:** dependencies are version-pinned, so the Docker build context
+> is this repository. The compose file is already configured accordingly.
 
 ```bash
-# from the directory that contains both runtime/ and harness/
-docker compose -f runtime/deploy/docker-compose.full.yml up --build
+# from the runtime repository root
+docker compose -f deploy/docker-compose.full.yml up --build
 # control plane on http://localhost:8080  (Postgres stays internal to the compose network)
 ```
 
@@ -1894,11 +1896,12 @@ go test -tags live ./internal/sandbox/ -v   # real containers: file round-trip, 
 
 ## Status, scope & limitations
 
-Runtime reached **v1.0** (tagged `v1.0`): a turnkey self-hostable on-prem
-AgentCore equivalent — one `docker compose up` brings up all six pillars on a
-single host, a stranger can self-serve onboard a tenant through the console UI,
-and the capstone proof (`deploy/compose/v1-proof.sh`) exercises every pillar
-end-to-end. See [v1.0 — turnkey self-host](#v10--turnkey-self-host).
+Runtime's code has reached the **v1.0 acceptance bar**, while the latest formal
+release tag in this repository is **v0.2.0**. The current tree is a turnkey
+self-hostable on-prem AgentCore equivalent: one `docker compose up` brings up
+all six pillars on a single host, a stranger can self-serve onboard a tenant
+through the console UI, and `deploy/compose/v1-proof.sh` exercises every pillar
+end-to-end. See [v1.0 release candidate — turnkey self-host](#v10-release-candidate--turnkey-self-host).
 
 ### What's implemented
 

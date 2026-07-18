@@ -1,6 +1,5 @@
-# Full stack: Postgres + control plane. Build context is the projects root
-# (contains runtime/ and harness/). Run from the projects root:
-#   docker compose -f runtime/deploy/docker-compose.full.yml up --build
+# Full stack: Postgres + control plane. Run from the repository root:
+#   docker compose -f deploy/docker-compose.full.yml up --build
 #
 # SECURITY: this baked-in runtime.yaml has no `tokens:`, so the control plane
 # runs OPEN (unauthenticated). That's fine for a local demo. Before exposing it
@@ -20,8 +19,8 @@ services:
       retries: 20
   runtimed:
     build:
-      context: ../..
-      dockerfile: runtime/deploy/Dockerfile
+      context: ..
+      dockerfile: deploy/Dockerfile
     depends_on:
       postgres:
         condition: service_healthy

@@ -1,9 +1,7 @@
 # Runtime — on-prem durable agent platform.
 #
-# The `go` CLI is the source of truth in this repo (the module uses a
-# `replace github.com/sausheong/harness => ../harness` directive, which confuses
-# IDE/LSP tooling but not `go build`/`go test`). These targets wrap the commands
-# you actually run day to day.
+# The `go` CLI is the source of truth in this repo. Dependencies are pinned in
+# go.mod, so a standalone clone builds without a sibling source checkout.
 #
 # Quick start:
 #   make build           # build agentd, runtimed, runtimectl, sandboxd into ./bin
@@ -114,10 +112,10 @@ pg-down: ## Stop the local Postgres
 # (image.tag unset ⇒ runtime:<appVersion>) would reference a tag we never built.
 CHART_APPVERSION ?= $(shell awk '/^appVersion:/{gsub(/"/,"",$$2); print $$2}' deploy/charts/runtime/Chart.yaml)
 .PHONY: docker-image
-docker-image: ## Build the all-binaries image (run from anywhere; context is the projects root)
+docker-image: ## Build the all-binaries image from this repository
 	docker build -f deploy/Dockerfile \
 		--build-arg VERSION=$(VERSION) --build-arg REVISION=$(REVISION) \
-		-t $(IMAGE):$(VERSION) -t $(IMAGE):$(CHART_APPVERSION) -t $(IMAGE):latest ..
+		-t $(IMAGE):$(VERSION) -t $(IMAGE):$(CHART_APPVERSION) -t $(IMAGE):latest .
 
 # ---- Helm chart ----
 CHART ?= deploy/charts/runtime

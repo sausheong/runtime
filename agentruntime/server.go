@@ -3,6 +3,7 @@ package agentruntime
 import (
 	"crypto/subtle"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -10,6 +11,12 @@ import (
 	"github.com/sausheong/runtime/internal/obs"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 )
+
+// maxSessionBodyBytes bounds the only agent-contract request that can carry
+// inline binary data. Sixteen MiB leaves room for a roughly 12 MiB source image
+// after base64 expansion while preventing an unauthenticated/local agent port
+// from buffering an arbitrarily large JSON body.
+const maxSessionBodyBytes int64 = 16 << 20
 
 // handler is the full agentd HTTP stack, outermost to innermost:
 // RequestID (mutates r.Header, so nothing may observe the request first) →
@@ -82,12 +89,18 @@ func (m *Manager) newMux() *http.ServeMux {
 		})
 	})
 	mux.HandleFunc("POST /sessions", func(w http.ResponseWriter, r *http.Request) {
+		r.Body = http.MaxBytesReader(w, r.Body, maxSessionBodyBytes)
 		var body struct {
 			Message   string `json:"message"`
 			ImageB64  string `json:"image_b64"`
 			ImageMime string `json:"image_mime"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			var tooLarge *http.MaxBytesError
+			if errors.As(err, &tooLarge) {
+				http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
+				return
+			}
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}

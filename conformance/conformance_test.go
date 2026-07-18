@@ -7,7 +7,9 @@ import (
 	"testing"
 )
 
-func goodAgent() http.Handler {
+func goodAgent() http.Handler { return agentWithSessionShape(true) }
+
+func agentWithSessionShape(valid bool) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(200) })
 	mux.HandleFunc("GET /meta", func(w http.ResponseWriter, _ *http.Request) {
@@ -20,14 +22,28 @@ func goodAgent() http.Handler {
 		_ = json.NewEncoder(w).Encode([]map[string]any{{"id": "ses-1", "status": "completed", "turn_count": 1}})
 	})
 	mux.HandleFunc("GET /sessions/{id}", func(w http.ResponseWriter, _ *http.Request) {
+		if !valid {
+			_ = json.NewEncoder(w).Encode(map[string]any{"status": "finished"})
+			return
+		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"id": "ses-1", "status": "completed", "turn_count": 1})
 	})
 	mux.HandleFunc("GET /sessions/{id}/stream", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
-		_, _ = w.Write([]byte("data: {\"type\":\"text\",\"text\":\"hi\"}\n\n"))
-		_, _ = w.Write([]byte("data: {\"type\":\"done\"}\n\n"))
+		_, _ = w.Write([]byte("id: 1\ndata: {\"type\":\"text\",\"text\":\"hi\"}\n\n"))
+		_, _ = w.Write([]byte("id: 2\ndata: {\"type\":\"done\"}\n\n"))
 	})
 	return mux
+}
+
+func TestRun_RejectsIncompleteSessionShape(t *testing.T) {
+	srv := httptest.NewServer(agentWithSessionShape(false))
+	defer srv.Close()
+	rec := &recorder{}
+	Run(rec, srv.URL)
+	if rec.fails == 0 {
+		t.Fatal("invalid session response should fail conformance")
+	}
 }
 
 type recorder struct{ fails int }

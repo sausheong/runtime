@@ -294,7 +294,10 @@ func main() {
 		}
 		// Open mode: no admin store ⇒ no /admin, no onboarding API, no onboarding
 		// page. Pass literal nil for the interface params (true nil interface).
-		handler = obs.RequestID(tracedHandler(accessLog(buildRoot(reg, nil, console.OIDCConfig{}, secretAdmin, gwHandler, nil, nil, nil, nil, nil, cm, ctlStore), cm)))
+		handler = obs.RequestID(tracedHandler(accessLog(buildRoot(rootOptions{
+			Registry: reg, ConsoleOIDC: console.OIDCConfig{}, SecretAdmin: secretAdmin,
+			Gateway: gwHandler, Metrics: cm, ControlStore: ctlStore,
+		}), cm)))
 	} else {
 		oidcVerifier, verr := identity.NewOIDCVerifier(ctx, oidcIssuer, oidcClientID)
 		if verr != nil {
@@ -351,7 +354,12 @@ func main() {
 				AgentMgr:  agentManager,
 			}
 		}
-		root := buildRoot(reg, idStore, consoleOIDC, secretAdmin, gwHandler, gwStore, gwMut, agentStore, agentManager, onb, cm, ctlStore) // mounts /admin since the store is non-nil
+		root := buildRoot(rootOptions{
+			Registry: reg, AdminStore: idStore, ConsoleOIDC: consoleOIDC,
+			SecretAdmin: secretAdmin, Gateway: gwHandler, UpstreamStore: gwStore,
+			GatewayMutator: gwMut, AgentStore: agentStore, AgentManager: agentManager,
+			Onboarding: onb, Metrics: cm, ControlStore: ctlStore,
+		}) // mounts /admin since the store is non-nil
 		onReject := func(status int) { cm.AuthRejected(status) }
 		// When OIDC login is available, lock the browser console to OIDC sessions:
 		// a service-key/bootstrap cookie authenticates the API but is bounced from
@@ -546,45 +554,6 @@ func mountMetrics(inner http.Handler, cm *obs.ControlMetrics, targets func() []o
 	mux.Handle("POST /register", registerMux)
 	mux.Handle("/", inner)
 	return mux
-}
-
-// buildRoot assembles the root mux: console at /ui, control-plane API at /, and
-// (when adminS is non-nil) the admin API at /admin. The secret admin is mounted
-// alongside the admin API; a nil secretBroker makes /admin/secrets return 503.
-// A nil gw leaves /gateway/* unmounted (stdlib mux → 404). The self-service
-// onboarding API (/admin/upstreams) mounts only when adminS, us, and gwMut are
-// all non-nil; onb (when non-nil) enables the console onboarding page.
-func buildRoot(reg *controlplane.Registry, adminS controlplane.AdminStore, consoleOIDC console.OIDCConfig, secretBroker controlplane.SecretAdmin, gw *gateway.Handler, us controlplane.UpstreamStore, gwMut controlplane.GatewayMutator, agentStore controlplane.AgentStore, agentMgr *controlplane.AgentManager, onb *console.Onboarding, cm *obs.ControlMetrics, ctlStore store.Store) http.Handler {
-	apiMux := controlplane.NewAPI(reg, cm, ctlStore)
-	if adminS != nil {
-		controlplane.RegisterAdmin(apiMux, adminS, reg.AgentTenants())
-		controlplane.RegisterSecretAdmin(apiMux, adminS, secretBroker)
-		// Onboarding API mounts only with an admin store AND a live gateway
-		// (us+gwMut non-nil): self-service requires both persistence and a
-		// manager to add the upstream to.
-		if us != nil && gwMut != nil {
-			controlplane.RegisterUpstreamAdmin(apiMux, adminS, us, gwMut)
-		}
-		// Dynamic managed-agent admin: add/remove/enable/disable/restart remote
-		// agents at runtime. Needs the store + live manager.
-		if agentStore != nil && agentMgr != nil {
-			controlplane.RegisterAgentAdmin(apiMux, agentStore, adminS, agentMgr)
-		}
-	}
-	if gw != nil {
-		apiMux.Handle("/gateway/mcp", gw.HTTP())
-		apiMux.HandleFunc("GET /gateway/status", gw.Status)
-	}
-	consoleH := console.Handler(reg, ctlStore, consoleOIDC, onb)
-	root := http.NewServeMux()
-	root.Handle("/ui", consoleH)
-	root.Handle("/ui/", consoleH)
-	// Exact root → the console landing page (a browser's front door). Bare "/"
-	// has no API route (it 404s), so repurposing only the exact path leaves every
-	// other API path on apiMux untouched. "/{$}" matches "/" only, not the catch-all.
-	root.Handle("/{$}", consoleH)
-	root.Handle("/", apiMux)
-	return root
 }
 
 func setupLogging() {

@@ -41,7 +41,7 @@ This file is the parking lot for everything *not yet built*. Each item below is 
 future unit of work (its own brainstorm → spec → plan → execute cycle, the same
 flow used for M1–M3). Design specs and plans live in `docs/superpowers/`.
 
-## 🎯 v1.0 Acceptance Bar — ✅ MET (tag `v1.0` created 2026-06-14, local pending push)
+## 🎯 v1.0 Acceptance Bar — ✅ MET (formal `v1.0` release pending)
 
 **The promise:** a stranger can clone the repo, run one `docker compose up` on a
 single host, follow the docs to self-serve onboard a tenant **through the console
@@ -49,13 +49,13 @@ UI**, and run real agents exercising all six AgentCore pillars — **without
 reading the Go source**. Proven by one clean from-scratch live run on a fresh
 machine, driven only by the published docs.
 
-**✅ ACHIEVED.** All three milestones done; the capstone proof
+**✅ ACHIEVED IN THE CODEBASE.** All three milestones are done; the capstone proof
 (`deploy/compose/v1-proof.sh`) passed **20/20 green** from a cold `--no-cache`
 build of a fresh two-repo clone, driven only by the published docs
 (`docs/{quickstart,operator-guide,tenant-guide}.md`), exercising all six pillars
-deterministically (air-gap, no LLM key). The `v1.0` annotated tag is created
-locally at the passing merge commit — **not pushed** (push with
-`git push origin v1.0` when ready). Residual caveat: the capstone ran on
+deterministically (air-gap, no LLM key). The latest formal repository tag is
+currently `v0.2.0`; cutting and publishing `v1.0` remains a release action, not
+an already-completed fact. Residual caveat: the capstone ran on
 macOS/Docker-Desktop; the docker.sock-gid + CDP-publish paths for native Linux
 are covered by code + docs but not run on a clean Linux box.
 
@@ -1175,11 +1175,12 @@ Pick an item, then run the standard flow (it's worked well for M1–M3):
 4. `finishing-a-development-branch` → merge to `master`.
 
 **Conventions that matter** (learned across M1–M3):
-- The `go` CLI is ground truth; the IDE/LSP is confused by the
-  `replace github.com/sausheong/harness => ../harness` cross-module setup —
-  ignore its diagnostics, trust `go build`/`go test`.
+- The `go` CLI is ground truth; run `make check` before submitting changes.
+  The published `harness` dependency is pinned in `go.mod`, so a standalone
+  checkout works with normal Go tooling.
 - Integration tests are `//go:build integration`, need Postgres at
   `postgres://runtime:runtime@localhost:5432/runtime?sslmode=disable` (local
   Postgres.app, not Docker), and self-clean their DB + the `dbos` schema.
 - DBOS v0.16.0 API notes: `docs/superpowers/plans/dbos-v0.16.0-api-notes.md`.
-- harness lives at `../harness` (owned; M1 added `RunTurn` to it).
+- Changes that require new harness APIs must land in a harness release first;
+  then update the pinned version in `go.mod`.

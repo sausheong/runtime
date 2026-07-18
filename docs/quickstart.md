@@ -5,13 +5,11 @@ Bring up the whole platform (all six pillars) on one host with Docker.
 ## Prerequisites
 
 - Docker (Desktop on macOS/Windows, or Engine on Linux) with Compose v2.
-- **Clone both repos side by side.** Runtime builds against a sibling
-  `harness/` checkout (a `replace` directive during the v0.x line):
+- Clone Runtime. Its Go dependencies, including `harness`, are pinned and
+  downloaded automatically:
 
   ```bash
-  git clone https://github.com/sausheong/harness.git
   git clone https://github.com/sausheong/runtime.git
-  # result: a parent dir containing both harness/ and runtime/
   ```
 
 ## Bring it up

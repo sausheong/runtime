@@ -246,7 +246,7 @@ func TestKG_IngestDropsOverCapacity(t *testing.T) {
 	k.sem <- struct{}{} // occupy the only slot
 
 	k.Ingest(context.Background(), twoMsgThread()) // must drop, not block
-	<-done                                          // drop path still fires ingestDone
+	<-done                                         // drop path still fires ingestDone
 	if len(saver.snapshot()) != 0 {
 		t.Fatal("over-capacity ingest must drop (no extract/save)")
 	}

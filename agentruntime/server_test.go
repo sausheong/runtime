@@ -72,6 +72,22 @@ func TestListSessionsEndpoint(t *testing.T) {
 	}
 }
 
+func TestCreateSessionRejectsOversizedBody(t *testing.T) {
+	m := newTestManager()
+	srv := httptest.NewServer(m.newMux())
+	defer srv.Close()
+
+	body := strings.NewReader(`{"message":"` + strings.Repeat("x", int(maxSessionBodyBytes)) + `"}`)
+	resp, err := http.Post(srv.URL+"/sessions", "application/json", body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status=%d want %d", resp.StatusCode, http.StatusRequestEntityTooLarge)
+	}
+}
+
 func TestStreamReplaysBufferedTerminal(t *testing.T) {
 	m := newTestManager()
 	ctx := context.Background()

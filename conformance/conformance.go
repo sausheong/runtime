@@ -62,6 +62,10 @@ func checkMeta(t TestingT, c *http.Client, base string) {
 		return
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("meta: status %d, want 200", resp.StatusCode)
+		return
+	}
 	var m map[string]string
 	if err := json.NewDecoder(resp.Body).Decode(&m); err != nil {
 		t.Errorf("meta: decode: %v", err)
@@ -85,6 +89,10 @@ func checkCreateSession(t TestingT, c *http.Client, base string) string {
 		return ""
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		t.Errorf("create session: status %d, want 2xx", resp.StatusCode)
+		return ""
+	}
 	var out struct {
 		SessionID string `json:"session_id"`
 	}
@@ -111,6 +119,9 @@ func checkStream(t TestingT, c *http.Client, base, sid string) {
 		t.Errorf("stream: content-type %q, want text/event-stream", ct)
 	}
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<16))
+	if !strings.Contains(string(body), "id: ") {
+		t.Errorf("stream: missing SSE id line")
+	}
 	if !strings.Contains(string(body), `"type":"done"`) {
 		t.Errorf("stream: never saw terminal done event; got %q", string(body))
 	} else {
@@ -125,13 +136,25 @@ func checkGetSession(t TestingT, c *http.Client, base, sid string) {
 		return
 	}
 	defer resp.Body.Close()
-	var m map[string]any
-	if err := json.NewDecoder(resp.Body).Decode(&m); err != nil {
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("get session: status %d, want 200", resp.StatusCode)
+		return
+	}
+	var row struct {
+		ID        string `json:"id"`
+		Status    string `json:"status"`
+		TurnCount *int   `json:"turn_count"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&row); err != nil {
 		t.Errorf("get session: decode: %v", err)
 		return
 	}
-	if _, ok := m["status"]; !ok {
-		t.Errorf("get session: missing status")
+	if row.ID != sid {
+		t.Errorf("get session: id %q, want %q", row.ID, sid)
+	} else if !validStatus(row.Status) {
+		t.Errorf("get session: invalid status %q", row.Status)
+	} else if row.TurnCount == nil {
+		t.Errorf("get session: missing turn_count")
 	} else {
 		t.Logf("get session: ok")
 	}
@@ -144,10 +167,27 @@ func checkListSessions(t TestingT, c *http.Client, base string) {
 		return
 	}
 	defer resp.Body.Close()
-	var rows []map[string]any
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("list sessions: status %d, want 200", resp.StatusCode)
+		return
+	}
+	var rows []struct {
+		ID        string `json:"id"`
+		Status    string `json:"status"`
+		TurnCount *int   `json:"turn_count"`
+	}
 	if err := json.NewDecoder(resp.Body).Decode(&rows); err != nil {
 		t.Errorf("list sessions: decode: %v", err)
 		return
 	}
+	for i, row := range rows {
+		if row.ID == "" || !validStatus(row.Status) || row.TurnCount == nil {
+			t.Errorf("list sessions: row %d missing or invalid id/status/turn_count", i)
+		}
+	}
 	t.Logf("list sessions: ok (%d)", len(rows))
+}
+
+func validStatus(s string) bool {
+	return s == "created" || s == "running" || s == "completed" || s == "error"
 }

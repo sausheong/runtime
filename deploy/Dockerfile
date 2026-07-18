@@ -1,12 +1,10 @@
-# Build context MUST be the parent directory containing BOTH `runtime/` and
-# `harness/` (runtime's go.mod has: replace github.com/sausheong/harness => ../harness).
-# Build from the projects root:
-#   docker build -f runtime/deploy/Dockerfile -t runtime:latest .
+# Build context is the runtime repository root:
+#   docker build -f deploy/Dockerfile -t runtime:latest .
 FROM golang:1.25 AS build
-WORKDIR /src
-COPY harness/ ./harness/
-COPY runtime/ ./runtime/
 WORKDIR /src/runtime
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . ./
 RUN go build -o /out/runtimed   ./cmd/runtimed \
  && go build -o /out/agentd     ./cmd/agentd \
  && go build -o /out/sandboxd   ./cmd/sandboxd \

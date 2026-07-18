@@ -41,8 +41,8 @@ services:
 
   runtimed:
     build:
-      context: ../../..
-      dockerfile: runtime/deploy/Dockerfile
+      context: ../..
+      dockerfile: deploy/Dockerfile
     image: runtime:latest
     depends_on:
       postgres:

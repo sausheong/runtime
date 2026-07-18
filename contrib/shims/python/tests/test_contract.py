@@ -2,7 +2,7 @@ import base64
 from typing import AsyncIterator
 from fastapi.testclient import TestClient
 
-from runtime_contract.app import create_app
+from runtime_contract.app import MAX_SESSION_BODY_BYTES, create_app
 from runtime_contract.events import ContractEvent
 from runtime_contract.metrics import Metrics
 from runtime_contract.store import Store
@@ -64,6 +64,13 @@ def test_follow_up_unknown_session_404(tmp_path):
     c, _ = make_client(tmp_path)
     r = c.post("/sessions/ses-nope/messages", json={"message": "x"})
     assert r.status_code == 404
+
+
+def test_session_body_limit(tmp_path):
+    c, _ = make_client(tmp_path)
+    body = b'{"message":"' + (b"x" * MAX_SESSION_BODY_BYTES) + b'"}'
+    r = c.post("/sessions", content=body, headers={"content-type": "application/json"})
+    assert r.status_code == 413
 
 
 def test_replay_since(tmp_path):
