@@ -41,6 +41,14 @@ type Manager struct {
 	// limits is the operator-resolved lifecycle limit set (from
 	// RUNTIME_AGENT_LIMITS). Zero value ⇒ no limits. Immutable after Serve
 	// constructs the Manager, so workflow-body reads are deterministic.
+	//
+	// Limits are process-lifetime constants: changing RUNTIME_AGENT_LIMITS
+	// across a restart is NOT replay-safe for in-flight sessions. Adding or
+	// removing session_timeout inserts/removes a decision step per iteration,
+	// so DBOS recovery hits an UnexpectedStepError and the session fails with
+	// status "error" (fail-closed). Changing max_turns/max_tokens changes the
+	// verdicts recovered sessions compute. Reconfiguring across a restart may
+	// therefore terminate recovered in-flight sessions with status "error".
 	limits config.Limits
 
 	mu          sync.Mutex
@@ -144,6 +152,19 @@ func effectiveMaxTurns(l config.Limits, specMax int) int {
 	return 25
 }
 
+// isTurnTimeout classifies a finished turn as a turn-timeout hit. Harness
+// v0.3.2's RunTurn returns a nil error on every path and reports failures on
+// TurnResult instead (StopReason "aborted" for ctx cancellation, "error" for
+// LLM stream errors), so the caller must decide FROM THE RESULT whether the
+// per-turn deadline fired: the turn ended abnormally (aborted/error), the
+// turn-scoped runCtx expired with DeadlineExceeded, and the enclosing stepCtx
+// is still live (a step-level cancellation is a shutdown, not a limit).
+func isTurnTimeout(stopReason string, runCtxErr, stepCtxErr error) bool {
+	return (stopReason == "aborted" || stopReason == "error") &&
+		runCtxErr == context.DeadlineExceeded &&
+		stepCtxErr == nil
+}
+
 // failLimit terminates the session with the limit_exceeded policy outcome:
 // status, client-facing error event naming the limit, and the metric. The
 // workflow then returns normally — a breached session is a COMPLETED
@@ -227,7 +248,11 @@ func (m *Manager) sessionWorkflow(ctx dbos.DBOSContext, in turnInput) (string, e
 				elapsed := time.Since(in.StartedAt).Milliseconds()
 				return timeoutCheck{ElapsedMS: elapsed, Exceeded: elapsed >= m.limits.SessionTimeoutMS}, nil
 			})
-			if cerr == nil && chk.Exceeded {
+			if cerr != nil {
+				// Fail-open: a failed check must not kill the session, but it
+				// must not be silent either.
+				slog.Warn("session timeout check failed", "session", wfID, "err", cerr)
+			} else if chk.Exceeded {
 				return m.failLimit(wfID, "session_timeout", chk.ElapsedMS, m.limits.SessionTimeoutMS), nil
 			}
 		}
@@ -271,11 +296,27 @@ func (m *Manager) sessionWorkflow(ctx dbos.DBOSContext, in turnInput) (string, e
 			start := time.Now()
 			tr, terr := rt.RunTurn(runCtx, userMsg, images, nil) // headless (emit=nil)
 			elapsed := time.Since(start)
+			// Harness v0.3.2 contract: RunTurn returns a nil error on EVERY
+			// path — failures ride TurnResult (StopReason "aborted" on ctx
+			// cancellation pre-check/tool dispatch, "error" on LLM stream
+			// errors, with details in TurnResult.Err). So the RESULT is the
+			// primary classification path for a turn timeout; the terr branch
+			// below is defense-in-depth for future harness versions only.
+			if terr == nil && isTurnTimeout(tr.StopReason, runCtx.Err(), stepCtx.Err()) {
+				// Turn timeout: checkpoint the verdict (NOT an error) so
+				// replay reproduces it; Entries nil ⇒ partial turn work is
+				// never applied to the canonical session, and Usage nil ⇒ the
+				// aborted turn never counts toward the token budget.
+				tspan.SetAttributes(obs.OutcomeAttr("turn_timeout"))
+				tspan.End()
+				m.observeTurn("turn_timeout", elapsed, nil, nil)
+				return turnOutput{Done: true, Reason: "limit:turn_timeout"}, nil
+			}
 			if terr != nil {
-				if runCtx.Err() == context.DeadlineExceeded && stepCtx.Err() == nil {
-					// Turn timeout: checkpoint the verdict (NOT an error) so
-					// replay reproduces it; Entries nil ⇒ partial turn work is
-					// never applied to the canonical session.
+				// Defense-in-depth: harness v0.3.2 never returns a non-nil
+				// error from RunTurn (see contract note above), but a future
+				// version might. Classify a deadline hit the same way.
+				if isTurnTimeout("aborted", runCtx.Err(), stepCtx.Err()) {
 					tspan.SetAttributes(obs.OutcomeAttr("turn_timeout"))
 					tspan.End()
 					m.observeTurn("turn_timeout", elapsed, nil, nil)

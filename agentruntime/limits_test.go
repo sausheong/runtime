@@ -1,6 +1,7 @@
 package agentruntime
 
 import (
+	"context"
 	"testing"
 
 	"github.com/sausheong/harness/llm"
@@ -47,6 +48,35 @@ func TestEffectiveMaxTurns(t *testing.T) {
 	}
 	if got := effectiveMaxTurns(config.Limits{MaxTurns: 3}, 40); got != 3 {
 		t.Errorf("limit wins: %d want 3", got)
+	}
+}
+
+// TestIsTurnTimeout is the regression test for the harness v0.3.2 contract:
+// RunTurn returns a nil error on every path and reports failures on
+// TurnResult.StopReason ("aborted" on ctx cancellation, "error" on LLM stream
+// errors), so turn-timeout classification MUST happen on the result, not on
+// the (always-nil) returned error.
+func TestIsTurnTimeout(t *testing.T) {
+	cases := []struct {
+		name       string
+		stopReason string
+		runCtxErr  error
+		stepCtxErr error
+		want       bool
+	}{
+		{"aborted on deadline", "aborted", context.DeadlineExceeded, nil, true},
+		{"error on deadline", "error", context.DeadlineExceeded, nil, true},
+		{"completed despite deadline", "completed", context.DeadlineExceeded, nil, false},
+		{"aborted without deadline", "aborted", nil, nil, false},
+		{"step cancelled (shutdown, not limit)", "aborted", context.DeadlineExceeded, context.Canceled, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := isTurnTimeout(tc.stopReason, tc.runCtxErr, tc.stepCtxErr); got != tc.want {
+				t.Errorf("isTurnTimeout(%q, %v, %v) = %v, want %v",
+					tc.stopReason, tc.runCtxErr, tc.stepCtxErr, got, tc.want)
+			}
+		})
 	}
 }
 

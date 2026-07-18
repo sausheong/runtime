@@ -33,7 +33,7 @@ type turnInput struct {
 	// startSession and re-supplied verbatim on DBOS replay: the deterministic
 	// origin for session_timeout. Zero on pre-upgrade in-flight sessions
 	// (those skip the session_timeout check).
-	StartedAt time.Time `json:"started_at,omitempty"`
+	StartedAt time.Time `json:"started_at"`
 }
 
 // turnOutput is the checkpointed return value of a single turn step. On replay
