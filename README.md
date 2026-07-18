@@ -8,9 +8,21 @@ Runtime hosts [harness](https://github.com/sausheong/harness)-based agents as
 supervised subprocesses behind a single control plane. Every conversation turn
 is checkpointed to Postgres via [DBOS](https://github.com/dbos-inc/dbos-transact-golang),
 so an agent that crashes mid-turn **resumes from its last completed turn** —
-no lost work, no duplicated committed tool calls.
+completed turns are retained and are not replayed. A side-effecting tool in the
+unfinished turn can still run again, so those tools should be idempotent.
 
 **Single binary + Postgres. Many agents. Durable by default.**
+
+## Documentation
+
+| Guide | Audience |
+|---|---|
+| [Runtime overview](runtime.md) | What Runtime is, its architecture, capabilities, and trade-offs |
+| [Quickstart](quickstart.md) | Bring up the complete single-host stack |
+| [Operator guide](operator-guide.md) | Run, secure, observe, and configure Runtime |
+| [Tenant guide](tenant-guide.md) | Onboard a tenant, issue keys, and use the six pillars |
+| [Deploying SDK agents](deploying-sdk-agents.md) | Host OpenAI, Claude, or other contract-compatible agents |
+| [Hello Claude tutorial](hello-claude.md) | Build and deploy a minimal Claude Agent SDK agent |
 
 ## Table of contents
 
@@ -47,6 +59,7 @@ no lost work, no duplicated committed tool calls.
 | **Multi-agent hosting** | One control plane hosts many agents, each an isolated OS subprocess, declared in a config file. |
 | **Path-routed control plane** | A single HTTP endpoint routes `/agents/{id}/...` to the right agent. One URL to operate the whole fleet. |
 | **Crash supervision** | Every agent has a supervisor that restarts it (capped backoff) if it dies. One agent crashing never affects the others. |
+| **Lifecycle guardrails** | Bound one turn, a whole session, loop iterations, and cumulative input/output tokens. Breaches terminate durably as `limit_exceeded` and are observable in metrics. |
 | **Session management** | Create sessions, stream their events (SSE), re-attach after a disconnect, list an agent's sessions, and see real per-session status + turn counts. |
 | **Streaming everything** | Agent output streams as Server-Sent Events end-to-end, through the control-plane proxy, with immediate flush. |
 | **Operator CLI** | `runtimectl` to list agents, invoke sessions, stream logs, list sessions, and run contract conformance. |
@@ -62,7 +75,7 @@ no lost work, no duplicated committed tool calls.
 
 ## Architecture
 
-![Runtime architecture: runtimectl drives runtimed (the control plane), which spawns and supervises one agentd subprocess per agent; each agentd runs agentruntime.Serve and checkpoints to Postgres.](docs/images/architecture.png)
+![Runtime architecture: runtimectl drives runtimed (the control plane), which spawns and supervises one agentd subprocess per agent; each agentd runs agentruntime.Serve and checkpoints to Postgres.](images/architecture.png)
 
 **Three binaries:**
 
@@ -85,7 +98,7 @@ no lost work, no duplicated committed tool calls.
   processes (a replica pool; default one).
 - **Session** — one durable conversation with an agent. Backed by a DBOS
   workflow whose id equals the session id. Has a status
-  (`created → running → completed | error`) and a turn count.
+  (`created → running → completed | error | limit_exceeded`) and a turn count.
 - **Turn** — one iteration of the agent loop (a model call plus its tool batch).
   Each turn is the unit of durability: a DBOS step, checkpointed on completion.
 - **Event** — a streamed unit of session output (`text`, `tool_result`,
@@ -164,13 +177,13 @@ turnkey deployment as a release candidate until a formal `v1.0` tag is cut.
 For a one-command, all-six-pillars deployment on a single host (no
 build-from-source dance), follow the turnkey guides:
 
-- **[Quickstart](docs/quickstart.md)** — clone this repository, `make compose-init`,
+- **[Quickstart](quickstart.md)** — clone this repository, `make compose-init`,
   `make compose-build`, `docker compose up`.
-- **[Operator guide](docs/operator-guide.md)** — bootstrap login, ports,
+- **[Operator guide](operator-guide.md)** — bootstrap login, ports,
   persistence/reset, security posture, observability.
-- **[Tenant guide](docs/tenant-guide.md)** — onboard a tenant in the console UI
+- **[Tenant guide](tenant-guide.md)** — onboard a tenant in the console UI
   and exercise all six pillars.
-- **[Deploying SDK agents](docs/deploying-sdk-agents.md)** — host an agent built
+- **[Deploying SDK agents](deploying-sdk-agents.md)** — host an agent built
   with the OpenAI Agents SDK or Claude Agent SDK, from adapter to GCP.
 
 The capstone proof `deploy/compose/v1-proof.sh` brings the stack up and asserts
@@ -341,6 +354,64 @@ agents:
   `runtime_agent_reachable`) and proxying it returns `503` until it returns.
 - **Spawn-time-only fields** (`command`, `kind`, `memory`, `gateway`) are
   rejected on a remote agent.
+
+### Lifecycle guardrails
+
+Native `agentruntime` agents can be bounded by four operator-controlled limits:
+
+```yaml
+agents:
+  - id: support
+    name: Support Agent
+    model: anthropic/claude-sonnet-4-6
+    listen_addr: 127.0.0.1:8101
+    limits:
+      turn_timeout: 2m       # one model/tool turn
+      session_timeout: 30m   # total wall-clock session lifetime
+      max_turns: 50          # durable loop iterations
+      max_tokens: 200000     # cumulative input + output tokens
+```
+
+All fields are optional. Platform-wide defaults can be set on `runtimed` with
+`RUNTIME_LIMIT_TURN_TIMEOUT`, `RUNTIME_LIMIT_SESSION_TIMEOUT`,
+`RUNTIME_LIMIT_MAX_TURNS`, and `RUNTIME_LIMIT_MAX_TOKENS`. A field in
+`runtime.yaml` overrides its platform default; an explicit `0` (or `0s`) opts
+that agent out of the corresponding default. When no `max_turns` limit is
+resolved, the agent specification's `MaxTurns` applies, followed by the legacy
+fallback of 25.
+
+Limits are resolved by the control plane and injected into local or registered
+remote agents. Enforcement happens inside the native durable workflow:
+
+- `turn_timeout` cancels a model/tool turn that exceeds its wall-clock budget.
+- `session_timeout` includes time spent down during crash recovery.
+- `max_turns` is checked before starting the next turn.
+- `max_tokens` counts checkpointed input and output usage from completed turns;
+  cache-token counters are excluded.
+
+A breach is a terminal policy outcome, not a crashed workflow. The session is
+set to `limit_exceeded`, its SSE stream ends with an `error` event naming the
+limit (e.g. `limit exceeded: max_tokens (150231/100000)`), and
+`agent_session_limit_hits_total{agent,limit}` increments. Completed turn
+checkpoints remain recoverable. `limits:` is also valid on remote (`url:`)
+agents — enforcement runs inside the agent process.
+
+> **Reconfiguration safety:** limits are process-lifetime constants — immutable
+> for an agent process. Changing them across a restart while sessions are in
+> flight is not replay-safe—especially adding or removing `session_timeout`,
+> which changes the DBOS step sequence. Affected in-flight sessions may
+> terminate with status `error` (fail-closed). Drain in-flight sessions before
+> changing limits.
+
+On Kubernetes/remote **scheduled** agents, an operator-set
+`RUNTIME_AGENT_LIMITS` in the pod environment takes precedence when the
+control plane sends an empty value — the registration handshake skips empty
+entries.
+
+The bundled Python contract shim does not currently enforce
+`RUNTIME_AGENT_LIMITS`; configure equivalent bounds in the hosted SDK or its
+process supervisor. The contract and control plane still understand the
+terminal `limit_exceeded` status when a foreign implementation emits it.
 
 ## Authentication & multi-tenancy
 
@@ -1089,6 +1160,7 @@ reserved for it):
 | `agent_turn_duration_seconds` | `agent` | Turn wall time (buckets sized for LLM turns: 0.1s–120s). |
 | `agent_tokens_total` | `agent,direction` | LLM tokens by direction (`input`/`output`/`cache_creation`/`cache_read`). |
 | `agent_tool_calls_total` | `agent,tool` | Tool calls dispatched by the agent loop. |
+| `agent_session_limit_hits_total` | `agent,limit` | Sessions terminated by `turn_timeout`, `session_timeout`, `max_turns`, or `max_tokens`. |
 
 ### Fan-out, auth, and cardinality
 
@@ -1228,7 +1300,7 @@ principal (send it via `RUNTIME_TOKEN`).
 - **`/ui/onboarding`** — a tenant-admin self-service page: mint agent keys,
   register HTTP/OpenAPI gateway upstreams, and attach per-tenant credentials
   (the one mutating flow; CSRF-protected with an HMAC-of-session token). See the
-  [Tenant guide](docs/tenant-guide.md).
+  [Tenant guide](tenant-guide.md).
 
 When auth is enabled, the console redirects to **`/ui/login`**: with OIDC
 configured it bounces to the identity provider and stores the validated token in
@@ -1265,8 +1337,8 @@ them with `/agents/{id}`.
 | `GET /meta` | `{agent_id, contract_version}`. The versioned agent contract. |
 | `GET /metrics` | *Optional.* Prometheus text exposition for this agent. An agent without it (e.g. a foreign-SDK shim) is skipped by the fan-out scrape (reason `no_metrics`) and is **not** marked down. |
 | `POST /sessions` | Body `{"message": "..."}` (optionally with inline image data; maximum body 16 MiB). Creates a session, starts the durable workflow, returns `{"session_id": "..."}`. |
-| `GET /sessions` | List this agent's sessions: `[{id,status,turn_count}]`. Foreign-SDK shims may add timing fields. |
-| `GET /sessions/{id}` | One session's status snapshot: `{id,status,turn_count}`. Foreign-SDK shims may add timing fields. |
+| `GET /sessions` | List this agent's sessions: `[{id,status,turn_count}]`. Status is `created`, `running`, `completed`, `error`, or `limit_exceeded`. Foreign-SDK shims may add timing fields. |
+| `GET /sessions/{id}` | One session's status snapshot: `{id,status,turn_count}` with the same status vocabulary. Foreign-SDK shims may add timing fields. |
 | `GET /sessions/{id}/stream?since=<seq>` | **SSE stream** of the session's events. Replays buffered events after `since` (default 0), then streams live until a terminal `done`/`error`. Each event carries an SSE `id:` line (its sequence number) so a client can resume with `?since=`. |
 
 **Event types** (the `type` field in each SSE `data:` payload): `text`,
@@ -1629,10 +1701,9 @@ See the following references for the full picture:
 
 | Document | What it covers |
 |---|---|
-| [`hello-claude.md`](hello-claude.md) | **Human tutorial** — Part A (write the four files) + Part B (build the image, ship the bundle, register the agent, invoke through the public edge). The narrative companion to `instruction.md`. |
-| [`instruction.md`](instruction.md) | **Machine-readable build spec** — exact file contents, verification gates, and deploy steps for building a Claude Agent SDK agent and hosting it on runtime. Intended as a ground-truth reference for LLM-assisted development. |
+| [`hello-claude.md`](hello-claude.md) | **Human tutorial** — write the four files, build the image, ship the bundle, register the agent, and invoke it through the public edge. |
 | [`contrib/shims/python/README.md`](contrib/shims/python/README.md) | Shim internals, the `AgentAdapter` protocol, the `ContractEvent` vocabulary, and standalone-dev instructions. |
-| [`docs/deploying-sdk-agents.md`](docs/deploying-sdk-agents.md) | SDK-agnostic deploy path (any framework, any host). |
+| [`deploying-sdk-agents.md`](deploying-sdk-agents.md) | SDK-agnostic deploy path (any framework, any host). |
 
 ## How durability works
 
@@ -1701,7 +1772,7 @@ WantedBy=multi-user.target
 For the **complete v1.0 platform** (all six pillars: control plane + Postgres +
 bundled embedder + sandbox/browser + Prometheus/Grafana/Jaeger) in one command,
 use the turnkey compose at `deploy/compose/` and follow the
-[Quickstart](docs/quickstart.md):
+[Quickstart](quickstart.md):
 
 ```bash
 cd runtime && make compose-init
@@ -1793,6 +1864,11 @@ unaffected.
 | `RUNTIME_AGENT_ID` | agentd | (set by runtimed per agent) | The agent's id. |
 | `RUNTIME_AGENT_TENANT` | agentd | `default` | The agent's tenant, injected by the control plane; pins the memory store's isolation. |
 | `RUNTIME_AGENT_MEMORY` | agentd | (unset) | `1` when the agent opted into memory (`memory: true`); tells agentd to wire the memory tool. |
+| `RUNTIME_LIMIT_TURN_TIMEOUT` | runtimed | (unset) | Platform default for one native-agent turn, as a Go duration. Per-agent `limits.turn_timeout` overrides it; `0s` opts out. |
+| `RUNTIME_LIMIT_SESSION_TIMEOUT` | runtimed | (unset) | Platform default wall-clock lifetime for a native-agent session, as a Go duration. Downtime during recovery counts. |
+| `RUNTIME_LIMIT_MAX_TURNS` | runtimed | (unset) | Platform default durable-loop iteration cap. Per-agent `0` opts out of this default. |
+| `RUNTIME_LIMIT_MAX_TOKENS` | runtimed | (unset) | Platform default cumulative input + output token budget. Per-agent `0` opts out. |
+| `RUNTIME_AGENT_LIMITS` | agentd | (set by runtimed) | Resolved lifecycle limits as JSON. Operator-injected; do not set directly for supervised local agents. |
 | `RUNTIME_EMBED_MODEL` | agentd | (unset) | Embedding model for semantic recall. Unset ⇒ recall disabled (tag/id memory only). |
 | `RUNTIME_EMBED_DIM` | agentd | (unset) | Embedding dimension (the `vector(N)` width). Required + positive when `RUNTIME_EMBED_MODEL` is set; invalid ⇒ fatal at startup. |
 | `RUNTIME_EMBED_RECALL_K` | agentd | `5` | Max memories injected per turn. |
@@ -1892,7 +1968,7 @@ go test -tags live ./internal/sandbox/ -v   # real containers: file round-trip, 
 
 ## Project layout
 
-![Runtime project layout: top-level packages under runtime/ and their responsibilities.](docs/images/project-layout.png)
+![Runtime project layout: top-level packages under runtime/ and their responsibilities.](images/project-layout.png)
 
 ## Status, scope & limitations
 
@@ -1912,6 +1988,10 @@ shutdown, per-agent health, full-stack Docker build), plus the six pillars:
 
 - **Spine** — per-agent replica **pools** with session affinity and **load-based
   autoscaling** with graceful drain (see [Replica pools](#replica-pools--session-affinity) and [Autoscaling](#autoscaling)).
+- **Lifecycle guardrails** — native durable enforcement of per-turn timeout,
+  whole-session timeout, maximum turns, and cumulative token budgets, with the
+  terminal `limit_exceeded` status and a fleet metric for every breach (see
+  [Lifecycle guardrails](#lifecycle-guardrails)).
 - **Identity** — multi-tenant access control with OIDC human login, bcrypt-hashed
   service keys (constant-time verify), per-agent admin/operator/viewer roles,
   per-tenant secrets brokering (AES-256-GCM at rest, injected into the tenant's
@@ -1939,7 +2019,7 @@ shutdown, per-agent health, full-stack Docker build), plus the six pillars:
 - **Polyglot hosting** — the Python contract shim hosting the OpenAI Agents SDK
   and the Claude Agent SDK, each running the full nutrition investigator (see the
   [Python shim](#hosting-a-foreign-sdk-agent-python-shim) and
-  [Deploying SDK agents](docs/deploying-sdk-agents.md)).
+  [Deploying SDK agents](deploying-sdk-agents.md)).
 - **Containers / Kubernetes** — a container image + Helm chart, per-agent-pod
   scheduling (each agent its own StatefulSet attached as a remote pool), and
   **remote agents** (attach instead of spawn) with a registration handshake that
@@ -1981,8 +2061,9 @@ Each of these is a known gap, planned for a future release:
 - **Gateway** — resources/prompts passthrough, OAuth2 upstream auth,
   auto-minted agent keys, and rate limits.
 - **Polyglot hosting** — in-flight crash resume for shim-hosted agents, a
-  TypeScript shim, further adapters (PydanticAI is the next candidate), and a
-  follow-up-messages endpoint in the Go agent contract.
+  TypeScript shim, native lifecycle-limit enforcement in the Python shim,
+  further adapters (PydanticAI is the next candidate), and a follow-up-messages
+  endpoint in the Go agent contract.
 - **Sandboxes** — kernel-mode variable persistence (same tool surface, persistent
   interpreter), runtime `pip install` / relaxed egress for the code interpreter,
   per-user scoping, and a console panel.
