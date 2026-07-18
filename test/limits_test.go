@@ -188,12 +188,12 @@ func lmMetricsBody(t *testing.T, base string) string {
 }
 
 // lmHasLimitHit reports whether the merged exposition carries
-// runtime_session_limit_hits_total{agent=...,limit=...} with value want. The
+// agent_session_limit_hits_total{agent=...,limit=...} with value want. The
 // fan-out injects a replica label server-side, so we match on label content,
 // not an exact rendered series string.
 func lmHasLimitHit(body, agent, limit string, want string) bool {
 	for _, line := range strings.Split(body, "\n") {
-		if !strings.HasPrefix(line, "runtime_session_limit_hits_total{") {
+		if !strings.HasPrefix(line, "agent_session_limit_hits_total{") {
 			continue
 		}
 		if strings.Contains(line, `agent="`+agent+`"`) &&
@@ -219,7 +219,7 @@ func lmTerminal(s string) bool {
 //     "limit exceeded: max_turns (3/3)" (the loop's turn counter reaches the
 //     configured cap entering the 4th iteration's check, observed == 3);
 //   - the merged /metrics exposition carries
-//     runtime_session_limit_hits_total{agent="lim",limit="max_turns"} 1.
+//     agent_session_limit_hits_total{agent="lim",limit="max_turns"} 1.
 func TestLimitMaxTurns(t *testing.T) {
 	db := lmOpenDB(t)
 	cfg := "agents:\n" +
@@ -266,10 +266,10 @@ func TestLimitMaxTurns(t *testing.T) {
 				got = append(got, line)
 			}
 		}
-		t.Fatalf("merged /metrics missing runtime_session_limit_hits_total{agent=\"lim\",limit=\"max_turns\"} 1;\n"+
+		t.Fatalf("merged /metrics missing agent_session_limit_hits_total{agent=\"lim\",limit=\"max_turns\"} 1;\n"+
 			"limit_hits lines present: %v", got)
 	}
-	t.Log("metric OK: runtime_session_limit_hits_total{agent=\"lim\",limit=\"max_turns\"} 1")
+	t.Log("metric OK: agent_session_limit_hits_total{agent=\"lim\",limit=\"max_turns\"} 1")
 }
 
 // TestLimitTurnTimeout: an agent with limits: {turn_timeout: 2s} and

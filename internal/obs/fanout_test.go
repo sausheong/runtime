@@ -266,14 +266,17 @@ runtime_agent_up{agent="evil"} 1
 	}
 }
 
-func TestFanoutAllowsAgentOwnedRuntimeFamily(t *testing.T) {
-	// runtime_session_limit_hits_total ORIGINATES in agentd (P1.2 lifecycle
-	// guardrails) despite its runtime_ prefix — it is on the
-	// agentOwnedRuntimeFamilies allowlist and must survive the merge with the
-	// server-side agent/replica labels injected. Any OTHER runtime_* family
-	// from the agent must still be dropped.
+func TestFanoutAgentSessionLimitFamilySurvivesAndRuntimeSpoofsDrop(t *testing.T) {
+	// The limit-hit counter ORIGINATES in agentd (P1.2 lifecycle guardrails),
+	// so it lives in the agent_* namespace: agent_session_limit_hits_total
+	// must survive the merge naturally, with the server-side agent/replica
+	// labels injected — no allowlist. EVERY runtime_* family from an agent is
+	// dropped unconditionally, including the old runtime_session_limit_hits_total
+	// name (nothing allowlists it anymore): the hardening boundary is whole.
 	agent := fakeAgent(t, func(w http.ResponseWriter, _ *http.Request) {
-		fmt.Fprint(w, `# TYPE runtime_session_limit_hits_total counter
+		fmt.Fprint(w, `# TYPE agent_session_limit_hits_total counter
+agent_session_limit_hits_total{agent="lim",limit="max_turns"} 1
+# TYPE runtime_session_limit_hits_total counter
 runtime_session_limit_hits_total{agent="lim",limit="max_turns"} 1
 # TYPE runtime_bogus_total counter
 runtime_bogus_total 7
@@ -285,14 +288,17 @@ runtime_bogus_total 7
 	})
 	body := scrapeHandler(t, h)
 	mustParseClean(t, body)
-	if !strings.Contains(body, `runtime_session_limit_hits_total{agent="lim",limit="max_turns",replica="0"} 1`) {
-		t.Fatalf("agent-owned runtime_session_limit_hits_total missing from merged exposition:\n%s", body)
+	if !strings.Contains(body, `agent_session_limit_hits_total{agent="lim",limit="max_turns",replica="0"} 1`) {
+		t.Fatalf("agent_session_limit_hits_total missing from merged exposition:\n%s", body)
+	}
+	if strings.Contains(body, "runtime_session_limit_hits_total") {
+		t.Fatalf("runtime_session_limit_hits_total leaked through the reserved-namespace guard:\n%s", body)
 	}
 	if strings.Contains(body, "runtime_bogus_total") {
-		t.Fatalf("non-allowlisted runtime_* family leaked through:\n%s", body)
+		t.Fatalf("runtime_* family leaked through:\n%s", body)
 	}
-	if v := testutil.ToFloat64(c.scrapeSkips.WithLabelValues("lim", "0", "reserved_name")); v != 1 {
-		t.Fatalf("skip reason reserved_name = %v, want 1 (only runtime_bogus_total dropped)", v)
+	if v := testutil.ToFloat64(c.scrapeSkips.WithLabelValues("lim", "0", "reserved_name")); v != 2 {
+		t.Fatalf("skip reason reserved_name = %v, want 2 (both runtime_* spoofs dropped)", v)
 	}
 }
 

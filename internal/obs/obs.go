@@ -296,7 +296,7 @@ func NewAgentMetrics(agentID string) *AgentMetrics {
 		Help: "Tool calls dispatched by the agent loop.",
 	}, []string{"agent", "tool"})
 	a.limitHits = prometheus.NewCounterVec(prometheus.CounterOpts{
-		Name: "runtime_session_limit_hits_total",
+		Name: "agent_session_limit_hits_total",
 		Help: "Sessions terminated by a lifecycle limit, by limit name.",
 	}, []string{"agent", "limit"})
 	a.reg.MustRegister(a.turns, a.turnDur, a.tokens, a.toolCalls, a.limitHits)
