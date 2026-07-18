@@ -227,6 +227,14 @@ specs/plans dated 2026-06-07/08.
 
 ## 🔜 Remaining work
 
+> **Post-v1.0 direction (2026-07-18):** the AgentCore gap analysis and the
+> prioritized closure plan live in `docs/agentcore-gap-plan.md`. Headline: v1.1
+> = the "Guarded" phase (lifecycle guardrails → Cedar policy engine at the
+> gateway → token/cost metering + alerting); v1.2 = OAuth2/OBO + memory
+> strategies + gateway quotas; v1.3 = Evaluations pillar + isolation
+> hardening. Payments (x402) is explicitly out of scope. Items below remain
+> the detailed per-pillar backlog; the gap plan sequences them.
+
 ### A. Spine hardening (within this sub-project — optional, do when needed)
 
 Carried-forward debt flagged during M1–M3 reviews. None blocking; pick up if/when
