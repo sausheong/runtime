@@ -186,6 +186,7 @@ func buildNutrition(d Deps) (agentruntime.Config, error) {
 func buildTestAgent(d Deps) (agentruntime.Config, error) {
 	reg := tool.NewRegistry()
 	reg.Register(testagent.MarkerTool{DB: d.DB})
+	reg.Register(testagent.SleepTool{})
 	cfg := agentruntime.Config{
 		Spec: hrt.AgentSpec{
 			ID: d.AgentID, Name: d.AgentID, Model: "test/scripted", MaxTurns: 10,

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"os"
+	"strconv"
 	"time"
 
 	"github.com/sausheong/harness/tool"
@@ -54,4 +55,41 @@ func (m MarkerTool) Execute(ctx context.Context, _ json.RawMessage) (tool.ToolRe
 	}
 
 	return tool.ToolResult{Output: "marked"}, nil
+}
+
+// SleepTool blocks for TESTAGENT_SLEEP_MS milliseconds (default 5000) or until
+// ctx is cancelled. Used by integration tests to trip turn_timeout: RunTurn's
+// context deadline cancels ctx, the tool returns, and the turn errors with
+// context.DeadlineExceeded.
+type SleepTool struct{}
+
+// Name returns the tool name.
+func (SleepTool) Name() string { return "sleep" }
+
+// Description returns the tool description.
+func (SleepTool) Description() string { return "sleeps; used to test turn timeouts" }
+
+// Parameters returns the (empty-object) JSON Schema for the tool input.
+func (SleepTool) Parameters() json.RawMessage {
+	return json.RawMessage(`{"type":"object","properties":{}}`)
+}
+
+// IsConcurrencySafe reports true: sleeping mutates nothing.
+func (SleepTool) IsConcurrencySafe(_ json.RawMessage) bool { return true }
+
+// Execute sleeps for TESTAGENT_SLEEP_MS milliseconds (default 5000) or until
+// ctx is cancelled, whichever comes first.
+func (SleepTool) Execute(ctx context.Context, _ json.RawMessage) (tool.ToolResult, error) {
+	ms := 5000
+	if v := os.Getenv("TESTAGENT_SLEEP_MS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			ms = n
+		}
+	}
+	select {
+	case <-time.After(time.Duration(ms) * time.Millisecond):
+		return tool.ToolResult{Output: "slept"}, nil
+	case <-ctx.Done():
+		return tool.ToolResult{}, ctx.Err()
+	}
 }
