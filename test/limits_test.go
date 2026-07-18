@@ -27,6 +27,8 @@ import (
 //	TestLimitTurnTimeout              — turn_timeout aborts a stuck tool call.
 //	TestLimitTokenBudgetSurvivesRecovery — max_tokens budget is rebuilt from
 //	                                    DBOS checkpoints across a SIGKILL.
+//	TestLimitSessionTimeout           — session_timeout trips a slow looping
+//	                                    session on wall clock from start.
 //
 // Boot scaffolding follows test/autoscale_test.go (build binaries, write
 // runtime.yaml to a temp dir, start runtimed in its own process group, poll
@@ -34,9 +36,9 @@ import (
 // asEventually, asGet200, rpListenPID) are reused from the other files in
 // this package.
 //
-// Ports: ctl 8900/8901/8902, agents 8910/8920/8930 — no collision with any
-// other integration test (autoscale 88xx, replica_pools 87xx, multiagent
-// 81xx, resume 80xx).
+// Ports: ctl 8900/8901/8902/8903, agents 8910/8920/8930/8940 — no collision
+// with any other integration test (autoscale 88xx, replica_pools 87xx,
+// multiagent 81xx, resume 80xx).
 
 // lmBoot wipes durable state, builds both binaries, writes cfgYAML to a temp
 // runtime.yaml, and starts runtimed with the given extra env (TESTAGENT_* mode
@@ -415,4 +417,75 @@ func TestLimitTokenBudgetSurvivesRecovery(t *testing.T) {
 			last.Type, last.Err, wantErr, evs)
 	}
 	t.Logf("event OK: %q — token budget survived the SIGKILL/recovery", last.Err)
+}
+
+// TestLimitSessionTimeout: an agent with limits: {session_timeout: 3s} and
+// TESTAGENT_MODE=loop slowed to ~500ms per turn (so several turns complete
+// before the wall clock trips — proof this is the SESSION clock, not a
+// per-turn limit) must be terminated by the platform:
+//
+//   - terminal status "limit_exceeded";
+//   - the stored events end with an error event of the form
+//     "limit exceeded: session_timeout (<elapsed>/3000)" — elapsed varies per
+//     run (whenever the once-per-iteration check first observes >= 3000ms), so
+//     assert prefix + configured-value suffix rather than an exact string;
+//   - the merged /metrics exposition carries
+//     agent_session_limit_hits_total{agent="lim4",limit="session_timeout"} 1.
+func TestLimitSessionTimeout(t *testing.T) {
+	db := lmOpenDB(t)
+	cfg := "agents:\n" +
+		"  - {id: lim4, name: Lim4, model: test/scripted, listen_addr: 127.0.0.1:8940, limits: {session_timeout: 3s}}\n"
+	base := lmBoot(t, db, cfg, "127.0.0.1:8903",
+		"TESTAGENT_MODE=loop", "TESTAGENT_LOOP_TURN_MS=500")
+	waitURL(t, base+"/agents/lim4/healthz", 30*time.Second)
+
+	sid := lmPostSession(t, base, "lim4")
+	t.Logf("session id = %s", sid)
+
+	var finalStatus string
+	if !asEventually(t, 30*time.Second, func() bool {
+		s, _ := lmSessionRow(t, base, "lim4", sid)
+		finalStatus = s
+		return lmTerminal(s)
+	}) {
+		t.Fatalf("session never terminal (session_timeout=3s did not fire); last status %q", finalStatus)
+	}
+	if finalStatus != "limit_exceeded" {
+		t.Fatalf("status = %q, want %q", finalStatus, "limit_exceeded")
+	}
+
+	// Several ~500ms turns must have completed before the 3s wall clock
+	// tripped — this distinguishes session_timeout from a per-turn limit.
+	_, tc := lmSessionRow(t, base, "lim4", sid)
+	if tc < 2 {
+		t.Fatalf("turn_count = %d, want >= 2 (several turns should complete before the session clock trips)", tc)
+	}
+
+	evs := lmEvents(t, base, "lim4", sid)
+	if len(evs) == 0 {
+		t.Fatal("no stored events for limit-terminated session")
+	}
+	last := evs[len(evs)-1]
+	const wantPrefix = "limit exceeded: session_timeout ("
+	const wantSuffix = "/3000)"
+	if last.Type != "error" || !strings.HasPrefix(last.Err, wantPrefix) || !strings.HasSuffix(last.Err, wantSuffix) {
+		t.Fatalf("last event = {type:%q err:%q}, want type \"error\" with prefix %q and suffix %q\nall events: %+v",
+			last.Type, last.Err, wantPrefix, wantSuffix, evs)
+	}
+	t.Logf("event OK: %q (turn_count=%d)", last.Err, tc)
+
+	if !asEventually(t, 10*time.Second, func() bool {
+		return lmHasLimitHit(lmMetricsBody(t, base), "lim4", "session_timeout", "1")
+	}) {
+		body := lmMetricsBody(t, base)
+		var got []string
+		for _, line := range strings.Split(body, "\n") {
+			if strings.Contains(line, "limit_hits") {
+				got = append(got, line)
+			}
+		}
+		t.Fatalf("merged /metrics missing agent_session_limit_hits_total{agent=\"lim4\",limit=\"session_timeout\"} 1;\n"+
+			"limit_hits lines present: %v", got)
+	}
+	t.Log("metric OK: agent_session_limit_hits_total{agent=\"lim4\",limit=\"session_timeout\"} 1")
 }

@@ -114,10 +114,17 @@ func (f *fakeAdmin2) ListRegistrationTokens(ctx context.Context) ([]identity.Reg
 }
 func (f *fakeAdmin2) RevokeRegistrationToken(ctx context.Context, tokenID string) error { return nil }
 
-// fakeSec2 implements controlplane.SecretAdmin with zero-value stubs.
-type fakeSec2 struct{}
+// fakeSec2 implements controlplane.SecretAdmin with zero-value stubs;
+// SetSecret records the names it was called with so tests can assert a
+// rejected creation never reached the broker.
+type fakeSec2 struct {
+	setNames []string
+}
 
-func (f *fakeSec2) SetSecret(ctx context.Context, tenant, name, plaintext string) error { return nil }
+func (f *fakeSec2) SetSecret(ctx context.Context, tenant, name, plaintext string) error {
+	f.setNames = append(f.setNames, name)
+	return nil
+}
 func (f *fakeSec2) ListSecretNames(ctx context.Context, tenant string) ([]identity.SecretMeta, error) {
 	return nil, nil
 }
@@ -206,6 +213,46 @@ func TestOnboardingNilSecretsNoPanic(t *testing.T) {
 	h.ServeHTTP(wp2, rp2)
 	if wp2.Code != http.StatusServiceUnavailable {
 		t.Fatalf("POST secrets with csrf (nil Secrets): want 503 got %d", wp2.Code)
+	}
+}
+
+// TestOnboardingSecretReservedPrefixRejected proves the console creation path
+// enforces the same reserved-prefix guard as the /admin/secrets API: a tenant
+// secret named RUNTIME_* / DBOS__* would shadow platform control vars at
+// spawn (e.g. RUNTIME_AGENT_LIMITS={} ⇒ unlimited), so it is rejected with
+// 400 before reaching the broker.
+func TestOnboardingSecretReservedPrefixRejected(t *testing.T) {
+	sec := &fakeSec2{}
+	deps := &Onboarding{Upstreams: &fakeUpstreamStore2{}, Mutator: &fakeMut2{}, Admin: &fakeAdmin2{}, Secrets: sec}
+	h := Handler(nil, nil, OIDCConfig{}, deps)
+	token := issuedCSRF(t, h)
+
+	for _, name := range []string{"RUNTIME_AGENT_LIMITS", "DBOS__VMID"} {
+		r := adminReq("POST", "/ui/onboarding/secrets",
+			url.Values{"csrf_token": {token}, "name": {name}, "value": {"{}"}})
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("name %s: want 400 got %d", name, w.Code)
+		}
+		if !strings.Contains(w.Body.String(), "reserved prefix") {
+			t.Fatalf("name %s: body %q missing reserved-prefix message", name, w.Body.String())
+		}
+	}
+	if len(sec.setNames) != 0 {
+		t.Fatalf("reserved-prefix secret reached the broker: %v", sec.setNames)
+	}
+
+	// A non-reserved name still saves (the guard must not over-match).
+	r := adminReq("POST", "/ui/onboarding/secrets",
+		url.Values{"csrf_token": {token}, "name": {"OPENAI_API_KEY"}, "value": {"sk"}})
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	if w.Code != http.StatusSeeOther {
+		t.Fatalf("legit secret: want 303 got %d", w.Code)
+	}
+	if len(sec.setNames) != 1 || sec.setNames[0] != "OPENAI_API_KEY" {
+		t.Fatalf("legit secret not stored: %v", sec.setNames)
 	}
 }
 

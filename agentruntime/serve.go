@@ -152,6 +152,22 @@ func effectiveMaxTurns(l config.Limits, specMax int) int {
 	return 25
 }
 
+// shouldCheckSessionTimeout gates the once-per-iteration session_timeout
+// decision step: a limit must be configured AND the checkpointed workflow
+// input must carry a session start time. Pre-upgrade in-flight sessions have
+// a zero StartedAt (the field didn't exist when they were checkpointed), so
+// they skip the check rather than measuring elapsed time from year 1.
+func shouldCheckSessionTimeout(l config.Limits, startedAt time.Time) bool {
+	return l.SessionTimeoutMS > 0 && !startedAt.IsZero()
+}
+
+// sessionTimedOut is the session_timeout verdict: the session's wall-clock
+// elapsed time has reached or exceeded the configured limit. Pure, so the
+// checkpointed decision step and its tests share one comparison.
+func sessionTimedOut(elapsedMS, limitMS int64) bool {
+	return elapsedMS >= limitMS
+}
+
 // isTurnTimeout classifies a finished turn as a turn-timeout hit. Harness
 // v0.3.2's RunTurn returns a nil error on every path and reports failures on
 // TurnResult instead (StopReason "aborted" for ctx cancellation, "error" for
@@ -243,10 +259,10 @@ func (m *Manager) sessionWorkflow(ctx dbos.DBOSContext, in turnInput) (string, e
 		// session_timeout: the clock is read ONCE per live iteration inside a
 		// checkpointed decision step; replay gets the recorded verdict and
 		// never consults the clock.
-		if m.limits.SessionTimeoutMS > 0 && !in.StartedAt.IsZero() {
+		if shouldCheckSessionTimeout(m.limits, in.StartedAt) {
 			chk, cerr := dbos.RunAsStep(ctx, func(context.Context) (timeoutCheck, error) {
 				elapsed := time.Since(in.StartedAt).Milliseconds()
-				return timeoutCheck{ElapsedMS: elapsed, Exceeded: elapsed >= m.limits.SessionTimeoutMS}, nil
+				return timeoutCheck{ElapsedMS: elapsed, Exceeded: sessionTimedOut(elapsed, m.limits.SessionTimeoutMS)}, nil
 			})
 			if cerr != nil {
 				// Fail-open: a failed check must not kill the session, but it

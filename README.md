@@ -1156,7 +1156,7 @@ reserved for it):
 
 | Metric | Labels | Meaning |
 |---|---|---|
-| `agent_turns_total` | `agent,outcome` | Turns by outcome (`completed`/`error`/`aborted`/`continue`). |
+| `agent_turns_total` | `agent,outcome` | Turns by outcome (`completed`/`error`/`aborted`/`continue`/`turn_timeout`). |
 | `agent_turn_duration_seconds` | `agent` | Turn wall time (buckets sized for LLM turns: 0.1s–120s). |
 | `agent_tokens_total` | `agent,direction` | LLM tokens by direction (`input`/`output`/`cache_creation`/`cache_read`). |
 | `agent_tool_calls_total` | `agent,tool` | Tool calls dispatched by the agent loop. |

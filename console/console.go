@@ -408,6 +408,14 @@ func Handler(reg *controlplane.Registry, st store.Store, oidc OIDCConfig, onb *O
 				http.Error(w, "secrets broker not configured (set RUNTIME_SECRETS_KEYS)", http.StatusServiceUnavailable)
 				return
 			}
+			// Reserved-prefix guard: a tenant secret named RUNTIME_* / DBOS__*
+			// would shadow platform control vars at spawn (see
+			// controlplane.HasReservedEnvPrefix). Reject at creation, same as
+			// the /admin/secrets API path.
+			if controlplane.HasReservedEnvPrefix(r.FormValue("name")) {
+				http.Error(w, controlplane.ReservedEnvPrefixError(r.FormValue("name")), http.StatusBadRequest)
+				return
+			}
 			if err := onb.Secrets.SetSecret(r.Context(), p.TenantID, r.FormValue("name"), r.FormValue("value")); err != nil {
 				http.Error(w, "set secret failed", http.StatusBadRequest)
 				return

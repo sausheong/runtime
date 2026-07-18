@@ -2,6 +2,7 @@ package controlplane
 
 import (
 	"context"
+	"log/slog"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -114,6 +115,20 @@ func (a AgentProcess) envDelta(ctx context.Context) ([]string, error) {
 			return nil, err
 		}
 		for name, val := range secrets {
+			// Defense-in-depth: brokered secrets come AFTER the fixed control
+			// block above, and the last duplicate wins (exec.Cmd, and the
+			// /register fold-to-map), so a reserved-prefix name could shadow an
+			// operator control var (e.g. RUNTIME_AGENT_LIMITS={} ⇒ unlimited).
+			// Creation already rejects these; skip any that predate the guard.
+			// Logging the NAME here does not violate the no-secret-name-in-logs
+			// invariant: that invariant protects legitimate tenant secret names,
+			// and a reserved-prefix name is invalid by construction (rejected at
+			// creation, attacker-chosen). The VALUE is never logged.
+			if HasReservedEnvPrefix(name) {
+				slog.Warn("skipping brokered secret with reserved-prefix name",
+					"tenant", a.Tenant, "agent", a.AgentID, "name", name)
+				continue
+			}
 			env = append(env, name+"="+val)
 		}
 	}

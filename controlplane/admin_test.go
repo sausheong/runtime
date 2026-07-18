@@ -534,6 +534,42 @@ func TestSecretAdmin_BadNameOrValue400(t *testing.T) {
 	}
 }
 
+// TestSecretAdmin_ReservedPrefixName400 proves the creation-time guard: a
+// tenant-admin must not be able to create a secret whose name collides with a
+// platform-owned env prefix (RUNTIME_, DBOS__) — such a secret would shadow
+// operator control vars at spawn (e.g. RUNTIME_AGENT_LIMITS={} ⇒ unlimited).
+func TestSecretAdmin_ReservedPrefixName400(t *testing.T) {
+	s := newFakeAdminStore()
+	s.CreateTenant(context.Background(), "alpha", "A")
+	sa := newFakeSecretAdmin()
+	mux := adminMuxWithSecrets(s, sa)
+	for _, name := range []string{"RUNTIME_AGENT_LIMITS", "RUNTIME_GATEWAY_URL", "DBOS__VMID", "RUNTIME_", "DBOS__X"} {
+		r := withPrincipal(httptest.NewRequest("POST", "/admin/secrets",
+			strings.NewReader(`{"name":"`+name+`","value":"{}"}`)),
+			identity.Principal{TenantID: "alpha", Role: identity.RoleAdmin})
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, r)
+		if rec.Code != 400 {
+			t.Fatalf("name %s: code=%d want 400", name, rec.Code)
+		}
+		if !strings.Contains(rec.Body.String(), "reserved prefix") {
+			t.Fatalf("name %s: body %q missing reserved-prefix message", name, rec.Body.String())
+		}
+		if _, ok := sa.set["alpha"][name]; ok {
+			t.Fatalf("reserved-prefix secret %s was stored", name)
+		}
+	}
+	// Non-reserved names still work (the guard must not over-match).
+	r := withPrincipal(httptest.NewRequest("POST", "/admin/secrets",
+		strings.NewReader(`{"name":"MY_RUNTIME_KEY","value":"v"}`)),
+		identity.Principal{TenantID: "alpha", Role: identity.RoleAdmin})
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, r)
+	if rec.Code != 200 {
+		t.Fatalf("non-reserved name: code=%d body=%s want 200", rec.Code, rec.Body.String())
+	}
+}
+
 func TestSecretAdmin_Delete(t *testing.T) {
 	s := newFakeAdminStore()
 	s.CreateTenant(context.Background(), "alpha", "A")

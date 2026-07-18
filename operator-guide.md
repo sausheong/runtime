@@ -47,9 +47,10 @@ network).
 
 ## Bound agent execution
 
-Bound what any single session may consume. All limits are optional; a limit
-of zero (or an absent field) means unlimited unless a platform default is
-set. Set platform defaults on `runtimed` to prevent a runaway native agent
+Bound what any single session may consume. All limits are optional: an
+absent field falls back to the platform default (if any), while an explicit
+`0` always means unlimited, overriding any platform default. Set platform
+defaults on `runtimed` to prevent a runaway native agent
 from holding a turn indefinitely or consuming an unbounded session budget:
 
 ```bash

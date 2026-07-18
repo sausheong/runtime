@@ -92,13 +92,16 @@ func TestEnvDeltaExcludesInheritedEnv(t *testing.T) {
 // TestEnvDeltaBrokeredValueShadowsInheritedEnv proves that when a brokered
 // secret shares a name with an inherited env var, the delta (the only thing
 // returned over the network) carries the BROKERED value, never the inherited
-// one — the inherited value must not leak in the payload.
+// one — the inherited value must not leak in the payload. The sentinel name
+// is deliberately NON-reserved: RUNTIME_*/DBOS__* brokered names are now
+// skipped by the reserved-prefix guard (see
+// TestEnvDeltaSkipsReservedPrefixBrokerSecrets).
 func TestEnvDeltaBrokeredValueShadowsInheritedEnv(t *testing.T) {
-	t.Setenv("RUNTIME_C3M2_SENTINEL", "leak-me")
+	t.Setenv("C3M2_SENTINEL", "leak-me")
 	ap := AgentProcess{
 		AgentID: "a1", Addr: "127.0.0.1:8081", PGDSN: "dsn://x", Tenant: "t1",
 		broker: fakeBroker{secrets: map[string]map[string]string{
-			"t1": {"RUNTIME_C3M2_SENTINEL": "from-broker"},
+			"t1": {"C3M2_SENTINEL": "from-broker"},
 		}},
 	}
 	delta, err := ap.envDelta(context.Background())
@@ -106,11 +109,50 @@ func TestEnvDeltaBrokeredValueShadowsInheritedEnv(t *testing.T) {
 		t.Fatalf("envDelta: %v", err)
 	}
 	joined := strings.Join(delta, "\n")
-	if !strings.Contains(joined, "RUNTIME_C3M2_SENTINEL=from-broker") {
+	if !strings.Contains(joined, "C3M2_SENTINEL=from-broker") {
 		t.Fatalf("delta must carry brokered value:\n%s", joined)
 	}
 	if strings.Contains(joined, "leak-me") {
 		t.Fatalf("delta leaked inherited value:\n%s", joined)
+	}
+}
+
+// TestEnvDeltaSkipsReservedPrefixBrokerSecrets proves the defense-in-depth
+// layer: a brokered secret whose NAME collides with a platform-owned prefix
+// (RUNTIME_, DBOS__) is skipped, so it can never shadow the fixed control
+// block (brokered entries come last and the last duplicate wins in exec.Cmd
+// and the /register fold-to-map). A tenant secret named RUNTIME_AGENT_LIMITS
+// with value "{}" would otherwise erase operator-imposed limits.
+func TestEnvDeltaSkipsReservedPrefixBrokerSecrets(t *testing.T) {
+	ap := AgentProcess{
+		AgentID: "a1", Addr: "127.0.0.1:8081", PGDSN: "dsn://x", Tenant: "t1",
+		broker: fakeBroker{secrets: map[string]map[string]string{
+			"t1": {
+				"RUNTIME_AGENT_LIMITS": "{}",       // would mean "unlimited"
+				"DBOS__VMID":           "hijack#9", // would steal another replica's executor id
+				"OPENAI_API_KEY":       "sk-legit", // legitimate tenant secret
+			},
+		}},
+	}
+	delta, err := ap.envDelta(context.Background())
+	if err != nil {
+		t.Fatalf("envDelta: %v", err)
+	}
+	// The legit secret passes through.
+	assertHasEnv(t, delta, "OPENAI_API_KEY=sk-legit")
+	// The reserved-prefix values must NOT appear anywhere.
+	joined := strings.Join(delta, "\n")
+	if strings.Contains(joined, "hijack#9") || strings.Contains(joined, "RUNTIME_AGENT_LIMITS={}") {
+		t.Fatalf("reserved-prefix brokered secret leaked into delta:\n%s", joined)
+	}
+	// The fixed block's explicit-empty RUNTIME_AGENT_LIMITS survives as the
+	// LAST occurrence of that name (last duplicate wins ⇒ no limits override).
+	idx := lastIndexWithPrefix(delta, "RUNTIME_AGENT_LIMITS=")
+	if idx < 0 {
+		t.Fatalf("fixed block's RUNTIME_AGENT_LIMITS entry missing:\n%s", joined)
+	}
+	if delta[idx] != "RUNTIME_AGENT_LIMITS=" {
+		t.Fatalf("last RUNTIME_AGENT_LIMITS entry = %q (idx %d), want the fixed block's explicit empty", delta[idx], idx)
 	}
 }
 

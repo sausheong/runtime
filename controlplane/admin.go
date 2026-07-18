@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"regexp"
+	"strings"
 
 	"github.com/sausheong/runtime/internal/identity"
 )
@@ -271,6 +273,32 @@ type SecretAdmin interface {
 // var can't smuggle '=' or newlines into the child environment.
 var envNameRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
+// reservedEnvPrefixes are env-name prefixes owned by the platform. A brokered
+// tenant secret is appended AFTER the fixed control block in envDelta (last
+// duplicate wins in exec.Cmd, and the /register fold-to-map has the same
+// last-write-wins shape), so a tenant-admin secret named e.g.
+// RUNTIME_AGENT_LIMITS could shadow an operator-imposed control var. Names
+// with these prefixes are rejected at creation on every path (API + console)
+// and skipped defense-in-depth at injection time (envDelta).
+var reservedEnvPrefixes = []string{"RUNTIME_", "DBOS__"}
+
+// HasReservedEnvPrefix reports whether name collides with a platform-owned
+// env-var prefix. Exported for the console's secret-creation handler.
+func HasReservedEnvPrefix(name string) bool {
+	for _, p := range reservedEnvPrefixes {
+		if strings.HasPrefix(name, p) {
+			return true
+		}
+	}
+	return false
+}
+
+// ReservedEnvPrefixError formats the uniform rejection message for a
+// reserved-prefix secret name (shared by the API and console handlers).
+func ReservedEnvPrefixError(name string) string {
+	return fmt.Sprintf("secret name %q uses a reserved prefix (RUNTIME_, DBOS__)", name)
+}
+
 // RegisterSecretAdmin mounts /admin/secrets on mux. store is reused only for
 // effectiveTenant's tenant validation. When sa is nil the handlers return 503.
 func RegisterSecretAdmin(mux *http.ServeMux, store AdminStore, sa SecretAdmin) {
@@ -289,6 +317,10 @@ func RegisterSecretAdmin(mux *http.ServeMux, store AdminStore, sa SecretAdmin) {
 		}
 		if body.Value == "" || !envNameRe.MatchString(body.Name) {
 			http.Error(w, "valid name (env identifier) and non-empty value required", http.StatusBadRequest)
+			return
+		}
+		if HasReservedEnvPrefix(body.Name) {
+			http.Error(w, ReservedEnvPrefixError(body.Name), http.StatusBadRequest)
 			return
 		}
 		tenant, ok := effectiveTenant(w, r, store, p, body.Tenant)
