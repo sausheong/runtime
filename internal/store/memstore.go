@@ -44,7 +44,7 @@ func (m *memStore) ActiveSessionsByReplica(_ context.Context, agentID string) (m
 		if s.AgentID != agentID {
 			continue
 		}
-		if s.Status == "completed" || s.Status == "error" {
+		if s.Status == "completed" || s.Status == "error" || s.Status == "limit_exceeded" {
 			continue
 		}
 		out[s.Replica]++

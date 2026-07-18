@@ -189,5 +189,5 @@ func checkListSessions(t TestingT, c *http.Client, base string) {
 }
 
 func validStatus(s string) bool {
-	return s == "created" || s == "running" || s == "completed" || s == "error"
+	return s == "created" || s == "running" || s == "completed" || s == "error" || s == "limit_exceeded"
 }

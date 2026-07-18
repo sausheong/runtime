@@ -6,7 +6,7 @@ type SessionRow struct {
 	ID         string
 	AgentID    string
 	WorkflowID string
-	Status     string // created | running | completed | error
+	Status     string // created | running | completed | error | limit_exceeded
 	TurnCount  int
 	Replica    int
 }
@@ -23,8 +23,9 @@ type Store interface {
 	ListSessions(ctx context.Context, agentID string) ([]SessionRow, error)
 	SessionReplica(ctx context.Context, id string) (int, error)
 	// ActiveSessionsByReplica returns replica index → count of NON-terminal
-	// sessions for the agent (terminal = completed|error). The autoscaler's load
-	// read. Replicas with zero active sessions may be absent from the map.
+	// sessions for the agent (terminal = completed|error|limit_exceeded). The
+	// autoscaler's load read. Replicas with zero active sessions may be absent
+	// from the map.
 	ActiveSessionsByReplica(ctx context.Context, agentID string) (map[int]int, error)
 	SetSessionStatus(ctx context.Context, id, status string) error
 	SetTurnCount(ctx context.Context, id string, n int) error

@@ -172,4 +172,25 @@ func TestActiveSessionsByReplica(t *testing.T) {
 	}
 }
 
+func TestLimitExceededIsTerminalForActiveCount(t *testing.T) {
+	// A limit_exceeded session must NOT count as active load — otherwise the
+	// autoscaler can never drain a replica that hosted a breached session.
+	st := NewMemStore()
+	ctx := context.Background()
+	id, err := st.CreateSession(ctx, "a1", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetSessionStatus(ctx, id, "limit_exceeded"); err != nil {
+		t.Fatal(err)
+	}
+	m, err := st.ActiveSessionsByReplica(ctx, "a1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m[0] != 0 {
+		t.Errorf("limit_exceeded counted as active: %v", m)
+	}
+}
+
 func itoa(i int) string { return string(rune('0' + i)) }

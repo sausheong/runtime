@@ -36,6 +36,12 @@ func agentWithSessionShape(valid bool) http.Handler {
 	return mux
 }
 
+func TestValidStatusIncludesLimitExceeded(t *testing.T) {
+	if !validStatus("limit_exceeded") {
+		t.Error("limit_exceeded must be a valid contract status")
+	}
+}
+
 func TestRun_RejectsIncompleteSessionShape(t *testing.T) {
 	srv := httptest.NewServer(agentWithSessionShape(false))
 	defer srv.Close()

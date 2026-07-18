@@ -122,7 +122,8 @@ func TestAutoscaleGrowDrain(t *testing.T) {
 
 	// ---- Gate 1: scale-up to 3 distinct replicas ------------------------
 	// The autoscaler scales on NON-TERMINAL session count (status NOT IN
-	// completed|error). Scripted sessions complete in milliseconds, so a ONE-SHOT
+	// completed|error|limit_exceeded). Scripted sessions complete in
+	// milliseconds, so a ONE-SHOT
 	// burst all turns terminal within a single 0.3s poll window and the policy
 	// loop never observes active>target — the pool never grows past min=1 (we saw
 	// exactly this: 12 sessions, all completed in the same second, distinct=1).
@@ -236,7 +237,7 @@ func TestAutoscaleGrowDrain(t *testing.T) {
 	// First confirm all pool sessions are terminal so drain isn't blocked.
 	if !asEventually(t, 15*time.Second, func() bool {
 		nonTerminal := count(t, db,
-			`SELECT count(*) FROM sessions WHERE agent_id='pool' AND status NOT IN ('completed','error')`)
+			`SELECT count(*) FROM sessions WHERE agent_id='pool' AND status NOT IN ('completed','error','limit_exceeded')`)
 		return nonTerminal == 0
 	}) {
 		t.Logf("Gate 4 NOTE: some pool sessions still non-terminal after 15s; " +

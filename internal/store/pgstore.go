@@ -83,7 +83,7 @@ func (p *pgStore) SessionReplica(ctx context.Context, id string) (int, error) {
 func (p *pgStore) ActiveSessionsByReplica(ctx context.Context, agentID string) (map[int]int, error) {
 	rows, err := p.db.QueryContext(ctx,
 		`SELECT replica, count(*) FROM sessions
-		 WHERE agent_id=$1 AND status NOT IN ('completed','error')
+		 WHERE agent_id=$1 AND status NOT IN ('completed','error','limit_exceeded')
 		 GROUP BY replica`, agentID)
 	if err != nil {
 		return nil, err
