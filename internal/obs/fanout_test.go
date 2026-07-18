@@ -266,6 +266,36 @@ runtime_agent_up{agent="evil"} 1
 	}
 }
 
+func TestFanoutAllowsAgentOwnedRuntimeFamily(t *testing.T) {
+	// runtime_session_limit_hits_total ORIGINATES in agentd (P1.2 lifecycle
+	// guardrails) despite its runtime_ prefix — it is on the
+	// agentOwnedRuntimeFamilies allowlist and must survive the merge with the
+	// server-side agent/replica labels injected. Any OTHER runtime_* family
+	// from the agent must still be dropped.
+	agent := fakeAgent(t, func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprint(w, `# TYPE runtime_session_limit_hits_total counter
+runtime_session_limit_hits_total{agent="lim",limit="max_turns"} 1
+# TYPE runtime_bogus_total counter
+runtime_bogus_total 7
+`)
+	})
+	c := NewControlMetrics()
+	h := FanoutHandler(c, func() []ScrapeTarget {
+		return []ScrapeTarget{{Agent: "lim", BaseURL: "http://" + agent}}
+	})
+	body := scrapeHandler(t, h)
+	mustParseClean(t, body)
+	if !strings.Contains(body, `runtime_session_limit_hits_total{agent="lim",limit="max_turns",replica="0"} 1`) {
+		t.Fatalf("agent-owned runtime_session_limit_hits_total missing from merged exposition:\n%s", body)
+	}
+	if strings.Contains(body, "runtime_bogus_total") {
+		t.Fatalf("non-allowlisted runtime_* family leaked through:\n%s", body)
+	}
+	if v := testutil.ToFloat64(c.scrapeSkips.WithLabelValues("lim", "0", "reserved_name")); v != 1 {
+		t.Fatalf("skip reason reserved_name = %v, want 1 (only runtime_bogus_total dropped)", v)
+	}
+}
+
 func TestFanoutTypeConflictDropsFamily(t *testing.T) {
 	// Two agents expose the same family name with conflicting TYPEs. Exactly
 	// one survives (scrape completion order is concurrent, so either may win)

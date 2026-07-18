@@ -41,6 +41,18 @@ const agentLabel = "agent"
 // scraped metric, identifying which replica of the agent the series came from.
 const replicaLabel = "replica"
 
+// agentOwnedRuntimeFamilies are runtime_*-named families that legitimately
+// ORIGINATE in agents, exempt from the runtime_* reserved-namespace drop.
+// Safe to pass through: the agent/replica labels are injected server-side
+// (an agent can only ever affect its own series), and the control plane
+// never registers these names, so no control family can be shadowed. The
+// reserved-set check (families the control registry actually gathered) still
+// applies even to these names.
+var agentOwnedRuntimeFamilies = map[string]struct{}{
+	// P1.2 lifecycle guardrails: agentd counts its own limit terminations.
+	"runtime_session_limit_hits_total": {},
+}
+
 // FanoutHandler serves the merged exposition: the control registry's own
 // families plus every healthy agent's families, merged by name (NOT text
 // concatenation — duplicate TYPE/HELP blocks are invalid). Sub-scrapes run
@@ -52,8 +64,8 @@ const replicaLabel = "replica"
 //   - every agent metric gets agent=<registered id> injected/overwritten
 //     server-side (label-lying is impossible);
 //   - agent families colliding with control families (or any runtime_* name —
-//     the control plane owns that namespace) are dropped, reason
-//     reserved_name;
+//     the control plane owns that namespace, except the explicit
+//     agentOwnedRuntimeFamilies allowlist) are dropped, reason reserved_name;
 //   - agent families colliding with another agent's family of a different
 //     TYPE are dropped, reason type_conflict (same-type collisions are safe:
 //     the injected agent label keeps series disjoint);
@@ -108,7 +120,8 @@ func FanoutHandler(c *ControlMetrics, targets func() []ScrapeTarget) http.Handle
 				// Note: reserved_name/type_conflict skip increments below land in
 				// the NEXT exposition — the own registry was gathered above,
 				// before this merge loop.
-				if _, isReserved := reserved[name]; isReserved || strings.HasPrefix(name, "runtime_") {
+				_, agentOwned := agentOwnedRuntimeFamilies[name]
+				if _, isReserved := reserved[name]; isReserved || (strings.HasPrefix(name, "runtime_") && !agentOwned) {
 					c.ScrapeSkip(res.agent, res.replica, "reserved_name")
 					slog.Warn("metrics fan-out: dropped reserved control family",
 						"agent", res.agent, "family", name)
