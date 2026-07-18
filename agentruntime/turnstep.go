@@ -2,7 +2,10 @@ package agentruntime
 
 import (
 	"encoding/json"
+	"fmt"
+	"time"
 
+	"github.com/sausheong/harness/llm"
 	"github.com/sausheong/harness/session"
 )
 
@@ -26,6 +29,11 @@ type turnInput struct {
 	// the checkpointed workflow input, so it is re-supplied identically on DBOS
 	// replay (replay-safe) and lets turn logs correlate back to the HTTP edge.
 	RequestID string `json:"request_id,omitempty"`
+	// StartedAt is the session's wall-clock start, stamped once by
+	// startSession and re-supplied verbatim on DBOS replay: the deterministic
+	// origin for session_timeout. Zero on pre-upgrade in-flight sessions
+	// (those skip the session_timeout check).
+	StartedAt time.Time `json:"started_at,omitempty"`
 }
 
 // turnOutput is the checkpointed return value of a single turn step. On replay
@@ -35,6 +43,33 @@ type turnOutput struct {
 	Done    bool                   `json:"done"`
 	Reason  string                 `json:"reason"`
 	Entries []session.SessionEntry `json:"entries"`
+	// Usage is this turn's token usage, checkpointed with the entries so the
+	// cumulative max_tokens budget is rebuilt exactly on replay. Nil on
+	// pre-upgrade checkpoints and usage-less turns (counts 0).
+	Usage *llm.Usage `json:"usage,omitempty"`
+}
+
+// timeoutCheck is the checkpointed verdict of the once-per-iteration
+// session_timeout decision step. The step reads the real clock ONCE live;
+// on replay DBOS returns this verdict verbatim, so replay never consults
+// the clock.
+type timeoutCheck struct {
+	ElapsedMS int64 `json:"elapsed_ms"`
+	Exceeded  bool  `json:"exceeded"`
+}
+
+// sumTokens converts one turn's usage to its budget contribution:
+// input + output. Cache tokens are excluded by design. Nil ⇒ 0.
+func sumTokens(u *llm.Usage) int {
+	if u == nil {
+		return 0
+	}
+	return u.InputTokens + u.OutputTokens
+}
+
+// breachMsg formats the uniform limit-breach event text.
+func breachMsg(limit string, observed, configured int64) string {
+	return fmt.Sprintf("limit exceeded: %s (%d/%d)", limit, observed, configured)
 }
 
 // applyEntries re-applies a turn's entries onto the in-memory session. Used

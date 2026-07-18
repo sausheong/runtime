@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -16,6 +17,7 @@ import (
 	"github.com/sausheong/harness/llm"
 	hrt "github.com/sausheong/harness/runtime"
 	"github.com/sausheong/harness/session"
+	"github.com/sausheong/runtime/internal/config"
 	"github.com/sausheong/runtime/internal/obs"
 	"github.com/sausheong/runtime/internal/store"
 )
@@ -36,6 +38,10 @@ type Manager struct {
 	// RUNTIME_AGENT_REPLICA). Stamped onto each session row at create so the
 	// control plane can pin session-scoped requests back to this replica.
 	replica int
+	// limits is the operator-resolved lifecycle limit set (from
+	// RUNTIME_AGENT_LIMITS). Zero value ⇒ no limits. Immutable after Serve
+	// constructs the Manager, so workflow-body reads are deterministic.
+	limits config.Limits
 
 	mu          sync.Mutex
 	subscribers map[string][]chan WireEvent // sessionID -> live SSE subscribers
@@ -114,6 +120,41 @@ func (m *Manager) observeTurn(outcome string, dur time.Duration, usage *llm.Usag
 	}
 }
 
+// parseLimits decodes RUNTIME_AGENT_LIMITS. "" ⇒ no limits (zero value).
+func parseLimits(s string) (config.Limits, error) {
+	var l config.Limits
+	if s == "" {
+		return l, nil
+	}
+	if err := json.Unmarshal([]byte(s), &l); err != nil {
+		return config.Limits{}, fmt.Errorf("agentruntime: RUNTIME_AGENT_LIMITS: %w", err)
+	}
+	return l, nil
+}
+
+// effectiveMaxTurns resolves the turn cap: operator limit wins, then the
+// author's Spec.MaxTurns, then the legacy fallback of 25.
+func effectiveMaxTurns(l config.Limits, specMax int) int {
+	if l.MaxTurns > 0 {
+		return l.MaxTurns
+	}
+	if specMax > 0 {
+		return specMax
+	}
+	return 25
+}
+
+// failLimit terminates the session with the limit_exceeded policy outcome:
+// status, client-facing error event naming the limit, and the metric. The
+// workflow then returns normally — a breached session is a COMPLETED
+// workflow, never a dangling/retried one.
+func (m *Manager) failLimit(wfID, limit string, observed, configured int64) string {
+	_ = m.st.SetSessionStatus(context.Background(), wfID, "limit_exceeded")
+	m.publish(wfID, WireEvent{Type: "error", Err: breachMsg(limit, observed, configured)})
+	m.metrics.LimitHitObserved(limit)
+	return "limit_exceeded"
+}
+
 // sessionWorkflow is the durable per-session loop. Registered once; run with a
 // stable workflow id == the session id so a process restart recovers exactly
 // this workflow and replays completed turns from their checkpoints.
@@ -143,13 +184,10 @@ func (m *Manager) sessionWorkflow(ctx dbos.DBOSContext, in turnInput) (string, e
 
 	// maxTurns bounds the durable loop so a misbehaving agent that never
 	// stops emitting tool calls cannot spin the workflow forever (each
-	// iteration checkpoints a step). Deterministic: derived from config and
-	// the loop counter, so it behaves identically on replay. 0 ⇒ 25 (matches
-	// harness's RunTurn/Run default).
-	maxTurns := m.cfg.Spec.MaxTurns
-	if maxTurns <= 0 {
-		maxTurns = 25
-	}
+	// iteration checkpoints a step). Deterministic: derived from immutable
+	// config (operator limit > author spec > legacy 25) and the loop counter,
+	// so it behaves identically on replay.
+	maxTurns := effectiveMaxTurns(m.limits, m.cfg.Spec.MaxTurns)
 
 	// Decode the optional first-turn image once. It derives ONLY from `in` (the
 	// checkpointed workflow input), so on DBOS replay `in` is re-supplied
@@ -168,11 +206,30 @@ func (m *Manager) sessionWorkflow(ctx dbos.DBOSContext, in turnInput) (string, e
 	}
 
 	userMsg := in.UserMsg
+	// totalTokens is the cumulative max_tokens budget, accumulated ONLY from
+	// checkpointed turn outputs, so live execution and replay rebuild the
+	// identical running total.
+	totalTokens := 0
 	for turn := 0; ; turn++ {
 		if turn >= maxTurns {
-			_ = m.st.SetSessionStatus(context.Background(), wfID, "error")
-			m.publish(wfID, WireEvent{Type: "error", Err: "agent exceeded maximum turns"})
-			return "error", nil
+			return m.failLimit(wfID, "max_turns", int64(turn), int64(maxTurns)), nil
+		}
+		// max_tokens: pure arithmetic over checkpointed per-turn usage —
+		// deterministic on replay by construction.
+		if m.limits.MaxTokens > 0 && totalTokens >= m.limits.MaxTokens {
+			return m.failLimit(wfID, "max_tokens", int64(totalTokens), int64(m.limits.MaxTokens)), nil
+		}
+		// session_timeout: the clock is read ONCE per live iteration inside a
+		// checkpointed decision step; replay gets the recorded verdict and
+		// never consults the clock.
+		if m.limits.SessionTimeoutMS > 0 && !in.StartedAt.IsZero() {
+			chk, cerr := dbos.RunAsStep(ctx, func(context.Context) (timeoutCheck, error) {
+				elapsed := time.Since(in.StartedAt).Milliseconds()
+				return timeoutCheck{ElapsedMS: elapsed, Exceeded: elapsed >= m.limits.SessionTimeoutMS}, nil
+			})
+			if cerr == nil && chk.Exceeded {
+				return m.failLimit(wfID, "session_timeout", chk.ElapsedMS, m.limits.SessionTimeoutMS), nil
+			}
 		}
 		prior := canonical.Entries() // snapshot of history for this turn
 
@@ -202,10 +259,28 @@ func (m *Manager) sessionWorkflow(ctx dbos.DBOSContext, in turnInput) (string, e
 			// at-least-once, duplicated only if a crash lands between RunTurn
 			// completing and the step checkpoint committing.
 			turnCtx, tspan := obs.StartSpan(stepCtx, "agent.turn", obs.TurnAttr(turn))
+			// runCtx bounds ONE turn when a turn_timeout is configured. Derived
+			// from stepCtx so a step cancellation still propagates; the
+			// deadline-vs-cancel distinction is resolved below.
+			runCtx := stepCtx
+			if m.limits.TurnTimeoutMS > 0 {
+				var cancel context.CancelFunc
+				runCtx, cancel = context.WithTimeout(stepCtx, time.Duration(m.limits.TurnTimeoutMS)*time.Millisecond)
+				defer cancel()
+			}
 			start := time.Now()
-			tr, terr := rt.RunTurn(stepCtx, userMsg, images, nil) // headless (emit=nil)
+			tr, terr := rt.RunTurn(runCtx, userMsg, images, nil) // headless (emit=nil)
 			elapsed := time.Since(start)
 			if terr != nil {
+				if runCtx.Err() == context.DeadlineExceeded && stepCtx.Err() == nil {
+					// Turn timeout: checkpoint the verdict (NOT an error) so
+					// replay reproduces it; Entries nil ⇒ partial turn work is
+					// never applied to the canonical session.
+					tspan.SetAttributes(obs.OutcomeAttr("turn_timeout"))
+					tspan.End()
+					m.observeTurn("turn_timeout", elapsed, nil, nil)
+					return turnOutput{Done: true, Reason: "limit:turn_timeout"}, nil
+				}
 				tspan.SetAttributes(obs.OutcomeAttr("error"))
 				tspan.End()
 				m.observeTurn("error", elapsed, nil, nil)
@@ -231,13 +306,21 @@ func (m *Manager) sessionWorkflow(ctx dbos.DBOSContext, in turnInput) (string, e
 				"turn", turn,
 				"reason", tr.StopReason,
 				"request_id", in.RequestID)
-			return turnOutput{Done: tr.Done, Reason: tr.StopReason, Entries: tr.Entries}, nil
+			return turnOutput{Done: tr.Done, Reason: tr.StopReason, Entries: tr.Entries, Usage: tr.Usage}, nil
 		})
 		if stepErr != nil {
 			_ = m.st.SetSessionStatus(context.Background(), wfID, "error")
 			m.publish(wfID, WireEvent{Type: "error", Err: stepErr.Error()})
 			return "error", stepErr
 		}
+		// Turn-timeout verdict: classified in the workflow body from the
+		// checkpointed output (replay-deterministic). Entries are nil, so the
+		// timed-out turn's partial work never reaches canonical.
+		if out.Reason == "limit:turn_timeout" {
+			return m.failLimit(wfID, "turn_timeout",
+				m.limits.TurnTimeoutMS, m.limits.TurnTimeoutMS), nil
+		}
+		totalTokens += sumTokens(out.Usage)
 
 		applyEntries(canonical, out.Entries) // SOLE mutator of canonical
 		_ = m.st.SetTurnCount(context.Background(), wfID, turn+1)
@@ -271,7 +354,8 @@ func (m *Manager) startSession(ctx context.Context, userMsg, imageB64, imageMime
 	if err != nil {
 		return "", err
 	}
-	in := turnInput{UserMsg: userMsg, ImageB64: imageB64, ImageMime: imageMime, RequestID: requestID}
+	in := turnInput{UserMsg: userMsg, ImageB64: imageB64, ImageMime: imageMime,
+		RequestID: requestID, StartedAt: time.Now().UTC()}
 	if _, err := dbos.RunWorkflow(m.dbosCtx, m.sessionWorkflow, in, dbos.WithWorkflowID(sessionID)); err != nil {
 		return "", err
 	}
@@ -323,6 +407,10 @@ func Serve(ctx context.Context, cfg Config) error {
 	}
 
 	replica, _ := strconv.Atoi(os.Getenv("RUNTIME_AGENT_REPLICA")) // "" or bad ⇒ 0
+	limits, err := parseLimits(os.Getenv("RUNTIME_AGENT_LIMITS"))
+	if err != nil {
+		return err // fail fast: a malformed operator value must not silently mean "unlimited"
+	}
 	m := &Manager{
 		agentID:     cfg.Spec.ID,
 		cfg:         cfg,
@@ -331,6 +419,7 @@ func Serve(ctx context.Context, cfg Config) error {
 		metrics:     obs.NewAgentMetrics(cfg.Spec.ID),
 		authToken:   os.Getenv("RUNTIME_AGENT_AUTH_TOKEN"),
 		replica:     replica,
+		limits:      limits,
 		subscribers: map[string][]chan WireEvent{},
 	}
 
