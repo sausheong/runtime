@@ -44,6 +44,11 @@ jobs:
         with:
           go-version: '1.25.1'
           cache: true
+      - name: Enable pgvector
+        run: |
+          container_id=$(docker ps --filter ancestor=pgvector/pgvector:pg16 --format '{{.ID}}' | head -1)
+          test -n "$container_id"
+          docker exec "$container_id" psql -U runtime -d runtime -c 'CREATE EXTENSION IF NOT EXISTS vector'
       - run: make test-integration
         env:
           RUNTIME_PG_DSN: postgres://runtime:runtime@localhost:5432/runtime?sslmode=disable
@@ -60,7 +65,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: azure/setup-helm@v4
-      - run: helm dependency build deploy/charts/runtime
+      # helm-deps also unpacks the dependency: Helm 4 does not render a
+      # dependency left only as charts/postgresql-*.tgz.
+      - run: make helm-deps
       - run: bash deploy/charts/runtime/test.sh
 
   container:

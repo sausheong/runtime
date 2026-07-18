@@ -60,6 +60,7 @@ func startRuntimed(t *testing.T, cfgBody string) (string, func()) {
 	// DBOS recreates its schema on Launch.
 	mustExec(t, db, `DROP TABLE IF EXISTS session_events, sessions, agents, markers CASCADE`)
 	mustExec(t, db, `DROP SCHEMA IF EXISTS dbos CASCADE`)
+	resetIdentityTables(t, db)
 
 	// Build both binaries to a temp dir. cwd is test/, so package paths are
 	// ../cmd/...

@@ -29,7 +29,7 @@ COPY --from=build /out/sandboxd   /app/sandboxd
 COPY --from=build /out/browserd   /app/browserd
 COPY --from=build /out/runtimectl /app/runtimectl
 COPY --from=build /out/v1-probe   /app/v1-probe
-COPY runtime/runtime.yaml /app/runtime.yaml
+COPY runtime.yaml /app/runtime.yaml
 ENV RUNTIME_AGENTD_BIN=/app/agentd \
     PATH=/app:$PATH
 EXPOSE 8080

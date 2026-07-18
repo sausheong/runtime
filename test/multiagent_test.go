@@ -44,6 +44,7 @@ func TestMultiAgentRouting(t *testing.T) {
 	mustExec(t, db, `CREATE TABLE markers (id BIGSERIAL PRIMARY KEY, ran_at TIMESTAMPTZ)`)
 	mustExec(t, db, `DROP TABLE IF EXISTS session_events, sessions, agents CASCADE`)
 	mustExec(t, db, `DROP SCHEMA IF EXISTS dbos CASCADE`)
+	resetIdentityTables(t, db)
 
 	// Build BOTH binaries to a temp dir. cwd is test/, so package paths are
 	// ../cmd/...

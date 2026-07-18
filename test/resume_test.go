@@ -168,6 +168,21 @@ func mustExec(t *testing.T, db *sql.DB, q string) {
 	}
 }
 
+// resetIdentityTables makes tests that intentionally boot runtimed in open
+// mode independent of earlier identity-enabled integration tests. Identity is
+// persisted, so clearing only session/DBOS state is not sufficient: any
+// leftover tenant flips the next control plane into enforced mode.
+func resetIdentityTables(t *testing.T, db *sql.DB) {
+	t.Helper()
+	for _, q := range []string{
+		`DROP TABLE IF EXISTS service_keys CASCADE`,
+		`DROP TABLE IF EXISTS identity_users CASCADE`,
+		`DROP TABLE IF EXISTS tenants CASCADE`,
+	} {
+		mustExec(t, db, q)
+	}
+}
+
 // count runs a single-column count query and returns the int.
 func count(t *testing.T, db *sql.DB, q string) int {
 	t.Helper()
