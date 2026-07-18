@@ -270,6 +270,7 @@ type AgentMetrics struct {
 	turnDur   *prometheus.HistogramVec
 	tokens    *prometheus.CounterVec
 	toolCalls *prometheus.CounterVec
+	limitHits *prometheus.CounterVec
 }
 
 func NewAgentMetrics(agentID string) *AgentMetrics {
@@ -294,7 +295,11 @@ func NewAgentMetrics(agentID string) *AgentMetrics {
 		Name: "agent_tool_calls_total",
 		Help: "Tool calls dispatched by the agent loop.",
 	}, []string{"agent", "tool"})
-	a.reg.MustRegister(a.turns, a.turnDur, a.tokens, a.toolCalls)
+	a.limitHits = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "runtime_session_limit_hits_total",
+		Help: "Sessions terminated by a lifecycle limit, by limit name.",
+	}, []string{"agent", "limit"})
+	a.reg.MustRegister(a.turns, a.turnDur, a.tokens, a.toolCalls, a.limitHits)
 	return a
 }
 
@@ -324,6 +329,15 @@ func (a *AgentMetrics) ToolCallObserved(tool string) {
 		return
 	}
 	a.toolCalls.WithLabelValues(a.agentID, tool).Inc()
+}
+
+// LimitHitObserved records a session terminated by a lifecycle limit
+// (turn_timeout | session_timeout | max_turns | max_tokens).
+func (a *AgentMetrics) LimitHitObserved(limit string) {
+	if a == nil {
+		return
+	}
+	a.limitHits.WithLabelValues(a.agentID, limit).Inc()
 }
 
 // Handler serves this registry's exposition (agentd mounts it at /metrics).
