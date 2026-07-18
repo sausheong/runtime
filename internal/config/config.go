@@ -2,6 +2,7 @@
 package config
 
 import (
+	"encoding/json"
 	"fmt"
 	"net"
 	"net/url"
@@ -9,6 +10,7 @@ import (
 	"path"
 	"strconv"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -39,6 +41,136 @@ type AgentConfig struct {
 	// Gateway opts the agent into the platform MCP gateway (env-injected
 	// URL+key). Optional; off (default) | full (true) | search.
 	Gateway GatewayMode `yaml:"gateway"`
+
+	// LimitsRaw is the yaml `limits:` block; Limits is the RESOLVED set (yaml
+	// merged over RUNTIME_LIMIT_* env defaults) populated by Load. Valid on
+	// local AND remote agents — enforcement is agent-side.
+	LimitsRaw *LimitsConfig `yaml:"limits"`
+	Limits    Limits        `yaml:"-"`
+}
+
+// LimitsConfig is the yaml-facing per-agent `limits:` block. Pointer fields
+// distinguish "absent" (inherit platform env default) from an explicit zero
+// (opt out of the default). Durations are Go duration strings.
+type LimitsConfig struct {
+	TurnTimeout    *string `yaml:"turn_timeout"`
+	SessionTimeout *string `yaml:"session_timeout"`
+	MaxTurns       *int    `yaml:"max_turns"`
+	MaxTokens      *int    `yaml:"max_tokens"`
+}
+
+// Limits is the RESOLVED per-agent limit set (yaml merged over platform env
+// defaults). Zero value of any field ⇒ that limit is unlimited. This struct is
+// the wire shape serialized into RUNTIME_AGENT_LIMITS.
+type Limits struct {
+	TurnTimeoutMS    int64 `json:"turn_timeout_ms,omitempty"`
+	SessionTimeoutMS int64 `json:"session_timeout_ms,omitempty"`
+	MaxTurns         int   `json:"max_turns,omitempty"`
+	MaxTokens        int   `json:"max_tokens,omitempty"`
+}
+
+// Empty reports whether no limit is set.
+func (l Limits) Empty() bool { return l == Limits{} }
+
+// JSON returns the RUNTIME_AGENT_LIMITS payload, or "" when no limit is set
+// (the injector emits an empty env value, which agentd treats as unset).
+func (l Limits) JSON() string {
+	if l.Empty() {
+		return ""
+	}
+	b, _ := json.Marshal(l)
+	return string(b)
+}
+
+// ResolveLimits merges an agent's limits block over the platform env defaults
+// (RUNTIME_LIMIT_TURN_TIMEOUT, RUNTIME_LIMIT_SESSION_TIMEOUT,
+// RUNTIME_LIMIT_MAX_TURNS, RUNTIME_LIMIT_MAX_TOKENS). Per field: agent-set
+// wins (an explicit zero means unlimited, overriding the default); absent
+// falls back to the env default; neither ⇒ unlimited.
+func ResolveLimits(raw *LimitsConfig, getenv func(string) string) (Limits, error) {
+	dur := func(field string, agentVal *string, envKey string) (int64, error) {
+		src, from := "", ""
+		if agentVal != nil {
+			src, from = *agentVal, "limits."+field
+		} else if v := getenv(envKey); v != "" {
+			src, from = v, envKey
+		}
+		if src == "" {
+			return 0, nil
+		}
+		d, err := time.ParseDuration(src)
+		if err != nil {
+			return 0, fmt.Errorf("config: %s: invalid duration %q: %w", from, src, err)
+		}
+		if d < 0 {
+			return 0, fmt.Errorf("config: %s: negative duration %q", from, src)
+		}
+		return d.Milliseconds(), nil
+	}
+	num := func(field string, agentVal *int, envKey string) (int, error) {
+		if agentVal != nil {
+			if *agentVal < 0 {
+				return 0, fmt.Errorf("config: limits.%s: negative value %d", field, *agentVal)
+			}
+			return *agentVal, nil
+		}
+		if v := getenv(envKey); v != "" {
+			n, err := strconv.Atoi(v)
+			if err != nil || n < 0 {
+				return 0, fmt.Errorf("config: %s: invalid value %q", envKey, v)
+			}
+			return n, nil
+		}
+		return 0, nil
+	}
+
+	var l Limits
+	var err error
+	if l.TurnTimeoutMS, err = dur("turn_timeout", raw.turnTimeoutPtr(), "RUNTIME_LIMIT_TURN_TIMEOUT"); err != nil {
+		return Limits{}, err
+	}
+	if l.SessionTimeoutMS, err = dur("session_timeout", raw.sessionTimeoutPtr(), "RUNTIME_LIMIT_SESSION_TIMEOUT"); err != nil {
+		return Limits{}, err
+	}
+	if l.MaxTurns, err = num("max_turns", raw.maxTurnsPtr(), "RUNTIME_LIMIT_MAX_TURNS"); err != nil {
+		return Limits{}, err
+	}
+	if l.MaxTokens, err = num("max_tokens", raw.maxTokensPtr(), "RUNTIME_LIMIT_MAX_TOKENS"); err != nil {
+		return Limits{}, err
+	}
+	if l.TurnTimeoutMS > 0 && l.SessionTimeoutMS > 0 && l.TurnTimeoutMS > l.SessionTimeoutMS {
+		return Limits{}, fmt.Errorf("config: limits: turn_timeout (%dms) exceeds session_timeout (%dms)", l.TurnTimeoutMS, l.SessionTimeoutMS)
+	}
+	return l, nil
+}
+
+// nil-safe accessors so ResolveLimits(nil, ...) means "no block".
+func (lc *LimitsConfig) turnTimeoutPtr() *string {
+	if lc == nil {
+		return nil
+	}
+	return lc.TurnTimeout
+}
+
+func (lc *LimitsConfig) sessionTimeoutPtr() *string {
+	if lc == nil {
+		return nil
+	}
+	return lc.SessionTimeout
+}
+
+func (lc *LimitsConfig) maxTurnsPtr() *int {
+	if lc == nil {
+		return nil
+	}
+	return lc.MaxTurns
+}
+
+func (lc *LimitsConfig) maxTokensPtr() *int {
+	if lc == nil {
+		return nil
+	}
+	return lc.MaxTokens
 }
 
 // AutoscaleConfig, when present on a local agent, makes its replica pool float
@@ -227,6 +359,14 @@ func (c *Config) Validate() error {
 		if a.Tenant == "" {
 			a.Tenant = "default"
 		}
+		// Resolve limits (yaml block merged over RUNTIME_LIMIT_* env defaults)
+		// so callers see a.Limits populated after Load. Valid on local AND
+		// remote agents — enforcement is agent-side.
+		l, err := ResolveLimits(a.LimitsRaw, os.Getenv)
+		if err != nil {
+			return fmt.Errorf("agent %q: %w", a.ID, err)
+		}
+		a.Limits = l
 		if ids[a.ID] {
 			return fmt.Errorf("config: duplicate agent id %q", a.ID)
 		}
