@@ -233,10 +233,21 @@ func main() {
 				return v, nil
 			}
 		}
+		// OAuth2 outbound credentials (P2.1): the broker mints/caches
+		// client_credentials tokens per (tenant, cred) with live rotation on a
+		// generation bump. Built only when a broker exists; base is
+		// context.Background() since it bounds token-fetch lifetime for the whole
+		// process, not any one call. WithOAuth2(nil) and a nil Handler.OAuth2 are
+		// safe no-ops (dialWith guards m.oauth != nil; gate #5 guards h.OAuth2 != nil).
+		var oauthMgr *gateway.OAuth2Manager
+		if secretBroker != nil {
+			oauthMgr = gateway.NewOAuth2Manager(context.Background(), secretBroker)
+		}
 		// WithCredentials(nil) is safe: dialWith only invokes the resolver when
 		// m.cred != nil, so a nil resolver (file upstreams, no broker) is a no-op.
-		gwManager = gateway.NewManager(servers, gateway.WithCredentials(resolver))
+		gwManager = gateway.NewManager(servers, gateway.WithCredentials(resolver), gateway.WithOAuth2(oauthMgr))
 		gwHandler = gateway.NewHandler(gwManager)
+		gwHandler.OAuth2 = oauthMgr
 		// Metrics wiring must precede gwManager.Start (no race on the first
 		// connect transition).
 		gwManager.Metrics = cm
