@@ -205,6 +205,12 @@ func (r restTool) Execute(ctx context.Context, input json.RawMessage) (tool.Tool
 	for k, v := range r.staticHeaders {
 		req.Header.Set(k, v)
 	}
+	// Per-call platform enrichment (principal claims) overwrites caller headers;
+	// validated non-colliding with static/cred at load. Empty ⇒ no-op.
+	enriched := EnrichedHeadersFrom(ctx)
+	for k, v := range enriched {
+		req.Header.Set(k, v)
+	}
 	for prop, wireName := range r.headerParams {
 		raw, ok := args[prop]
 		if !ok {
@@ -212,6 +218,9 @@ func (r restTool) Execute(ctx context.Context, input json.RawMessage) (tool.Tool
 		}
 		if _, clash := headerClash(r.staticHeaders, wireName); clash {
 			return tool.ToolResult{Error: fmt.Sprintf("header %q is set by gateway configuration and cannot be overridden", wireName)}, nil
+		}
+		if _, clash := headerClash(enriched, wireName); clash {
+			return tool.ToolResult{Error: fmt.Sprintf("header %q is set by gateway enrichment and cannot be overridden", wireName)}, nil
 		}
 		req.Header.Set(wireName, scalarString(raw))
 	}

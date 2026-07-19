@@ -432,6 +432,22 @@ func (m *Manager) ForwardsTenant(toolName string) bool {
 	return false
 }
 
+// EnrichFor returns the claim→header enrichment map for the upstream serving
+// the given gateway tool name (<server>__<tool>), or nil. Names without the
+// "__" separator (e.g. search_tools) never enrich. Safe for concurrent use.
+func (m *Manager) EnrichFor(toolName string) map[string]string {
+	srv, _, ok := strings.Cut(toolName, "__")
+	if !ok {
+		return nil
+	}
+	for _, u := range m.snapshot() {
+		if u.cfg.Name == srv {
+			return u.cfg.Enrich
+		}
+	}
+	return nil
+}
+
 // Status returns per-upstream state. tenant=="" ⇒ unscoped (all upstreams);
 // otherwise only upstreams visible to that tenant.
 func (m *Manager) Status(tenant string) []UpstreamStatus {

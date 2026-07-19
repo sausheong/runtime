@@ -192,7 +192,7 @@ func (h *Handler) serverFor(p identity.Principal, ok bool, mode viewMode) *sdk.S
 			Name:        t.Name(),
 			Description: t.Description(),
 			InputSchema: json.RawMessage(t.Parameters()),
-		}, h.toolHandler(key, t, h.m.ForwardsTenant(t.Name()), mode))
+		}, h.toolHandler(key, t, h.m.ForwardsTenant(t.Name()), h.m.EnrichFor(t.Name()), mode))
 	}
 	if mode == modeSearch {
 		srv.AddTool(searchToolDef(), h.searchHandler(key, tenant))
@@ -218,7 +218,7 @@ func (h *Handler) serverFor(p identity.Principal, ok bool, mode viewMode) *sdk.S
 // the tools/call, so a per-request identity middleware upstream of HTTP()
 // is honored here — confirmed by TestServerViewerCannotCall passing via
 // this ctx path (no serverFor-time fallback needed).
-func (h *Handler) toolHandler(builtFor string, t tool.Tool, forwardTenant bool, mode viewMode) sdk.ToolHandler {
+func (h *Handler) toolHandler(builtFor string, t tool.Tool, forwardTenant bool, enrich map[string]string, mode viewMode) sdk.ToolHandler {
 	return func(ctx context.Context, req *sdk.CallToolRequest) (*sdk.CallToolResult, error) {
 		p, ok := h.PrincipalFor(ctx)
 		callerBase, _ := principalView(p, ok)
@@ -291,6 +291,13 @@ func (h *Handler) toolHandler(builtFor string, t tool.Tool, forwardTenant bool, 
 			args = injected
 		}
 		serverName, _, _ := strings.Cut(t.Name(), "__") // sound: "__" banned in server names
+		// Per-call header enrichment (OpenAPI upstreams): resolve the principal's
+		// claims into outbound headers and attach to ctx so the REST adapter can
+		// apply them (overwriting any caller-supplied same-named header). Empty
+		// enrich ⇒ nil ⇒ ctx unchanged. Done BEFORE StartSpan so uctx inherits it.
+		if enriched := ResolveEnrichedHeaders(enrich, p, ok); enriched != nil {
+			ctx = WithEnrichedHeaders(ctx, enriched)
+		}
 		start := time.Now()
 		uctx, uspan := obs.StartSpan(ctx, "gateway.upstream",
 			obs.GatewayServerAttr(serverName), obs.GatewayToolAttr(t.Name()))
