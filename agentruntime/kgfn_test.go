@@ -17,7 +17,7 @@ func (stubKG) Ingest(context.Context, []hrt.Message) {}
 func TestConfig_KGFnField(t *testing.T) {
 	called := false
 	cfg := Config{
-		KGFn: func(model string) hrt.KnowledgeGraph {
+		KGFn: func(model, sessionID string) hrt.KnowledgeGraph {
 			called = true
 			return stubKG{}
 		},
@@ -25,7 +25,7 @@ func TestConfig_KGFnField(t *testing.T) {
 	if cfg.KGFn == nil {
 		t.Fatal("KGFn field must be settable")
 	}
-	if kg := cfg.KGFn("m"); kg == nil || !called {
+	if kg := cfg.KGFn("m", "s"); kg == nil || !called {
 		t.Fatal("KGFn must return the KG")
 	}
 }

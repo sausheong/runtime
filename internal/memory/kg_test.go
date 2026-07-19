@@ -236,6 +236,26 @@ func TestKG_IngestEmbedFailSavesAnyway(t *testing.T) {
 	}
 }
 
+func TestForSession_BindsSessionIDToIngest(t *testing.T) {
+	var gotSession string
+	g := &KG{
+		save: func(_ context.Context, _ hmem.Entry) error { return nil },
+	}
+	// A summary strategy that records the session id it was asked to write under.
+	g.putSummary = func(_ context.Context, sessionID, _ string) error { gotSession = sessionID; return nil }
+	g.strategies = []Strategy{&fakeStrategy{kind: "summary", mode: WriteSupersede, shouldRun: true, records: []string{"digest"}}}
+	done := make(chan struct{})
+	g.ingestDone = func() { close(done) }
+	g.sem = make(chan struct{}, 1)
+
+	kg := g.ForSession("sess-42")
+	kg.Ingest(context.Background(), []hrt.Message{{Role: "user", Content: "one two three"}, {Role: "assistant", Content: "ok"}})
+	<-done
+	if gotSession != "sess-42" {
+		t.Fatalf("summary written under session %q, want sess-42", gotSession)
+	}
+}
+
 func TestKG_IngestDropsOverCapacity(t *testing.T) {
 	ext := &fakeExtractor{facts: []string{"x"}}
 	saver := &recordingSaver{}

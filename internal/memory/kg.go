@@ -121,6 +121,45 @@ func newKGWithIngest(emb Embedder, ext Extractor, s searcher, sv saver, dedupFlo
 	}
 }
 
+// ForSession returns a KnowledgeGraph view bound to one session id, so summary
+// write (WriteSupersede) and summary recall key on the calling session. The
+// underlying KG is process-shared; the wrapper carries only the id, passed as a
+// parameter through the ingest goroutine — never stored on the shared KG, so
+// concurrent sessions cannot clobber each other. The harness KnowledgeGraph
+// interface is unchanged; this adapts to it.
+func (g *KG) ForSession(sessionID string) hrt.KnowledgeGraph {
+	return sessionKG{kg: g, sid: sessionID}
+}
+
+// sessionKG is the per-session wrapper: one instance per ForSession call binds a
+// single session id to the shared KG's recall/ingest.
+type sessionKG struct {
+	kg  *KG
+	sid string
+}
+
+func (w sessionKG) ShouldRecall(query string) bool { return w.kg.ShouldRecall(query) }
+func (w sessionKG) Recall(ctx context.Context, query string) string {
+	return w.kg.recallForSession(ctx, query, w.sid)
+}
+func (w sessionKG) Ingest(ctx context.Context, thread []hrt.Message) {
+	w.kg.ingestForSession(ctx, thread, w.sid)
+}
+
+// ingestForSession runs ingest with the session id bound (for WriteSupersede),
+// routing through the same gated, race-free path as the legacy Ingest — the sctx
+// is threaded as a parameter, never stored on the shared KG.
+func (g *KG) ingestForSession(_ context.Context, thread []hrt.Message, sessionID string) {
+	g.ingestWith(StrategyContext{SessionID: sessionID}, thread)
+}
+
+// recallForSession returns the recall block for the session. In this task it is
+// exactly today's fact-similarity recall; the summary block is added in Task 4
+// (the sessionID param is kept now so Task 4 only edits the body).
+func (g *KG) recallForSession(ctx context.Context, query, _ string) string {
+	return g.Recall(ctx, query)
+}
+
 // ShouldRecall is a cheap gate: skip empty/whitespace/very short inputs where
 // recall would not help. Called synchronously at Run start.
 func (g *KG) ShouldRecall(query string) bool {

@@ -111,7 +111,7 @@ func wireMemory(cfg *agentruntime.Config, d Deps) error {
 			kgOpts = append(kgOpts, memory.WithIngest(ingestExt, dedupFloor, minMsgs, maxInflight))
 		}
 		kg := memory.NewKG(st, k, floor, kgOpts...)
-		cfg.KGFn = func(string) hrt.KnowledgeGraph { return kg }
+		cfg.KGFn = func(_, sessionID string) hrt.KnowledgeGraph { return kg.ForSession(sessionID) }
 	}
 	return nil
 }

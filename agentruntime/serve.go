@@ -60,9 +60,13 @@ type Manager struct {
 
 // buildRuntime constructs a fresh harness Runtime bound to sess. No compaction
 // in M1 (durability correctness first).
-func (m *Manager) buildRuntime(sess *session.Session) (*hrt.Runtime, error) {
+func (m *Manager) buildRuntime(sess *session.Session, sessionID string) (*hrt.Runtime, error) {
+	deps := hrt.RuntimeDeps{}
+	if m.cfg.KGFn != nil {
+		deps.KGFn = func(model string) hrt.KnowledgeGraph { return m.cfg.KGFn(model, sessionID) }
+	}
 	return hrt.BuildRuntime(
-		hrt.RuntimeDeps{KGFn: m.cfg.KGFn},
+		deps,
 		hrt.RuntimeInputs{
 			Provider:   m.cfg.Provider,
 			Tools:      m.cfg.Tools,
@@ -289,7 +293,7 @@ func (m *Manager) sessionWorkflow(ctx dbos.DBOSContext, in turnInput) (string, e
 			for _, e := range prior {
 				turnSess.Append(e)
 			}
-			rt, err := m.buildRuntime(turnSess)
+			rt, err := m.buildRuntime(turnSess, wfID)
 			if err != nil {
 				return turnOutput{}, err
 			}
