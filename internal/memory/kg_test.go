@@ -248,7 +248,7 @@ func TestForSession_BindsSessionIDToIngest(t *testing.T) {
 	g.ingestDone = func() { close(done) }
 	g.sem = make(chan struct{}, 1)
 
-	kg := g.ForSession("sess-42")
+	kg := g.ForSession("sess-42", "")
 	kg.Ingest(context.Background(), []hrt.Message{{Role: "user", Content: "one two three"}, {Role: "assistant", Content: "ok"}})
 	<-done
 	if gotSession != "sess-42" {

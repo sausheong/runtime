@@ -19,6 +19,7 @@ import (
 	hrt "github.com/sausheong/harness/runtime"
 	"github.com/sausheong/harness/session"
 	"github.com/sausheong/runtime/internal/config"
+	"github.com/sausheong/runtime/internal/memory"
 	"github.com/sausheong/runtime/internal/obs"
 	"github.com/sausheong/runtime/internal/store"
 )
@@ -66,10 +67,10 @@ type Manager struct {
 
 // buildRuntime constructs a fresh harness Runtime bound to sess. No compaction
 // in M1 (durability correctness first).
-func (m *Manager) buildRuntime(sess *session.Session, sessionID string) (*hrt.Runtime, error) {
+func (m *Manager) buildRuntime(sess *session.Session, sessionID, actor string) (*hrt.Runtime, error) {
 	deps := hrt.RuntimeDeps{}
 	if m.cfg.KGFn != nil {
-		deps.KGFn = func(model string) hrt.KnowledgeGraph { return m.cfg.KGFn(model, sessionID) }
+		deps.KGFn = func(model string) hrt.KnowledgeGraph { return m.cfg.KGFn(model, sessionID, actor) }
 	}
 	return hrt.BuildRuntime(
 		deps,
@@ -299,7 +300,7 @@ func (m *Manager) sessionWorkflow(ctx dbos.DBOSContext, in turnInput) (string, e
 			for _, e := range prior {
 				turnSess.Append(e)
 			}
-			rt, err := m.buildRuntime(turnSess, wfID)
+			rt, err := m.buildRuntime(turnSess, wfID, in.Subject)
 			if err != nil {
 				return turnOutput{}, err
 			}
@@ -328,7 +329,7 @@ func (m *Manager) sessionWorkflow(ctx dbos.DBOSContext, in turnInput) (string, e
 				defer cancel()
 			}
 			start := time.Now()
-			tr, terr := rt.RunTurn(runCtx, userMsg, images, nil) // headless (emit=nil)
+			tr, terr := rt.RunTurn(memory.WithActor(runCtx, in.Subject), userMsg, images, nil) // headless (emit=nil); actor on ctx for the memory tool + recall path
 			elapsed := time.Since(start)
 			// Harness v0.3.2 contract: RunTurn returns a nil error on EVERY
 			// path — failures ride TurnResult (StopReason "aborted" on ctx

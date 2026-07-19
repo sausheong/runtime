@@ -147,30 +147,34 @@ func newKGWithIngest(emb Embedder, ext Extractor, s searcher, sv saver, dedupFlo
 // parameter through the ingest goroutine — never stored on the shared KG, so
 // concurrent sessions cannot clobber each other. The harness KnowledgeGraph
 // interface is unchanged; this adapts to it.
-func (g *KG) ForSession(sessionID string) hrt.KnowledgeGraph {
-	return sessionKG{kg: g, sid: sessionID}
+func (g *KG) ForSession(sessionID, actor string) hrt.KnowledgeGraph {
+	return sessionKG{kg: g, sid: sessionID, actor: actor}
 }
 
 // sessionKG is the per-session wrapper: one instance per ForSession call binds a
-// single session id to the shared KG's recall/ingest.
+// single session id (and caller actor) to the shared KG's recall/ingest.
 type sessionKG struct {
-	kg  *KG
-	sid string
+	kg    *KG
+	sid   string
+	actor string
 }
 
 func (w sessionKG) ShouldRecall(query string) bool { return w.kg.ShouldRecall(query) }
 func (w sessionKG) Recall(ctx context.Context, query string) string {
-	return w.kg.recallForSession(ctx, query, w.sid)
+	// Wrap the live turn ctx with the actor BEFORE recall so the Store's
+	// SearchSimilar (Task 6) scopes the read to (tenant, actor_id=actor).
+	return w.kg.recallForSession(WithActor(ctx, w.actor), query, w.sid)
 }
 func (w sessionKG) Ingest(ctx context.Context, thread []hrt.Message) {
-	w.kg.ingestForSession(ctx, thread, w.sid)
+	w.kg.ingestForSession(ctx, thread, w.sid, w.actor)
 }
 
-// ingestForSession runs ingest with the session id bound (for WriteSupersede),
-// routing through the same gated, race-free path as the legacy Ingest — the sctx
-// is threaded as a parameter, never stored on the shared KG.
-func (g *KG) ingestForSession(_ context.Context, thread []hrt.Message, sessionID string) {
-	g.ingestWith(StrategyContext{SessionID: sessionID}, thread)
+// ingestForSession runs ingest with the session id + actor bound (for
+// WriteSupersede and actor-scoped writes), routing through the same gated,
+// race-free path as the legacy Ingest — the sctx is threaded as a parameter,
+// never stored on the shared KG.
+func (g *KG) ingestForSession(_ context.Context, thread []hrt.Message, sessionID, actor string) {
+	g.ingestWith(StrategyContext{SessionID: sessionID, Actor: actor}, thread)
 }
 
 // recallForSession returns the recall block for the session: the fact-similarity
@@ -280,7 +284,9 @@ func (g *KG) runIngest(sctx StrategyContext, thread []hrt.Message) {
 	// Fresh context: the request ctx is typically cancelled by the time the
 	// harness fires Ingest in its end-of-Run defer. The extractor's own client
 	// timeout (30s) bounds how long a stuck extraction can hold its sem slot.
-	ctx := context.Background()
+	// Re-attach the actor (carried as data on sctx, since the background ctx has
+	// none) so isDuplicate's search + save are actor-scoped.
+	ctx := WithActor(context.Background(), sctx.Actor)
 	facts, err := g.extractor.Extract(ctx, thread)
 	if err != nil {
 		slog.Warn("memory: ingest extract failed", "err", err)

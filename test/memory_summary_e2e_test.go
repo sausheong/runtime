@@ -122,11 +122,11 @@ func TestSummaryStrategyEndToEnd(t *testing.T) {
 
 	// Drive 3 completed turns in one session S, polling after each so the async
 	// write lands before the next turn (deterministic supersede ordering).
-	kg.ForSession("S").Ingest(ctx, thread("1"))
+	kg.ForSession("S", "").Ingest(ctx, thread("1"))
 	waitForSummary(t, st, "S", "summary #1")
-	kg.ForSession("S").Ingest(ctx, thread("2"))
+	kg.ForSession("S", "").Ingest(ctx, thread("2"))
 	waitForSummary(t, st, "S", "summary #2")
-	kg.ForSession("S").Ingest(ctx, thread("3"))
+	kg.ForSession("S", "").Ingest(ctx, thread("3"))
 	waitForSummary(t, st, "S", "summary #3")
 
 	// Assertion 1: supersede, not accumulate — exactly ONE live summary row.
@@ -145,7 +145,7 @@ func TestSummaryStrategyEndToEnd(t *testing.T) {
 
 	// Assertion 3: per-session isolation — S2 gets its OWN single summary; S is
 	// unchanged. Driving S2 once produces the next digest ("summary #4").
-	kg.ForSession("S2").Ingest(ctx, thread("s2"))
+	kg.ForSession("S2", "").Ingest(ctx, thread("s2"))
 	waitForSummary(t, st, "S2", "summary #4")
 	if n := countLiveSummaries(t, db, "S2"); n != 1 {
 		t.Fatalf("want exactly 1 live summary row for session S2, got %d", n)
@@ -169,7 +169,7 @@ func TestSummaryStrategyEndToEnd(t *testing.T) {
 	// empty (a fresh attach), yet recallForSession surfaces the session's own
 	// stored summary. ShouldRecall requires >=3 words, so use a >=3-word query.
 	// No embedder ⇒ the fact block is empty; the summary block is what appears.
-	resume := kg.ForSession("S").Recall(ctx, "what did we discuss earlier")
+	resume := kg.ForSession("S", "").Recall(ctx, "what did we discuss earlier")
 	if !strings.Contains(resume, "summary #3") {
 		t.Fatalf("recall on resume must surface the session's latest summary, got %q", resume)
 	}

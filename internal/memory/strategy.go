@@ -27,6 +27,12 @@ const (
 // on it.
 type StrategyContext struct {
 	SessionID string
+	// Actor is the caller's forwarded subject, captured before the ingest
+	// goroutine detaches. It travels as data here (not on ctx) because the
+	// harness fires Ingest under context.Background(), discarding the turn ctx;
+	// runStrategies/runIngest re-attach it to the fresh background ctx before any
+	// Store write so writes are actor-scoped. Empty ⇒ the tenant-wide bucket.
+	Actor string
 }
 
 // Strategy is one memory-extraction kind (fact, summary, …). Extract turns a
@@ -43,7 +49,7 @@ type Strategy interface {
 // and skipped, never surfaced (ingest must never break a turn). Uses a fresh
 // context.Background (the caller detaches from the request ctx before invoking).
 func (g *KG) runStrategies(sctx StrategyContext, thread []hrt.Message) {
-	ctx := context.Background()
+	ctx := WithActor(context.Background(), sctx.Actor)
 	for _, st := range g.strategies {
 		if !st.ShouldRun(thread) {
 			continue
