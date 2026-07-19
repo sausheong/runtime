@@ -20,3 +20,8 @@ ALTER TABLE memory_events ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'f
 ALTER TABLE memory_events ADD COLUMN IF NOT EXISTS session_id TEXT;
 CREATE INDEX IF NOT EXISTS memory_events_summary_idx
     ON memory_events (tenant_id, session_id) WHERE kind = 'summary';
+
+-- P2.2 M2: actor namespacing. Additive; existing rows read as actor_id=''
+-- (the tenant-wide bucket). A non-empty actor_id scopes rows to one caller.
+ALTER TABLE memory_events ADD COLUMN IF NOT EXISTS actor_id TEXT NOT NULL DEFAULT '';
+CREATE INDEX IF NOT EXISTS memory_events_actor_idx ON memory_events (tenant_id, actor_id);

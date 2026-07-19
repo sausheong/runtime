@@ -116,6 +116,7 @@ const liveSelect = `
 SELECT e.entry_id, e.content, e.tags, e.origin, e.created_at, e.original_created_at
 FROM   memory_events e
 WHERE  e.tenant_id = $1
+  AND  e.actor_id = $2
   AND  e.kind <> 'summary'
   AND  e.op IN ('create','update')
   AND  NOT EXISTS (SELECT 1 FROM memory_events s
@@ -172,17 +173,18 @@ func (s *Store) Save(ctx context.Context, e hmem.Entry) (hmem.Entry, error) {
 	}
 	e.CreatedAt = now
 	e.UpdatedAt = now
+	actor := actorFrom(ctx)
 	var err error
 	if s.embedder == nil {
 		_, err = s.db.ExecContext(ctx,
-			`INSERT INTO memory_events (tenant_id, op, entry_id, content, tags, origin, created_at, kind)
-			 VALUES ($1,'create',$2,$3,$4,$5,$6,'fact')`,
-			s.tenant, e.ID, e.Content, textArray(e.Tags), e.Origin, now)
+			`INSERT INTO memory_events (tenant_id, op, entry_id, content, tags, origin, created_at, kind, actor_id)
+			 VALUES ($1,'create',$2,$3,$4,$5,$6,'fact',$7)`,
+			s.tenant, e.ID, e.Content, textArray(e.Tags), e.Origin, now, actor)
 	} else {
 		_, err = s.db.ExecContext(ctx,
-			`INSERT INTO memory_events (tenant_id, op, entry_id, content, tags, origin, created_at, kind, embedding)
-			 VALUES ($1,'create',$2,$3,$4,$5,$6,'fact',$7)`,
-			s.tenant, e.ID, e.Content, textArray(e.Tags), e.Origin, now, s.embedOrNil(ctx, e.ID, e.Content))
+			`INSERT INTO memory_events (tenant_id, op, entry_id, content, tags, origin, created_at, kind, actor_id, embedding)
+			 VALUES ($1,'create',$2,$3,$4,$5,$6,'fact',$7,$8)`,
+			s.tenant, e.ID, e.Content, textArray(e.Tags), e.Origin, now, actor, s.embedOrNil(ctx, e.ID, e.Content))
 	}
 	if err != nil {
 		return hmem.Entry{}, fmt.Errorf("memory: save tenant %q id %q: %w", s.tenant, e.ID, err)
@@ -202,16 +204,17 @@ func (s *Store) Update(ctx context.Context, id, content string) (hmem.Entry, err
 	}
 	now := time.Now().UTC()
 	newID := generateID(now)
+	actor := actorFrom(ctx)
 	if s.embedder == nil {
 		_, err = s.db.ExecContext(ctx,
-			`INSERT INTO memory_events (tenant_id, op, entry_id, content, tags, origin, supersedes, created_at, original_created_at, kind)
-			 VALUES ($1,'update',$2,$3,$4,$5,$6,$7,$8,'fact')`,
-			s.tenant, newID, content, textArray(old.Tags), old.Origin, id, now, old.CreatedAt)
+			`INSERT INTO memory_events (tenant_id, op, entry_id, content, tags, origin, supersedes, created_at, original_created_at, kind, actor_id)
+			 VALUES ($1,'update',$2,$3,$4,$5,$6,$7,$8,'fact',$9)`,
+			s.tenant, newID, content, textArray(old.Tags), old.Origin, id, now, old.CreatedAt, actor)
 	} else {
 		_, err = s.db.ExecContext(ctx,
-			`INSERT INTO memory_events (tenant_id, op, entry_id, content, tags, origin, supersedes, created_at, original_created_at, kind, embedding)
-			 VALUES ($1,'update',$2,$3,$4,$5,$6,$7,$8,'fact',$9)`,
-			s.tenant, newID, content, textArray(old.Tags), old.Origin, id, now, old.CreatedAt, s.embedOrNil(ctx, newID, content))
+			`INSERT INTO memory_events (tenant_id, op, entry_id, content, tags, origin, supersedes, created_at, original_created_at, kind, actor_id, embedding)
+			 VALUES ($1,'update',$2,$3,$4,$5,$6,$7,$8,'fact',$9,$10)`,
+			s.tenant, newID, content, textArray(old.Tags), old.Origin, id, now, old.CreatedAt, actor, s.embedOrNil(ctx, newID, content))
 	}
 	if err != nil {
 		return hmem.Entry{}, fmt.Errorf("memory: update tenant %q id %q: %w", s.tenant, id, err)
@@ -244,9 +247,9 @@ func (s *Store) Remove(ctx context.Context, id string) error {
 // entries whose tags contain tag.
 func (s *Store) List(ctx context.Context, tag string) ([]hmem.Entry, error) {
 	q := liveSelect
-	args := []any{s.tenant}
+	args := []any{s.tenant, actorFrom(ctx)}
 	if tag != "" {
-		q += ` AND $2 = ANY(e.tags)`
+		q += ` AND $3 = ANY(e.tags)`
 		args = append(args, tag)
 	}
 	q += ` ORDER BY COALESCE(e.original_created_at, e.created_at) ASC, e.seq ASC`
@@ -269,8 +272,8 @@ func (s *Store) List(ctx context.Context, tag string) ([]hmem.Entry, error) {
 // Get returns the live entry for id. ok=false (no error) for unknown or
 // tombstoned ids.
 func (s *Store) Get(ctx context.Context, id string) (hmem.Entry, bool, error) {
-	q := liveSelect + ` AND e.entry_id = $2 ORDER BY e.seq DESC LIMIT 1`
-	rows, err := s.db.QueryContext(ctx, q, s.tenant, id)
+	q := liveSelect + ` AND e.entry_id = $3 ORDER BY e.seq DESC LIMIT 1`
+	rows, err := s.db.QueryContext(ctx, q, s.tenant, actorFrom(ctx), id)
 	if err != nil {
 		return hmem.Entry{}, false, fmt.Errorf("memory: get tenant %q id %q: %w", s.tenant, id, err)
 	}
@@ -304,6 +307,7 @@ func (s *Store) PutSessionSummary(ctx context.Context, sessionID, content string
 	lock.Lock()
 	defer lock.Unlock()
 
+	actor := actorFrom(ctx)
 	now := time.Now().UTC()
 	// Find the current live summary row's entry_id + birth time (if any).
 	var prevID string
@@ -315,14 +319,14 @@ func (s *Store) PutSessionSummary(ctx context.Context, sessionID, content string
 		newID := generateID(now)
 		if s.embedder == nil {
 			_, err = s.db.ExecContext(ctx,
-				`INSERT INTO memory_events (tenant_id, op, entry_id, content, origin, created_at, kind, session_id)
-				 VALUES ($1,'create',$2,$3,'summary',$4,'summary',$5)`,
-				s.tenant, newID, content, now, sessionID)
+				`INSERT INTO memory_events (tenant_id, op, entry_id, content, origin, created_at, kind, session_id, actor_id)
+				 VALUES ($1,'create',$2,$3,'summary',$4,'summary',$5,$6)`,
+				s.tenant, newID, content, now, sessionID, actor)
 		} else {
 			_, err = s.db.ExecContext(ctx,
-				`INSERT INTO memory_events (tenant_id, op, entry_id, content, origin, created_at, kind, session_id, embedding)
-				 VALUES ($1,'create',$2,$3,'summary',$4,'summary',$5,$6)`,
-				s.tenant, newID, content, now, sessionID, s.embedOrNil(ctx, newID, content))
+				`INSERT INTO memory_events (tenant_id, op, entry_id, content, origin, created_at, kind, session_id, actor_id, embedding)
+				 VALUES ($1,'create',$2,$3,'summary',$4,'summary',$5,$6,$7)`,
+				s.tenant, newID, content, now, sessionID, actor, s.embedOrNil(ctx, newID, content))
 		}
 	case err != nil:
 		return fmt.Errorf("memory: summary lookup tenant %q session %q: %w", s.tenant, sessionID, err)
@@ -335,14 +339,14 @@ func (s *Store) PutSessionSummary(ctx context.Context, sessionID, content string
 		}
 		if s.embedder == nil {
 			_, err = s.db.ExecContext(ctx,
-				`INSERT INTO memory_events (tenant_id, op, entry_id, content, origin, supersedes, created_at, original_created_at, kind, session_id)
-				 VALUES ($1,'update',$2,$3,'summary',$4,$5,$6,'summary',$7)`,
-				s.tenant, newID, content, prevID, now, orig.Time, sessionID)
+				`INSERT INTO memory_events (tenant_id, op, entry_id, content, origin, supersedes, created_at, original_created_at, kind, session_id, actor_id)
+				 VALUES ($1,'update',$2,$3,'summary',$4,$5,$6,'summary',$7,$8)`,
+				s.tenant, newID, content, prevID, now, orig.Time, sessionID, actor)
 		} else {
 			_, err = s.db.ExecContext(ctx,
-				`INSERT INTO memory_events (tenant_id, op, entry_id, content, origin, supersedes, created_at, original_created_at, kind, session_id, embedding)
-				 VALUES ($1,'update',$2,$3,'summary',$4,$5,$6,'summary',$7,$8)`,
-				s.tenant, newID, content, prevID, now, orig.Time, sessionID, s.embedOrNil(ctx, newID, content))
+				`INSERT INTO memory_events (tenant_id, op, entry_id, content, origin, supersedes, created_at, original_created_at, kind, session_id, actor_id, embedding)
+				 VALUES ($1,'update',$2,$3,'summary',$4,$5,$6,'summary',$7,$8,$9)`,
+				s.tenant, newID, content, prevID, now, orig.Time, sessionID, actor, s.embedOrNil(ctx, newID, content))
 		}
 	}
 	if err != nil {
@@ -389,12 +393,14 @@ func (v pgVector) Value() (driver.Value, error) {
 // liveness clauses (superseded/tombstoned excluded) and skips NULL embeddings.
 func (s *Store) SearchSimilar(ctx context.Context, queryVec []float32, k int, floor float64) ([]hmem.Entry, error) {
 	// The liveness clauses (op IN, the two NOT EXISTS) mirror the liveSelect
-	// constant; they are re-spelled inline because SearchSimilar needs $2/$3/$4
-	// for the vector/floor/limit args. Keep these in sync with liveSelect.
+	// constant; they are re-spelled inline because SearchSimilar needs $3/$4/$5
+	// for the vector/floor/limit args (actor_id is $2). Keep these in sync with
+	// liveSelect.
 	q := `
 SELECT e.entry_id, e.content, e.tags, e.origin, e.created_at, e.original_created_at
 FROM   memory_events e
 WHERE  e.tenant_id = $1
+  AND  e.actor_id = $2
   AND  e.embedding IS NOT NULL
   AND  e.kind <> 'summary'
   AND  e.op IN ('create','update')
@@ -402,10 +408,10 @@ WHERE  e.tenant_id = $1
                    WHERE sup.tenant_id = $1 AND sup.supersedes = e.entry_id)
   AND  NOT EXISTS (SELECT 1 FROM memory_events d
                    WHERE d.tenant_id = $1 AND d.op = 'delete' AND d.entry_id = e.entry_id)
-  AND  1 - (e.embedding <=> $2) >= $3
-ORDER BY e.embedding <=> $2
-LIMIT $4`
-	rows, err := s.db.QueryContext(ctx, q, s.tenant, pgVector(queryVec), floor, k)
+  AND  1 - (e.embedding <=> $3) >= $4
+ORDER BY e.embedding <=> $3
+LIMIT $5`
+	rows, err := s.db.QueryContext(ctx, q, s.tenant, actorFrom(ctx), pgVector(queryVec), floor, k)
 	if err != nil {
 		return nil, fmt.Errorf("memory: search tenant %q: %w", s.tenant, err)
 	}
