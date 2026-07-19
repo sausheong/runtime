@@ -8,7 +8,7 @@ import (
 )
 
 func TestLimitHitObserved(t *testing.T) {
-	m := NewAgentMetrics("a1")
+	m := NewAgentMetrics("a1", "acme", "test/scripted")
 	m.LimitHitObserved("max_tokens")
 	m.LimitHitObserved("max_tokens")
 	m.LimitHitObserved("turn_timeout")

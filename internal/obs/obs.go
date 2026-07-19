@@ -13,6 +13,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/sausheong/harness/llm"
+	"github.com/sausheong/runtime/internal/config"
 )
 
 // Outcome label values for GatewayCall.
@@ -279,19 +280,23 @@ func (c *ControlMetrics) PolicyDecision(tenant, decision string) {
 // fan-out merge produces disjoint series across agents.
 type AgentMetrics struct {
 	agentID   string
+	tenant    string
+	model     string
 	reg       *prometheus.Registry
 	turns     *prometheus.CounterVec
 	turnDur   *prometheus.HistogramVec
 	tokens    *prometheus.CounterVec
+	cost      *prometheus.CounterVec
+	unpriced  *prometheus.CounterVec
 	toolCalls *prometheus.CounterVec
 	limitHits *prometheus.CounterVec
 }
 
-func NewAgentMetrics(agentID string) *AgentMetrics {
+func NewAgentMetrics(agentID, tenant, model string) *AgentMetrics {
 	// Deliberately no Go runtime/process collectors: unlabeled go_*/process_*
 	// families from multiple agent registries would collide in the fan-out
 	// merge; do not add collectors.NewGoCollector().
-	a := &AgentMetrics{agentID: agentID, reg: prometheus.NewRegistry()}
+	a := &AgentMetrics{agentID: agentID, tenant: tenant, model: model, reg: prometheus.NewRegistry()}
 	a.turns = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "agent_turns_total",
 		Help: "Agent turns by outcome (completed/error/aborted/continue).",
@@ -304,7 +309,15 @@ func NewAgentMetrics(agentID string) *AgentMetrics {
 	a.tokens = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "agent_tokens_total",
 		Help: "LLM tokens consumed, by direction (input/output/cache_creation/cache_read).",
-	}, []string{"agent", "direction"})
+	}, []string{"agent", "tenant", "model", "direction"})
+	a.cost = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "agent_cost_usd_total",
+		Help: "LLM dollar cost (tokens x per-model price, cache included).",
+	}, []string{"agent", "tenant", "model"})
+	a.unpriced = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "agent_cost_unpriced_total",
+		Help: "Turns whose model had no price entry (cost blind spot).",
+	}, []string{"agent", "tenant", "model"})
 	a.toolCalls = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "agent_tool_calls_total",
 		Help: "Tool calls dispatched by the agent loop.",
@@ -313,29 +326,38 @@ func NewAgentMetrics(agentID string) *AgentMetrics {
 		Name: "agent_session_limit_hits_total",
 		Help: "Sessions terminated by a lifecycle limit, by limit name.",
 	}, []string{"agent", "limit"})
-	a.reg.MustRegister(a.turns, a.turnDur, a.tokens, a.toolCalls, a.limitHits)
+	a.reg.MustRegister(a.turns, a.turnDur, a.tokens, a.cost, a.unpriced, a.toolCalls, a.limitHits)
 	return a
 }
 
 // TurnObserved records one agent turn. outcome is the harness
 // TurnResult.StopReason vocabulary ("completed", "error", "aborted",
 // "continue") — an upstream contract, so no constants are defined here.
-func (a *AgentMetrics) TurnObserved(outcome string, dur time.Duration, usage *llm.Usage) {
+// price is this agent's per-model price, or nil when the model is unpriced.
+// Tokens are emitted UNCONDITIONALLY before any pricing branch, so a pricing
+// gap can never suppress token metering.
+func (a *AgentMetrics) TurnObserved(outcome string, dur time.Duration, usage *llm.Usage, price *config.ModelPrice) {
 	if a == nil {
 		return
 	}
 	a.turns.WithLabelValues(a.agentID, outcome).Inc()
 	a.turnDur.WithLabelValues(a.agentID).Observe(dur.Seconds())
-	if usage != nil {
-		a.tokens.WithLabelValues(a.agentID, "input").Add(float64(usage.InputTokens))
-		a.tokens.WithLabelValues(a.agentID, "output").Add(float64(usage.OutputTokens))
-		if usage.CacheCreationInputTokens > 0 {
-			a.tokens.WithLabelValues(a.agentID, "cache_creation").Add(float64(usage.CacheCreationInputTokens))
-		}
-		if usage.CacheReadInputTokens > 0 {
-			a.tokens.WithLabelValues(a.agentID, "cache_read").Add(float64(usage.CacheReadInputTokens))
-		}
+	if usage == nil {
+		return
 	}
+	a.tokens.WithLabelValues(a.agentID, a.tenant, a.model, "input").Add(float64(usage.InputTokens))
+	a.tokens.WithLabelValues(a.agentID, a.tenant, a.model, "output").Add(float64(usage.OutputTokens))
+	if usage.CacheCreationInputTokens > 0 {
+		a.tokens.WithLabelValues(a.agentID, a.tenant, a.model, "cache_creation").Add(float64(usage.CacheCreationInputTokens))
+	}
+	if usage.CacheReadInputTokens > 0 {
+		a.tokens.WithLabelValues(a.agentID, a.tenant, a.model, "cache_read").Add(float64(usage.CacheReadInputTokens))
+	}
+	if price == nil {
+		a.unpriced.WithLabelValues(a.agentID, a.tenant, a.model).Inc()
+		return
+	}
+	a.cost.WithLabelValues(a.agentID, a.tenant, a.model).Add(price.Cost(usage))
 }
 
 func (a *AgentMetrics) ToolCallObserved(tool string) {

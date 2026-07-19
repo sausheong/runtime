@@ -9,6 +9,7 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/sausheong/harness/llm"
+	"github.com/sausheong/runtime/internal/config"
 )
 
 func TestControlMetricsHTTPObserved(t *testing.T) {
@@ -89,27 +90,27 @@ func TestControlMetrics_ReplicaLabels(t *testing.T) {
 }
 
 func TestAgentMetricsTurnObserved(t *testing.T) {
-	a := NewAgentMetrics("support")
+	a := NewAgentMetrics("support", "acme", "test/scripted")
 	a.TurnObserved("completed", 2*time.Second, &llm.Usage{
 		InputTokens: 100, OutputTokens: 40,
 		CacheCreationInputTokens: 7, CacheReadInputTokens: 9,
-	})
-	a.TurnObserved("error", time.Second, nil) // nil usage must not panic or count tokens
+	}, nil)
+	a.TurnObserved("error", time.Second, nil, nil) // nil usage must not panic or count tokens
 	a.ToolCallObserved("bash")
 
 	if v := testutil.ToFloat64(a.turns.WithLabelValues("support", "completed")); v != 1 {
 		t.Fatalf("turns completed = %v, want 1", v)
 	}
-	if v := testutil.ToFloat64(a.tokens.WithLabelValues("support", "input")); v != 100 {
+	if v := testutil.ToFloat64(a.tokens.WithLabelValues("support", "acme", "test/scripted", "input")); v != 100 {
 		t.Fatalf("input tokens = %v, want 100", v)
 	}
-	if v := testutil.ToFloat64(a.tokens.WithLabelValues("support", "output")); v != 40 {
+	if v := testutil.ToFloat64(a.tokens.WithLabelValues("support", "acme", "test/scripted", "output")); v != 40 {
 		t.Fatalf("output tokens = %v, want 40", v)
 	}
-	if v := testutil.ToFloat64(a.tokens.WithLabelValues("support", "cache_creation")); v != 7 {
+	if v := testutil.ToFloat64(a.tokens.WithLabelValues("support", "acme", "test/scripted", "cache_creation")); v != 7 {
 		t.Fatalf("cache_creation tokens = %v, want 7", v)
 	}
-	if v := testutil.ToFloat64(a.tokens.WithLabelValues("support", "cache_read")); v != 9 {
+	if v := testutil.ToFloat64(a.tokens.WithLabelValues("support", "acme", "test/scripted", "cache_read")); v != 9 {
 		t.Fatalf("cache_read tokens = %v, want 9", v)
 	}
 }
@@ -117,8 +118,8 @@ func TestAgentMetricsTurnObserved(t *testing.T) {
 func TestAgentMetricsNoCacheSeriesWithoutCacheTokens(t *testing.T) {
 	// Usage without cache fields must NOT create cache_creation/cache_read
 	// series — only input and output.
-	a := NewAgentMetrics("support")
-	a.TurnObserved("completed", time.Second, &llm.Usage{InputTokens: 100, OutputTokens: 40})
+	a := NewAgentMetrics("support", "acme", "test/scripted")
+	a.TurnObserved("completed", time.Second, &llm.Usage{InputTokens: 100, OutputTokens: 40}, nil)
 	if n := testutil.CollectAndCount(a.tokens); n != 2 {
 		t.Fatalf("token series = %d, want 2 (input/output only)", n)
 	}
@@ -149,8 +150,8 @@ func TestTurnDurationUsesTurnBucketsNotDefBuckets(t *testing.T) {
 	// Regression guard: agent_turn_duration_seconds must use the custom
 	// turnBuckets (0.1..120), not prometheus.DefBuckets (0.005..10) — agent
 	// turns routinely exceed 10s.
-	a := NewAgentMetrics("support")
-	a.TurnObserved("completed", 45*time.Second, nil)
+	a := NewAgentMetrics("support", "acme", "test/scripted")
+	a.TurnObserved("completed", 45*time.Second, nil, nil)
 	body := scrapeHandler(t, a.Handler())
 	for _, want := range []string{`le="60"`, `le="120"`} {
 		if !strings.Contains(body, `agent_turn_duration_seconds_bucket{agent="support",`+want) {
@@ -190,13 +191,13 @@ func TestNilReceiversAreSafe(t *testing.T) {
 	c.GatewayCall("s", "t", "ok", time.Millisecond)
 	c.GatewayUpstreamUp("s", false)
 	c.ScrapeSkip("a", 0, "timeout")
-	a.TurnObserved("completed", time.Millisecond, nil)
+	a.TurnObserved("completed", time.Millisecond, nil, nil)
 	a.ToolCallObserved("bash")
 }
 
 func TestAgentMetricsHandlerServesExposition(t *testing.T) {
-	a := NewAgentMetrics("support")
-	a.TurnObserved("completed", time.Second, nil)
+	a := NewAgentMetrics("support", "acme", "test/scripted")
+	a.TurnObserved("completed", time.Second, nil, nil)
 	body := scrapeHandler(t, a.Handler())
 	if !strings.Contains(body, `agent_turns_total{agent="support",outcome="completed"} 1`) {
 		t.Fatalf("exposition missing turn counter:\n%s", body)
@@ -209,6 +210,43 @@ func TestNilAgentMetricsHandlerIs404(t *testing.T) {
 	a.Handler().ServeHTTP(rec, httptest.NewRequest("GET", "/metrics", nil))
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("nil handler status = %d, want 404", rec.Code)
+	}
+}
+
+func TestTurnObservedCostPriced(t *testing.T) {
+	a := NewAgentMetrics("support", "acme", "anthropic/claude-opus-4-8")
+	price := &config.ModelPrice{Input: 15, Output: 75}
+	a.TurnObserved("completed", time.Second,
+		&llm.Usage{InputTokens: 1_000_000, OutputTokens: 1_000_000}, price)
+
+	// cost = 15 + 75 = 90
+	if got := testutil.ToFloat64(a.cost.WithLabelValues("support", "acme", "anthropic/claude-opus-4-8")); got != 90 {
+		t.Fatalf("agent_cost_usd_total = %v, want 90", got)
+	}
+	// tokens carry tenant+model labels
+	if got := testutil.ToFloat64(a.tokens.WithLabelValues("support", "acme", "anthropic/claude-opus-4-8", "input")); got != 1_000_000 {
+		t.Fatalf("agent_tokens_total input = %v, want 1e6", got)
+	}
+	// unpriced counter untouched
+	if got := testutil.ToFloat64(a.unpriced.WithLabelValues("support", "acme", "anthropic/claude-opus-4-8")); got != 0 {
+		t.Fatalf("unpriced = %v, want 0", got)
+	}
+}
+
+func TestTurnObservedUnpriced(t *testing.T) {
+	a := NewAgentMetrics("support", "acme", "mystery/model")
+	a.TurnObserved("completed", time.Second,
+		&llm.Usage{InputTokens: 500, OutputTokens: 500}, nil) // nil price ⇒ unpriced
+
+	if got := testutil.ToFloat64(a.unpriced.WithLabelValues("support", "acme", "mystery/model")); got != 1 {
+		t.Fatalf("agent_cost_unpriced_total = %v, want 1", got)
+	}
+	if got := testutil.ToFloat64(a.cost.WithLabelValues("support", "acme", "mystery/model")); got != 0 {
+		t.Fatalf("cost must stay 0 for unpriced: %v", got)
+	}
+	// tokens STILL emitted for unpriced models
+	if got := testutil.ToFloat64(a.tokens.WithLabelValues("support", "acme", "mystery/model", "input")); got != 500 {
+		t.Fatalf("tokens must flow for unpriced model: %v", got)
 	}
 }
 
