@@ -418,6 +418,7 @@ func TestAdminRegisterTokens(t *testing.T) {
 // fakeSecretAdmin implements SecretAdmin in-memory.
 type fakeSecretAdmin struct {
 	set     map[string]map[string]string // tenant -> name -> plaintext
+	oauth   map[string]map[string]identity.OAuth2Config
 	names   map[string][]identity.SecretMeta
 	rotated []string
 }
@@ -443,6 +444,65 @@ func (f *fakeSecretAdmin) DeleteSecret(_ context.Context, tenant, name string) e
 func (f *fakeSecretAdmin) RotateSecrets(_ context.Context, tenant string) (identity.RotateStats, error) {
 	f.rotated = append(f.rotated, tenant)
 	return identity.RotateStats{Tenant: tenant, Total: 1, Rotated: 1}, nil
+}
+func (f *fakeSecretAdmin) SetOAuth2(_ context.Context, tenant, name string, cfg identity.OAuth2Config) error {
+	if f.oauth == nil {
+		f.oauth = map[string]map[string]identity.OAuth2Config{}
+	}
+	if f.oauth[tenant] == nil {
+		f.oauth[tenant] = map[string]identity.OAuth2Config{}
+	}
+	f.oauth[tenant][name] = cfg
+	if f.names[tenant] == nil {
+		f.names[tenant] = nil
+	}
+	f.names[tenant] = append(f.names[tenant], identity.SecretMeta{
+		Name: name, Type: identity.CredTypeOAuth2,
+		OAuth2: &identity.OAuth2Meta{TokenURL: cfg.TokenURL, ClientID: cfg.ClientID, Scopes: cfg.Scopes, Audience: cfg.Audience},
+	})
+	return nil
+}
+func (f *fakeSecretAdmin) ListSecrets(ctx context.Context, tenant string) ([]identity.SecretMeta, error) {
+	return f.ListSecretNames(ctx, tenant)
+}
+
+func TestSecretAdmin_SetOAuth2AndListNoSecretLeak(t *testing.T) {
+	s := newFakeAdminStore()
+	s.CreateTenant(context.Background(), "acme", "Acme")
+	sa := newFakeSecretAdmin()
+	mux := adminMuxWithSecrets(s, sa)
+	body := `{"name":"orders_oauth","type":"oauth2_client_credentials","token_url":"https://idp/token","client_id":"cid","client_secret":"topsecret","scopes":["a"]}`
+	r := withPrincipal(httptest.NewRequest("POST", "/admin/secrets", strings.NewReader(body)),
+		identity.Principal{TenantID: "acme", Role: identity.RoleAdmin})
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, r)
+	if w.Code != 200 {
+		t.Fatalf("create: %d %s", w.Code, w.Body)
+	}
+	lr := withPrincipal(httptest.NewRequest("GET", "/admin/secrets", nil),
+		identity.Principal{TenantID: "acme", Role: identity.RoleAdmin})
+	lw := httptest.NewRecorder()
+	mux.ServeHTTP(lw, lr)
+	if strings.Contains(lw.Body.String(), "topsecret") {
+		t.Fatalf("client_secret leaked in listing: %s", lw.Body)
+	}
+	if !strings.Contains(lw.Body.String(), "oauth2_client_credentials") || !strings.Contains(lw.Body.String(), "cid") {
+		t.Fatalf("listing missing type/client_id: %s", lw.Body)
+	}
+}
+
+func TestSecretAdmin_OAuth2BadConfig400(t *testing.T) {
+	s := newFakeAdminStore()
+	s.CreateTenant(context.Background(), "acme", "Acme")
+	mux := adminMuxWithSecrets(s, newFakeSecretAdmin())
+	body := `{"name":"bad","type":"oauth2_client_credentials","client_id":"cid","client_secret":"s"}` // no token_url
+	r := withPrincipal(httptest.NewRequest("POST", "/admin/secrets", strings.NewReader(body)),
+		identity.Principal{TenantID: "acme", Role: identity.RoleAdmin})
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, r)
+	if w.Code != 400 {
+		t.Fatalf("expected 400 for missing token_url, got %d", w.Code)
+	}
 }
 
 // adminMuxWithSecrets wires both the store and the secret admin.

@@ -125,7 +125,14 @@ func (f *fakeSec2) SetSecret(ctx context.Context, tenant, name, plaintext string
 	f.setNames = append(f.setNames, name)
 	return nil
 }
+func (f *fakeSec2) SetOAuth2(ctx context.Context, tenant, name string, cfg identity.OAuth2Config) error {
+	f.setNames = append(f.setNames, name)
+	return nil
+}
 func (f *fakeSec2) ListSecretNames(ctx context.Context, tenant string) ([]identity.SecretMeta, error) {
+	return nil, nil
+}
+func (f *fakeSec2) ListSecrets(ctx context.Context, tenant string) ([]identity.SecretMeta, error) {
 	return nil, nil
 }
 func (f *fakeSec2) DeleteSecret(ctx context.Context, tenant, name string) error { return nil }

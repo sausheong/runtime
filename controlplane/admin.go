@@ -264,7 +264,9 @@ func RegisterAdmin(mux *http.ServeMux, s AdminStore, agentTenants map[string]str
 // feature is disabled (no master key) and handlers return 503.
 type SecretAdmin interface {
 	SetSecret(ctx context.Context, tenant, name, plaintext string) error
+	SetOAuth2(ctx context.Context, tenant, name string, cfg identity.OAuth2Config) error
 	ListSecretNames(ctx context.Context, tenant string) ([]identity.SecretMeta, error)
+	ListSecrets(ctx context.Context, tenant string) ([]identity.SecretMeta, error)
 	DeleteSecret(ctx context.Context, tenant, name string) error
 	RotateSecrets(ctx context.Context, tenant string) (identity.RotateStats, error)
 }
@@ -311,12 +313,19 @@ func RegisterSecretAdmin(mux *http.ServeMux, store AdminStore, sa SecretAdmin) {
 			http.Error(w, "secrets not configured", http.StatusServiceUnavailable)
 			return
 		}
-		var body struct{ Name, Value, Tenant string }
+		var body struct {
+			Name, Value, Tenant, Type string
+			TokenURL                  string   `json:"token_url"`
+			ClientID                  string   `json:"client_id"`
+			ClientSecret              string   `json:"client_secret"`
+			Scopes                    []string `json:"scopes"`
+			Audience                  string   `json:"audience"`
+		}
 		if !decode(w, r, &body) {
 			return
 		}
-		if body.Value == "" || !envNameRe.MatchString(body.Name) {
-			http.Error(w, "valid name (env identifier) and non-empty value required", http.StatusBadRequest)
+		if !envNameRe.MatchString(body.Name) {
+			http.Error(w, "valid name (env identifier) required", http.StatusBadRequest)
 			return
 		}
 		if HasReservedEnvPrefix(body.Name) {
@@ -325,6 +334,26 @@ func RegisterSecretAdmin(mux *http.ServeMux, store AdminStore, sa SecretAdmin) {
 		}
 		tenant, ok := effectiveTenant(w, r, store, p, body.Tenant)
 		if !ok {
+			return
+		}
+		if body.Type == identity.CredTypeOAuth2 {
+			cfg := identity.OAuth2Config{
+				TokenURL: body.TokenURL, ClientID: body.ClientID, ClientSecret: body.ClientSecret,
+				Scopes: body.Scopes, Audience: body.Audience,
+			}
+			if err := cfg.Validate(); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			if err := sa.SetOAuth2(r.Context(), tenant, body.Name, cfg); err != nil {
+				serverError(w, "set oauth2 credential", err)
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]string{"name": body.Name, "type": identity.CredTypeOAuth2})
+			return
+		}
+		if body.Value == "" {
+			http.Error(w, "non-empty value required", http.StatusBadRequest)
 			return
 		}
 		if err := sa.SetSecret(r.Context(), tenant, body.Name, body.Value); err != nil {
@@ -343,7 +372,7 @@ func RegisterSecretAdmin(mux *http.ServeMux, store AdminStore, sa SecretAdmin) {
 			http.Error(w, "secrets not configured", http.StatusServiceUnavailable)
 			return
 		}
-		metas, err := sa.ListSecretNames(r.Context(), p.TenantID)
+		metas, err := sa.ListSecrets(r.Context(), p.TenantID)
 		if err != nil {
 			serverError(w, "list secrets", err)
 			return
