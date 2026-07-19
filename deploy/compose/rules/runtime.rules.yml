@@ -1,0 +1,59 @@
+groups:
+  - name: runtime
+    rules:
+      - alert: AgentDown
+        expr: runtime_agent_up == 0
+        for: 2m
+        labels: { severity: critical }
+        annotations:
+          summary: "Agent replica down"
+          description: "agent={{ $labels.agent }} replica={{ $labels.replica }} has been unreachable for 2m."
+
+      - alert: GatewayUpstreamDown
+        expr: runtime_gateway_upstream_up == 0
+        for: 2m
+        labels: { severity: warning }
+        annotations:
+          summary: "Gateway upstream down"
+          description: "gateway upstream server={{ $labels.server }} unreachable for 2m."
+
+      - alert: HighTurnErrorRate
+        expr: |
+          rate(agent_turns_total{outcome="error"}[5m])
+            / rate(agent_turns_total[5m]) > 0.2
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: "High agent turn error rate"
+          description: "agent={{ $labels.agent }} error ratio >20% over 10m."
+
+      - alert: SessionLimitSpike
+        expr: increase(agent_session_limit_hits_total[15m]) > 5
+        labels: { severity: warning }
+        annotations:
+          summary: "Lifecycle limits tripping frequently"
+          description: "agent={{ $labels.agent }} limit={{ $labels.limit }} hit >5 times in 15m."
+
+      - alert: PolicyDenySpike
+        expr: increase(runtime_gateway_policy_decisions_total{decision="deny"}[15m]) > 10
+        labels: { severity: warning }
+        annotations:
+          summary: "Gateway policy denials surging"
+          description: "tenant={{ $labels.tenant }} >10 policy denials in 15m."
+
+      - alert: UnpricedModelUsage
+        expr: increase(agent_cost_unpriced_total[1h]) > 0
+        labels: { severity: warning }
+        annotations:
+          summary: "Model running without a price (cost blind spot)"
+          description: "agent={{ $labels.agent }} model={{ $labels.model }} has no price entry; cost is not being metered."
+
+      # --- CostBurnHigh: spend-rate guard. Uncomment and tune <threshold>
+      # (dollars/hour per tenant) for your deployment before enabling.
+      # - alert: CostBurnHigh
+      #   expr: sum by (tenant) (rate(agent_cost_usd_total[1h])) * 3600 > 10
+      #   for: 15m
+      #   labels: { severity: warning }
+      #   annotations:
+      #     summary: "Tenant spend rate high"
+      #     description: "tenant={{ $labels.tenant }} projected >\$10/hour."
