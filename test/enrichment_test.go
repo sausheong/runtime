@@ -186,10 +186,14 @@ func TestEnrichmentInjectsClaims(t *testing.T) {
 	if !res.IsError {
 		t.Fatalf("caller override of an enriched header must be rejected: %+v", res.Content)
 	}
-	if len(res.Content) > 0 {
-		if tc, ok := res.Content[0].(*sdk.TextContent); ok &&
-			!strings.Contains(tc.Text, "enrichment") {
-			t.Fatalf("override rejection should cite gateway enrichment, got: %q", tc.Text)
-		}
+	if len(res.Content) == 0 {
+		t.Fatal("override rejection must carry content citing gateway enrichment, got empty content")
+	}
+	tc, ok := res.Content[0].(*sdk.TextContent)
+	if !ok {
+		t.Fatalf("override rejection content must be text, got: %T", res.Content[0])
+	}
+	if !strings.Contains(tc.Text, "enrichment") {
+		t.Fatalf("override rejection should cite gateway enrichment, got: %q", tc.Text)
 	}
 }

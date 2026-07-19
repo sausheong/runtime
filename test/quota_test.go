@@ -3,8 +3,11 @@
 package test
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
+	"encoding/json"
+	"io"
 	"net/http"
 	"os"
 	"os/exec"
@@ -173,9 +176,22 @@ func TestQuotaLifecycle(t *testing.T) {
 		t.Fatalf("acme quota list must contain the acme/sbx rule: %s", acmeList)
 	}
 
-	// (6) A tenant admin cannot set a "*" (superuser-only) quota ⇒ 400.
-	adminPost(t, ctlAddr, acmeAdmin.Plaintext, "/admin/quotas",
-		map[string]any{"tenant": "*", "upstream": "sbx", "rate_per_min": 1}, http.StatusBadRequest)
+	// (6) A tenant admin cannot set a "*" (superuser-only) quota ⇒ 400 with the
+	// RBAC message. Use a FRESH upstream (no existing rule) so the rejection is
+	// unambiguously the RBAC guard, not a PRIMARY KEY dup on (acme, sbx). The
+	// handler must pass body.Tenant through to RegisterQuotaShared for this to
+	// hold — if the guard is removed the "*" write would rewrite/insert and this
+	// assertion fails.
+	rbacBody, _ := json.Marshal(map[string]any{"tenant": "*", "upstream": "other-svc", "rate_per_min": 1})
+	rbacResp := authReq(t, "POST", base+"/admin/quotas", acmeAdmin.Plaintext, bytes.NewReader(rbacBody))
+	rbacRB, _ := io.ReadAll(rbacResp.Body)
+	rbacResp.Body.Close()
+	if rbacResp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("tenant-admin '*' quota write must be rejected: status=%d body=%s", rbacResp.StatusCode, rbacRB)
+	}
+	if !strings.Contains(string(rbacRB), "superuser") {
+		t.Fatalf("tenant-admin '*' rejection must carry the RBAC message (mentioning superuser): %s", rbacRB)
+	}
 
 	// (7) Delete the rule ⇒ acme flows again (poll; refresh throttle applies).
 	authReq(t, "DELETE", base+"/admin/quotas?upstream=sbx", acmeAdmin.Plaintext, nil).Body.Close()

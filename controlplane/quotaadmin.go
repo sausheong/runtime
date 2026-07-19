@@ -63,11 +63,12 @@ func RegisterQuotaAdmin(mux *http.ServeMux, store AdminStore, qs QuotaStore) {
 		if !decode(w, r, &body) {
 			return
 		}
-		// A superuser may name any tenant (incl. "*"); a non-superuser's target
-		// is force-pinned to its own tenant here (body.Tenant is never trusted),
-		// and RegisterQuotaShared double-guards ("*" and cross-tenant rejected).
+		// An empty tenant defaults to the caller's own tenant (convenience).
+		// Any explicit value is passed through to RegisterQuotaShared so its
+		// RBAC guards run: a superuser may name any tenant (incl. "*"), while a
+		// non-superuser naming "*" or another tenant is REJECTED (not rewritten).
 		target := body.Tenant
-		if !p.Superuser {
+		if target == "" {
 			target = p.TenantID
 		}
 		if err := RegisterQuotaShared(r.Context(), qs, p.TenantID, p.Superuser, target, body.Upstream, body.RatePerMin); err != nil {
