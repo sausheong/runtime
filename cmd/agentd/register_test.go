@@ -83,6 +83,54 @@ func TestFetchRegistrationSkipsEmpty(t *testing.T) {
 	}
 }
 
+// TestFetchRegistrationClearsToggleOnEmpty proves that for a control-plane-owned
+// platform toggle, an empty delta value CLEARS any inherited/leaked value rather
+// than being skipped. Without this, a leaked RUNTIME_SUBJECT_FORWARDING=1 on a
+// remote pod would survive the "off" (empty) signal and let a caller spoof the
+// forwarded subject.
+func TestFetchRegistrationClearsToggleOnEmpty(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"env": map[string]string{"RUNTIME_SUBJECT_FORWARDING": ""}, // off ⇒ clear
+		})
+	}))
+	defer srv.Close()
+
+	t.Setenv("RUNTIME_REGISTRATION_URL", srv.URL)
+	t.Setenv("RUNTIME_REGISTRATION_TOKEN", "svk-abc.def")
+	t.Setenv("HOSTNAME", "support-0")
+	t.Setenv("RUNTIME_SUBJECT_FORWARDING", "1") // leaked/inherited truthy value
+
+	fetchRegistration()
+
+	if got := os.Getenv("RUNTIME_SUBJECT_FORWARDING"); got != "" {
+		t.Fatalf("toggle not cleared by empty delta value: got %q want \"\"", got)
+	}
+}
+
+// TestFetchRegistrationSetsToggleOn covers the on-case Setenv path for a toggle.
+func TestFetchRegistrationSetsToggleOn(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"env": map[string]string{"RUNTIME_SUBJECT_FORWARDING": "1"},
+		})
+	}))
+	defer srv.Close()
+
+	t.Setenv("RUNTIME_REGISTRATION_URL", srv.URL)
+	t.Setenv("RUNTIME_REGISTRATION_TOKEN", "svk-abc.def")
+	t.Setenv("HOSTNAME", "support-0")
+	os.Unsetenv("RUNTIME_SUBJECT_FORWARDING")
+
+	fetchRegistration()
+
+	if got := os.Getenv("RUNTIME_SUBJECT_FORWARDING"); got != "1" {
+		t.Fatalf("toggle not set on: got %q want \"1\"", got)
+	}
+}
+
 func TestFetchRegistrationNoopWhenUnset(t *testing.T) {
 	os.Unsetenv("RUNTIME_REGISTRATION_URL")
 	os.Unsetenv("RUNTIME_REGISTRATION_TOKEN")
