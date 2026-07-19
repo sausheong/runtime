@@ -40,7 +40,9 @@ land in `docs/superpowers/specs/` as each item starts.
 
 **Phase P2 "Scoped" (v1.2) — IN PROGRESS. First-milestone sweep COMPLETE: all
 three P2 sub-projects now have their first milestone merged (P2.3 DONE; P2.1 M1
-DONE; P2.2 M1 DONE). Deeper milestones (M2+) remain across the phase.**
+DONE; P2.2 M1 DONE). P2.2 M2 (actor namespacing) is now DONE via the
+subject-forwarding keystone, which also unblocks P2.1 M2 (OBO). Deeper
+milestones remain across the phase.**
 
 - **P2.3 Gateway quotas + enrichment — DONE (merged 2026-07-19, ff to `5ba6232`,
   11 commits, branch `p2.3-gateway-quotas-enrichment`).** Quotas: new
@@ -72,8 +74,11 @@ DONE; P2.2 M1 DONE). Deeper milestones (M2+) remain across the phase.**
   opposite of the fail-open quota limiter, since a credential is a security
   control. `client_secret` is write-only (never in list/API/console/logs); live
   rotation via re-run without restart. Depends on P1.1 principal-on-path.
-  **M2 (OBO / RFC 8693 user-token exchange)** and **M3 (IdP connector presets)**
-  remain.
+  **M2 (OBO / RFC 8693 user-token exchange)** is now **UNBLOCKED** — the
+  subject-forwarding keystone (see P2.2 M2 below) carries the authenticated
+  caller's `Subject`/`Tenant`/`Role` into the durable turn loop, so per-user
+  token acquisition can key off the forwarded identity. **M3 (IdP connector
+  presets)** remains.
 - **P2.2 Memory strategies — M1 (strategy pipeline + summary) DONE (merged,
   branch `p2.2-memory-strategies`).** M1 generalizes `internal/memory/ingest.go`
   into a strategy pipeline and ships the first non-fact strategy: a per-session
@@ -88,8 +93,23 @@ DONE; P2.2 M1 DONE). Deeper milestones (M2+) remain across the phase.**
   Best-effort (a summarizer failure or empty digest skips the write, never breaks
   a turn); one extra summarization LLM call per turn (known M1 cost, smarter
   cadence deferred). Metric `agent_memory_summary_writes_total{agent,tenant,model}`.
-  **M2 (preference + `actor_id` namespacing)**, **M3 (episodic)**, and
-  **M4 (TTL/GC + dedup hardening)** remain.
+  **M2 (`actor_id` namespacing) — DONE via the subject-forwarding keystone
+  (branch `p2.2-m2-subject-forwarding`).** The identity chain, previously severed
+  at the reverse proxy, now runs the whole way: gated by
+  `RUNTIME_SUBJECT_FORWARDING` (envBool `1/true/yes/on`, off by default), the
+  control-plane edge strips any inbound `X-Runtime-*` (anti-spoof) then sets
+  `X-Runtime-{User,Tenant,Role}` from the authenticated `identity.Principal`;
+  agentd reads the trio and carries it on the checkpointed `turnInput` (durable
+  across DBOS replay); and the memory Store gains an `actor_id` column, scoping
+  fact reads/writes and summary stamps to `actor_id=subject`. **Strict
+  isolation** (an actor-scoped read does not see the tenant-wide `actor_id=''`
+  bucket, and vice-versa); degrade-toward-shared, never cross-actor (no
+  principal/empty subject ⇒ `''`). Off/unset ⇒ byte-for-byte today's tenant-wide
+  behavior; existing rows read as `''`. Memory keys only on the **subject**;
+  `Tenant`/`Role` are forwarded and reach the turn loop but are reserved for OBO
+  (P2.1 M2, now unblocked). New shared `internal/rheader` header-const package;
+  no new metric. The **preference** strategy (originally paired with M2) and
+  **M3 (episodic)** + **M4 (TTL/GC + dedup hardening)** remain.
 
 ## Prioritization principles
 
@@ -232,11 +252,14 @@ OAuth tokens scoped to that user.
   not fake it with a service account.
 
 **Milestones:** M1 oauth2 client-credentials upstream creds (closes the
-backlogged "gateway OAuth2"), M2 OBO token exchange keyed on the calling user,
-M3 IdP connector presets (config templates for common providers — docs +
-validation, not code per provider).
+backlogged "gateway OAuth2") — **DONE**; M2 OBO token exchange keyed on the
+calling user — **UNBLOCKED** (the subject-forwarding keystone under P2.2 M2 now
+delivers the caller's subject/tenant/role into the durable turn loop); M3 IdP
+connector presets (config templates for common providers — docs + validation,
+not code per provider).
 
-**Dependencies:** P1.1 M1 (principal available on the gateway call path).
+**Dependencies:** P1.1 M1 (principal available on the gateway call path); M2 also
+builds on the P2.2-M2 subject-forwarding keystone (identity in the turn loop).
 
 ### P2.2 Memory strategies: summary, preference, episodic + user namespacing
 
@@ -260,8 +283,11 @@ tenant-scoped where AgentCore namespaces to `actor_id`/`user_id`.
   today's tenant-wide behavior is the default. Fold in the backlogged
   Memory TTL/GC as retention-per-kind while touching the schema.
 
-**Milestones:** M1 strategy pipeline + summary, M2 preference + actor
-namespacing, M3 episodic, M4 TTL/GC + dedup hardening (backlog item).
+**Milestones:** M1 strategy pipeline + summary — **DONE**; M2 preference + actor
+namespacing — **actor namespacing DONE** (via the subject-forwarding keystone:
+`RUNTIME_SUBJECT_FORWARDING`-gated edge injection of `X-Runtime-*`, `actor_id`
+column, strict per-actor isolation; preference strategy still to come); M3
+episodic; M4 TTL/GC + dedup hardening (backlog item).
 
 **Dependencies:** none hard; P1.3's session totals make summary triggers
 smarter.

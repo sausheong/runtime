@@ -710,8 +710,10 @@ the summary answers "where were we in *this* conversation?".
 
 Unlike semantic recall and fact auto-ingestion, the summary is
 **embedder-independent**: it is keyed by session, not by vector similarity, so it
-needs no embeddings endpoint and works in deployments with none configured. It is
-**tenant-scoped** (per-user/actor namespacing is a later milestone — not yet).
+needs no embeddings endpoint and works in deployments with none configured. By
+default it is **tenant-scoped**; when subject forwarding is enabled
+(`RUNTIME_SUBJECT_FORWARDING`), summaries — like facts — become **actor-scoped**
+to the authenticated caller (see [Actor-namespaced memory](#actor-namespaced-memory-subject-forwarding) below).
 
 Enable it independently of `RUNTIME_INGEST_ENABLED` (facts); the summary can run
 alone. It is still gated by the per-agent `memory: true` flag.
@@ -728,6 +730,47 @@ summarization LLM call per turn — a known M1 cost; smarter cadence
 (regenerate-when-warranted) is a future optimization. It is **best-effort**: a
 summarizer failure or an empty digest skips the write and never breaks a turn.
 The counter `agent_memory_summary_writes_total` is registered for summary writes; its emission hook is wired in a later milestone (it currently reports 0).
+
+#### Actor-namespaced memory (subject forwarding)
+
+By default memory is **tenant-scoped**: every caller of a given agent shares one
+memory bucket. Setting `RUNTIME_SUBJECT_FORWARDING` turns on **per-actor
+isolation** so two different callers of the same agent get separate memories.
+
+When forwarding is on, the control-plane edge injects the authenticated
+principal's identity as `X-Runtime-{User,Tenant,Role}` headers on the hop to the
+agent; agentd carries the subject on the checkpointed turn input (durable across
+DBOS replay) and scopes memory to `actor_id=<subject>`. Facts and the rolling
+session summary are written and read under that actor.
+
+- **Strict isolation.** An actor-scoped read (`actor_id=subject`) sees only that
+  actor's rows. It does **not** see the tenant-wide (`actor_id=''`) bucket, and a
+  tenant-wide reader does not see any actor's rows. There is no "shared +
+  private" union.
+- **Default off ⇒ today's behavior.** With `RUNTIME_SUBJECT_FORWARDING` unset,
+  behavior is byte-for-byte the existing tenant-wide memory. Existing rows carry
+  `actor_id=''` (the column default) and read as the tenant-wide bucket, so the
+  change is backward-compatible.
+- **Degrade toward the shared bucket, never cross-actor.** Forwarding on but no
+  authenticated principal (or an empty subject) ⇒ `actor_id=''` (tenant-wide),
+  never someone else's actor. The only path to a non-empty `actor_id` is an
+  authenticated principal with a non-empty subject **and** forwarding enabled.
+- **Anti-spoof (strip-then-set).** When forwarding is on, the proxy deletes every
+  inbound `X-Runtime-*` header before setting the trio from the principal — so a
+  caller cannot forge an actor by supplying its own header. The trust boundary is
+  the existing one: the agent port is loopback for local agents and
+  `AuthToken`-gated for remote agents.
+- **Keying scope.** Memory keys only on the **subject** (`X-Runtime-User`).
+  Tenant and role are forwarded too and reach the turn loop, but they are not
+  used for memory keying in this milestone — they are available for a future OBO
+  (on-behalf-of) exchange.
+
+```bash
+# Platform-wide edge flag (accepts 1/true/yes/on). Requires identity/auth to be
+# configured so an authenticated subject exists to forward; without it every
+# request degrades to the tenant-wide bucket.
+export RUNTIME_SUBJECT_FORWARDING=1
+```
 
 ### Open mode & backward compatibility
 
@@ -1943,6 +1986,7 @@ unaffected.
 | `RUNTIME_INGEST_MAX_INFLIGHT` | agentd | `4` | Max concurrent extraction goroutines; turns over the cap are dropped. |
 | `RUNTIME_INGEST_DEDUP_FLOOR` | agentd | `0.85` | Cosine similarity at/above which a candidate fact is treated as a duplicate and skipped. |
 | `RUNTIME_INGEST_MAX_FACTS` | agentd | `10` | Hard cap on facts saved per turn. |
+| `RUNTIME_SUBJECT_FORWARDING` | runtimed + agentd | (unset) | `1`/`true`/`yes`/`on` enables forwarding the authenticated caller's subject as `X-Runtime-*` to agents and actor-scoping memory; off ⇒ tenant-wide (today's behavior). |
 | `RUNTIME_LOG_FORMAT` | runtimed | `text` | `json` switches `slog` to JSON output. |
 | `RUNTIME_CTL_URL` | runtimectl | `http://localhost:8080` | Control-plane base URL the CLI targets. |
 | `RUNTIME_TOKEN` | runtimectl | (unset) | Bearer credential (service key, OIDC token, or bootstrap key) sent on every CLI request when set. |
