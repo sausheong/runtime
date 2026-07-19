@@ -102,7 +102,7 @@ func (p *pgStore) ActiveSessionsByReplica(ctx context.Context, agentID string) (
 
 func (p *pgStore) ListSessions(ctx context.Context, agentID string) ([]SessionRow, error) {
 	rows, err := p.db.QueryContext(ctx,
-		`SELECT id, agent_id, workflow_id, status, turn_count, replica FROM sessions WHERE agent_id=$1 ORDER BY created_at DESC`,
+		`SELECT id, agent_id, workflow_id, status, turn_count, replica, tokens_total, cost_usd FROM sessions WHERE agent_id=$1 ORDER BY created_at DESC`,
 		agentID)
 	if err != nil {
 		return nil, err
@@ -111,7 +111,7 @@ func (p *pgStore) ListSessions(ctx context.Context, agentID string) ([]SessionRo
 	var out []SessionRow
 	for rows.Next() {
 		var s SessionRow
-		if err := rows.Scan(&s.ID, &s.AgentID, &s.WorkflowID, &s.Status, &s.TurnCount, &s.Replica); err != nil {
+		if err := rows.Scan(&s.ID, &s.AgentID, &s.WorkflowID, &s.Status, &s.TurnCount, &s.Replica, &s.TokensTotal, &s.CostUSD); err != nil {
 			return nil, err
 		}
 		out = append(out, s)
@@ -125,11 +125,18 @@ func (p *pgStore) SetTurnCount(ctx context.Context, id string, n int) error {
 	return err
 }
 
+func (p *pgStore) SetSessionUsage(ctx context.Context, id string, tokens int64, cost float64) error {
+	_, err := p.db.ExecContext(ctx,
+		`UPDATE sessions SET tokens_total = $2, cost_usd = $3, last_active_at = now() WHERE id=$1`,
+		id, tokens, cost)
+	return err
+}
+
 func (p *pgStore) GetSession(ctx context.Context, id string) (SessionRow, error) {
 	var s SessionRow
 	err := p.db.QueryRowContext(ctx,
-		`SELECT id, agent_id, workflow_id, status, turn_count, replica FROM sessions WHERE id=$1`, id).
-		Scan(&s.ID, &s.AgentID, &s.WorkflowID, &s.Status, &s.TurnCount, &s.Replica)
+		`SELECT id, agent_id, workflow_id, status, turn_count, replica, tokens_total, cost_usd FROM sessions WHERE id=$1`, id).
+		Scan(&s.ID, &s.AgentID, &s.WorkflowID, &s.Status, &s.TurnCount, &s.Replica, &s.TokensTotal, &s.CostUSD)
 	if err == sql.ErrNoRows {
 		return SessionRow{}, fmt.Errorf("session %q not found", id)
 	}

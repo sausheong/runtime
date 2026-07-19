@@ -75,6 +75,18 @@ func (m *memStore) SetTurnCount(_ context.Context, id string, n int) error {
 	return nil
 }
 
+func (m *memStore) SetSessionUsage(_ context.Context, id string, tokens int64, cost float64) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	s, ok := m.sessions[id]
+	if !ok {
+		return fmt.Errorf("session %q not found", id)
+	}
+	s.TokensTotal = tokens
+	s.CostUSD = cost
+	return nil
+}
+
 func (m *memStore) GetSession(_ context.Context, id string) (SessionRow, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
