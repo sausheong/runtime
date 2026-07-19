@@ -293,7 +293,7 @@ func Handler(reg *controlplane.Registry, st store.Store, oidc OIDCConfig, onb *O
 			// register credential-less upstreams without panicking the request.
 			var secs []identity.SecretMeta
 			if onb.Secrets != nil {
-				secs, _ = onb.Secrets.ListSecretNames(r.Context(), p.TenantID)
+				secs, _ = onb.Secrets.ListSecrets(r.Context(), p.TenantID)
 			}
 			allKeys, _ := onb.Admin.ListKeys(r.Context(), p.TenantID)
 			// Show only active keys: a revoked key is dead and only clutters the
@@ -424,6 +424,28 @@ func Handler(reg *controlplane.Registry, st store.Store, oidc OIDCConfig, onb *O
 				http.Error(w, controlplane.ReservedEnvPrefixError(r.FormValue("name")), http.StatusBadRequest)
 				return
 			}
+			// The name field is shared by both credential forms; branch on the
+			// form's type. An oauth2 cred seals a client_credentials config;
+			// anything else (absent/empty/"static") stays a static secret.
+			if r.FormValue("type") == identity.CredTypeOAuth2 {
+				cfg := identity.OAuth2Config{
+					TokenURL:     r.FormValue("token_url"),
+					ClientID:     r.FormValue("client_id"),
+					ClientSecret: r.FormValue("client_secret"),
+					Scopes:       splitScopes(r.FormValue("scopes")),
+					Audience:     r.FormValue("audience"),
+				}
+				if err := cfg.Validate(); err != nil {
+					http.Error(w, err.Error(), http.StatusBadRequest)
+					return
+				}
+				if err := onb.Secrets.SetOAuth2(r.Context(), p.TenantID, r.FormValue("name"), cfg); err != nil {
+					http.Error(w, "set oauth2 credential failed", http.StatusBadRequest)
+					return
+				}
+				flashRedirect(w, r, "OAuth2 credential "+r.FormValue("name")+" saved.")
+				return
+			}
 			if err := onb.Secrets.SetSecret(r.Context(), p.TenantID, r.FormValue("name"), r.FormValue("value")); err != nil {
 				http.Error(w, "set secret failed", http.StatusBadRequest)
 				return
@@ -550,6 +572,22 @@ func sessionValue(r *http.Request) string {
 func flashRedirect(w http.ResponseWriter, r *http.Request, msg string) {
 	http.SetCookie(w, &http.Cookie{Name: "rt_flash", Value: msg, Path: "/ui/onboarding", MaxAge: 30, HttpOnly: true, SameSite: http.SameSiteLaxMode})
 	http.Redirect(w, r, "/ui/onboarding", http.StatusSeeOther)
+}
+
+// splitScopes parses the oauth2 scopes form field, which lets an admin separate
+// scopes with commas and/or whitespace. Empty fragments are dropped so a
+// trailing comma or double space does not yield a blank scope.
+func splitScopes(s string) []string {
+	fields := strings.FieldsFunc(s, func(r rune) bool {
+		return r == ',' || r == ' ' || r == '\t' || r == '\n' || r == '\r'
+	})
+	out := make([]string, 0, len(fields))
+	for _, f := range fields {
+		if f = strings.TrimSpace(f); f != "" {
+			out = append(out, f)
+		}
+	}
+	return out
 }
 
 // setSessionCookie writes the runtime_token cookie the identity Authenticator

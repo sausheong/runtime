@@ -270,6 +270,25 @@ func runAdmin(base string, args []string) {
 		tenant := flagValue(args[4:], "--tenant", "")
 		mustAdminPost(base, "/admin/secrets", map[string]string{"name": name, "value": value, "tenant": tenant})
 		fmt.Printf("secret %s set\n", name)
+	case "secret set-oauth2":
+		// admin secret set-oauth2 --name n --token-url u --client-id c --client-secret s [--scope x ...] [--audience a] [--tenant t]
+		name := flagValue(args[2:], "--name", "")
+		if name == "" {
+			fmt.Fprintln(os.Stderr, "secret set-oauth2 requires --name")
+			os.Exit(2)
+		}
+		body := map[string]any{
+			"name":          name,
+			"type":          "oauth2_client_credentials",
+			"token_url":     flagValue(args[2:], "--token-url", ""),
+			"client_id":     flagValue(args[2:], "--client-id", ""),
+			"client_secret": flagValue(args[2:], "--client-secret", ""),
+			"scopes":        flagValues(args[2:], "--scope"),
+			"audience":      flagValue(args[2:], "--audience", ""),
+			"tenant":        flagValue(args[2:], "--tenant", ""),
+		}
+		mustAdminPostAny(base, "/admin/secrets", body)
+		fmt.Printf("oauth2 credential %s set\n", name)
 	case "secret ls":
 		fmt.Print(string(mustAdminGet(base, "/admin/secrets")))
 	case "secret rm":
@@ -457,7 +476,7 @@ func mustAtoi(s string) int {
 }
 
 func adminUsage() {
-	fmt.Fprintln(os.Stderr, "usage: runtimectl admin <tenant create <id> [--name n]|user add <subject> --role r [--tenant t]|user ls|key create --role r [--label l] [--tenant t]|key ls|key revoke <id>|secret set <name> <value> [--tenant t]|secret ls|secret rm <name>|secret rotate [--tenant t]|upstream add --name n (--url u|--openapi spec) [--base-url b] [--cred-secret s] [--cred-header h] [--tenant t]|upstream ls|upstream rm <id>|agent add --id i --url u [--name n] [--model m] [--cred-secret s] [--tenant t]|agent ls|agent rm <id>|agent enable <id>|agent disable <id>|agent restart <id>|policy add --name n --file p.cedar [--tenant t]|policy ls [--tenant t]|policy rm <name> [--tenant t]|quota add --tenant t --upstream u --rate n|quota ls|quota rm --upstream u [--tenant t]>")
+	fmt.Fprintln(os.Stderr, "usage: runtimectl admin <tenant create <id> [--name n]|user add <subject> --role r [--tenant t]|user ls|key create --role r [--label l] [--tenant t]|key ls|key revoke <id>|secret set <name> <value> [--tenant t]|secret set-oauth2 --name n --token-url u --client-id c --client-secret s [--scope x] [--audience a] [--tenant t]|secret ls|secret rm <name>|secret rotate [--tenant t]|upstream add --name n (--url u|--openapi spec) [--base-url b] [--cred-secret s] [--cred-header h] [--tenant t]|upstream ls|upstream rm <id>|agent add --id i --url u [--name n] [--model m] [--cred-secret s] [--tenant t]|agent ls|agent rm <id>|agent enable <id>|agent disable <id>|agent restart <id>|policy add --name n --file p.cedar [--tenant t]|policy ls [--tenant t]|policy rm <name> [--tenant t]|quota add --tenant t --upstream u --rate n|quota ls|quota rm --upstream u [--tenant t]>")
 	os.Exit(2)
 }
 
@@ -508,6 +527,19 @@ func flagValue(args []string, name, def string) string {
 		}
 	}
 	return def
+}
+
+// flagValues collects the value following every occurrence of name in args, so
+// a repeated flag (e.g. --scope a --scope b) yields ["a","b"]. Returns nil when
+// the flag is absent.
+func flagValues(args []string, name string) []string {
+	var out []string
+	for i := 0; i < len(args)-1; i++ {
+		if args[i] == name {
+			out = append(out, args[i+1])
+		}
+	}
+	return out
 }
 
 func adminPost(base, path string, body map[string]string) ([]byte, error) {

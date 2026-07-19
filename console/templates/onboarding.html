@@ -137,19 +137,39 @@
     <h2>Credentials</h2>
     <p class="card-desc">Per-tenant secrets brokered into upstream requests. Values are never displayed.</p>
     <table>
-      <thead><tr><th>Name</th></tr></thead>
+      <thead><tr><th>Name</th><th>Type</th></tr></thead>
       <tbody>
-      {{range .Secrets}}<tr><td class="mono">{{.Name}}</td></tr>{{else}}
-        <tr><td class="empty">No credentials set.</td></tr>
+      {{range .Secrets}}<tr><td class="mono">{{.Name}}</td><td>{{if .Type}}{{.Type}}{{else}}static{{end}}</td></tr>{{else}}
+        <tr><td colspan="2" class="empty">No credentials set.</td></tr>
       {{end}}
       </tbody>
     </table>
     <form method="post" action="/ui/onboarding/secrets">
       <input type="hidden" name="csrf_token" value="{{.CSRF}}">
+      <input type="hidden" name="type" value="static">
       <div class="row" style="margin-top:1rem">
         <input name="name" placeholder="ORDERS_API_KEY" style="flex:1">
         <input name="value" placeholder="value" type="password" style="flex:1">
         <button type="submit">Set credential</button>
+      </div>
+    </form>
+    <h3 style="margin-top:1.5rem">OAuth2 client credentials</h3>
+    <p class="card-desc">Client-credentials grant; the runtime fetches and refreshes access tokens. The client secret is write-only and never displayed.</p>
+    <form method="post" action="/ui/onboarding/secrets">
+      <input type="hidden" name="csrf_token" value="{{.CSRF}}">
+      <input type="hidden" name="type" value="oauth2_client_credentials">
+      <div class="row" style="margin-top:.5rem">
+        <input name="name" placeholder="ORDERS_OAUTH" style="flex:1">
+        <input name="token_url" placeholder="https://auth.example.com/oauth/token" style="flex:2">
+      </div>
+      <div class="row" style="margin-top:.5rem">
+        <input name="client_id" placeholder="client id" style="flex:1">
+        <input name="client_secret" placeholder="client secret" type="password" style="flex:1">
+      </div>
+      <div class="row" style="margin-top:.5rem">
+        <input name="scopes" placeholder="scope1, scope2" style="flex:1">
+        <input name="audience" placeholder="audience (optional)" style="flex:1">
+        <button type="submit">Set OAuth2 credential</button>
       </div>
     </form>
   </section>
