@@ -2,17 +2,20 @@ package identity
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
+	"sync/atomic"
 )
 
 // secretStore is the slice of *Store the Broker needs. Declared as an interface
 // so the broker is unit-testable without Postgres.
 type secretStore interface {
-	PutSecret(ctx context.Context, tenantID, name string, valueEnc []byte) error
+	PutSecret(ctx context.Context, tenantID, name string, valueEnc []byte, credType string) error
 	ListSecretNames(ctx context.Context, tenantID string) ([]SecretMeta, error)
 	DeleteSecret(ctx context.Context, tenantID, name string) error
 	LoadSecrets(ctx context.Context, tenantID string) ([]EncryptedSecret, error)
+	LoadSecret(ctx context.Context, tenantID, name string) (EncryptedSecret, string, error)
 }
 
 // Broker is the single place where the Keyring meets storage. It seals on write
@@ -21,6 +24,7 @@ type secretStore interface {
 type Broker struct {
 	store   secretStore
 	keyring *Keyring
+	gen     atomic.Uint64
 }
 
 // NewBroker pairs a store with a keyring.
@@ -54,9 +58,10 @@ func (b *Broker) SetSecret(ctx context.Context, tenant, name, plaintext string) 
 	if err != nil {
 		return fmt.Errorf("identity: seal secret %q for tenant %q: %w", name, tenant, err)
 	}
-	if err := b.store.PutSecret(ctx, tenant, name, enc); err != nil {
+	if err := b.store.PutSecret(ctx, tenant, name, enc, CredTypeStatic); err != nil {
 		return fmt.Errorf("identity: store secret %q for tenant %q: %w", name, tenant, err)
 	}
+	b.gen.Add(1)
 	return nil
 }
 
@@ -65,9 +70,14 @@ func (b *Broker) ListSecretNames(ctx context.Context, tenant string) ([]SecretMe
 	return b.store.ListSecretNames(ctx, tenant)
 }
 
-// DeleteSecret passes through to the store.
+// DeleteSecret passes through to the store and bumps the generation so a cached
+// TokenSource for the removed credential is discarded live.
 func (b *Broker) DeleteSecret(ctx context.Context, tenant, name string) error {
-	return b.store.DeleteSecret(ctx, tenant, name)
+	if err := b.store.DeleteSecret(ctx, tenant, name); err != nil {
+		return err
+	}
+	b.gen.Add(1)
+	return nil
 }
 
 // RotateStats reports the outcome of a re-encrypt pass. It carries no secret
@@ -103,7 +113,11 @@ func (b *Broker) Rotate(ctx context.Context, tenant string) (RotateStats, error)
 			slog.Error("rotate: seal failed", "tenant", tenant, "name", e.Name, "err", err)
 			continue
 		}
-		if err := b.store.PutSecret(ctx, tenant, e.Name, nb); err != nil {
+		_, ct, terr := b.store.LoadSecret(ctx, tenant, e.Name)
+		if terr != nil {
+			ct = CredTypeStatic
+		}
+		if err := b.store.PutSecret(ctx, tenant, e.Name, nb, ct); err != nil {
 			st.Failed++
 			slog.Error("rotate: store failed", "tenant", tenant, "name", e.Name, "err", err)
 			continue
@@ -116,4 +130,91 @@ func (b *Broker) Rotate(ctx context.Context, tenant string) (RotateStats, error)
 // RotateSecrets satisfies controlplane.SecretAdmin; it is an alias for Rotate.
 func (b *Broker) RotateSecrets(ctx context.Context, tenant string) (RotateStats, error) {
 	return b.Rotate(ctx, tenant)
+}
+
+// SetOAuth2 seals an oauth2 client_credentials config as JSON under the keyring
+// (binding tenant+name, exactly like a static value) and persists it with
+// type=oauth2_client_credentials. The client_secret never leaves the broker in
+// plaintext. Bumps the generation so a cached TokenSource is rebuilt live.
+func (b *Broker) SetOAuth2(ctx context.Context, tenant, name string, cfg OAuth2Config) error {
+	if err := cfg.Validate(); err != nil {
+		return err
+	}
+	raw, err := json.Marshal(cfg)
+	if err != nil {
+		return fmt.Errorf("identity: marshal oauth2 config %q: %w", name, err)
+	}
+	enc, err := b.keyring.Seal(tenant, name, raw)
+	if err != nil {
+		return fmt.Errorf("identity: seal oauth2 config %q for tenant %q: %w", name, tenant, err)
+	}
+	if err := b.store.PutSecret(ctx, tenant, name, enc, CredTypeOAuth2); err != nil {
+		return fmt.Errorf("identity: store oauth2 config %q for tenant %q: %w", name, tenant, err)
+	}
+	b.gen.Add(1)
+	return nil
+}
+
+// CredType returns the credential type for (tenant, name): CredTypeStatic or
+// CredTypeOAuth2. Absent secret ⇒ the store's error.
+func (b *Broker) CredType(ctx context.Context, tenant, name string) (string, error) {
+	_, ct, err := b.store.LoadSecret(ctx, tenant, name)
+	if err != nil {
+		return "", err
+	}
+	if ct == "" {
+		ct = CredTypeStatic
+	}
+	return ct, nil
+}
+
+// OAuth2ConfigFor decrypts and returns the oauth2 config for (tenant, name).
+// Used only inside the gateway process to build a TokenSource — never surfaced
+// to an API. Errors if the secret is not an oauth2 credential.
+func (b *Broker) OAuth2ConfigFor(ctx context.Context, tenant, name string) (OAuth2Config, error) {
+	e, ct, err := b.store.LoadSecret(ctx, tenant, name)
+	if err != nil {
+		return OAuth2Config{}, err
+	}
+	if ct != CredTypeOAuth2 {
+		return OAuth2Config{}, fmt.Errorf("identity: secret %q is not an oauth2 credential", name)
+	}
+	pt, err := b.keyring.Open(tenant, e.Name, e.ValueEnc)
+	if err != nil {
+		return OAuth2Config{}, fmt.Errorf("identity: decrypt oauth2 config %q for tenant %q: %w", name, tenant, err)
+	}
+	var cfg OAuth2Config
+	if err := json.Unmarshal(pt, &cfg); err != nil {
+		return OAuth2Config{}, fmt.Errorf("identity: unmarshal oauth2 config %q: %w", name, err)
+	}
+	return cfg, nil
+}
+
+// Generation increments on every secret write/rotate/delete. A cached oauth2
+// TokenSource keys on it to rebuild after a rotation without a restart.
+func (b *Broker) Generation() uint64 { return b.gen.Load() }
+
+// ListSecrets returns the enriched read model: type for every secret and, for
+// oauth2 creds, the NON-SECRET fields (token_url/client_id/scopes/audience).
+// client_secret is never included. A decrypt failure on one oauth2 row omits
+// its oauth fields (still lists name+type) rather than failing the whole list.
+func (b *Broker) ListSecrets(ctx context.Context, tenant string) ([]SecretMeta, error) {
+	metas, err := b.store.ListSecretNames(ctx, tenant)
+	if err != nil {
+		return nil, err
+	}
+	for i := range metas {
+		if metas[i].Type != CredTypeOAuth2 {
+			continue
+		}
+		cfg, cerr := b.OAuth2ConfigFor(ctx, tenant, metas[i].Name)
+		if cerr != nil {
+			continue // list name+type without oauth detail rather than fail
+		}
+		metas[i].OAuth2 = &OAuth2Meta{
+			TokenURL: cfg.TokenURL, ClientID: cfg.ClientID,
+			Scopes: cfg.Scopes, Audience: cfg.Audience,
+		}
+	}
+	return metas, nil
 }

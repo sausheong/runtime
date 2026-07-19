@@ -16,10 +16,10 @@ func TestSecretsStore_CRUD(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := s.PutSecret(ctx, "alpha", "OPENAI_API_KEY", []byte("ENC1")); err != nil {
+	if err := s.PutSecret(ctx, "alpha", "OPENAI_API_KEY", []byte("ENC1"), CredTypeStatic); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.PutSecret(ctx, "alpha", "OPENAI_BASE_URL", []byte("ENC2")); err != nil {
+	if err := s.PutSecret(ctx, "alpha", "OPENAI_BASE_URL", []byte("ENC2"), CredTypeStatic); err != nil {
 		t.Fatal(err)
 	}
 
@@ -47,7 +47,7 @@ func TestSecretsStore_CRUD(t *testing.T) {
 	}
 
 	before := metas[0].UpdatedAt
-	if err := s.PutSecret(ctx, "alpha", "OPENAI_API_KEY", []byte("ENC1b")); err != nil {
+	if err := s.PutSecret(ctx, "alpha", "OPENAI_API_KEY", []byte("ENC1b"), CredTypeStatic); err != nil {
 		t.Fatal(err)
 	}
 	enc2, _ := s.LoadSecrets(ctx, "alpha")
@@ -80,7 +80,7 @@ func TestSecretsStore_TenantCascade(t *testing.T) {
 	if err := s.CreateTenant(ctx, "alpha", "A"); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.PutSecret(ctx, "alpha", "K", []byte("X")); err != nil {
+	if err := s.PutSecret(ctx, "alpha", "K", []byte("X"), CredTypeStatic); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.ExecContext(ctx, `DELETE FROM tenants WHERE id='alpha'`); err != nil {
@@ -114,7 +114,7 @@ func TestBroker_RotateOverPostgres(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.PutSecret(ctx, "alpha", "LEG", legacyBlob); err != nil {
+	if err := s.PutSecret(ctx, "alpha", "LEG", legacyBlob, CredTypeStatic); err != nil {
 		t.Fatal(err)
 	}
 	krOld, _ := NewKeyring(map[string]*Cipher{"v1": cOld}, "v1", "v1")

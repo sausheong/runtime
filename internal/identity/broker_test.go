@@ -9,23 +9,43 @@ import (
 // fakeSecretStore implements secretStore in-memory for hermetic broker tests.
 type fakeSecretStore struct {
 	put     map[string][]byte // name -> ciphertext (single tenant for the test)
+	typ     map[string]string // name -> credential type
 	loaded  []EncryptedSecret
 	loadErr error // error to return from LoadSecrets
 }
 
-func (f *fakeSecretStore) PutSecret(_ context.Context, _, name string, enc []byte) error {
+func (f *fakeSecretStore) PutSecret(_ context.Context, _, name string, enc []byte, credType string) error {
 	if f.put == nil {
 		f.put = map[string][]byte{}
 	}
+	if f.typ == nil {
+		f.typ = map[string]string{}
+	}
 	f.put[name] = enc
+	f.typ[name] = credType
 	return nil
 }
 func (f *fakeSecretStore) ListSecretNames(_ context.Context, _ string) ([]SecretMeta, error) {
-	return nil, nil
+	var out []SecretMeta
+	for name, ct := range f.typ {
+		out = append(out, SecretMeta{Name: name, Type: ct})
+	}
+	return out, nil
 }
-func (f *fakeSecretStore) DeleteSecret(_ context.Context, _, _ string) error { return nil }
+func (f *fakeSecretStore) DeleteSecret(_ context.Context, _, name string) error {
+	delete(f.put, name)
+	delete(f.typ, name)
+	return nil
+}
 func (f *fakeSecretStore) LoadSecrets(_ context.Context, _ string) ([]EncryptedSecret, error) {
 	return f.loaded, f.loadErr
+}
+func (f *fakeSecretStore) LoadSecret(_ context.Context, _, name string) (EncryptedSecret, string, error) {
+	v, ok := f.put[name]
+	if !ok {
+		return EncryptedSecret{}, "", errors.New("not found")
+	}
+	return EncryptedSecret{Name: name, ValueEnc: v}, f.typ[name], nil
 }
 
 func newTestBroker(t *testing.T, fs *fakeSecretStore) *Broker {
@@ -112,10 +132,15 @@ func TestBroker_SecretsForPropagatesLoadError(t *testing.T) {
 // rotateFakeStore records writes back so Rotate's output can be inspected.
 type rotateFakeStore struct {
 	rows map[string][]byte
+	typ  map[string]string
 }
 
-func (f *rotateFakeStore) PutSecret(_ context.Context, _, name string, enc []byte) error {
+func (f *rotateFakeStore) PutSecret(_ context.Context, _, name string, enc []byte, credType string) error {
 	f.rows[name] = enc
+	if f.typ == nil {
+		f.typ = map[string]string{}
+	}
+	f.typ[name] = credType
 	return nil
 }
 func (f *rotateFakeStore) ListSecretNames(_ context.Context, _ string) ([]SecretMeta, error) {
@@ -123,6 +148,7 @@ func (f *rotateFakeStore) ListSecretNames(_ context.Context, _ string) ([]Secret
 }
 func (f *rotateFakeStore) DeleteSecret(_ context.Context, _, name string) error {
 	delete(f.rows, name)
+	delete(f.typ, name)
 	return nil
 }
 func (f *rotateFakeStore) LoadSecrets(_ context.Context, _ string) ([]EncryptedSecret, error) {
@@ -131,6 +157,13 @@ func (f *rotateFakeStore) LoadSecrets(_ context.Context, _ string) ([]EncryptedS
 		out = append(out, EncryptedSecret{Name: n, ValueEnc: v})
 	}
 	return out, nil
+}
+func (f *rotateFakeStore) LoadSecret(_ context.Context, _, name string) (EncryptedSecret, string, error) {
+	v, ok := f.rows[name]
+	if !ok {
+		return EncryptedSecret{}, "", errors.New("not found")
+	}
+	return EncryptedSecret{Name: name, ValueEnc: v}, f.typ[name], nil
 }
 
 func twoKeyBroker(t *testing.T, fs secretStore) *Broker {
@@ -216,5 +249,48 @@ func TestBroker_RotateIdempotent(t *testing.T) {
 	}
 	if second.Failed != 0 || second.Rotated != first.Rotated {
 		t.Fatalf("second rotate not clean: %+v", second)
+	}
+}
+
+func TestBrokerOAuth2RoundTripAndGeneration(t *testing.T) {
+	b := newTestBroker(t, &fakeSecretStore{})
+	ctx := context.Background()
+	g0 := b.Generation()
+	cfg := OAuth2Config{TokenURL: "https://idp/token", ClientID: "cid", ClientSecret: "sec", Scopes: []string{"a"}}
+	if err := b.SetOAuth2(ctx, "acme", "orders_oauth", cfg); err != nil {
+		t.Fatalf("SetOAuth2: %v", err)
+	}
+	if b.Generation() == g0 {
+		t.Fatal("generation did not bump on SetOAuth2")
+	}
+	ct, err := b.CredType(ctx, "acme", "orders_oauth")
+	if err != nil || ct != CredTypeOAuth2 {
+		t.Fatalf("CredType = %q, %v", ct, err)
+	}
+	got, err := b.OAuth2ConfigFor(ctx, "acme", "orders_oauth")
+	if err != nil || got.ClientSecret != "sec" || got.TokenURL != cfg.TokenURL {
+		t.Fatalf("OAuth2ConfigFor = %+v, %v", got, err)
+	}
+	metas, err := b.ListSecrets(ctx, "acme")
+	if err != nil || len(metas) != 1 || metas[0].Type != CredTypeOAuth2 || metas[0].OAuth2 == nil {
+		t.Fatalf("ListSecrets = %+v, %v", metas, err)
+	}
+	if metas[0].OAuth2.ClientID != "cid" {
+		t.Fatalf("list client_id = %q", metas[0].OAuth2.ClientID)
+	}
+}
+
+func TestBrokerStaticStaysStatic(t *testing.T) {
+	b := newTestBroker(t, &fakeSecretStore{})
+	ctx := context.Background()
+	if err := b.SetSecret(ctx, "acme", "API_KEY", "v"); err != nil {
+		t.Fatalf("SetSecret: %v", err)
+	}
+	ct, err := b.CredType(ctx, "acme", "API_KEY")
+	if err != nil || ct != CredTypeStatic {
+		t.Fatalf("CredType = %q, %v", ct, err)
+	}
+	if _, err := b.OAuth2ConfigFor(ctx, "acme", "API_KEY"); err == nil {
+		t.Fatal("OAuth2ConfigFor on a static secret should error")
 	}
 }
