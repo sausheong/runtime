@@ -2,7 +2,7 @@
 # v1.0 capstone proof — brings up the turnkey stack and asserts ALL SIX PILLARS
 # end-to-end, plus persistence and no-secrets-in-logs. Run from anywhere;
 # resolves its own dir.
-# Requires Docker + these host ports free: 8080 5432 9090 3000 16686 4318 9000.
+# Requires Docker + these host ports free: 8080 5432 9090 9093 3000 16686 4318 9000.
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/../.." && pwd)"   # repo root (/Users/sausheong/projects/runtime)
@@ -153,6 +153,8 @@ fi
 curl -sf localhost:3000/api/health >/dev/null && pass "grafana healthy" || fail "grafana down"
 curl -sf localhost:16686/ >/dev/null && pass "jaeger UI reachable" || fail "jaeger down"
 if curl -s "localhost:9090/api/v1/targets" | grep -q runtimed; then pass "prometheus scrapes runtimed"; else fail "runtimed not a prometheus target"; fi
+curl -sf localhost:9093/-/healthy >/dev/null && pass "alertmanager healthy" || fail "alertmanager not healthy"
+if curl -s "localhost:9090/api/v1/rules" | grep -q '"name":"runtime"'; then pass "prometheus loaded alert rules"; else fail "prometheus alert rules not loaded"; fi
 
 # Observability: a trace reached Jaeger (runtimed exports OTLP → collector →
 # jaeger). Service name is exactly "runtimed".
