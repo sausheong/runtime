@@ -61,8 +61,6 @@ land in `docs/superpowers/specs/` as each item starts.
 - **P2.1 OBO / OAuth2 outbound creds — NEXT.**
 - **P2.2 Memory strategies — after P2.1.**
 
-master unpushed (46 commits ahead of origin).
-
 ## Prioritization principles
 
 1. **Security posture first.** The one AgentCore claim we cannot currently make
