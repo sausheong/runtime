@@ -17,7 +17,15 @@ import (
 	"github.com/sausheong/runtime/internal/obs"
 	"github.com/sausheong/runtime/internal/policy"
 	"github.com/sausheong/runtime/internal/quota"
+	"github.com/sausheong/runtime/internal/rheader"
 )
+
+// UserTenantSource resolves a verified subject to its tenant row(s). It is the
+// minimal slice of the identity store the gateway needs for the OBO tenant-bind
+// (kept an interface to avoid importing the concrete store).
+type UserTenantSource interface {
+	UsersBySubject(ctx context.Context, subject string) ([]identity.UserRow, error)
+}
 
 // Handler serves the federated tool set over MCP Streamable HTTP plus the
 // operator status endpoint. Per-tenant SDK servers are cached and rebuilt
@@ -55,6 +63,13 @@ type Handler struct {
 	// OAuth2 mints per-call client_credentials tokens for oauth2 upstream
 	// credentials. nil ⇒ oauth2 credentials disabled (static path only).
 	OAuth2 *OAuth2Manager
+
+	// Assertion re-verifies a forwarded caller JWT (X-Runtime-Assertion) for OBO.
+	// nil ⇒ no caller-assertion landing (M2a inert; today's behavior).
+	Assertion identity.OIDCVerifier
+	// Users resolves a verified subject to its tenant for the OBO tenant-bind.
+	// nil ⇒ no caller-assertion landing (paired with Assertion).
+	Users UserTenantSource
 
 	mu sync.Mutex
 	// cache maps mode-qualified view key → server, rebuilt when the Manager's
@@ -173,8 +188,40 @@ func (h *Handler) HTTP() http.Handler {
 			http.Error(w, "search mode requires embeddings (RUNTIME_EMBED_MODEL)", http.StatusBadRequest)
 			return
 		}
+		// OBO caller-assertion landing (M2a): re-verify + tenant-bind a forwarded
+		// caller JWT and land it on the ctx the SDK propagates to gate #5. Nil-safe:
+		// only active when both Assertion and Users are wired. Fail-closed — any
+		// failure leaves the carrier unset (never blind-trust the header).
+		if h.Assertion != nil && h.Users != nil {
+			if jwt := r.Header.Get(rheader.Assertion); jwt != "" {
+				if ctx, ok := h.verifyCallerAssertion(r.Context(), jwt); ok {
+					r = r.WithContext(ctx)
+				}
+			}
+		}
 		mcp.ServeHTTP(w, r)
 	})
+}
+
+// verifyCallerAssertion re-verifies a forwarded caller JWT and binds it to the
+// agent principal's tenant. Returns the assertion-bearing ctx + true only on a
+// verified, same-tenant match; false (fail-closed) on any failure — verify
+// error, store error, subject not in exactly one tenant, no agent principal, or
+// a tenant mismatch. Never lands an unverified or cross-tenant assertion.
+func (h *Handler) verifyCallerAssertion(ctx context.Context, jwt string) (context.Context, bool) {
+	sub, err := h.Assertion.Verify(ctx, jwt)
+	if err != nil {
+		return ctx, false
+	}
+	rows, err := h.Users.UsersBySubject(ctx, sub)
+	if err != nil || len(rows) != 1 {
+		return ctx, false
+	}
+	agent, ok := h.PrincipalFor(ctx)
+	if !ok || rows[0].TenantID != agent.TenantID {
+		return ctx, false
+	}
+	return WithCallerAssertion(ctx, sub, jwt), true
 }
 
 // serverFor returns the cached SDK server for the principal's mode-qualified

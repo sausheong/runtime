@@ -441,6 +441,11 @@ func main() {
 		azr := identity.NewAuthorizer(reg.AgentTenants()).WithLiveLookup(reg.TenantOf)
 		if gwHandler != nil {
 			gwHandler.PrincipalFor = controlplane.PrincipalFromContext
+			// OBO caller-assertion (M2a): re-verify + tenant-bind a forwarded
+			// caller JWT at the gateway. nil-safe: oidcVerifier is nil when OIDC
+			// is unconfigured, leaving Handler.Assertion nil (landing inert).
+			gwHandler.Assertion = oidcVerifier
+			gwHandler.Users = idStore
 		}
 		// Self-service onboarding (v1.0-M1): only when a gateway manager exists.
 		// Guard the GatewayMutator interface assignment to avoid the typed-nil
