@@ -287,6 +287,7 @@ type Config struct {
 	Agents  []AgentConfig `yaml:"agents"`
 	Tokens  []TokenConfig `yaml:"tokens"`
 	Gateway GatewayConfig `yaml:"gateway"`
+	Pricing Pricing       `yaml:"pricing"`
 }
 
 // Load reads and validates the config file at path.
@@ -298,6 +299,9 @@ func Load(path string) (*Config, error) {
 	var c Config
 	if err := yaml.Unmarshal(b, &c); err != nil {
 		return nil, fmt.Errorf("parse config %q: %w", path, err)
+	}
+	if err := c.Pricing.validate(); err != nil {
+		return nil, err
 	}
 	if err := c.Validate(); err != nil {
 		return nil, err
