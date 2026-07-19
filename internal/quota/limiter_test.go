@@ -54,6 +54,73 @@ func TestBucketRefill(t *testing.T) {
 	}
 }
 
+func TestRefreshThrottledWithinWindow(t *testing.T) {
+	ms := NewMemStore()
+	ctx := context.Background()
+	// Start with a generous limit so the first Allow loads a rule (l.loaded=true).
+	_ = ms.Insert(ctx, Rule{Tenant: "acme", Upstream: "u", RatePerMin: 100})
+	now := time.Unix(0, 0)
+	l := NewLimiter(ms, 0, func() time.Time { return now })
+
+	// First call loads the rules (loaded==false ⇒ throttle skipped) and records
+	// lastRefresh at t=0.
+	if ok, _ := l.Allow(ctx, "acme", "u"); !ok {
+		t.Fatal("first call must pass")
+	}
+
+	// Mutate the store within the refresh window: replace with a strict rate 1.
+	if _, err := ms.Delete(ctx, "acme", "u"); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	_ = ms.Insert(ctx, Rule{Tenant: "acme", Upstream: "u", RatePerMin: 1})
+
+	// Still within the 2s window: the mutation is NOT observed — the limiter must
+	// keep using the cached rate-100 bucket, so calls keep passing.
+	now = now.Add(time.Second) // < refreshWindow (2s)
+	for i := 0; i < 5; i++ {
+		if ok, _ := l.Allow(ctx, "acme", "u"); !ok {
+			t.Fatalf("call %d within window must still use cached rate-100 rule", i)
+		}
+	}
+
+	// Advance past the window: the re-query now observes the rate-1 rule. The
+	// changed rate rebuilds the bucket full (capacity 1), so one call passes...
+	now = now.Add(3 * time.Second) // total 4s > window
+	if ok, _ := l.Allow(ctx, "acme", "u"); !ok {
+		t.Fatal("first call after window must pass (fresh rate-1 bucket)")
+	}
+	// ...and the next is denied under the now-observed rate-1 limit.
+	if ok, ra := l.Allow(ctx, "acme", "u"); ok || ra <= 0 {
+		t.Fatalf("second call after window must be denied by rate-1 rule (ok=%v ra=%v)", ok, ra)
+	}
+}
+
+func TestSeedForcesRefresh(t *testing.T) {
+	ms := NewMemStore()
+	ctx := context.Background()
+	_ = ms.Insert(ctx, Rule{Tenant: "acme", Upstream: "u", RatePerMin: 100})
+	now := time.Unix(0, 0)
+	l := NewLimiter(ms, 0, func() time.Time { return now })
+
+	if ok, _ := l.Allow(ctx, "acme", "u"); !ok {
+		t.Fatal("first call must pass")
+	}
+	// Within the window a store mutation would be throttled, but Seed sets
+	// loaded=false which forces the next Allow to re-read the store immediately.
+	if _, err := ms.Delete(ctx, "acme", "u"); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	_ = ms.Insert(ctx, Rule{Tenant: "acme", Upstream: "u", RatePerMin: 1})
+	l.Seed(nil)
+
+	if ok, _ := l.Allow(ctx, "acme", "u"); !ok {
+		t.Fatal("first call after Seed must pass (fresh rate-1 bucket)")
+	}
+	if ok, ra := l.Allow(ctx, "acme", "u"); ok || ra <= 0 {
+		t.Fatalf("Seed must force refresh; rate-1 rule must deny (ok=%v ra=%v)", ok, ra)
+	}
+}
+
 func TestEnvDefaultIsStarStarFloor(t *testing.T) {
 	ms := NewMemStore()
 	l := NewLimiter(ms, 1, nil) // env default rate 1 = (*,*)

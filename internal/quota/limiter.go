@@ -38,18 +38,20 @@ func (b *bucket) take(now time.Time) (bool, time.Duration) {
 // changes; buckets persist across refreshes keyed by resolved (tenant,upstream)
 // and reset when their rate changes.
 type Limiter struct {
-	st         QuotaStore
-	envDefault int
-	clock      func() time.Time
+	st            QuotaStore
+	envDefault    int
+	clock         func() time.Time
+	refreshWindow time.Duration
 
-	mu      sync.Mutex
-	gen     uint64
-	loaded  bool
-	seed    []Rule          // file-config rules (lowest precedence under DB)
-	rules   map[string]Rule // "tenant\x00upstream" -> rule (resolved set)
-	buckets map[string]*bucket
-	rates   map[string]int // bucketKey -> rate that built the bucket (reset on change)
-	lastUse map[string]time.Time
+	mu          sync.Mutex
+	gen         uint64
+	loaded      bool
+	lastRefresh time.Time
+	seed        []Rule          // file-config rules (lowest precedence under DB)
+	rules       map[string]Rule // "tenant\x00upstream" -> rule (resolved set)
+	buckets     map[string]*bucket
+	rates       map[string]int // bucketKey -> rate that built the bucket (reset on change)
+	lastUse     map[string]time.Time
 }
 
 func NewLimiter(st QuotaStore, envDefault int, clock func() time.Time) *Limiter {
@@ -58,7 +60,8 @@ func NewLimiter(st QuotaStore, envDefault int, clock func() time.Time) *Limiter 
 	}
 	return &Limiter{
 		st: st, envDefault: envDefault, clock: clock,
-		rules: map[string]Rule{}, buckets: map[string]*bucket{},
+		refreshWindow: 2 * time.Second,
+		rules:         map[string]Rule{}, buckets: map[string]*bucket{},
 		rates: map[string]int{}, lastUse: map[string]time.Time{},
 	}
 }
@@ -75,8 +78,20 @@ func (l *Limiter) Seed(rules []Rule) {
 // refresh rebuilds the resolved rule map from seed + store when the generation
 // moved. Caller holds l.mu. Fail-open on store error.
 func (l *Limiter) refresh(ctx context.Context) {
+	// Throttle store reads off the hot path: Allow runs under l.mu, and for the
+	// Postgres store l.st.Rules is a full SELECT, so an unthrottled refresh runs
+	// a DB round-trip on every tool call, serialized behind the mutex. Re-query
+	// at most once per refreshWindow. We can't just trust l.gen: Store.gen is
+	// process-local, so a rule edited on replica A never bumps replica B's gen —
+	// the periodic re-query is what makes cross-replica edits eventually visible.
+	// The window bounds staleness while keeping that freshness.
+	if l.loaded && l.clock().Sub(l.lastRefresh) < l.refreshWindow {
+		return
+	}
 	dbRules, gen, err := l.st.Rules(ctx)
 	if err != nil {
+		// Fail-open only when no rules have ever loaded; a transient read error
+		// after load keeps enforcing last-good rules.
 		slog.Warn("quota: store read failed; treating as no limits", "err", err)
 		if !l.loaded { // never loaded ⇒ at least apply the seed
 			l.rebuild(nil)
@@ -84,6 +99,7 @@ func (l *Limiter) refresh(ctx context.Context) {
 		}
 		return
 	}
+	l.lastRefresh = l.clock() // re-queried; reset the throttle regardless of gen
 	if l.loaded && gen == l.gen {
 		return
 	}
@@ -104,20 +120,23 @@ func (l *Limiter) rebuild(dbRules []Rule) {
 	l.rules = m
 }
 
-// resolve returns the effective rule for (tenant,upstream): most-specific-wins,
-// then the env default as the (*,*) floor. Caller holds l.mu.
-func (l *Limiter) resolve(tenant, upstream string) (int, bool) {
+// resolveRule walks the (tenant,upstream) precedence list once, returning the
+// matched rate together with its bucket key (a matched rule's key is a shared
+// ceiling: a (acme,*) rule caps acme across every upstream). Falling through to
+// the env default yields the (*,*) floor keyed to the (*,*) bucket. Caller holds
+// l.mu. ok=false ⇒ no applicable rule (unlimited).
+func (l *Limiter) resolveRule(tenant, upstream string) (rate int, bucketKey string, ok bool) {
 	for _, k := range []string{
 		key(tenant, upstream), key(tenant, "*"), key("*", upstream), key("*", "*"),
 	} {
 		if r, ok := l.rules[k]; ok {
-			return r.RatePerMin, true
+			return r.RatePerMin, k, true
 		}
 	}
 	if l.envDefault > 0 {
-		return l.envDefault, true
+		return l.envDefault, key("*", "*"), true
 	}
-	return 0, false
+	return 0, "", false
 }
 
 // Allow consumes one token for (tenant,upstream). No applicable rule ⇒ allowed.
@@ -125,15 +144,10 @@ func (l *Limiter) Allow(ctx context.Context, tenant, upstream string) (bool, tim
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.refresh(ctx)
-	rate, ok := l.resolve(tenant, upstream)
+	rate, bk, ok := l.resolveRule(tenant, upstream)
 	if !ok {
 		return true, 0
 	}
-	// Bucket keyed by the RESOLVED call pair (not the rule pair) so different
-	// calls sharing a wildcard rule each get independent buckets... EXCEPT that
-	// would let a (acme,*) rate be exceeded across many upstreams. Key on the
-	// matched rule instead so the wildcard rate is a shared ceiling.
-	bk := l.matchedRuleKey(tenant, upstream)
 	now := l.clock()
 	if l.rates[bk] != rate { // new or changed rate ⇒ fresh full bucket
 		l.buckets[bk] = &bucket{capacity: float64(rate), perSec: float64(rate) / 60, tokens: float64(rate), last: now}
@@ -141,20 +155,6 @@ func (l *Limiter) Allow(ctx context.Context, tenant, upstream string) (bool, tim
 	}
 	l.lastUse[bk] = now
 	return l.buckets[bk].take(now)
-}
-
-// matchedRuleKey returns the key of the rule that resolve() matched, so the
-// bucket is shared across all calls that resolve to the same rule (a (acme,*)
-// rule is one shared ceiling for acme across every upstream). Caller holds l.mu.
-func (l *Limiter) matchedRuleKey(tenant, upstream string) string {
-	for _, k := range []string{
-		key(tenant, upstream), key(tenant, "*"), key("*", upstream), key("*", "*"),
-	} {
-		if _, ok := l.rules[k]; ok {
-			return k
-		}
-	}
-	return key("*", "*") // env-default bucket
 }
 
 // Reap drops buckets untouched for older than ttl (call periodically). Bounds
