@@ -10,19 +10,37 @@ land in `docs/superpowers/specs/` as each item starts.
 
 ## Status (2026-07-19)
 
-Phase P1 "Guarded" — 2 of 3 items complete, both READY TO MERGE:
+**Phase P1 "Guarded" — COMPLETE (all 3 items merged to master).**
 
-- **P1.2 Lifecycle guardrails — DONE.** turn/session timeouts, max_turns,
+- **P1.2 Lifecycle guardrails — DONE (merged).** turn/session timeouts, max_turns,
   max_tokens enforced durably in `agentruntime`; terminal status
   `limit_exceeded`; metric `agent_session_limit_hits_total`. Branch
   `p1.2-lifecycle-guardrails`.
-- **P1.1 Cedar policy engine (M1+M2) — DONE.** Deterministic per-tool-call
+- **P1.1 Cedar policy engine (M1+M2) — DONE (merged).** Deterministic per-tool-call
   authorization at the gateway (cedar-go): permit-by-default, platform
   (file) + tenant (DB) layers, `/admin/policies` + CLI + console CRUD,
   metric `runtime_gateway_policy_decisions_total`. Branch
   `p1.1-cedar-policy` (contains P1.2). A final review caught + fixed a real
   `__entity`-escape authorization bypass — see the spec.
-- **P1.3 Metering + alerting — NEXT.**
+- **P1.3 Metering + alerting (M1+M2) — DONE (merged 2026-07-19, ff to `2d3f86c`,
+  11 commits, branch `p1.3-metering-alerting`).** M1 metering: `pricing:` block
+  in runtime.yaml → per-model dollar cost; injected per-agent as
+  `RUNTIME_AGENT_PRICING` (mirrors `RUNTIME_AGENT_LIMITS`); metrics
+  `agent_cost_usd_total` + `agent_cost_unpriced_total` and tenant/model labels
+  on `agent_tokens_total`; per-session `tokens_total`/`cost_usd` persisted to the
+  sessions table (idempotent replay-safe projection of checkpointed usage) and
+  surfaced in the session API + console. Fail-closed only on malformed pricing;
+  unknown model → tokens flow, cost skipped + flagged. Cost includes cache
+  tokens (deliberately wider than the P1.2 max_tokens budget). M2 alerting:
+  turnkey Alertmanager compose overlay (:9093) + Prometheus rule_files/alerting
+  wiring + 7-rule starter set (incl. UnpricedModelUsage + commented CostBurnHigh)
+  + null receiver w/ commented Slack/PagerDuty + v1-proof assertions. Final
+  whole-branch review MERGE-READY, no Critical/Important. Deferred (Docker
+  unavailable in dev env): live v1-proof alerting run + promtool/amtool lint.
+
+**Next: Phase P2 "Scoped" (v1.2) — P2.1 gateway OAuth2 → OBO, P2.2 memory
+strategy pipeline, P2.3 gateway quotas.** master unpushed (34 commits ahead of
+origin).
 
 ## Prioritization principles
 

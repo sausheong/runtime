@@ -235,10 +235,11 @@ specs/plans dated 2026-06-07/08.
 > hardening. Payments (x402) is explicitly out of scope. Items below remain
 > the detailed per-pillar backlog; the gap plan sequences them.
 >
-> **Progress:** P1.2 lifecycle guardrails and P1.1 Cedar policy engine (M1+M2)
-> are both DONE and READY TO MERGE (branches `p1.2-lifecycle-guardrails` and
-> `p1.1-cedar-policy`, the latter containing the former). P1.3 (metering +
-> alerting) is next, completing the "Guarded" phase.
+> **Progress:** the **"Guarded" phase (v1.1) is COMPLETE** — all three items
+> merged to master. P1.2 lifecycle guardrails, P1.1 Cedar policy engine (M1+M2),
+> and P1.3 token/cost metering + Alertmanager overlay (M1+M2, merged 2026-07-19).
+> Next is the "Scoped" phase (v1.2): gateway OAuth2 → OBO, memory strategy
+> pipeline, gateway quotas. See `agentcore-gap-plan.md`.
 
 ### A. Spine hardening (within this sub-project — optional, do when needed)
 
