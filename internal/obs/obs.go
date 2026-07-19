@@ -316,8 +316,9 @@ type AgentMetrics struct {
 	tokens    *prometheus.CounterVec
 	cost      *prometheus.CounterVec
 	unpriced  *prometheus.CounterVec
-	toolCalls *prometheus.CounterVec
-	limitHits *prometheus.CounterVec
+	toolCalls     *prometheus.CounterVec
+	limitHits     *prometheus.CounterVec
+	summaryWrites *prometheus.CounterVec
 }
 
 func NewAgentMetrics(agentID, tenant, model string) *AgentMetrics {
@@ -354,7 +355,11 @@ func NewAgentMetrics(agentID, tenant, model string) *AgentMetrics {
 		Name: "agent_session_limit_hits_total",
 		Help: "Sessions terminated by a lifecycle limit, by limit name.",
 	}, []string{"agent", "limit"})
-	a.reg.MustRegister(a.turns, a.turnDur, a.tokens, a.cost, a.unpriced, a.toolCalls, a.limitHits)
+	a.summaryWrites = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "agent_memory_summary_writes_total",
+		Help: "Rolling per-session summary writes (WriteSupersede).",
+	}, []string{"agent", "tenant", "model"})
+	a.reg.MustRegister(a.turns, a.turnDur, a.tokens, a.cost, a.unpriced, a.toolCalls, a.limitHits, a.summaryWrites)
 	return a
 }
 
@@ -402,6 +407,14 @@ func (a *AgentMetrics) LimitHitObserved(limit string) {
 		return
 	}
 	a.limitHits.WithLabelValues(a.agentID, limit).Inc()
+}
+
+// SummaryWrite counts one rolling per-session summary write. Nil-safe.
+func (a *AgentMetrics) SummaryWrite() {
+	if a == nil {
+		return
+	}
+	a.summaryWrites.WithLabelValues(a.agentID, a.tenant, a.model).Inc()
 }
 
 // Handler serves this registry's exposition (agentd mounts it at /metrics).

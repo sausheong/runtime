@@ -46,6 +46,7 @@ type KG struct {
 	// wired in Task 4's NewKG change; nil is fine here (the runner guards them).
 	strategies     []Strategy
 	putSummary     func(ctx context.Context, sessionID, content string) error
+	getSummary     func(ctx context.Context, sessionID string) (string, bool, error)
 	onSummaryWrite func()
 }
 
@@ -78,6 +79,10 @@ func WithStrategies(ss ...Strategy) KGOption {
 	return func(g *KG) { g.strategies = ss }
 }
 
+// WithSummaryMetric sets a callback invoked after each successful summary write
+// (WriteSupersede). Nil is fine; the runner nil-guards it.
+func WithSummaryMetric(f func()) KGOption { return func(g *KG) { g.onSummaryWrite = f } }
+
 // NewKG builds a KnowledgeGraph backed by a tenant-pinned Store. Without any
 // KGOption the Ingest path is a no-op (M2 semantic-recall-only behavior).
 func NewKG(st *Store, k int, floor float64, opts ...KGOption) *KG {
@@ -90,6 +95,8 @@ func NewKG(st *Store, k int, floor float64, opts ...KGOption) *KG {
 			_, err := st.Save(ctx, e)
 			return err
 		},
+		putSummary: st.PutSessionSummary,
+		getSummary: st.GetSessionSummary,
 	}
 	for _, o := range opts {
 		o(g)
@@ -153,11 +160,26 @@ func (g *KG) ingestForSession(_ context.Context, thread []hrt.Message, sessionID
 	g.ingestWith(StrategyContext{SessionID: sessionID}, thread)
 }
 
-// recallForSession returns the recall block for the session. In this task it is
-// exactly today's fact-similarity recall; the summary block is added in Task 4
-// (the sessionID param is kept now so Task 4 only edits the body).
-func (g *KG) recallForSession(ctx context.Context, query, _ string) string {
-	return g.Recall(ctx, query)
+// recallForSession returns the recall block for the session: the fact-similarity
+// block (unchanged from Recall) plus, when present, this session's rolling
+// summary. Best-effort throughout — a summary lookup error degrades to fact-only,
+// never breaking a turn.
+func (g *KG) recallForSession(ctx context.Context, query, sessionID string) string {
+	fact := g.Recall(ctx, query)
+	var summary string
+	if g.getSummary != nil && sessionID != "" {
+		if s, ok, err := g.getSummary(ctx, sessionID); err == nil && ok && strings.TrimSpace(s) != "" {
+			summary = "Conversation summary so far:\n" + strings.TrimSpace(s) + "\n"
+		}
+	}
+	switch {
+	case fact != "" && summary != "":
+		return fact + "\n" + summary
+	case summary != "":
+		return summary
+	default:
+		return fact
+	}
 }
 
 // ShouldRecall is a cheap gate: skip empty/whitespace/very short inputs where

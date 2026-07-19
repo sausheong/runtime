@@ -94,7 +94,30 @@ func wireMemory(cfg *agentruntime.Config, d Deps) error {
 		return fmt.Errorf("agentkind: memory store for %q: %w", d.AgentID, err)
 	}
 	cfg.Tools.Register(&hmemory.MemoryTool{Store: st})
-	if enabled {
+
+	// Assemble the strategy pipeline. The fact strategy needs the embedder (dedup
+	// + recall), so it is added only when ingestExt is set (which already required
+	// enabled). The summary strategy is embedder-INDEPENDENT — it keys on the
+	// session, not on similarity — so it may be enabled even with no embedder.
+	var strategies []memory.Strategy
+	if ingestExt != nil {
+		minMsgs := envInt("RUNTIME_INGEST_MIN_MESSAGES", 2)
+		strategies = append(strategies, memory.NewFactStrategy(ingestExt, minMsgs))
+	}
+	if envBool("RUNTIME_SUMMARY_ENABLED") {
+		if sum, ok := memory.NewSummarizerFromEnv(); ok {
+			sMin := envInt("RUNTIME_SUMMARY_MIN_MESSAGES", envInt("RUNTIME_INGEST_MIN_MESSAGES", 2))
+			strategies = append(strategies, memory.NewSummaryStrategy(sum, sMin))
+		} else {
+			slog.Warn("agentkind: RUNTIME_SUMMARY_ENABLED set but no summary/ingest model configured; summary disabled", "agent", d.AgentID)
+		}
+	}
+
+	// Build the KG when there is anything for it to do: semantic recall (embedder)
+	// OR at least one strategy (e.g. summary-only, embedder-less). Recall k/floor
+	// are read unconditionally; they are harmless defaults when no embedder is set
+	// (Recall returns "" without one).
+	if enabled || len(strategies) > 0 {
 		k := envInt("RUNTIME_EMBED_RECALL_K", 5)
 		// Default tuned for OpenAI-family embeddings (text-embedding-3-*), where a
 		// question scores only ~0.25-0.40 cosine against the declarative memory it
@@ -109,6 +132,9 @@ func wireMemory(cfg *agentruntime.Config, d Deps) error {
 			minMsgs := envInt("RUNTIME_INGEST_MIN_MESSAGES", 2)
 			maxInflight := envInt("RUNTIME_INGEST_MAX_INFLIGHT", 4)
 			kgOpts = append(kgOpts, memory.WithIngest(ingestExt, dedupFloor, minMsgs, maxInflight))
+		}
+		if len(strategies) > 0 {
+			kgOpts = append(kgOpts, memory.WithStrategies(strategies...))
 		}
 		kg := memory.NewKG(st, k, floor, kgOpts...)
 		cfg.KGFn = func(_, sessionID string) hrt.KnowledgeGraph { return kg.ForSession(sessionID) }
