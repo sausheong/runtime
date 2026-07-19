@@ -19,8 +19,8 @@ groups:
 
       - alert: HighTurnErrorRate
         expr: |
-          rate(agent_turns_total{outcome="error"}[5m])
-            / rate(agent_turns_total[5m]) > 0.2
+          sum by (agent) (rate(agent_turns_total{outcome="error"}[5m]))
+            / sum by (agent) (rate(agent_turns_total[5m])) > 0.2
         for: 10m
         labels: { severity: warning }
         annotations:
