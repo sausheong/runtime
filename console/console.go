@@ -13,6 +13,7 @@ import (
 	"github.com/sausheong/runtime/controlplane"
 	"github.com/sausheong/runtime/internal/agentstore"
 	"github.com/sausheong/runtime/internal/identity"
+	"github.com/sausheong/runtime/internal/policy"
 	"github.com/sausheong/runtime/internal/store"
 )
 
@@ -86,6 +87,7 @@ type Onboarding struct {
 	Secrets   controlplane.SecretAdmin
 	Agents    controlplane.AgentStore    // dynamic managed-agent persistence; nil ⇒ section hidden
 	AgentMgr  *controlplane.AgentManager // live attach/detach; nil ⇒ section hidden
+	Policies  controlplane.PolicyStore   // tenant Cedar policy store; nil ⇒ section hidden
 }
 
 // Handler returns the console's HTTP handler. The read-only views render the
@@ -306,6 +308,10 @@ func Handler(reg *controlplane.Registry, st store.Store, oidc OIDCConfig, onb *O
 			if onb.Agents != nil {
 				agents, _ = onb.Agents.List(r.Context(), p.TenantID)
 			}
+			var policies []policy.Row
+			if onb.Policies != nil {
+				policies, _ = onb.Policies.List(r.Context(), p.TenantID)
+			}
 			// A freshly minted key arrives as "key:<plaintext>" — the one time it
 			// is ever shown. Split it out so the template can give it a distinct,
 			// copy-it-now treatment instead of a generic success flash.
@@ -320,6 +326,7 @@ func Handler(reg *controlplane.Registry, st store.Store, oidc OIDCConfig, onb *O
 				"Flash": flash, "NewKey": newKey,
 				"SecretsEnabled": onb.Secrets != nil,
 				"Agents":         agents, "AgentsEnabled": onb.Agents != nil && onb.AgentMgr != nil,
+				"Policies": policies, "PoliciesEnabled": onb.Policies != nil,
 			})
 		})
 
@@ -443,6 +450,30 @@ func Handler(reg *controlplane.Registry, st store.Store, oidc OIDCConfig, onb *O
 			}
 			flashRedirect(w, r, "Upstream "+r.PathValue("id")+" removed.")
 		}))
+
+		// Tenant Cedar policies: add/delete gateway authorization rules. Mounted
+		// only when the policy engine is on (onb.Policies non-nil). An invalid
+		// Cedar text surfaces the parser error via the flash (author fixes it).
+		if onb.Policies != nil {
+			mux.HandleFunc("POST /ui/onboarding/policies", guard(func(p identity.Principal, w http.ResponseWriter, r *http.Request) {
+				name := r.FormValue("name")
+				if err := controlplane.RegisterPolicyShared(r.Context(), onb.Policies, p.TenantID, name, r.FormValue("cedar_text")); err != nil {
+					// Parser/validation errors are the author's to fix: show the
+					// message on the page rather than a bare 400.
+					flashRedirect(w, r, "Policy rejected: "+err.Error())
+					return
+				}
+				flashRedirect(w, r, "Policy "+name+" saved. It now gates gateway tool calls in this tenant.")
+			}))
+
+			mux.HandleFunc("POST /ui/onboarding/policies/{name}/delete", guard(func(p identity.Principal, w http.ResponseWriter, r *http.Request) {
+				if err := controlplane.RemovePolicyShared(r.Context(), onb.Policies, p.TenantID, r.PathValue("name")); err != nil {
+					http.Error(w, "remove failed", http.StatusInternalServerError)
+					return
+				}
+				flashRedirect(w, r, "Policy "+r.PathValue("name")+" removed.")
+			}))
+		}
 
 		// Managed agents: register/deregister/enable/disable/re-attach remote
 		// agents at runtime. Mounted only when the store + live manager exist.

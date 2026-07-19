@@ -192,5 +192,34 @@
       <button type="submit">Register upstream</button>
     </form>
   </section>
+
+  {{if .PoliciesEnabled}}
+  <!-- ===== Policies ===== -->
+  <section class="card">
+    <h2>Gateway policies</h2>
+    <p class="card-desc">Cedar rules that deterministically allow or forbid tool calls in this tenant. A matching <code>forbid</code> denies the call regardless of the LLM.</p>
+    <table>
+      <thead><tr><th>Name</th><th>Policy</th><th></th></tr></thead>
+      <tbody>
+      {{range .Policies}}<tr>
+        <td>{{.Name}}</td>
+        <td><pre class="policy-text">{{.CedarText}}</pre></td>
+        <td class="actions"><form method="post" action="/ui/onboarding/policies/{{.Name}}/delete">
+          <input type="hidden" name="csrf_token" value="{{$.CSRF}}"><button type="submit" class="danger">Remove</button>
+        </form></td>
+      </tr>{{else}}
+        <tr><td colspan="3" class="empty">No policies — all tool calls are permitted (permit by default).</td></tr>
+      {{end}}
+      </tbody>
+    </table>
+    <form method="post" action="/ui/onboarding/policies" style="margin-top:1rem">
+      <input type="hidden" name="csrf_token" value="{{.CSRF}}">
+      <p><input name="name" placeholder="policy name (e.g. no-destructive-sql)" required style="width:100%"></p>
+      <p><label>Cedar policy (exactly one statement)<br>
+        <textarea name="cedar_text" rows="4" style="width:100%;font-family:monospace" placeholder='forbid (principal, action == Gateway::Action::"call_tool", resource) when &#123; resource.server == "sandbox" &#125;;' required></textarea></label></p>
+      <button type="submit">Add policy</button>
+    </form>
+  </section>
+  {{end}}
 </main>
 </body></html>{{end}}

@@ -381,6 +381,7 @@ func main() {
 				Secrets:   secretAdmin,
 				Agents:    agentStore,
 				AgentMgr:  agentManager,
+				Policies:  polAdmin, // nil interface when the policy engine is off
 			}
 		}
 		root := buildRoot(rootOptions{
