@@ -92,6 +92,44 @@ empty entries).
 The Python contract shim does not yet enforce these native limits, so bound
 foreign SDK agents in their framework or process supervisor.
 
+## Policy engine (Cedar)
+
+Deterministic per-call authorization for gateway tools — the LLM is never the
+authorization arbiter. Enable with either:
+
+    RUNTIME_POLICY_ENABLED=1              # tenant-layer policies only
+    RUNTIME_POLICY_FILE=platform.cedar    # + operator guardrails (implies enabled)
+
+Two layers, and a `forbid` in either denies the call:
+
+- **Platform layer** — the `.cedar` file above. Loaded at boot, immutable at
+  runtime, applied to every tenant AND to superuser/open-mode calls. A parse
+  error in this file is a **boot failure** (fail-closed: a broken guardrail
+  file must never mean "no guardrails").
+- **Tenant layer** — per-tenant policies managed by tenant admins (console →
+  Gateway policies, `POST /admin/policies`, `runtimectl admin policy`).
+
+With the engine on and no policies, every call is allowed (**permit by
+default**); policies subtract. A denied call returns the MCP tool error
+`forbidden by policy: <id>` (e.g. `platform/0` or `tenant/<name>`). Decisions
+are counted in `runtime_gateway_policy_decisions_total{tenant,decision}` and
+denials are audit-logged — never with argument values or policy text. An
+evaluation error also denies (fail-closed).
+
+Policies see `principal` (`Runtime::Key`, attrs `tenant`/`subject`/`role`/
+`superuser`), `resource` (`Gateway::Tool`, attrs `server`/`tool`), and
+`context.input` — the tool-call arguments as the agent sent them (before any
+platform tenant injection). Example platform guardrail — block shell-
+destructive sandbox code for everyone, in every tenant:
+
+    forbid (principal, action == Gateway::Action::"call_tool", resource)
+    when { resource.server == "sandbox" &&
+           context.input has code &&
+           context.input.code like "*rm -rf*" };
+
+A tenant admin cannot weaken a platform forbid: Cedar's forbid-overrides rule
+means a tenant `permit` can never re-enable a platform-forbidden call.
+
 ## Observability
 
 - **Grafana** http://localhost:3000 (anonymous viewer) — the runtime dashboard.
@@ -101,5 +139,7 @@ foreign SDK agents in their framework or process supervisor.
   requests.
 - **Lifecycle limits** — query `agent_session_limit_hits_total` in Prometheus
   to find sessions terminated by timeout, turn, or token guardrails.
+- **Policy decisions** — query `runtime_gateway_policy_decisions_total` to see
+  gateway allow/deny/error counts per tenant; denials are also audit-logged.
 
 For the complete configuration and metrics reference, see [README.md](README.md).

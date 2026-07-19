@@ -1150,6 +1150,7 @@ reserved for it):
 | `runtime_gateway_tool_calls_total` | `server,tool,outcome` | Federated gateway tool calls that reached the upstream (authz rejections are not counted). |
 | `runtime_gateway_tool_call_duration_seconds` | `server` | Gateway tool-call latency histogram. |
 | `runtime_gateway_upstream_up` | `server` | 1 when the gateway upstream connection is up. |
+| `runtime_gateway_policy_decisions_total` | `tenant,decision` | Cedar policy evaluations at the gateway, by `decision` (`allow`/`deny`/`error`). Emitted only when the policy engine is enabled. |
 | `runtime_metrics_scrape_skips_total` | `agent,reason` | Agents skipped during the fan-out scrape. Reasons: `timeout`, `unreachable`, `parse`, `no_metrics`, `status_<code>`, `reserved_name`, `type_conflict`. |
 
 **Agent metrics** (emitted per `agentd`, merged into `runtimed`'s exposition):
