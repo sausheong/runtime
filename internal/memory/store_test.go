@@ -311,6 +311,50 @@ func TestStore_SearchSimilarCrossTenantIsolation(t *testing.T) {
 	}
 }
 
+func TestStore_SessionSummaryUpsertAndGet(t *testing.T) {
+	st, db := freshStore(t, "acme")
+	defer db.Close()
+	ctx := context.Background()
+
+	// No summary yet.
+	if _, ok, err := st.GetSessionSummary(ctx, "sess-1"); err != nil || ok {
+		t.Fatalf("expected no summary, got ok=%v err=%v", ok, err)
+	}
+	// First write creates it.
+	if err := st.PutSessionSummary(ctx, "sess-1", "digest v1"); err != nil {
+		t.Fatal(err)
+	}
+	got, ok, err := st.GetSessionSummary(ctx, "sess-1")
+	if err != nil || !ok || got != "digest v1" {
+		t.Fatalf("after first put: got=%q ok=%v err=%v", got, ok, err)
+	}
+	// Second write supersedes — still exactly one live row, updated content.
+	if err := st.PutSessionSummary(ctx, "sess-1", "digest v2"); err != nil {
+		t.Fatal(err)
+	}
+	got, ok, err = st.GetSessionSummary(ctx, "sess-1")
+	if err != nil || !ok || got != "digest v2" {
+		t.Fatalf("after second put: got=%q ok=%v err=%v", got, ok, err)
+	}
+	// Exactly one live summary row for the session (supersede chain, not growth).
+	var live int
+	if err := db.QueryRow(
+		`SELECT count(1) FROM memory_events e
+		 WHERE e.tenant_id='acme' AND e.session_id='sess-1' AND e.kind='summary'
+		   AND e.op IN ('create','update')
+		   AND NOT EXISTS (SELECT 1 FROM memory_events s
+		                   WHERE s.tenant_id='acme' AND s.supersedes = e.entry_id)`).Scan(&live); err != nil {
+		t.Fatal(err)
+	}
+	if live != 1 {
+		t.Fatalf("want exactly one live summary row, got %d", live)
+	}
+	// Isolation: a different session has no summary.
+	if _, ok, _ := st.GetSessionSummary(ctx, "sess-2"); ok {
+		t.Fatal("sess-2 should have no summary")
+	}
+}
+
 func TestStore_DedupFloorSeparation(t *testing.T) {
 	// Synthetic vectors with known cosine similarities to the query {1,0,0}.
 	// (The 0.7/0.85 thresholds below are illustrative test values for proving

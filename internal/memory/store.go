@@ -22,6 +22,14 @@ var schemaSQL string
 //go:embed embed_schema.sql
 var embedSchemaSQL string
 
+// KindFact / KindSummary are the memory_events.kind discriminators. Facts are the
+// existing tool/agent path (Save/Update); summaries are per-session rolling
+// digests written via PutSessionSummary and excluded from similarity recall.
+const (
+	KindFact    = "fact"
+	KindSummary = "summary"
+)
+
 // Store is a tenant-pinned Postgres MemoryStore. Every query filters by tenant,
 // captured at construction — the agent's (unscoped) tool calls can never reach
 // another tenant's pool. An optional Embedder enables semantic recall: Save/Update
@@ -98,6 +106,23 @@ WHERE  e.tenant_id = $1
   AND  NOT EXISTS (SELECT 1 FROM memory_events d
                    WHERE d.tenant_id = $1 AND d.op = 'delete' AND d.entry_id = e.entry_id)`
 
+// liveSummaryIDSelect / liveSummaryContentSelect project the single live summary
+// row for a (tenant, session_id): a create|update row not superseded and not
+// tombstoned, with kind='summary'. Mirrors liveSelect's liveness clauses but keys
+// on the session_id column (summaries rotate entry_ids on each update).
+const liveSummaryLiveness = `
+FROM   memory_events e
+WHERE  e.tenant_id = $1 AND e.session_id = $2 AND e.kind = 'summary'
+  AND  e.op IN ('create','update')
+  AND  NOT EXISTS (SELECT 1 FROM memory_events s
+                   WHERE s.tenant_id = $1 AND s.supersedes = e.entry_id)
+  AND  NOT EXISTS (SELECT 1 FROM memory_events d
+                   WHERE d.tenant_id = $1 AND d.op = 'delete' AND d.entry_id = e.entry_id)
+ORDER BY e.seq DESC LIMIT 1`
+
+const liveSummaryIDSelect = `SELECT e.entry_id, e.original_created_at ` + liveSummaryLiveness
+const liveSummaryContentSelect = `SELECT e.content ` + liveSummaryLiveness
+
 func scanEntry(rows *sql.Rows) (hmem.Entry, error) {
 	var (
 		e        hmem.Entry
@@ -133,13 +158,13 @@ func (s *Store) Save(ctx context.Context, e hmem.Entry) (hmem.Entry, error) {
 	var err error
 	if s.embedder == nil {
 		_, err = s.db.ExecContext(ctx,
-			`INSERT INTO memory_events (tenant_id, op, entry_id, content, tags, origin, created_at)
-			 VALUES ($1,'create',$2,$3,$4,$5,$6)`,
+			`INSERT INTO memory_events (tenant_id, op, entry_id, content, tags, origin, created_at, kind)
+			 VALUES ($1,'create',$2,$3,$4,$5,$6,'fact')`,
 			s.tenant, e.ID, e.Content, textArray(e.Tags), e.Origin, now)
 	} else {
 		_, err = s.db.ExecContext(ctx,
-			`INSERT INTO memory_events (tenant_id, op, entry_id, content, tags, origin, created_at, embedding)
-			 VALUES ($1,'create',$2,$3,$4,$5,$6,$7)`,
+			`INSERT INTO memory_events (tenant_id, op, entry_id, content, tags, origin, created_at, kind, embedding)
+			 VALUES ($1,'create',$2,$3,$4,$5,$6,'fact',$7)`,
 			s.tenant, e.ID, e.Content, textArray(e.Tags), e.Origin, now, s.embedOrNil(ctx, e.ID, e.Content))
 	}
 	if err != nil {
@@ -162,13 +187,13 @@ func (s *Store) Update(ctx context.Context, id, content string) (hmem.Entry, err
 	newID := generateID(now)
 	if s.embedder == nil {
 		_, err = s.db.ExecContext(ctx,
-			`INSERT INTO memory_events (tenant_id, op, entry_id, content, tags, origin, supersedes, created_at, original_created_at)
-			 VALUES ($1,'update',$2,$3,$4,$5,$6,$7,$8)`,
+			`INSERT INTO memory_events (tenant_id, op, entry_id, content, tags, origin, supersedes, created_at, original_created_at, kind)
+			 VALUES ($1,'update',$2,$3,$4,$5,$6,$7,$8,'fact')`,
 			s.tenant, newID, content, textArray(old.Tags), old.Origin, id, now, old.CreatedAt)
 	} else {
 		_, err = s.db.ExecContext(ctx,
-			`INSERT INTO memory_events (tenant_id, op, entry_id, content, tags, origin, supersedes, created_at, original_created_at, embedding)
-			 VALUES ($1,'update',$2,$3,$4,$5,$6,$7,$8,$9)`,
+			`INSERT INTO memory_events (tenant_id, op, entry_id, content, tags, origin, supersedes, created_at, original_created_at, kind, embedding)
+			 VALUES ($1,'update',$2,$3,$4,$5,$6,$7,$8,'fact',$9)`,
 			s.tenant, newID, content, textArray(old.Tags), old.Origin, id, now, old.CreatedAt, s.embedOrNil(ctx, newID, content))
 	}
 	if err != nil {
@@ -246,6 +271,75 @@ func (s *Store) Get(ctx context.Context, id string) (hmem.Entry, bool, error) {
 	return e, true, nil
 }
 
+// PutSessionSummary writes the rolling summary for a session as exactly one live
+// kind='summary' row per (tenant, session_id). The first write creates it; each
+// later write appends an update row (fresh id) that supersedes the prior live
+// summary for this session, so the live set never grows beyond one. Summaries are
+// keyed by the session_id column, not entry_id (Update rotates entry_ids). The
+// summary is embedded when an embedder is present (harmless; recall is keyed, and
+// SearchSimilar excludes kind='summary').
+func (s *Store) PutSessionSummary(ctx context.Context, sessionID, content string) error {
+	now := time.Now().UTC()
+	// Find the current live summary row's entry_id + birth time (if any).
+	var prevID string
+	var prevOriginal sql.NullTime
+	err := s.db.QueryRowContext(ctx, liveSummaryIDSelect, s.tenant, sessionID).Scan(&prevID, &prevOriginal)
+	switch {
+	case err == sql.ErrNoRows:
+		// create
+		newID := generateID(now)
+		if s.embedder == nil {
+			_, err = s.db.ExecContext(ctx,
+				`INSERT INTO memory_events (tenant_id, op, entry_id, content, origin, created_at, kind, session_id)
+				 VALUES ($1,'create',$2,$3,'summary',$4,'summary',$5)`,
+				s.tenant, newID, content, now, sessionID)
+		} else {
+			_, err = s.db.ExecContext(ctx,
+				`INSERT INTO memory_events (tenant_id, op, entry_id, content, origin, created_at, kind, session_id, embedding)
+				 VALUES ($1,'create',$2,$3,'summary',$4,'summary',$5,$6)`,
+				s.tenant, newID, content, now, sessionID, s.embedOrNil(ctx, newID, content))
+		}
+	case err != nil:
+		return fmt.Errorf("memory: summary lookup tenant %q session %q: %w", s.tenant, sessionID, err)
+	default:
+		// update: supersede prev, preserve birth time
+		newID := generateID(now)
+		orig := prevOriginal
+		if !orig.Valid {
+			orig = sql.NullTime{Time: now, Valid: true}
+		}
+		if s.embedder == nil {
+			_, err = s.db.ExecContext(ctx,
+				`INSERT INTO memory_events (tenant_id, op, entry_id, content, origin, supersedes, created_at, original_created_at, kind, session_id)
+				 VALUES ($1,'update',$2,$3,'summary',$4,$5,$6,'summary',$7)`,
+				s.tenant, newID, content, prevID, now, orig.Time, sessionID)
+		} else {
+			_, err = s.db.ExecContext(ctx,
+				`INSERT INTO memory_events (tenant_id, op, entry_id, content, origin, supersedes, created_at, original_created_at, kind, session_id, embedding)
+				 VALUES ($1,'update',$2,$3,'summary',$4,$5,$6,'summary',$7,$8)`,
+				s.tenant, newID, content, prevID, now, orig.Time, sessionID, s.embedOrNil(ctx, newID, content))
+		}
+	}
+	if err != nil {
+		return fmt.Errorf("memory: put summary tenant %q session %q: %w", s.tenant, sessionID, err)
+	}
+	return nil
+}
+
+// GetSessionSummary returns the live summary content for a session, ok=false when
+// none exists.
+func (s *Store) GetSessionSummary(ctx context.Context, sessionID string) (string, bool, error) {
+	var content string
+	err := s.db.QueryRowContext(ctx, liveSummaryContentSelect, s.tenant, sessionID).Scan(&content)
+	if err == sql.ErrNoRows {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, fmt.Errorf("memory: get summary tenant %q session %q: %w", s.tenant, sessionID, err)
+	}
+	return content, true, nil
+}
+
 // pgVector binds a []float32 as a pgvector literal ("[0.1,0.2,...]").
 type pgVector []float32
 
@@ -277,6 +371,7 @@ SELECT e.entry_id, e.content, e.tags, e.origin, e.created_at, e.original_created
 FROM   memory_events e
 WHERE  e.tenant_id = $1
   AND  e.embedding IS NOT NULL
+  AND  e.kind <> 'summary'
   AND  e.op IN ('create','update')
   AND  NOT EXISTS (SELECT 1 FROM memory_events sup
                    WHERE sup.tenant_id = $1 AND sup.supersedes = e.entry_id)
