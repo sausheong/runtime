@@ -194,6 +194,31 @@ func TestEnvDeltaEmptyLimitsIsExplicitEmpty(t *testing.T) {
 	}
 }
 
+func TestEnvDelta_SubjectForwardingExplicit(t *testing.T) {
+	// RUNTIME_SUBJECT_FORWARDING is ALWAYS emitted explicitly (value or empty)
+	// so an inherited operator var can't silently flip it on — same discipline
+	// as RUNTIME_AGENT_MEMORY / RUNTIME_AGENT_LIMITS.
+	on := AgentProcess{AgentID: "a", PGDSN: "dsn", Addr: ":1", Kind: "k", Tenant: "t",
+		SubjectForwarding: true}
+	off := AgentProcess{AgentID: "a", PGDSN: "dsn", Addr: ":1", Kind: "k", Tenant: "t"}
+
+	onEnv, err := on.envDelta(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(onEnv, "RUNTIME_SUBJECT_FORWARDING=1") {
+		t.Errorf("on: envDelta missing RUNTIME_SUBJECT_FORWARDING=1:\n%s", strings.Join(onEnv, "\n"))
+	}
+
+	offEnv, err := off.envDelta(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(offEnv, "RUNTIME_SUBJECT_FORWARDING=") {
+		t.Errorf("off: envDelta missing explicit empty RUNTIME_SUBJECT_FORWARDING=:\n%s", strings.Join(offEnv, "\n"))
+	}
+}
+
 func TestBuildEnvIsEnvironPlusDelta(t *testing.T) {
 	t.Setenv("RUNTIME_C3M2_SENTINEL2", "keep")
 	ap := AgentProcess{AgentID: "a1", Addr: "127.0.0.1:8081", PGDSN: "dsn://x", Tenant: "t1"}

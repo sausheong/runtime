@@ -31,6 +31,8 @@ type AgentProcess struct {
 	Tenant  string   // tenant that owns this agent (from runtime.yaml; "default" if unset)
 	Memory  bool     // opt-in: when true, the spawn env carries RUNTIME_AGENT_MEMORY=1 so agentd wires the memory tool.
 
+	SubjectForwarding bool // opt-in: when true, spawn env carries RUNTIME_SUBJECT_FORWARDING=1 so agentd consumes the forwarded caller subject.
+
 	// Remote marks an attach-only agent: no spawn, no Supervisor — runtimed
 	// health-checks, proxies, and reports status, but never restarts it.
 	Remote bool
@@ -102,6 +104,14 @@ func (a AgentProcess) envDelta(ctx context.Context) ([]string, error) {
 		env = append(env, "RUNTIME_AGENT_MEMORY=1")
 	} else {
 		env = append(env, "RUNTIME_AGENT_MEMORY=")
+	}
+	// Edge subject-forwarding switch (P2.2 M2). Always emitted — explicit empty
+	// when off, so an inherited operator var can't flip it on. Lives in envDelta
+	// so both local spawn and the remote /register handshake carry it.
+	if a.SubjectForwarding {
+		env = append(env, "RUNTIME_SUBJECT_FORWARDING=1")
+	} else {
+		env = append(env, "RUNTIME_SUBJECT_FORWARDING=")
 	}
 	if a.GatewayOn {
 		u := a.GatewayURL

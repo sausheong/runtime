@@ -1,12 +1,27 @@
 package controlplane
 
 import (
+	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 
 	"github.com/sausheong/runtime/internal/config"
 )
+
+// subjectForwardingEnabled reports whether RUNTIME_SUBJECT_FORWARDING is truthy
+// (1/true/yes/on, case-insensitive, trimmed). It is a platform-wide edge switch
+// read once at registry construction; controlplane has no shared env helper, so
+// this small truthy idiom is duplicated locally.
+func subjectForwardingEnabled() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("RUNTIME_SUBJECT_FORWARDING"))) {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
+	}
+}
 
 // AgentInfo is the public description of a registered agent.
 type AgentInfo struct {
@@ -59,6 +74,9 @@ func NewRegistry(cfg *config.Config, binPath, dsn string) *Registry {
 		managed:  map[string]bool{},
 		disabled: map[string]bool{},
 	}
+	// Platform-wide edge switch, read once at registry construction; stamped on
+	// every agent so both local spawn and remote /register carry it explicitly.
+	subjectForwarding := subjectForwardingEnabled()
 	for _, a := range cfg.Agents {
 		r.order = append(r.order, a.ID)
 		r.infos[a.ID] = AgentInfo{ID: a.ID, Name: a.Name, Model: a.Model, Tenant: a.Tenant}
@@ -72,9 +90,10 @@ func NewRegistry(cfg *config.Config, binPath, dsn string) *Registry {
 			AgentID: a.ID, BinPath: binPath, PGDSN: dsn,
 			Kind: a.Kind, Command: a.Command, WorkDir: a.WorkDir, Tenant: a.Tenant,
 			Memory: a.Memory, GatewayOn: a.Gateway.Enabled(),
-			GatewaySearch: a.Gateway == config.GatewaySearch,
-			LimitsJSON:    a.Limits.JSON(),
-			PricingJSON:   pricingJSON,
+			GatewaySearch:     a.Gateway == config.GatewaySearch,
+			LimitsJSON:        a.Limits.JSON(),
+			PricingJSON:       pricingJSON,
+			SubjectForwarding: subjectForwarding,
 		}
 		if a.URL != "" {
 			n := a.RemotePoolSize()
