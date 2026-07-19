@@ -76,7 +76,7 @@ func TestOnboardingEndToEnd(t *testing.T) {
 	mgr := gateway.NewManager(nil, gateway.WithBackoff(time.Hour, time.Hour))
 
 	mux := http.NewServeMux()
-	controlplane.RegisterUpstreamAdmin(mux, idStore, gwStore, mgr)
+	controlplane.RegisterUpstreamAdmin(mux, idStore, gwStore, mgr, nil)
 
 	admin1 := identity.Principal{Role: identity.RoleAdmin, TenantID: "obe1"}
 	admin2 := identity.Principal{Role: identity.RoleAdmin, TenantID: "obe2"}

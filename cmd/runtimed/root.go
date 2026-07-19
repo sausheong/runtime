@@ -28,6 +28,7 @@ type rootOptions struct {
 	ControlStore   store.Store
 	PolicyStore    controlplane.PolicyStore
 	QuotaStore     controlplane.QuotaStore
+	CredType       controlplane.CredTypeFunc
 }
 
 // buildRoot assembles the root mux: console at /ui, control-plane API at /, and
@@ -38,7 +39,7 @@ func buildRoot(o rootOptions) http.Handler {
 		controlplane.RegisterAdmin(apiMux, o.AdminStore, o.Registry.AgentTenants())
 		controlplane.RegisterSecretAdmin(apiMux, o.AdminStore, o.SecretAdmin)
 		if o.UpstreamStore != nil && o.GatewayMutator != nil {
-			controlplane.RegisterUpstreamAdmin(apiMux, o.AdminStore, o.UpstreamStore, o.GatewayMutator)
+			controlplane.RegisterUpstreamAdmin(apiMux, o.AdminStore, o.UpstreamStore, o.GatewayMutator, o.CredType)
 		}
 		if o.AgentStore != nil && o.AgentManager != nil {
 			controlplane.RegisterAgentAdmin(apiMux, o.AgentStore, o.AdminStore, o.AgentManager)

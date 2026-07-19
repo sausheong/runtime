@@ -170,6 +170,14 @@ func main() {
 	if secretBroker != nil {
 		secretAdmin = secretBroker
 	}
+	// credType is the broker-backed cred-type lookup used to enforce
+	// "oauth2 creds are only valid on openapi upstreams" at registration time
+	// (and at startup, below). Nil when brokering is disabled ⇒ the check is
+	// skipped and dial-time fail-closed remains the backstop.
+	var credType controlplane.CredTypeFunc
+	if secretBroker != nil {
+		credType = secretBroker.CredType
+	}
 
 	// Gateway (B1 + v1.0-M1 self-service): build the manager when file upstreams
 	// exist OR a secrets broker is available (so tenants can self-register
@@ -191,6 +199,23 @@ func main() {
 		servers := append([]config.GatewayServer(nil), cfg.Gateway.Servers...)
 		for _, row := range dbRows {
 			servers = append(servers, row.ToConfig())
+		}
+		// Enforce oauth2-creds-only-on-openapi for file-config upstreams. Config
+		// load alone can't do this: a cred's TYPE is broker runtime data, not
+		// config. Single-tenant resolution mirrors dialWith (Tenants length 1).
+		// An unknown/absent cred (CredType error) is skipped — dial fails closed.
+		if secretBroker != nil {
+			for _, s := range servers {
+				if s.CredSecret == "" || len(s.Tenants) != 1 {
+					continue
+				}
+				ct, cerr := secretBroker.CredType(ctx, s.Tenants[0], s.CredSecret)
+				if cerr == nil && ct == identity.CredTypeOAuth2 && s.OpenAPI == "" {
+					slog.Error("gateway upstream: oauth2 credential is only valid on an openapi upstream",
+						"upstream", s.Name, "cred", s.CredSecret)
+					os.Exit(1)
+				}
+			}
 		}
 		var resolver gateway.CredentialResolver
 		if secretBroker != nil {
@@ -359,7 +384,7 @@ func main() {
 		handler = obs.RequestID(tracedHandler(accessLog(buildRoot(rootOptions{
 			Registry: reg, ConsoleOIDC: console.OIDCConfig{}, SecretAdmin: secretAdmin,
 			Gateway: gwHandler, Metrics: cm, ControlStore: ctlStore, PolicyStore: polAdmin,
-			QuotaStore: quotaAdmin,
+			QuotaStore: quotaAdmin, CredType: credType,
 		}), cm)))
 	} else {
 		oidcVerifier, verr := identity.NewOIDCVerifier(ctx, oidcIssuer, oidcClientID)
@@ -416,6 +441,7 @@ func main() {
 				Agents:    agentStore,
 				AgentMgr:  agentManager,
 				Policies:  polAdmin, // nil interface when the policy engine is off
+				CredType:  credType, // nil when brokering is off ⇒ check skipped
 			}
 		}
 		root := buildRoot(rootOptions{
@@ -423,7 +449,7 @@ func main() {
 			SecretAdmin: secretAdmin, Gateway: gwHandler, UpstreamStore: gwStore,
 			GatewayMutator: gwMut, AgentStore: agentStore, AgentManager: agentManager,
 			Onboarding: onb, Metrics: cm, ControlStore: ctlStore, PolicyStore: polAdmin,
-			QuotaStore: quotaAdmin,
+			QuotaStore: quotaAdmin, CredType: credType,
 		}) // mounts /admin since the store is non-nil
 		onReject := func(status int) { cm.AuthRejected(status) }
 		// When OIDC login is available, lock the browser console to OIDC sessions:

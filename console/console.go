@@ -88,6 +88,7 @@ type Onboarding struct {
 	Agents    controlplane.AgentStore    // dynamic managed-agent persistence; nil ⇒ section hidden
 	AgentMgr  *controlplane.AgentManager // live attach/detach; nil ⇒ section hidden
 	Policies  controlplane.PolicyStore   // tenant Cedar policy store; nil ⇒ section hidden
+	CredType  controlplane.CredTypeFunc  // broker-backed cred-type lookup; nil ⇒ oauth2-on-openapi check skipped
 }
 
 // Handler returns the console's HTTP handler. The read-only views render the
@@ -436,7 +437,7 @@ func Handler(reg *controlplane.Registry, st store.Store, oidc OIDCConfig, onb *O
 				OpenAPI: r.FormValue("openapi"), BaseURL: r.FormValue("base_url"),
 				CredSecret: r.FormValue("cred_secret"), CredHeader: r.FormValue("cred_header"),
 			}
-			if _, err := controlplane.RegisterUpstreamShared(r.Context(), onb.Upstreams, onb.Mutator, p.TenantID, params); err != nil {
+			if _, err := controlplane.RegisterUpstreamShared(r.Context(), onb.Upstreams, onb.Mutator, onb.CredType, p.TenantID, params); err != nil {
 				http.Error(w, err.Error(), http.StatusBadRequest)
 				return
 			}

@@ -43,12 +43,40 @@ type UpstreamParams struct {
 	CredHeader string   `json:"cred_header"`
 }
 
+// CredTypeFunc reports the credential type (identity.CredTypeStatic or
+// identity.CredTypeOAuth2) for a (tenant, name) pair. Backed by
+// *identity.Broker.CredType. A nil CredTypeFunc means the broker is unavailable
+// and the oauth2-on-openapi registration check is skipped (dial-time
+// fail-closed remains the backstop).
+type CredTypeFunc func(ctx context.Context, tenant, name string) (string, error)
+
+// checkOAuth2Openapi enforces that an oauth2 credential is only attached to an
+// openapi upstream. credType may be nil (broker unavailable) ⇒ skip the check;
+// dial-time fail-closed remains the backstop. Returns nil for static creds and
+// for oauth2 creds on openapi upstreams. A credType lookup error (e.g. the cred
+// has not been created yet) is treated as "unknown" and does not block — dial
+// fails closed.
+func checkOAuth2Openapi(ctx context.Context, credType CredTypeFunc, tenant string, p UpstreamParams) error {
+	if credType == nil || p.CredSecret == "" {
+		return nil
+	}
+	ct, err := credType(ctx, tenant, p.CredSecret)
+	if err != nil {
+		return nil // unknown cred (e.g. not created yet) — don't block; dial fails closed
+	}
+	if ct == identity.CredTypeOAuth2 && p.OpenAPI == "" {
+		return fmt.Errorf("credential %q is an oauth2 credential and is only valid on an openapi upstream", p.CredSecret)
+	}
+	return nil
+}
+
 // RegisterUpstreamShared validates params, persists the row, and adds it to the
 // live manager. Shared by the API and the console (HTTP-agnostic: no
 // http.ResponseWriter — callers map the returned error onto a status code).
-// tenant is the owning tenant (already resolved by the caller). Returns the
-// stored row.
-func RegisterUpstreamShared(ctx context.Context, store UpstreamStore, mut GatewayMutator, tenant string, p UpstreamParams) (gateway.UpstreamRow, error) {
+// tenant is the owning tenant (already resolved by the caller). credType is an
+// optional broker-backed lookup enforcing oauth2-creds-only-on-openapi; nil
+// skips that check. Returns the stored row.
+func RegisterUpstreamShared(ctx context.Context, store UpstreamStore, mut GatewayMutator, credType CredTypeFunc, tenant string, p UpstreamParams) (gateway.UpstreamRow, error) {
 	if p.Name == "" || strings.Contains(p.Name, "__") {
 		return gateway.UpstreamRow{}, fmt.Errorf("name required and must not contain %q", "__")
 	}
@@ -61,6 +89,9 @@ func RegisterUpstreamShared(ctx context.Context, store UpstreamStore, mut Gatewa
 	}
 	if (p.CredSecret == "") != (p.CredHeader == "") {
 		return gateway.UpstreamRow{}, fmt.Errorf("cred_secret and cred_header must both be set or both omitted")
+	}
+	if err := checkOAuth2Openapi(ctx, credType, tenant, p); err != nil {
+		return gateway.UpstreamRow{}, err
 	}
 	id, err := genID("gwu")
 	if err != nil {
@@ -155,7 +186,7 @@ func MintAgentKey(ctx context.Context, store AdminStore, tenant string, role ide
 // RegisterUpstreamAdmin mounts /admin/upstreams. Admin-scoped; writes pinned to
 // the caller's tenant via effectiveTenant. When us/mut are nil the feature is
 // disabled and handlers return 503.
-func RegisterUpstreamAdmin(mux *http.ServeMux, store AdminStore, us UpstreamStore, mut GatewayMutator) {
+func RegisterUpstreamAdmin(mux *http.ServeMux, store AdminStore, us UpstreamStore, mut GatewayMutator, credType CredTypeFunc) {
 	mux.HandleFunc("POST /admin/upstreams", func(w http.ResponseWriter, r *http.Request) {
 		p, ok := requireAdmin(w, r)
 		if !ok {
@@ -176,7 +207,7 @@ func RegisterUpstreamAdmin(mux *http.ServeMux, store AdminStore, us UpstreamStor
 		if !ok {
 			return
 		}
-		row, err := RegisterUpstreamShared(r.Context(), us, mut, tenant, body.UpstreamParams)
+		row, err := RegisterUpstreamShared(r.Context(), us, mut, credType, tenant, body.UpstreamParams)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return

@@ -81,7 +81,7 @@ func TestUpstreamAPIRBACAndValidation(t *testing.T) {
 	mut := &fakeMutator{}
 	store := newFakeAdminStore()
 	store.CreateTenant(context.Background(), "t1", "t1")
-	RegisterUpstreamAdmin(mux, store, us, mut)
+	RegisterUpstreamAdmin(mux, store, us, mut, nil)
 
 	admin := identity.Principal{Role: identity.RoleAdmin, TenantID: "t1"}
 	viewer := identity.Principal{Role: identity.RoleViewer, TenantID: "t1"}
@@ -112,7 +112,7 @@ func TestUpstreamCredBothOrNeither(t *testing.T) {
 	mux := http.NewServeMux()
 	store := newFakeAdminStore()
 	store.CreateTenant(context.Background(), "t1", "t1")
-	RegisterUpstreamAdmin(mux, store, &fakeUpstreamStore{}, &fakeMutator{})
+	RegisterUpstreamAdmin(mux, store, &fakeUpstreamStore{}, &fakeMutator{}, nil)
 	admin := identity.Principal{Role: identity.RoleAdmin, TenantID: "t1"}
 	// cred_secret without cred_header → 400
 	w := postUpstream(t, mux, admin, map[string]any{"name": "o", "url": "http://x", "cred_secret": "K"})
@@ -127,7 +127,7 @@ func TestUpstreamRollbackOnManagerError(t *testing.T) {
 	store.CreateTenant(context.Background(), "t1", "t1")
 	us := &fakeUpstreamStore{}
 	mut := &errMutator{} // Add always errors
-	RegisterUpstreamAdmin(mux, store, us, mut)
+	RegisterUpstreamAdmin(mux, store, us, mut, nil)
 	admin := identity.Principal{Role: identity.RoleAdmin, TenantID: "t1"}
 	w := postUpstream(t, mux, admin, map[string]any{"name": "orders", "url": "http://x"})
 	if w.Code != http.StatusBadRequest {
@@ -150,7 +150,7 @@ func TestUpstreamDeleteCrossTenantNoOp(t *testing.T) {
 		"gwu-x": {ID: "gwu-x", TenantID: "t1", Name: "orders", Transport: "http", URL: "http://x"},
 	}}
 	mut := &fakeMutator{}
-	RegisterUpstreamAdmin(mux, store, us, mut)
+	RegisterUpstreamAdmin(mux, store, us, mut, nil)
 	// admin of t2 tries to delete t1's upstream by id
 	admin2 := identity.Principal{Role: identity.RoleAdmin, TenantID: "t2"}
 	r := withPrincipal(httptest.NewRequest("DELETE", "/admin/upstreams/gwu-x", nil), admin2)
@@ -174,7 +174,7 @@ func TestUpstreamDuplicateNameFriendlyError(t *testing.T) {
 	store.CreateTenant(context.Background(), "t1", "t1")
 	us := &fakeUpstreamStore{}
 	mut := &fakeMutator{}
-	RegisterUpstreamAdmin(mux, store, us, mut)
+	RegisterUpstreamAdmin(mux, store, us, mut, nil)
 	admin := identity.Principal{Role: identity.RoleAdmin, TenantID: "t1"}
 
 	if w := postUpstream(t, mux, admin, map[string]any{"name": "orders", "url": "http://x"}); w.Code != http.StatusCreated {
