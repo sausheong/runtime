@@ -29,12 +29,15 @@ type rootOptions struct {
 	PolicyStore    controlplane.PolicyStore
 	QuotaStore     controlplane.QuotaStore
 	CredType       controlplane.CredTypeFunc
+	// SubjectForwarding gates the anti-spoof strip-then-set of X-Runtime-* at the
+	// reverse proxy (RUNTIME_SUBJECT_FORWARDING). Off ⇒ today's behavior.
+	SubjectForwarding bool
 }
 
 // buildRoot assembles the root mux: console at /ui, control-plane API at /, and
 // optional admin, gateway, onboarding, and managed-agent surfaces.
 func buildRoot(o rootOptions) http.Handler {
-	apiMux := controlplane.NewAPI(o.Registry, o.Metrics, o.ControlStore)
+	apiMux := controlplane.NewAPI(o.Registry, o.Metrics, o.ControlStore, o.SubjectForwarding)
 	if o.AdminStore != nil {
 		controlplane.RegisterAdmin(apiMux, o.AdminStore, o.Registry.AgentTenants())
 		controlplane.RegisterSecretAdmin(apiMux, o.AdminStore, o.SecretAdmin)

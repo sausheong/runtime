@@ -36,7 +36,7 @@ func TestAPI_RemoteAgentHealthAndProxyUseBearer(t *testing.T) {
 		t.Fatal(err)
 	}
 	reg := NewRegistry(cfg, "bin", "dsn")
-	api := NewAPI(reg, nil, store.NewMemStore())
+	api := NewAPI(reg, nil, store.NewMemStore(), false)
 
 	// /agents reports healthy.
 	rec := httptest.NewRecorder()

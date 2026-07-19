@@ -32,7 +32,7 @@ func TestRouter_DispatchAndList(t *testing.T) {
 	}}
 	reg := NewRegistry(cfg, "/bin/agentd", "dsn")
 
-	srv := httptest.NewServer(NewAPI(reg, nil, store.NewMemStore()))
+	srv := httptest.NewServer(NewAPI(reg, nil, store.NewMemStore(), false))
 	defer srv.Close()
 
 	resp, err := http.Get(srv.URL + "/agents/a/sessions")
@@ -93,7 +93,7 @@ func TestAPI_NewSessionRoundRobinsAndPins(t *testing.T) {
 	st := store.NewMemStore()
 	owned, _ := st.CreateSession(context.Background(), "a", 1) // owned by replica 1
 
-	srv := httptest.NewServer(NewAPI(reg, nil, st))
+	srv := httptest.NewServer(NewAPI(reg, nil, st, false))
 	defer srv.Close()
 
 	// Two POSTs round-robin across replicas 0 then 1.
@@ -187,7 +187,7 @@ func TestAPI_RemoteAgentSessionRoutesWithoutLocalStore(t *testing.T) {
 
 	// Control-plane store is EMPTY — it never saw this remote's session, exactly
 	// as in a separate-instance deployment.
-	srv := httptest.NewServer(NewAPI(reg, nil, store.NewMemStore()))
+	srv := httptest.NewServer(NewAPI(reg, nil, store.NewMemStore(), false))
 	defer srv.Close()
 
 	// A session-scoped GET for a session the control-plane store has never heard
@@ -225,7 +225,7 @@ func TestAPI_CommandAgentSessionRoutesWithoutLocalStore(t *testing.T) {
 	reg := commandRegistry(t, "shim", backend.URL)
 
 	// Control-plane store is EMPTY — the shim wrote the session to its own SQLite.
-	srv := httptest.NewServer(NewAPI(reg, nil, store.NewMemStore()))
+	srv := httptest.NewServer(NewAPI(reg, nil, store.NewMemStore(), false))
 	defer srv.Close()
 
 	code := httpGetCode(t, srv.URL+"/agents/shim/sessions/ses-shim-123/stream?since=0")

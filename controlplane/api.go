@@ -8,8 +8,44 @@ import (
 	"time"
 
 	"github.com/sausheong/runtime/internal/obs"
+	"github.com/sausheong/runtime/internal/rheader"
 	"github.com/sausheong/runtime/internal/store"
 )
+
+// stripRuntimeHeaders deletes every inbound header under the reserved
+// X-Runtime- prefix. Callers must never smuggle a platform claim past the
+// proxy; the platform sets its own afterward.
+func stripRuntimeHeaders(h http.Header) {
+	for k := range h {
+		if strings.HasPrefix(http.CanonicalHeaderKey(k), rheader.Prefix) {
+			h.Del(k)
+		}
+	}
+}
+
+// forwardSubject implements the anti-spoof strip-then-set for the caller's
+// authenticated identity. When forwarding is off it is a no-op (today's
+// behavior). When on it ALWAYS strips inbound X-Runtime-*, then sets the trio
+// from the request's Principal when one is present with a non-empty value.
+func forwardSubject(r *http.Request, forwarding bool) {
+	if !forwarding {
+		return
+	}
+	stripRuntimeHeaders(r.Header)
+	p, ok := PrincipalFromContext(r.Context())
+	if !ok {
+		return
+	}
+	if p.Subject != "" {
+		r.Header.Set(rheader.User, p.Subject)
+	}
+	if p.TenantID != "" {
+		r.Header.Set(rheader.Tenant, p.TenantID)
+	}
+	if p.Role != "" {
+		r.Header.Set(rheader.Role, string(p.Role))
+	}
+}
 
 // NewAPI returns the control-plane HTTP handler routing /agents/{id}/... to each
 // agent's replica pool, plus GET /agents and GET /healthz. New sessions
@@ -17,7 +53,7 @@ import (
 // (resolved from st); replica-agnostic paths use replica 0. m records
 // proxy-error metrics; nil ⇒ no-op. st resolves session→replica affinity and is
 // REQUIRED (non-nil); unlike m it is not nil-safe (pickReplica dereferences it).
-func NewAPI(reg *Registry, m *obs.ControlMetrics, st store.Store) *http.ServeMux {
+func NewAPI(reg *Registry, m *obs.ControlMetrics, st store.Store, subjectForwarding bool) *http.ServeMux {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
@@ -104,6 +140,7 @@ func NewAPI(reg *Registry, m *obs.ControlMetrics, st store.Store) *http.ServeMux
 			return
 		}
 		m.ProxyCall(id, proxyKind(r.Method, r.URL.Path))
+		forwardSubject(r, subjectForwarding)
 		reverseProxy(ap.baseURL(), ap.AuthToken, func() { m.ProxyError(id) }).ServeHTTP(w, r)
 	})
 

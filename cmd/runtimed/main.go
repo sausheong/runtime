@@ -379,6 +379,11 @@ func main() {
 		}
 	}
 
+	// Subject forwarding is a platform-wide switch read once; set into BOTH
+	// rootOptions literals below (open + identity modes). Missing either site
+	// silently disables forwarding on that path.
+	sf := envBool("RUNTIME_SUBJECT_FORWARDING")
+
 	if !identityOn {
 		slog.Warn("no identity configured — control plane is running OPEN (unauthenticated)")
 		if secretBroker != nil {
@@ -395,7 +400,7 @@ func main() {
 		handler = obs.RequestID(tracedHandler(accessLog(buildRoot(rootOptions{
 			Registry: reg, ConsoleOIDC: console.OIDCConfig{}, SecretAdmin: secretAdmin,
 			Gateway: gwHandler, Metrics: cm, ControlStore: ctlStore, PolicyStore: polAdmin,
-			QuotaStore: quotaAdmin, CredType: credType,
+			QuotaStore: quotaAdmin, CredType: credType, SubjectForwarding: sf,
 		}), cm)))
 	} else {
 		oidcVerifier, verr := identity.NewOIDCVerifier(ctx, oidcIssuer, oidcClientID)
@@ -460,7 +465,7 @@ func main() {
 			SecretAdmin: secretAdmin, Gateway: gwHandler, UpstreamStore: gwStore,
 			GatewayMutator: gwMut, AgentStore: agentStore, AgentManager: agentManager,
 			Onboarding: onb, Metrics: cm, ControlStore: ctlStore, PolicyStore: polAdmin,
-			QuotaStore: quotaAdmin, CredType: credType,
+			QuotaStore: quotaAdmin, CredType: credType, SubjectForwarding: sf,
 		}) // mounts /admin since the store is non-nil
 		onReject := func(status int) { cm.AuthRejected(status) }
 		// When OIDC login is available, lock the browser console to OIDC sessions:
@@ -743,6 +748,17 @@ func envOr(k, d string) string {
 		return v
 	}
 	return d
+}
+
+// envBool reports whether an env var is truthy (1/true/yes/on, case-insensitive,
+// trimmed). Unset/empty/anything else ⇒ false.
+func envBool(k string) bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(k))) {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
+	}
 }
 
 // envFloatOr reads a float env var with a default (malformed ⇒ default + warn).
