@@ -699,6 +699,36 @@ near-duplicate is skipped, not merged). It requires semantic recall: if
 startup fails. Conversation content is sent to the same proxy used for chat and
 embeddings — no new egress.
 
+#### Rolling session summary
+
+Separate from facts, an agent can keep a **rolling per-session summary**: a
+running digest of the conversation that is regenerated each completed turn,
+stored durably, and **re-injected when the session resumes** — after the
+in-memory thread is gone (e.g. process restart or a later reconnect) but the DB
+summary survives. Where semantic recall answers "what does this tenant know?",
+the summary answers "where were we in *this* conversation?".
+
+Unlike semantic recall and fact auto-ingestion, the summary is
+**embedder-independent**: it is keyed by session, not by vector similarity, so it
+needs no embeddings endpoint and works in deployments with none configured. It is
+**tenant-scoped** (per-user/actor namespacing is a later milestone — not yet).
+
+Enable it independently of `RUNTIME_INGEST_ENABLED` (facts); the summary can run
+alone. It is still gated by the per-agent `memory: true` flag.
+
+```bash
+export RUNTIME_SUMMARY_ENABLED=1
+export RUNTIME_SUMMARY_MODEL=anthropic/claude-haiku-4-5   # falls back to RUNTIME_INGEST_MODEL if unset
+# reuses OPENAI_BASE_URL / OPENAI_API_KEY
+export RUNTIME_SUMMARY_MIN_MESSAGES=2   # skip very short threads (default = ingest's min-messages default, 2)
+```
+
+The summary is regenerated on **every completed turn**, so it costs one extra
+summarization LLM call per turn — a known M1 cost; smarter cadence
+(regenerate-when-warranted) is a future optimization. It is **best-effort**: a
+summarizer failure or an empty digest skips the write and never breaks a turn.
+The metric `agent_memory_summary_writes_total` counts summary writes.
+
 ### Open mode & backward compatibility
 
 - **No identity configured** (no OIDC issuer, no service keys, no users, no
@@ -1187,6 +1217,7 @@ reserved for it):
 | `agent_cost_unpriced_total` | `agent,tenant,model` | Turns whose model has no price entry — a cost blind spot; alertable via `UnpricedModelUsage`. |
 | `agent_tool_calls_total` | `agent,tool` | Tool calls dispatched by the agent loop. |
 | `agent_session_limit_hits_total` | `agent,limit` | Sessions terminated by `turn_timeout`, `session_timeout`, `max_turns`, or `max_tokens`. |
+| `agent_memory_summary_writes_total` | `agent,tenant,model` | Rolling per-session memory summaries written (one per completed turn when the summary strategy is enabled). |
 
 ### Fan-out, auth, and cardinality
 

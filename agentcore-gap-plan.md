@@ -38,7 +38,9 @@ land in `docs/superpowers/specs/` as each item starts.
   whole-branch review MERGE-READY, no Critical/Important. Deferred (Docker
   unavailable in dev env): live v1-proof alerting run + promtool/amtool lint.
 
-**Phase P2 "Scoped" (v1.2) — IN PROGRESS. P2.3 DONE; P2.1 M1 DONE; P2.2 remains.**
+**Phase P2 "Scoped" (v1.2) — IN PROGRESS. First-milestone sweep COMPLETE: all
+three P2 sub-projects now have their first milestone merged (P2.3 DONE; P2.1 M1
+DONE; P2.2 M1 DONE). Deeper milestones (M2+) remain across the phase.**
 
 - **P2.3 Gateway quotas + enrichment — DONE (merged 2026-07-19, ff to `5ba6232`,
   11 commits, branch `p2.3-gateway-quotas-enrichment`).** Quotas: new
@@ -72,7 +74,22 @@ land in `docs/superpowers/specs/` as each item starts.
   rotation via re-run without restart. Depends on P1.1 principal-on-path.
   **M2 (OBO / RFC 8693 user-token exchange)** and **M3 (IdP connector presets)**
   remain.
-- **P2.2 Memory strategies — after P2.1.**
+- **P2.2 Memory strategies — M1 (strategy pipeline + summary) DONE (merged,
+  branch `p2.2-memory-strategies`).** M1 generalizes `internal/memory/ingest.go`
+  into a strategy pipeline and ships the first non-fact strategy: a per-session
+  **rolling summary** — a running conversation digest regenerated each completed
+  turn, stored durably and re-injected when the session resumes (in-memory thread
+  gone, DB summary survives). Unlike semantic recall/facts it is
+  **embedder-independent** (keyed by session, not vector similarity — works with
+  no embeddings configured) and **tenant-scoped**. Enabled by
+  `RUNTIME_SUMMARY_ENABLED` (independent of `RUNTIME_INGEST_ENABLED`), with
+  `RUNTIME_SUMMARY_MODEL` (falls back to `RUNTIME_INGEST_MODEL`) and
+  `RUNTIME_SUMMARY_MIN_MESSAGES`; still gated by per-agent `memory: true`.
+  Best-effort (a summarizer failure or empty digest skips the write, never breaks
+  a turn); one extra summarization LLM call per turn (known M1 cost, smarter
+  cadence deferred). Metric `agent_memory_summary_writes_total{agent,tenant,model}`.
+  **M2 (preference + `actor_id` namespacing)**, **M3 (episodic)**, and
+  **M4 (TTL/GC + dedup hardening)** remain.
 
 ## Prioritization principles
 
