@@ -16,6 +16,7 @@ import (
 	"github.com/sausheong/runtime/internal/identity"
 	"github.com/sausheong/runtime/internal/obs"
 	"github.com/sausheong/runtime/internal/policy"
+	"github.com/sausheong/runtime/internal/quota"
 )
 
 // Handler serves the federated tool set over MCP Streamable HTTP plus the
@@ -46,6 +47,10 @@ type Handler struct {
 	// after the view and role gates) against the Cedar engine. nil ⇒ policy
 	// enforcement off — behavior identical to pre-policy builds.
 	Policy *policy.Engine
+
+	// Quota, when non-nil, rate-limits every cataloged tool call (gate #4,
+	// after the policy gate, before tenant injection). nil ⇒ quotas off.
+	Quota *quota.Limiter
 
 	mu sync.Mutex
 	// cache maps mode-qualified view key → server, rebuilt when the Manager's
@@ -260,6 +265,22 @@ func (h *Handler) toolHandler(builtFor string, t tool.Tool, forwardTenant bool, 
 				return errResult(msg), nil
 			}
 			h.Metrics.PolicyDecision(tenantLabel, "allow")
+		}
+		// Gate #4: per-(tenant,upstream) rate quota. Superuser exempt;
+		// open-mode (no principal) skipped (no tenant key). Fail-open: the
+		// limiter allows on any store error. Reject is an MCP tool error, like
+		// the policy deny — MCP has no per-call status channel.
+		if h.Quota != nil && ok && !p.Superuser {
+			serverName, _, _ := strings.Cut(t.Name(), "__")
+			if allowed, retry := h.Quota.Allow(ctx, p.TenantID, serverName); !allowed {
+				h.Metrics.QuotaRejection(p.TenantID, serverName)
+				// Audit: tenant + server + retry only; never argument values.
+				slog.Warn("gateway quota exceeded",
+					"tenant", p.TenantID, "server", serverName,
+					"retry_after_s", int(retry.Seconds()))
+				return errResult(fmt.Sprintf("quota exceeded: %s/%s (retry after %ds)",
+					p.TenantID, serverName, int(retry.Seconds()))), nil
+			}
 		}
 		args := req.Params.Arguments
 		if forwardTenant {

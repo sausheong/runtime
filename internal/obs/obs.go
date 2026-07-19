@@ -46,6 +46,7 @@ type ControlMetrics struct {
 	asActive        *prometheus.GaugeVec
 	asEvents        *prometheus.CounterVec
 	policyDecisions *prometheus.CounterVec
+	quotaRejections *prometheus.CounterVec
 }
 
 func NewControlMetrics() *ControlMetrics {
@@ -119,9 +120,13 @@ func NewControlMetrics() *ControlMetrics {
 		Name: "runtime_gateway_policy_decisions_total",
 		Help: "Gateway policy decisions, by tenant and decision (allow/deny/error).",
 	}, []string{"tenant", "decision"})
+	c.quotaRejections = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "runtime_gateway_quota_rejections_total",
+		Help: "Gateway tool calls rejected by a rate quota, by tenant and upstream server.",
+	}, []string{"tenant", "server"})
 	c.reg.MustRegister(c.httpRequests, c.httpDuration, c.agentUp, c.agentReachable, c.agentRestarts,
 		c.proxyErrors, c.agentProxyCalls, c.gwCalls, c.gwDuration, c.gwUp, c.scrapeSkips,
-		c.asDesired, c.asCurrent, c.asActive, c.asEvents, c.policyDecisions)
+		c.asDesired, c.asCurrent, c.asActive, c.asEvents, c.policyDecisions, c.quotaRejections)
 	return c
 }
 
@@ -274,6 +279,14 @@ func (c *ControlMetrics) PolicyDecision(tenant, decision string) {
 		return
 	}
 	c.policyDecisions.WithLabelValues(tenant, decision).Inc()
+}
+
+// QuotaRejection counts one quota-rejected gateway call. Nil-safe.
+func (c *ControlMetrics) QuotaRejection(tenant, server string) {
+	if c == nil {
+		return
+	}
+	c.quotaRejections.WithLabelValues(tenant, server).Inc()
 }
 
 // AgentMetrics is agentd's registry. Every series carries agent=<id> so the
