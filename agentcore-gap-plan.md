@@ -40,9 +40,11 @@ land in `docs/superpowers/specs/` as each item starts.
 
 **Phase P2 "Scoped" (v1.2) — IN PROGRESS. First-milestone sweep COMPLETE: all
 three P2 sub-projects now have their first milestone merged (P2.3 DONE; P2.1 M1
-DONE; P2.2 M1 DONE). P2.2 M2 (actor namespacing) is now DONE via the
-subject-forwarding keystone, which also unblocks P2.1 M2 (OBO). Deeper
-milestones remain across the phase.**
+DONE; P2.2 M1 DONE). P2.2 M2 (actor namespacing) is DONE via the
+subject-forwarding keystone. P2.1 M2 is split: **M2a (caller-JWT propagation
+channel) is DONE** — the identity channel for OBO — and **M2b (the RFC 8693
+token exchange + `CredTypeOBO`) is the immediate next**. Deeper milestones remain
+across the phase.**
 
 - **P2.3 Gateway quotas + enrichment — DONE (merged 2026-07-19, ff to `5ba6232`,
   11 commits, branch `p2.3-gateway-quotas-enrichment`).** Quotas: new
@@ -74,11 +76,25 @@ milestones remain across the phase.**
   opposite of the fail-open quota limiter, since a credential is a security
   control. `client_secret` is write-only (never in list/API/console/logs); live
   rotation via re-run without restart. Depends on P1.1 principal-on-path.
-  **M2 (OBO / RFC 8693 user-token exchange)** is now **UNBLOCKED** — the
-  subject-forwarding keystone (see P2.2 M2 below) carries the authenticated
-  caller's `Subject`/`Tenant`/`Role` into the durable turn loop, so per-user
-  token acquisition can key off the forwarded identity. **M3 (IdP connector
-  presets)** remains.
+  **M2 is split into M2a (identity channel) + M2b (token exchange):**
+  - **M2a (caller-JWT propagation channel) — DONE (branch
+    `p2.1-m2a-caller-jwt-propagation`).** The `RUNTIME_SUBJECT_FORWARDING` flag
+    now *also* forwards the caller's **verified OIDC JWT** as `X-Runtime-Assertion`
+    edge→agentd→gateway, alongside the `X-Runtime-{User,Tenant,Role}` subject
+    headers. The gateway **re-verifies** it (OIDC + JWKS) and **tenant-binds** it
+    to the calling agent's tenant, landing `{callerSubject, rawJWT}` on the ctx at
+    the tool-dispatch point (gate #5). It is a bearer secret: ephemeral
+    (request-scoped, never persisted or checkpointed — a crash-recovered turn has
+    no JWT), never logged, stripped at trust boundaries (reserved `X-Runtime-`
+    prefix), and **fail-closed** (unverifiable/expired/cross-tenant ⇒ dropped, no
+    landing). **This is plumbing only — no downstream token is minted yet, and
+    there is no `CredTypeOBO`.** Reuses `RUNTIME_SUBJECT_FORWARDING` (no new flag);
+    the gateway re-verify is active whenever the handler's verifier + user store
+    are wired.
+  - **M2b (OBO / RFC 8693 user-token exchange + `CredTypeOBO`) — the immediate
+    next.** Consume the M2a caller assertion as the `subject_token`, exchange it
+    for a user-scoped downstream credential, cached per (tenant, user, upstream).
+  - **M3 (IdP connector presets)** remains.
 - **P2.2 Memory strategies — M1 (strategy pipeline + summary) DONE (merged,
   branch `p2.2-memory-strategies`).** M1 generalizes `internal/memory/ingest.go`
   into a strategy pipeline and ships the first non-fact strategy: a per-session
@@ -252,11 +268,13 @@ OAuth tokens scoped to that user.
   not fake it with a service account.
 
 **Milestones:** M1 oauth2 client-credentials upstream creds (closes the
-backlogged "gateway OAuth2") — **DONE**; M2 OBO token exchange keyed on the
-calling user — **UNBLOCKED** (the subject-forwarding keystone under P2.2 M2 now
-delivers the caller's subject/tenant/role into the durable turn loop); M3 IdP
-connector presets (config templates for common providers — docs + validation,
-not code per provider).
+backlogged "gateway OAuth2") — **DONE**; M2 OBO — split into **M2a** (caller-JWT
+propagation channel: the verified OIDC JWT is forwarded as `X-Runtime-Assertion`,
+re-verified + tenant-bound at the gateway, landed at tool dispatch — the identity
+channel only, no token minted) — **DONE** — and **M2b** (the RFC 8693 token
+exchange keyed on the calling user + `CredTypeOBO`, consuming the M2a assertion as
+`subject_token`) — **the immediate next**; M3 IdP connector presets (config
+templates for common providers — docs + validation, not code per provider).
 
 **Dependencies:** P1.1 M1 (principal available on the gateway call path); M2 also
 builds on the P2.2-M2 subject-forwarding keystone (identity in the turn loop).

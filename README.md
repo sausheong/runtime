@@ -772,6 +772,28 @@ session summary are written and read under that actor.
 export RUNTIME_SUBJECT_FORWARDING=1
 ```
 
+#### On-behalf-of identity (OBO) — caller JWT forwarding
+
+The same `RUNTIME_SUBJECT_FORWARDING` flag **also** forwards the caller's
+*verified OIDC JWT* to the gateway — as the header `X-Runtime-Assertion`, in
+addition to the `X-Runtime-{User,Tenant,Role}` subject headers above. This is the
+identity channel for OBO: it carries *who the human caller is*, verifiably, from
+the edge through agentd to the gateway's per-call tool dispatch point.
+
+- **Re-verified and tenant-bound at the gateway.** The gateway does not blindly
+  trust the forwarded header. It re-verifies the JWT (OIDC + JWKS) and binds it to
+  the calling agent's tenant before landing it for use. A forwarded JWT that fails
+  verification, is expired, or resolves to a different tenant is **dropped**
+  (fail-closed) — the turn simply proceeds with no caller assertion.
+- **It is a bearer secret.** The JWT is **ephemeral** — request-scoped only, never
+  persisted and never checkpointed (a crash-recovered turn simply has no JWT), never
+  logged, and stripped at trust boundaries (it lives under the reserved
+  `X-Runtime-` prefix that the edge deletes before set) so a caller cannot spoof it.
+- **No downstream token is minted yet.** This milestone builds only the identity
+  *channel*. The actual on-behalf-of token exchange (RFC 8693 — swapping the
+  caller's assertion for a user-scoped downstream credential) lands in a later
+  milestone.
+
 ### Open mode & backward compatibility
 
 - **No identity configured** (no OIDC issuer, no service keys, no users, no
@@ -1986,7 +2008,7 @@ unaffected.
 | `RUNTIME_INGEST_MAX_INFLIGHT` | agentd | `4` | Max concurrent extraction goroutines; turns over the cap are dropped. |
 | `RUNTIME_INGEST_DEDUP_FLOOR` | agentd | `0.85` | Cosine similarity at/above which a candidate fact is treated as a duplicate and skipped. |
 | `RUNTIME_INGEST_MAX_FACTS` | agentd | `10` | Hard cap on facts saved per turn. |
-| `RUNTIME_SUBJECT_FORWARDING` | runtimed + agentd | (unset) | `1`/`true`/`yes`/`on` enables forwarding the authenticated caller's subject as `X-Runtime-*` to agents and actor-scoping memory; off ⇒ tenant-wide (today's behavior). |
+| `RUNTIME_SUBJECT_FORWARDING` | runtimed + agentd | (unset) | `1`/`true`/`yes`/`on` enables forwarding the authenticated caller's subject as `X-Runtime-*` to agents (actor-scoping memory) **and** forwarding the caller's verified OIDC JWT as `X-Runtime-Assertion` to the gateway for OBO (re-verified + tenant-bound there; ephemeral, never persisted); off ⇒ tenant-wide (today's behavior). |
 | `RUNTIME_LOG_FORMAT` | runtimed | `text` | `json` switches `slog` to JSON output. |
 | `RUNTIME_CTL_URL` | runtimectl | `http://localhost:8080` | Control-plane base URL the CLI targets. |
 | `RUNTIME_TOKEN` | runtimectl | (unset) | Bearer credential (service key, OIDC token, or bootstrap key) sent on every CLI request when set. |
