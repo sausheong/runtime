@@ -219,6 +219,48 @@ func TestMiddleware_SelectionRequired_APIForbidden(t *testing.T) {
 	}
 }
 
+func TestIdentityMiddleware_RetainsOIDCAssertion(t *testing.T) {
+	var gotJWT string
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotJWT = identity.AssertionFrom(r.Context())
+		w.WriteHeader(http.StatusOK)
+	})
+	mw := IdentityMiddleware(next,
+		stubAuthndr{p: identity.Principal{TenantID: "alpha", Role: identity.RoleOperator, Kind: identity.KindOIDC}},
+		testAZ(), nil)
+	req := httptest.NewRequest("POST", "/agents/a1/sessions", nil)
+	req.Header.Set("Authorization", "Bearer the.jwt.token")
+	rec := httptest.NewRecorder()
+	mw.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("code=%d want 200", rec.Code)
+	}
+	if gotJWT != "the.jwt.token" {
+		t.Fatalf("assertion on ctx = %q, want the.jwt.token", gotJWT)
+	}
+}
+
+func TestIdentityMiddleware_NoAssertionForServiceKey(t *testing.T) {
+	var gotJWT string
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotJWT = identity.AssertionFrom(r.Context())
+		w.WriteHeader(http.StatusOK)
+	})
+	mw := IdentityMiddleware(next,
+		stubAuthndr{p: identity.Principal{TenantID: "alpha", Role: identity.RoleOperator, Kind: identity.KindServiceKey}},
+		testAZ(), nil)
+	req := httptest.NewRequest("POST", "/agents/a1/sessions", nil)
+	req.Header.Set("Authorization", "Bearer the.jwt.token")
+	rec := httptest.NewRecorder()
+	mw.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("code=%d want 200", rec.Code)
+	}
+	if gotJWT != "" {
+		t.Fatalf("assertion on ctx = %q, want '' (service key must not retain)", gotJWT)
+	}
+}
+
 func TestActionForRequest(t *testing.T) {
 	cases := []struct {
 		method, path string

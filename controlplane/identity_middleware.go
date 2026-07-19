@@ -116,8 +116,29 @@ func identityMiddleware(next http.Handler, a authenticator, az *identity.Authori
 		}
 
 		ctx := context.WithValue(r.Context(), principalKey, p)
+		// Retain the caller's raw verified JWT on ctx for OBO forwarding, but ONLY
+		// for human OIDC callers — never service keys / bootstrap / legacy, whose
+		// bearer is not a subject_token. It is a bearer secret: never logged.
+		if p.Kind == identity.KindOIDC {
+			if jwt := bearerCredential(r); jwt != "" {
+				ctx = identity.WithAssertion(ctx, jwt)
+			}
+		}
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
+}
+
+// bearerCredential re-extracts the caller's bearer the same way identity's
+// unexported extractCredential does (that helper is not reachable from this
+// package): Authorization "Bearer <t>", then the runtime_token cookie fallback.
+func bearerCredential(r *http.Request) string {
+	if h := r.Header.Get("Authorization"); strings.HasPrefix(h, "Bearer ") {
+		return strings.TrimPrefix(h, "Bearer ")
+	}
+	if c, err := r.Cookie("runtime_token"); err == nil {
+		return c.Value
+	}
+	return ""
 }
 
 func isExempt(path string) bool {
