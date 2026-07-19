@@ -50,17 +50,23 @@ func (m *OAuth2Manager) IsOAuth2(ctx context.Context, tenant, name string) bool 
 }
 
 // Bearer returns the "Bearer <token>" header value for an oauth2 credential.
-//   - applies=false ⇒ (tenant, name) is not an oauth2 cred; the caller should
-//     use the static path. err is nil in this case.
+//   - applies=false, err=nil ⇒ (tenant, name) is a static (non-oauth2) cred;
+//     the caller should use the static path (header baked at dial).
+//   - applies=false, err!=nil ⇒ the cred could not be classified (CredType
+//     lookup errored, e.g. deleted mid-session or a transient DB error): the
+//     caller MUST fail closed regardless of applies.
 //   - applies=true, err!=nil ⇒ oauth2 cred but minting failed: the caller MUST
 //     fail closed (reject the tool call, never send without the credential).
 func (m *OAuth2Manager) Bearer(ctx context.Context, tenant, name string) (string, bool, error) {
 	ct, err := m.src.CredType(ctx, tenant, name)
 	if err != nil {
-		// Cred lookup failed. Treat as non-applying so a missing/removed cred
-		// falls through to the static path (which resolves nothing) rather than
-		// masquerading as an oauth2 failure.
-		return "", false, nil
+		// Cred lookup failed: the credential is unclassifiable. Surface the
+		// error so the caller fails CLOSED (gate #5 rejects the call). Accepted
+		// trade-off: a static cred deleted mid-session, or a transient DB error,
+		// also fails closed for this upstream even though a static header was
+		// baked at dial — correct posture for a security control; the collateral
+		// is a rare operator action / transient blip.
+		return "", false, err
 	}
 	if ct != identity.CredTypeOAuth2 {
 		return "", false, nil

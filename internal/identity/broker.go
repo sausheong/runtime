@@ -42,6 +42,12 @@ func (b *Broker) SecretsFor(ctx context.Context, tenant string) (map[string]stri
 	}
 	out := make(map[string]string, len(enc))
 	for _, e := range enc {
+		// oauth2 creds are gateway-per-call only: they must NEVER enter the
+		// name->plaintext map that is injected into the agent env or resolved
+		// as a static credential. The client_secret must not leave the broker.
+		if e.Type == CredTypeOAuth2 {
+			continue
+		}
 		pt, err := b.keyring.Open(tenant, e.Name, e.ValueEnc)
 		if err != nil {
 			return nil, fmt.Errorf("identity: decrypt secret %q for tenant %q: %w", e.Name, tenant, err)
@@ -113,8 +119,8 @@ func (b *Broker) Rotate(ctx context.Context, tenant string) (RotateStats, error)
 			slog.Error("rotate: seal failed", "tenant", tenant, "name", e.Name, "err", err)
 			continue
 		}
-		_, ct, terr := b.store.LoadSecret(ctx, tenant, e.Name)
-		if terr != nil {
+		ct := e.Type
+		if ct == "" {
 			ct = CredTypeStatic
 		}
 		if err := b.store.PutSecret(ctx, tenant, e.Name, nb, ct); err != nil {

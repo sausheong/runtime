@@ -154,7 +154,7 @@ func (f *rotateFakeStore) DeleteSecret(_ context.Context, _, name string) error 
 func (f *rotateFakeStore) LoadSecrets(_ context.Context, _ string) ([]EncryptedSecret, error) {
 	out := make([]EncryptedSecret, 0, len(f.rows))
 	for n, v := range f.rows {
-		out = append(out, EncryptedSecret{Name: n, ValueEnc: v})
+		out = append(out, EncryptedSecret{Name: n, ValueEnc: v, Type: f.typ[n]})
 	}
 	return out, nil
 }
@@ -277,6 +277,59 @@ func TestBrokerOAuth2RoundTripAndGeneration(t *testing.T) {
 	}
 	if metas[0].OAuth2.ClientID != "cid" {
 		t.Fatalf("list client_id = %q", metas[0].OAuth2.ClientID)
+	}
+}
+
+// TestBroker_SecretsForExcludesOAuth2 is the FIX-1 regression: an oauth2 cred's
+// sealed JSON (which contains client_secret) must NEVER enter the name->plaintext
+// map used for agent env injection / static resolution. Only static rows appear.
+// Rotate, however, must still re-seal BOTH rows (oauth2 rows need re-encryption
+// under a rotated key), so Total==2.
+func TestBroker_SecretsForExcludesOAuth2(t *testing.T) {
+	fs := &fakeSecretStore{}
+	b := newTestBroker(t, fs)
+	ctx := context.Background()
+
+	if err := b.SetSecret(ctx, "acme", "API_KEY", "sk-static"); err != nil {
+		t.Fatal(err)
+	}
+	cfg := OAuth2Config{TokenURL: "https://idp/token", ClientID: "cid", ClientSecret: "topsecret"}
+	if err := b.SetOAuth2(ctx, "acme", "ORDERS_OAUTH", cfg); err != nil {
+		t.Fatal(err)
+	}
+	// Mirror the stored rows (name, ciphertext, type) into what LoadSecrets returns.
+	fs.loaded = []EncryptedSecret{
+		{Name: "API_KEY", ValueEnc: fs.put["API_KEY"], Type: fs.typ["API_KEY"]},
+		{Name: "ORDERS_OAUTH", ValueEnc: fs.put["ORDERS_OAUTH"], Type: fs.typ["ORDERS_OAUTH"]},
+	}
+
+	got, err := b.SecretsFor(ctx, "acme")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := got["ORDERS_OAUTH"]; ok {
+		t.Fatal("SecretsFor leaked oauth2 cred into name->plaintext map (client_secret exposure)")
+	}
+	if got["API_KEY"] != "sk-static" {
+		t.Fatalf("static secret missing/mismatched: %q", got["API_KEY"])
+	}
+	if len(got) != 1 {
+		t.Fatalf("SecretsFor returned %d entries, want 1 (static only): %v", len(got), got)
+	}
+
+	// Rotate must still process BOTH rows (oauth2 included) — re-seal, not skip.
+	st, err := b.Rotate(ctx, "acme")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Total != 2 || st.Rotated != 2 || st.Failed != 0 {
+		t.Fatalf("Rotate stats = %+v, want total=2 rotated=2 failed=0", st)
+	}
+	if fs.typ["ORDERS_OAUTH"] != CredTypeOAuth2 {
+		t.Fatalf("Rotate changed oauth2 row type to %q, want %q", fs.typ["ORDERS_OAUTH"], CredTypeOAuth2)
+	}
+	if fs.typ["API_KEY"] != CredTypeStatic {
+		t.Fatalf("Rotate changed static row type to %q, want %q", fs.typ["API_KEY"], CredTypeStatic)
 	}
 }
 

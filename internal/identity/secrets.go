@@ -15,10 +15,11 @@ type SecretMeta struct {
 	UpdatedAt time.Time   `json:"updated_at"`
 }
 
-// EncryptedSecret is the broker-facing read model: name + ciphertext only.
+// EncryptedSecret is the broker-facing read model: name + ciphertext + type.
 type EncryptedSecret struct {
 	Name     string
 	ValueEnc []byte
+	Type     string
 }
 
 // PutSecret inserts or overwrites a tenant's secret with its type. valueEnc is
@@ -74,7 +75,7 @@ func (s *Store) DeleteSecret(ctx context.Context, tenantID, name string) error {
 // decrypt at spawn time.
 func (s *Store) LoadSecrets(ctx context.Context, tenantID string) ([]EncryptedSecret, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT name, value_enc FROM secrets WHERE tenant_id=$1 ORDER BY name`, tenantID)
+		`SELECT name, value_enc, type FROM secrets WHERE tenant_id=$1 ORDER BY name`, tenantID)
 	if err != nil {
 		return nil, err
 	}
@@ -82,7 +83,7 @@ func (s *Store) LoadSecrets(ctx context.Context, tenantID string) ([]EncryptedSe
 	var out []EncryptedSecret
 	for rows.Next() {
 		var e EncryptedSecret
-		if err := rows.Scan(&e.Name, &e.ValueEnc); err != nil {
+		if err := rows.Scan(&e.Name, &e.ValueEnc, &e.Type); err != nil {
 			return nil, err
 		}
 		out = append(out, e)

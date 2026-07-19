@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"sync/atomic"
@@ -81,6 +82,37 @@ func TestOAuth2ManagerRebuildsOnGenerationBump(t *testing.T) {
 	v2, _, _ := m.Bearer(context.Background(), "acme", "c")
 	if v2 != "Bearer tok-cid2" {
 		t.Fatalf("v2 = %q (did not rebuild on gen bump)", v2)
+	}
+}
+
+// errCredTypeSource is a source whose CredType lookup fails (e.g. the cred was
+// deleted mid-session or a transient DB error).
+type errCredTypeSource struct{ err error }
+
+func (s *errCredTypeSource) OAuth2ConfigFor(_ context.Context, _, _ string) (identity.OAuth2Config, error) {
+	return identity.OAuth2Config{}, s.err
+}
+func (s *errCredTypeSource) CredType(_ context.Context, _, _ string) (string, error) {
+	return "", s.err
+}
+func (s *errCredTypeSource) Generation() uint64 { return 0 }
+
+// TestOAuth2ManagerBearerCredTypeError is the FIX-2 regression: a CredType
+// lookup error must surface as err!=nil (applies=false) so gate #5 fails CLOSED,
+// rather than the old fail-OPEN (nil err) that let an oauth2 upstream go out
+// with no Authorization header.
+func TestOAuth2ManagerBearerCredTypeError(t *testing.T) {
+	src := &errCredTypeSource{err: errors.New("not found")}
+	m := NewOAuth2Manager(context.Background(), src)
+	v, applies, err := m.Bearer(context.Background(), "acme", "orders_oauth")
+	if err == nil {
+		t.Fatal("Bearer must surface CredType error (fail closed), got nil")
+	}
+	if applies {
+		t.Fatal("applies must be false on a CredType lookup error")
+	}
+	if v != "" {
+		t.Fatalf("value must be empty on error, got %q", v)
 	}
 }
 

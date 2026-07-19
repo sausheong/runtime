@@ -312,13 +312,18 @@ func (h *Handler) toolHandler(builtFor string, t tool.Tool, forwardTenant bool, 
 		// (no tenant) cannot own a tenant-scoped oauth2 cred, so skip.
 		if h.OAuth2 != nil && credSecret != "" && ok && !p.Superuser {
 			value, applies, cerr := h.OAuth2.Bearer(ctx, p.TenantID, credSecret)
+			// Fail CLOSED on any error, regardless of applies: a mint failure
+			// (applies=true) OR an unclassifiable cred (applies=false, e.g. the
+			// cred was deleted mid-session or a transient DB error) both reject
+			// the call rather than let an oauth2 upstream — dialed without a
+			// baked header — go out uncredentialed.
+			if cerr != nil {
+				h.Metrics.CredentialError(p.TenantID, serverName)
+				slog.Warn("gateway credential unavailable",
+					"tenant", p.TenantID, "server", serverName, "cred", credSecret)
+				return errResult("credential unavailable: " + credSecret), nil
+			}
 			if applies {
-				if cerr != nil {
-					h.Metrics.CredentialError(p.TenantID, serverName)
-					slog.Warn("gateway credential unavailable",
-						"tenant", p.TenantID, "server", serverName, "cred", credSecret)
-					return errResult("credential unavailable: " + credSecret), nil
-				}
 				ctx = WithCredentialHeader(ctx, credHeader, value)
 			}
 		}
