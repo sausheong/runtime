@@ -1173,6 +1173,7 @@ reserved for it):
 | `runtime_gateway_upstream_up` | `server` | 1 when the gateway upstream connection is up. |
 | `runtime_gateway_policy_decisions_total` | `tenant,decision` | Cedar policy evaluations at the gateway, by `decision` (`allow`/`deny`/`error`). Emitted only when the policy engine is enabled. |
 | `runtime_gateway_quota_rejections_total` | `tenant,server` | Gateway tool calls rejected for exceeding a per-`(tenant,upstream)` rate quota. See the [operator guide](operator-guide.md#gateway-quotas). |
+| `runtime_gateway_credential_errors_total` | `tenant,server` | Gateway tool calls that failed closed because an outbound OAuth2 credential could not be minted (token endpoint unreachable/erroring). See the [operator guide](operator-guide.md#oauth2-outbound-credentials). |
 | `runtime_metrics_scrape_skips_total` | `agent,reason` | Agents skipped during the fan-out scrape. Reasons: `timeout`, `unreachable`, `parse`, `no_metrics`, `status_<code>`, `reserved_name`, `type_conflict`. |
 
 **Agent metrics** (emitted per `agentd`, merged into `runtimed`'s exposition):

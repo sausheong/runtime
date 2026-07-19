@@ -74,6 +74,31 @@ exceeded, the agent's tool call comes back as the tool error
 agent that sees this should **back off and retry** after the stated delay rather
 than treating it as a hard failure.
 
+## Give an upstream an OAuth2 credential
+
+If one of your OpenAPI upstreams authenticates with an OAuth2
+`client_credentials` token instead of a static API key, create the credential
+once and point the upstream at it. From the CLI:
+
+```bash
+runtimectl admin secret set-oauth2 \
+  --name orders_oauth --token-url https://idp.example.com/oauth/token \
+  --client-id svc-orders --client-secret "$SECRET" --scope orders.read
+```
+
+(You can also create it from the console's secrets page.) Then reference it on
+the upstream with `cred_secret: orders_oauth` — the platform mints, caches, and
+auto-refreshes the token and sends it as `Bearer <token>` (the header defaults
+to `Authorization`; override with `cred_header`).
+
+- The `--client-secret` is **write-only**: once set it never appears in
+  `secret ls`, the API, the console, or logs. To rotate it, just re-run
+  `set-oauth2` — the change applies without a restart.
+- OAuth2 credentials are **OpenAPI-only**. Attaching one to a non-OpenAPI
+  (`url:`/MCP) upstream is rejected. If the token endpoint is unreachable the
+  call **fails closed** (`credential unavailable: <name>`) — it is never sent
+  unauthenticated.
+
 ## Roles and keys
 
 Every request to the control plane carries a bearer — a human's OIDC cookie or a

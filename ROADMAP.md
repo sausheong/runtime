@@ -238,8 +238,9 @@ specs/plans dated 2026-06-07/08.
 > **Progress:** the **"Guarded" phase (v1.1) is COMPLETE** (P1.2 lifecycle
 > guardrails, P1.1 Cedar policy engine, P1.3 metering + Alertmanager). The
 > **"Scoped" phase (v1.2) is IN PROGRESS**: P2.3 gateway quotas + header
-> enrichment is DONE (merged 2026-07-19); P2.1 gateway OAuth2 → OBO and P2.2
-> memory strategy pipeline remain. See `agentcore-gap-plan.md`.
+> enrichment is DONE (merged 2026-07-19); P2.1 gateway OAuth2 **M1
+> (client_credentials) is DONE** (merged; M2 OBO / RFC 8693 and M3 IdP presets
+> remain); P2.2 memory strategy pipeline remains. See `agentcore-gap-plan.md`.
 
 ### A. Spine hardening (within this sub-project — optional, do when needed)
 

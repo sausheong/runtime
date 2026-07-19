@@ -38,7 +38,7 @@ land in `docs/superpowers/specs/` as each item starts.
   whole-branch review MERGE-READY, no Critical/Important. Deferred (Docker
   unavailable in dev env): live v1-proof alerting run + promtool/amtool lint.
 
-**Phase P2 "Scoped" (v1.2) — IN PROGRESS. P2.3 DONE; P2.1 + P2.2 remain.**
+**Phase P2 "Scoped" (v1.2) — IN PROGRESS. P2.3 DONE; P2.1 M1 DONE; P2.2 remains.**
 
 - **P2.3 Gateway quotas + enrichment — DONE (merged 2026-07-19, ff to `5ba6232`,
   11 commits, branch `p2.3-gateway-quotas-enrichment`).** Quotas: new
@@ -58,7 +58,20 @@ land in `docs/superpowers/specs/` as each item starts.
   deliberately asymmetric to P1.1 policy fail-closed. Reviews caught: limiter
   per-call DB query (throttle fix), quota RBAC guard unreachable via force-pin
   (pass-through fix), and a final-review outage-path throttle gap — all fixed.
-- **P2.1 OBO / OAuth2 outbound creds — NEXT.**
+- **P2.1 OBO / OAuth2 outbound creds — M1 (client_credentials) DONE (merged,
+  branch `p2.1-oauth2-outbound-credentials`).** M1: `oauth2_client_credentials`
+  brokered secret type minted/cached/auto-refreshed by the platform; created via
+  `runtimectl admin secret set-oauth2` (+ `/admin/secrets` + console); referenced
+  by an OpenAPI upstream through the existing `cred_secret`/`cred_header` (value
+  becomes `Bearer <token>`, header defaults to `Authorization`). **OpenAPI-only**
+  (rejected at registration + fatal at startup for file-config + refused at dial),
+  **fail-closed** (`credential unavailable: <name>` + new metric
+  `runtime_gateway_credential_errors_total{tenant,server}`) — deliberately the
+  opposite of the fail-open quota limiter, since a credential is a security
+  control. `client_secret` is write-only (never in list/API/console/logs); live
+  rotation via re-run without restart. Depends on P1.1 principal-on-path.
+  **M2 (OBO / RFC 8693 user-token exchange)** and **M3 (IdP connector presets)**
+  remain.
 - **P2.2 Memory strategies — after P2.1.**
 
 ## Prioritization principles

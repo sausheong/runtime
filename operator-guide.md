@@ -229,6 +229,57 @@ gateway:
   `cred_header` or a static `headers:` entry is a **config load error** — no
   runtime ambiguity about which value wins.
 
+## OAuth2 outbound credentials
+
+An OpenAPI upstream can authenticate to its backend with an OAuth2
+`client_credentials` access token that the platform mints, caches, and
+auto-refreshes — instead of a static API key. Create the credential once
+(type `oauth2_client_credentials`), then point an upstream at it with the
+existing `cred_secret` / `cred_header`:
+
+```bash
+runtimectl admin secret set-oauth2 \
+  --name orders_oauth --token-url https://idp.example.com/oauth/token \
+  --client-id svc-orders --client-secret "$SECRET" --scope orders.read
+  # optional: --audience https://api.example.com --tenant acme
+```
+
+An upstream references it exactly like a static credential — the minted token
+becomes the header value `Bearer <token>` (`cred_header` defaults to
+`Authorization`):
+
+```yaml
+gateway:
+  servers:
+    - name: orders
+      openapi: http://host.docker.internal:9000/openapi.yaml
+      base_url: http://host.docker.internal:9000
+      cred_secret: orders_oauth   # resolves to "Bearer <minted-token>"
+      cred_header: Authorization  # default; shown for clarity
+```
+
+- **OpenAPI-only.** An oauth2 credential is valid only on an `openapi:` upstream
+  (a `url:`/MCP upstream sets headers once at connect and cannot refresh a token
+  per call). It is **rejected when you attach it to a non-OpenAPI upstream** —
+  at registration (admin API/console, when the broker is reachable) and, for a
+  file-config upstream, fatally at startup — and it is **refused at dial** (fail
+  closed) if it ever reaches a non-openapi path.
+- **Fail closed.** If the token endpoint is unreachable or erroring, the tool
+  call is rejected with `credential unavailable: <name>` and counted in
+  `runtime_gateway_credential_errors_total{tenant,server}` — the request is
+  never sent unauthenticated. This is the deliberate **opposite** of the
+  fail-open [quota limiter](#gateway-quotas): a credential is a **security**
+  control (like the [policy engine](#policy-engine-cedar)), so it must not fail
+  open.
+- **Live rotation.** Re-run `secret set-oauth2` to rotate the client secret or
+  scopes; the change takes effect **without a restart**. Within a generation the
+  access token auto-refreshes on its TTL.
+- **`client_secret` is write-only** — it never appears in `secret ls`, the
+  `/admin/secrets` API, the console, or any log line.
+
+On-behalf-of (RFC 8693 user-token exchange) is **not** included in this
+release; only the `client_credentials` (service-to-service) grant is supported.
+
 ## Cost metering
 
 Attach dollar prices to models and the platform meters per-turn LLM cost. Add a
@@ -319,5 +370,9 @@ receiver's name. Restart Alertmanager to apply.
 - **Cost** — query `agent_cost_usd_total` and `agent_tokens_total` (both labelled
   `tenant`/`model`) for spend and token burn; `agent_cost_unpriced_total` flags
   models running without a price. See [Cost metering](#cost-metering).
+- **Credential errors** — query `runtime_gateway_credential_errors_total`
+  (labelled `tenant`/`server`) to see gateway tool calls that failed closed
+  because an outbound OAuth2 credential could not be minted. See [OAuth2
+  outbound credentials](#oauth2-outbound-credentials).
 
 For the complete configuration and metrics reference, see [README.md](README.md).
