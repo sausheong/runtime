@@ -211,6 +211,11 @@ func (r restTool) Execute(ctx context.Context, input json.RawMessage) (tool.Tool
 	for k, v := range enriched {
 		req.Header.Set(k, v)
 	}
+	// Per-call oauth2 credential (client_credentials): overwrite any caller/
+	// static header of the same name — an agent can never suppress or spoof it.
+	if ch, cv := CredentialHeaderFrom(ctx); ch != "" {
+		req.Header.Set(ch, cv)
+	}
 	for prop, wireName := range r.headerParams {
 		raw, ok := args[prop]
 		if !ok {
@@ -221,6 +226,9 @@ func (r restTool) Execute(ctx context.Context, input json.RawMessage) (tool.Tool
 		}
 		if _, clash := headerClash(enriched, wireName); clash {
 			return tool.ToolResult{Error: fmt.Sprintf("header %q is set by gateway enrichment and cannot be overridden", wireName)}, nil
+		}
+		if ch, _ := CredentialHeaderFrom(ctx); ch != "" && strings.EqualFold(ch, wireName) {
+			return tool.ToolResult{Error: fmt.Sprintf("header %q is set by the gateway credential and cannot be overridden", wireName)}, nil
 		}
 		req.Header.Set(wireName, scalarString(raw))
 	}

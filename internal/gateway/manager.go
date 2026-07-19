@@ -47,6 +47,7 @@ type Manager struct {
 
 	dial       dialFunc
 	cred       CredentialResolver
+	oauth      *OAuth2Manager
 	minBackoff time.Duration
 	maxBackoff time.Duration
 
@@ -78,6 +79,10 @@ type CredentialResolver func(ctx context.Context, tenant, secretName string) (st
 
 // WithCredentials sets the per-tenant credential resolver used at dial time.
 func WithCredentials(r CredentialResolver) Option { return func(m *Manager) { m.cred = r } }
+
+// WithOAuth2 sets the manager used to mint oauth2 client_credentials tokens.
+// nil ⇒ oauth2 credentials are unavailable (dial fails closed if one is named).
+func WithOAuth2(o *OAuth2Manager) Option { return func(m *Manager) { m.oauth = o } }
 
 // NewManager builds a Manager for the configured servers. Call Start to begin
 // connecting.
@@ -216,17 +221,30 @@ func (m *Manager) dialWith(ctx context.Context, s config.GatewayServer) (upstrea
 	// upstream has no unambiguous secret owner, so injection is skipped — and we
 	// warn if a credential was nonetheless configured, since that combination is
 	// almost certainly a misconfiguration that would otherwise dial with no auth.
-	if s.CredSecret != "" && m.cred != nil {
-		if len(s.Tenants) == 1 {
-			val, err := m.cred(ctx, s.Tenants[0], s.CredSecret)
+	if s.CredSecret != "" && len(s.Tenants) == 1 {
+		tenant := s.Tenants[0]
+		// OAuth2 creds are resolved PER CALL in the REST path (they refresh);
+		// they must never be baked into a dial-time header. They are also
+		// OpenAPI-only: minting has no per-call hook on an MCP-over-HTTP (url:)
+		// session, so refuse to dial such an upstream rather than connect it
+		// unauthenticated (fail closed).
+		if m.oauth != nil && m.oauth.IsOAuth2(ctx, tenant, s.CredSecret) {
+			if transportOf(s) != "openapi" {
+				return nil, fmt.Errorf("gateway: oauth2 credential %q is only valid on an openapi upstream, not %s (%q)",
+					s.CredSecret, transportOf(s), s.Name)
+			}
+			return m.dial(ctx, s) // per-call injection handles auth
+		}
+		if m.cred != nil {
+			val, err := m.cred(ctx, tenant, s.CredSecret)
 			if err != nil {
 				return nil, fmt.Errorf("gateway: resolve credential for upstream %q: %w", s.Name, err)
 			}
 			s = withCredHeader(s, s.CredHeader, val)
-		} else {
-			slog.Warn("gateway: credential configured but upstream is not single-tenant; skipping injection",
-				"server", s.Name, "tenants", len(s.Tenants))
 		}
+	} else if s.CredSecret != "" && m.cred != nil {
+		slog.Warn("gateway: credential configured but upstream is not single-tenant; skipping injection",
+			"server", s.Name, "tenants", len(s.Tenants))
 	}
 	return m.dial(ctx, s)
 }
@@ -446,6 +464,22 @@ func (m *Manager) EnrichFor(toolName string) map[string]string {
 		}
 	}
 	return nil
+}
+
+// CredFor returns the (cred_secret, cred_header) of the upstream serving the
+// given gateway tool name (<server>__<tool>), or ("",""). Names without the
+// "__" separator (e.g. search_tools) never carry a credential.
+func (m *Manager) CredFor(toolName string) (string, string) {
+	srv, _, ok := strings.Cut(toolName, "__")
+	if !ok {
+		return "", ""
+	}
+	for _, u := range m.snapshot() {
+		if u.cfg.Name == srv {
+			return u.cfg.CredSecret, u.cfg.CredHeader
+		}
+	}
+	return "", ""
 }
 
 // Status returns per-upstream state. tenant=="" ⇒ unscoped (all upstreams);

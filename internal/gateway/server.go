@@ -52,6 +52,10 @@ type Handler struct {
 	// after the policy gate, before tenant injection). nil ⇒ quotas off.
 	Quota *quota.Limiter
 
+	// OAuth2 mints per-call client_credentials tokens for oauth2 upstream
+	// credentials. nil ⇒ oauth2 credentials disabled (static path only).
+	OAuth2 *OAuth2Manager
+
 	mu sync.Mutex
 	// cache maps mode-qualified view key → server, rebuilt when the Manager's
 	// generation moves. Replacement semantics: existing MCP sessions keep
@@ -188,11 +192,12 @@ func (h *Handler) serverFor(p identity.Principal, ok bool, mode viewMode) *sdk.S
 	}
 	srv := sdk.NewServer(&sdk.Implementation{Name: "runtime-gateway", Version: "m2"}, nil)
 	for _, t := range h.m.ToolsFor(tenant) {
+		credSecret, credHeader := h.m.CredFor(t.Name())
 		srv.AddTool(&sdk.Tool{
 			Name:        t.Name(),
 			Description: t.Description(),
 			InputSchema: json.RawMessage(t.Parameters()),
-		}, h.toolHandler(key, t, h.m.ForwardsTenant(t.Name()), h.m.EnrichFor(t.Name()), mode))
+		}, h.toolHandler(key, t, h.m.ForwardsTenant(t.Name()), h.m.EnrichFor(t.Name()), credSecret, credHeader, mode))
 	}
 	if mode == modeSearch {
 		srv.AddTool(searchToolDef(), h.searchHandler(key, tenant))
@@ -218,7 +223,7 @@ func (h *Handler) serverFor(p identity.Principal, ok bool, mode viewMode) *sdk.S
 // the tools/call, so a per-request identity middleware upstream of HTTP()
 // is honored here — confirmed by TestServerViewerCannotCall passing via
 // this ctx path (no serverFor-time fallback needed).
-func (h *Handler) toolHandler(builtFor string, t tool.Tool, forwardTenant bool, enrich map[string]string, mode viewMode) sdk.ToolHandler {
+func (h *Handler) toolHandler(builtFor string, t tool.Tool, forwardTenant bool, enrich map[string]string, credSecret, credHeader string, mode viewMode) sdk.ToolHandler {
 	return func(ctx context.Context, req *sdk.CallToolRequest) (*sdk.CallToolResult, error) {
 		p, ok := h.PrincipalFor(ctx)
 		callerBase, _ := principalView(p, ok)
@@ -297,6 +302,25 @@ func (h *Handler) toolHandler(builtFor string, t tool.Tool, forwardTenant bool, 
 		// enrich ⇒ nil ⇒ ctx unchanged. Done BEFORE StartSpan so uctx inherits it.
 		if enriched := ResolveEnrichedHeaders(enrich, p, ok); enriched != nil {
 			ctx = WithEnrichedHeaders(ctx, enriched)
+		}
+		// Gate #5: per-call oauth2 credential. Resolved on the calling
+		// principal's tenant, minted (cached/refreshed) by OAuth2Manager,
+		// and attached to ctx for the REST adapter to stamp into cred_header.
+		// FAIL CLOSED: a mint failure rejects the call — never send the
+		// request without the credential. Static creds (applies=false) were
+		// already injected at dial and need nothing here. Superuser/open mode
+		// (no tenant) cannot own a tenant-scoped oauth2 cred, so skip.
+		if h.OAuth2 != nil && credSecret != "" && ok && !p.Superuser {
+			value, applies, cerr := h.OAuth2.Bearer(ctx, p.TenantID, credSecret)
+			if applies {
+				if cerr != nil {
+					h.Metrics.CredentialError(p.TenantID, serverName)
+					slog.Warn("gateway credential unavailable",
+						"tenant", p.TenantID, "server", serverName, "cred", credSecret)
+					return errResult("credential unavailable: " + credSecret), nil
+				}
+				ctx = WithCredentialHeader(ctx, credHeader, value)
+			}
 		}
 		start := time.Now()
 		uctx, uspan := obs.StartSpan(ctx, "gateway.upstream",

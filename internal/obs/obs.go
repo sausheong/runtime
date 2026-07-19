@@ -29,24 +29,25 @@ var turnBuckets = []float64{0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60, 120}
 // ControlMetrics is runtimed's registry: HTTP edge, agent supervision,
 // reverse proxy, gateway federation, and fan-out scrape bookkeeping.
 type ControlMetrics struct {
-	reg             *prometheus.Registry
-	httpRequests    *prometheus.CounterVec
-	httpDuration    *prometheus.HistogramVec
-	agentUp         *prometheus.GaugeVec
-	agentReachable  *prometheus.GaugeVec
-	agentRestarts   *prometheus.CounterVec
-	proxyErrors     *prometheus.CounterVec
-	agentProxyCalls *prometheus.CounterVec
-	gwCalls         *prometheus.CounterVec
-	gwDuration      *prometheus.HistogramVec
-	gwUp            *prometheus.GaugeVec
-	scrapeSkips     *prometheus.CounterVec
-	asDesired       *prometheus.GaugeVec
-	asCurrent       *prometheus.GaugeVec
-	asActive        *prometheus.GaugeVec
-	asEvents        *prometheus.CounterVec
-	policyDecisions *prometheus.CounterVec
-	quotaRejections *prometheus.CounterVec
+	reg              *prometheus.Registry
+	httpRequests     *prometheus.CounterVec
+	httpDuration     *prometheus.HistogramVec
+	agentUp          *prometheus.GaugeVec
+	agentReachable   *prometheus.GaugeVec
+	agentRestarts    *prometheus.CounterVec
+	proxyErrors      *prometheus.CounterVec
+	agentProxyCalls  *prometheus.CounterVec
+	gwCalls          *prometheus.CounterVec
+	gwDuration       *prometheus.HistogramVec
+	gwUp             *prometheus.GaugeVec
+	scrapeSkips      *prometheus.CounterVec
+	asDesired        *prometheus.GaugeVec
+	asCurrent        *prometheus.GaugeVec
+	asActive         *prometheus.GaugeVec
+	asEvents         *prometheus.CounterVec
+	policyDecisions  *prometheus.CounterVec
+	quotaRejections  *prometheus.CounterVec
+	credentialErrors *prometheus.CounterVec
 }
 
 func NewControlMetrics() *ControlMetrics {
@@ -124,9 +125,14 @@ func NewControlMetrics() *ControlMetrics {
 		Name: "runtime_gateway_quota_rejections_total",
 		Help: "Gateway tool calls rejected by a rate quota, by tenant and upstream server.",
 	}, []string{"tenant", "server"})
+	c.credentialErrors = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "runtime_gateway_credential_errors_total",
+		Help: "Gateway tool calls failed closed because an outbound credential could not be minted, by tenant and upstream server.",
+	}, []string{"tenant", "server"})
 	c.reg.MustRegister(c.httpRequests, c.httpDuration, c.agentUp, c.agentReachable, c.agentRestarts,
 		c.proxyErrors, c.agentProxyCalls, c.gwCalls, c.gwDuration, c.gwUp, c.scrapeSkips,
-		c.asDesired, c.asCurrent, c.asActive, c.asEvents, c.policyDecisions, c.quotaRejections)
+		c.asDesired, c.asCurrent, c.asActive, c.asEvents, c.policyDecisions, c.quotaRejections,
+		c.credentialErrors)
 	return c
 }
 
@@ -287,6 +293,15 @@ func (c *ControlMetrics) QuotaRejection(tenant, server string) {
 		return
 	}
 	c.quotaRejections.WithLabelValues(tenant, server).Inc()
+}
+
+// CredentialError counts one fail-closed gateway call (an outbound credential
+// could not be minted), by tenant and upstream server. Nil-safe.
+func (c *ControlMetrics) CredentialError(tenant, server string) {
+	if c == nil {
+		return
+	}
+	c.credentialErrors.WithLabelValues(tenant, server).Inc()
 }
 
 // AgentMetrics is agentd's registry. Every series carries agent=<id> so the
