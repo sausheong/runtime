@@ -19,6 +19,7 @@ import (
 	hrt "github.com/sausheong/harness/runtime"
 	"github.com/sausheong/harness/session"
 	"github.com/sausheong/runtime/internal/config"
+	"github.com/sausheong/runtime/internal/identity"
 	"github.com/sausheong/runtime/internal/memory"
 	"github.com/sausheong/runtime/internal/obs"
 	"github.com/sausheong/runtime/internal/store"
@@ -60,6 +61,15 @@ type Manager struct {
 	// verdicts recovered sessions compute. Reconfiguring across a restart may
 	// therefore terminate recovered in-flight sessions with status "error".
 	limits config.Limits
+
+	// assertions bridges the caller's raw verified OIDC JWT from POST /sessions
+	// (which has the HTTP request) to sessionWorkflow (which does not — the DBOS
+	// workflow ctx is not the request ctx). Keyed by sessionID; stored BEFORE
+	// RunWorkflow, loaded once in the workflow, deleted on workflow exit. The JWT
+	// is a bearer secret: ephemeral, request-scoped, NEVER checkpointed/persisted
+	// (not on turnInput). On a fresh-process replay the map is empty ⇒ callerJWT
+	// "" ⇒ downstream OBO fails closed, by design.
+	assertions sync.Map // sessionID -> raw caller JWT
 
 	mu          sync.Mutex
 	subscribers map[string][]chan WireEvent // sessionID -> live SSE subscribers
@@ -212,6 +222,16 @@ func (m *Manager) failLimit(wfID, limit string, observed, configured int64) stri
 func (m *Manager) sessionWorkflow(ctx dbos.DBOSContext, in turnInput) (string, error) {
 	wfID, _ := dbos.GetWorkflowID(ctx)
 
+	// callerJWT is the caller's raw verified OIDC JWT, bridged out-of-band from
+	// startSession via m.assertions (never on the checkpointed turnInput). Loaded
+	// once here and deleted on workflow exit; empty on a fresh-process replay
+	// (the map does not survive a restart) ⇒ downstream OBO fails closed.
+	var callerJWT string
+	if v, ok := m.assertions.Load(wfID); ok {
+		callerJWT, _ = v.(string)
+	}
+	defer m.assertions.Delete(wfID)
+
 	// canonical is the authoritative session, rebuilt turn-by-turn from each
 	// turn step's checkpointed entries. It is mutated ONLY by applyEntries
 	// below — never by RunTurn — so live execution and replay produce
@@ -329,7 +349,9 @@ func (m *Manager) sessionWorkflow(ctx dbos.DBOSContext, in turnInput) (string, e
 				defer cancel()
 			}
 			start := time.Now()
-			tr, terr := rt.RunTurn(memory.WithActor(runCtx, in.Subject), userMsg, images, nil) // headless (emit=nil); actor on ctx for the memory tool + recall path
+			actorCtx := memory.WithActor(runCtx, in.Subject)
+			actorCtx = identity.WithAssertion(actorCtx, callerJWT) // caller JWT for OBO; no-ops when "" (e.g. replay); never checkpointed
+			tr, terr := rt.RunTurn(actorCtx, userMsg, images, nil) // headless (emit=nil); actor on ctx for the memory tool + recall path
 			elapsed := time.Since(start)
 			// Harness v0.3.2 contract: RunTurn returns a nil error on EVERY
 			// path — failures ride TurnResult (StopReason "aborted" on ctx
@@ -432,15 +454,22 @@ func (m *Manager) sessionWorkflow(ctx dbos.DBOSContext, in turnInput) (string, e
 // with the session id as the stable DBOS workflow id. requestID is the
 // originating POST's X-Request-ID, carried into the checkpointed workflow
 // input for log correlation.
-func (m *Manager) startSession(ctx context.Context, userMsg, imageB64, imageMime, requestID, subject, tenant, role string) (string, error) {
+func (m *Manager) startSession(ctx context.Context, userMsg, imageB64, imageMime, requestID, subject, tenant, role, assertion string) (string, error) {
 	sessionID, err := m.st.CreateSession(ctx, m.agentID, m.replica)
 	if err != nil {
 		return "", err
+	}
+	// Bridge the caller JWT to sessionWorkflow out-of-band, BEFORE RunWorkflow so
+	// the workflow can Load it. It is NEVER placed on turnInput (checkpointed);
+	// it is an ephemeral bearer secret deleted when the workflow exits.
+	if assertion != "" {
+		m.assertions.Store(sessionID, assertion)
 	}
 	in := turnInput{UserMsg: userMsg, ImageB64: imageB64, ImageMime: imageMime,
 		RequestID: requestID, StartedAt: time.Now().UTC(),
 		Subject: subject, Tenant: tenant, Role: role}
 	if _, err := dbos.RunWorkflow(m.dbosCtx, m.sessionWorkflow, in, dbos.WithWorkflowID(sessionID)); err != nil {
+		m.assertions.Delete(sessionID) // workflow never started ⇒ its defer won't clean up; don't leak the secret
 		return "", err
 	}
 	return sessionID, nil

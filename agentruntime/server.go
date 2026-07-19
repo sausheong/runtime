@@ -24,6 +24,18 @@ func readForwardedIdentity(r *http.Request, on bool) (subject, tenant, role stri
 	return r.Header.Get(rheader.User), r.Header.Get(rheader.Tenant), r.Header.Get(rheader.Role)
 }
 
+// readAssertion reads the caller's forwarded verified OIDC JWT
+// (X-Runtime-Assertion) set by the control-plane edge for OBO. Gated by the same
+// RUNTIME_SUBJECT_FORWARDING flag as the identity trio: off ⇒ "" regardless of
+// any inbound header. The JWT is a bearer secret — request-scoped only, never
+// checkpointed, never logged.
+func readAssertion(r *http.Request, on bool) string {
+	if !on {
+		return ""
+	}
+	return r.Header.Get(rheader.Assertion)
+}
+
 // maxSessionBodyBytes bounds the only agent-contract request that can carry
 // inline binary data. Sixteen MiB leaves room for a roughly 12 MiB source image
 // after base64 expansion while preventing an unauthenticated/local agent port
@@ -117,7 +129,8 @@ func (m *Manager) newMux() *http.ServeMux {
 			return
 		}
 		subject, tenant, role := readForwardedIdentity(r, m.subjectForwarding)
-		id, err := m.startSession(r.Context(), body.Message, body.ImageB64, body.ImageMime, obs.RequestIDFromContext(r.Context()), subject, tenant, role)
+		assertion := readAssertion(r, m.subjectForwarding)
+		id, err := m.startSession(r.Context(), body.Message, body.ImageB64, body.ImageMime, obs.RequestIDFromContext(r.Context()), subject, tenant, role, assertion)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
