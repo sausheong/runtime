@@ -44,6 +44,7 @@ type ControlMetrics struct {
 	asCurrent       *prometheus.GaugeVec
 	asActive        *prometheus.GaugeVec
 	asEvents        *prometheus.CounterVec
+	policyDecisions *prometheus.CounterVec
 }
 
 func NewControlMetrics() *ControlMetrics {
@@ -113,9 +114,13 @@ func NewControlMetrics() *ControlMetrics {
 		Name: "runtime_autoscale_events_total",
 		Help: "Autoscale actions by agent and action (up/down/undrain/reap/blocked).",
 	}, []string{"agent", "action"})
+	c.policyDecisions = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "runtime_gateway_policy_decisions_total",
+		Help: "Gateway policy decisions, by tenant and decision (allow/deny/error).",
+	}, []string{"tenant", "decision"})
 	c.reg.MustRegister(c.httpRequests, c.httpDuration, c.agentUp, c.agentReachable, c.agentRestarts,
 		c.proxyErrors, c.agentProxyCalls, c.gwCalls, c.gwDuration, c.gwUp, c.scrapeSkips,
-		c.asDesired, c.asCurrent, c.asActive, c.asEvents)
+		c.asDesired, c.asCurrent, c.asActive, c.asEvents, c.policyDecisions)
 	return c
 }
 
@@ -259,6 +264,15 @@ func (c *ControlMetrics) AutoscaleEvent(agent, action string) {
 		return
 	}
 	c.asEvents.WithLabelValues(agent, action).Inc()
+}
+
+// PolicyDecision records one gateway policy evaluation outcome by tenant and
+// decision (allow/deny/error).
+func (c *ControlMetrics) PolicyDecision(tenant, decision string) {
+	if c == nil {
+		return
+	}
+	c.policyDecisions.WithLabelValues(tenant, decision).Inc()
 }
 
 // AgentMetrics is agentd's registry. Every series carries agent=<id> so the

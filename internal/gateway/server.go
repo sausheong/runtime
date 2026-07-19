@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
 	"sync"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/sausheong/runtime/internal/identity"
 	"github.com/sausheong/runtime/internal/obs"
+	"github.com/sausheong/runtime/internal/policy"
 )
 
 // Handler serves the federated tool set over MCP Streamable HTTP plus the
@@ -39,6 +41,11 @@ type Handler struct {
 
 	// Metrics (nil-safe) records federated tool calls. Set once before serving.
 	Metrics *obs.ControlMetrics
+
+	// Policy, when non-nil, evaluates every cataloged tool call (gate #3,
+	// after the view and role gates) against the Cedar engine. nil ⇒ policy
+	// enforcement off — behavior identical to pre-policy builds.
+	Policy *policy.Engine
 
 	mu sync.Mutex
 	// cache maps mode-qualified view key → server, rebuilt when the Manager's
@@ -180,7 +187,7 @@ func (h *Handler) serverFor(p identity.Principal, ok bool, mode viewMode) *sdk.S
 			Name:        t.Name(),
 			Description: t.Description(),
 			InputSchema: json.RawMessage(t.Parameters()),
-		}, h.toolHandler(key, t, h.m.ForwardsTenant(t.Name())))
+		}, h.toolHandler(key, t, h.m.ForwardsTenant(t.Name()), mode))
 	}
 	if mode == modeSearch {
 		srv.AddTool(searchToolDef(), h.searchHandler(key, tenant))
@@ -206,7 +213,7 @@ func (h *Handler) serverFor(p identity.Principal, ok bool, mode viewMode) *sdk.S
 // the tools/call, so a per-request identity middleware upstream of HTTP()
 // is honored here — confirmed by TestServerViewerCannotCall passing via
 // this ctx path (no serverFor-time fallback needed).
-func (h *Handler) toolHandler(builtFor string, t tool.Tool, forwardTenant bool) sdk.ToolHandler {
+func (h *Handler) toolHandler(builtFor string, t tool.Tool, forwardTenant bool, mode viewMode) sdk.ToolHandler {
 	return func(ctx context.Context, req *sdk.CallToolRequest) (*sdk.CallToolResult, error) {
 		p, ok := h.PrincipalFor(ctx)
 		callerBase, _ := principalView(p, ok)
@@ -216,6 +223,39 @@ func (h *Handler) toolHandler(builtFor string, t tool.Tool, forwardTenant bool) 
 		}
 		if ok && !p.Superuser && p.Role == identity.RoleViewer {
 			return errResult("forbidden: role viewer cannot call tools (requires operator)"), nil
+		}
+		// Gate #3: deterministic Cedar policy. Runs on the caller's raw
+		// arguments BEFORE injectTenant, so policies see what the agent sent,
+		// never the platform-injected tenant. nil engine ⇒ enforcement off.
+		if h.Policy != nil {
+			tenantLabel := "open"
+			if ok {
+				tenantLabel = p.TenantID
+				if p.Superuser {
+					tenantLabel = "superuser"
+				}
+			}
+			d := h.Policy.Evaluate(ctx, policy.Request{
+				Principal: p, OK: ok, ToolName: t.Name(),
+				Args: req.Params.Arguments, Mode: string(mode),
+			})
+			if !d.Allow {
+				decision := "deny"
+				msg := "forbidden by policy: " + d.PolicyID
+				if d.Err != nil {
+					decision = "error"
+					msg = "forbidden by policy: evaluation error"
+				}
+				h.Metrics.PolicyDecision(tenantLabel, decision)
+				// Audit: the deny is the actionable event. Never log argument
+				// values or policy text.
+				slog.Warn("gateway policy deny",
+					"tenant", tenantLabel, "subject", p.Subject,
+					"tool", t.Name(), "policy_id", d.PolicyID,
+					"decision", decision, "err", d.Err)
+				return errResult(msg), nil
+			}
+			h.Metrics.PolicyDecision(tenantLabel, "allow")
 		}
 		args := req.Params.Arguments
 		if forwardTenant {
