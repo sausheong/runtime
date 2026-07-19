@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"os"
 	"strconv"
 	"strings"
@@ -149,7 +150,11 @@ func wireGateway(cfg *agentruntime.Config, d Deps) {
 	if d.GatewayURL == "" {
 		return
 	}
-	s := hmcp.ServerConfig{Name: "gateway", URL: d.GatewayURL}
+	s := hmcp.ServerConfig{
+		Name:       "gateway",
+		URL:        d.GatewayURL,
+		HTTPClient: &http.Client{Transport: assertionRoundTripper{base: http.DefaultTransport}},
+	}
 	if d.GatewayKey != "" {
 		s.Headers = map[string]string{"Authorization": "Bearer " + d.GatewayKey}
 	}
