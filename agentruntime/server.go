@@ -118,13 +118,16 @@ func (m *Manager) newMux() *http.ServeMux {
 			return
 		}
 		type sessOut struct {
-			ID        string `json:"id"`
-			Status    string `json:"status"`
-			TurnCount int    `json:"turn_count"`
+			ID          string  `json:"id"`
+			Status      string  `json:"status"`
+			TurnCount   int     `json:"turn_count"`
+			TokensTotal int64   `json:"tokens_total"`
+			CostUSD     float64 `json:"cost_usd"`
 		}
 		out := make([]sessOut, 0, len(rows))
 		for _, s := range rows {
-			out = append(out, sessOut{ID: s.ID, Status: s.Status, TurnCount: s.TurnCount})
+			out = append(out, sessOut{ID: s.ID, Status: s.Status, TurnCount: s.TurnCount,
+				TokensTotal: s.TokensTotal, CostUSD: s.CostUSD})
 		}
 		_ = json.NewEncoder(w).Encode(out)
 	})
@@ -220,6 +223,7 @@ func (m *Manager) newMux() *http.ServeMux {
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"id": row.ID, "status": row.Status, "turn_count": row.TurnCount,
+			"tokens_total": row.TokensTotal, "cost_usd": row.CostUSD,
 		})
 	})
 	return mux

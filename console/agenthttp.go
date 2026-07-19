@@ -19,11 +19,13 @@ import (
 
 // sessionRow mirrors one element of the agent runtime's GET /sessions response.
 type sessionRow struct {
-	ID          string `json:"id"`
-	Status      string `json:"status"`
-	TurnCount   int    `json:"turn_count"`
-	CompletedAt string `json:"completed_at"` // RFC3339 UTC, empty if still running
-	DurationMs  *int   `json:"duration_ms"`  // nil if still running
+	ID          string  `json:"id"`
+	Status      string  `json:"status"`
+	TurnCount   int     `json:"turn_count"`
+	TokensTotal int64   `json:"tokens_total"` // cumulative tokens (metering)
+	CostUSD     float64 `json:"cost_usd"`     // cumulative dollar cost (metering)
+	CompletedAt string  `json:"completed_at"` // RFC3339 UTC, empty if still running
+	DurationMs  *int    `json:"duration_ms"`  // nil if still running
 }
 
 // eventRow mirrors one element of the agent runtime's GET /sessions/{id}/events
@@ -60,6 +62,7 @@ type AgentMetrics struct {
 	TurnsByOutcome           map[string]int64 // e.g. {"completed":3,"error":1}
 	TurnCount                int64            // agent_turn_duration_seconds_count
 	TurnSumSeconds           float64          // agent_turn_duration_seconds_sum
+	CostUSD                  float64          // sum of agent_cost_usd_total across all series
 }
 
 // TurnsCompleted / TurnsError are template conveniences (maps are awkward in
@@ -172,6 +175,11 @@ func parseAgentMetrics(r io.Reader) (AgentMetrics, error) {
 			case "cache_read":
 				m.CacheRead += v
 			}
+		}
+	}
+	if f := fams["agent_cost_usd_total"]; f != nil {
+		for _, metric := range f.Metric {
+			m.CostUSD += metric.GetCounter().GetValue()
 		}
 	}
 	if f := fams["agent_tool_calls_total"]; f != nil {

@@ -72,6 +72,25 @@ func TestListSessionsEndpoint(t *testing.T) {
 	}
 }
 
+func TestSessionListIncludesUsage(t *testing.T) {
+	st := store.NewMemStore()
+	id, _ := st.CreateSession(context.Background(), "a1", 0)
+	_ = st.SetSessionUsage(context.Background(), id, 1234, 0.99)
+	m := &Manager{agentID: "a1", st: st, subscribers: map[string][]chan WireEvent{}}
+
+	req := httptest.NewRequest("GET", "/sessions", nil)
+	rec := httptest.NewRecorder()
+	m.handler().ServeHTTP(rec, req)
+
+	var out []map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	if len(out) != 1 || out[0]["tokens_total"].(float64) != 1234 || out[0]["cost_usd"].(float64) != 0.99 {
+		t.Fatalf("session list missing usage: %v", out)
+	}
+}
+
 func TestCreateSessionRejectsOversizedBody(t *testing.T) {
 	m := newTestManager()
 	srv := httptest.NewServer(m.newMux())
