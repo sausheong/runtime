@@ -727,7 +727,7 @@ The summary is regenerated on **every completed turn**, so it costs one extra
 summarization LLM call per turn — a known M1 cost; smarter cadence
 (regenerate-when-warranted) is a future optimization. It is **best-effort**: a
 summarizer failure or an empty digest skips the write and never breaks a turn.
-The metric `agent_memory_summary_writes_total` counts summary writes.
+The counter `agent_memory_summary_writes_total` is registered for summary writes; its emission hook is wired in a later milestone (it currently reports 0).
 
 ### Open mode & backward compatibility
 
@@ -1217,7 +1217,7 @@ reserved for it):
 | `agent_cost_unpriced_total` | `agent,tenant,model` | Turns whose model has no price entry — a cost blind spot; alertable via `UnpricedModelUsage`. |
 | `agent_tool_calls_total` | `agent,tool` | Tool calls dispatched by the agent loop. |
 | `agent_session_limit_hits_total` | `agent,limit` | Sessions terminated by `turn_timeout`, `session_timeout`, `max_turns`, or `max_tokens`. |
-| `agent_memory_summary_writes_total` | `agent,tenant,model` | Rolling per-session memory summaries written (one per completed turn when the summary strategy is enabled). |
+| `agent_memory_summary_writes_total` | `agent,tenant,model` | Rolling per-session summaries written. Registered in M1; the write hook is wired in a later milestone (currently reports 0). |
 
 ### Fan-out, auth, and cardinality
 
