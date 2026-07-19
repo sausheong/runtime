@@ -184,6 +184,12 @@ a partially completed run, unlike Go agents' DBOS-backed per-turn durability —
 process killed during a run loses that in-flight turn (its prior sessions and
 completed events remain intact).
 
+**Lifecycle limits are adapter-owned.** This shim does not currently consume
+the native runtime's `RUNTIME_AGENT_LIMITS` payload. Bound turn duration,
+session duration, turns, or tokens in the SDK, adapter, container, or process
+supervisor. `limit_exceeded` remains a valid terminal contract status for a
+foreign implementation that adds those controls.
+
 ## A note on trust
 
 A library consumer trusts the **loopback proxy** — it expects to be reached only

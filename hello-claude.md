@@ -514,11 +514,13 @@ sessions, and the tool-use/token metrics card.
 - **Security**: the agent enforces no bearer — it trusts that only the control
   plane reaches its port (network firewall). Platform auth is at the
   control-plane edge (the service key), not the agent.
+- **Lifecycle limits**: the Python shim does not consume native
+  `RUNTIME_AGENT_LIMITS`; configure time, turn, and token bounds in the Claude
+  SDK adapter or the container/process supervisor.
 
 ## References (in this repo)
 
 - Working example: `examples/hello-claude/` (the source this guide mirrors)
-- SDK-agnostic deploy path: `docs/deploying-sdk-agents.md`
-- Full GCP walkthrough (VPC, firewall, VMs): `deploy/gcp/README.md`
-- Using the deployed runtime (keys, roles, invoke): `deploy/gcp/USING.md`
-- Tenant onboarding + roles: `docs/tenant-guide.md`
+- SDK-agnostic deploy path: `deploying-sdk-agents.md`
+- Reusable GCP deployment assets: `deploy/gcp/`
+- Runtime access, roles, and tenant setup: `tenant-guide.md`

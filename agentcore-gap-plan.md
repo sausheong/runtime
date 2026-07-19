@@ -1,12 +1,28 @@
 # AgentCore Gap-Closure Plan (post-v1.0)
 
-**Date:** 2026-07-18
+**Date:** 2026-07-18 (updated 2026-07-19)
 **Input:** gap analysis of `agentcore.md` vs the shipped v1.0 platform.
 **Scope decision:** Payments (x402) is explicitly OUT — not needed for an
 on-prem platform.
 **Convention:** each milestone below is its own brainstorm → spec → plan →
 execute cycle (the M1–M3 flow). This doc is the prioritized parking lot; specs
 land in `docs/superpowers/specs/` as each item starts.
+
+## Status (2026-07-19)
+
+Phase P1 "Guarded" — 2 of 3 items complete, both READY TO MERGE:
+
+- **P1.2 Lifecycle guardrails — DONE.** turn/session timeouts, max_turns,
+  max_tokens enforced durably in `agentruntime`; terminal status
+  `limit_exceeded`; metric `agent_session_limit_hits_total`. Branch
+  `p1.2-lifecycle-guardrails`.
+- **P1.1 Cedar policy engine (M1+M2) — DONE.** Deterministic per-tool-call
+  authorization at the gateway (cedar-go): permit-by-default, platform
+  (file) + tenant (DB) layers, `/admin/policies` + CLI + console CRUD,
+  metric `runtime_gateway_policy_decisions_total`. Branch
+  `p1.1-cedar-policy` (contains P1.2). A final review caught + fixed a real
+  `__entity`-escape authorization bypass — see the spec.
+- **P1.3 Metering + alerting — NEXT.**
 
 ## Prioritization principles
 

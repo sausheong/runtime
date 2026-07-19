@@ -1,6 +1,6 @@
 # OpenAI Agents SDK — SG Nutrition Investigator (image input)
 
-Idiomatic [OpenAI Agents SDK](https://openai.github.io/openai-agents-python/) implementation of the agent in [`../specs.md`](../specs.md). The agent is given a **photo of a nutrition label**; the model's own vision reads the product name, additives, and sugar/saturated-fat values, then runs the SFA additive, HCS, and Nutri-Grade tools. There is no Open Food Facts lookup — the image is the sole source of truth.
+Idiomatic [OpenAI Agents SDK](https://openai.github.io/openai-agents-python/) implementation of the SG Nutrition Investigator. The agent is given a **photo of a nutrition label**; the model's own vision reads the product name, additives, and sugar/saturated-fat values, then runs the SFA additive, HCS, and Nutri-Grade tools. There is no Open Food Facts lookup — the image is the sole source of truth.
 
 ## Run
 
@@ -27,9 +27,7 @@ loaded with `override=True`, so it wins over any stray `OPENAI_*` in your shell.
 
 ## Additive data
 
-`check_sfa_additive` resolves against the **full SFA permitted-additives list** (~540 entries, ~270 with E-numbers) in `sfa_additives.json`, parsed from the official SFA PDF by [`../build_additives.py`](../build_additives.py). Lookups work by E-number, INS number, or name. At load time the demo builds a normalised alias index (dropping parentheticals and stereo markers, so "monosodium glutamate" matches the PDF's "Monosodium L- glutamate") and indexes both E- and INS-numbers (incl. base numbers, so "500" finds "500(ii)") — making ~110 number-only entries like the phosphates findable. A tiny map covers true colloquialisms absent from the PDF (MSG, vitamin C, baking soda). The prompt also nudges the vision model to pass an E-number when the label only prints a name, since number lookups are most reliable. A handful of consumer-relevant warnings (benzene/Vitamin C interaction, PKU/phenylalanine, etc.) are overlaid on top, since the PDF's own "Notes" column only records "GMP"/"*". Additives not in the list return an honest "not found — worth noting" rather than assuming permitted.
-
-To regenerate: `uv run --with pdfplumber python ../build_additives.py`.
+`check_sfa_additive` resolves against the **full SFA permitted-additives list** (~540 entries, ~270 with E-numbers) in `sfa_additives.json`, derived from the official SFA data. Lookups work by E-number, INS number, or name. At load time the demo builds a normalised alias index (dropping parentheticals and stereo markers, so "monosodium glutamate" matches the source's "Monosodium L- glutamate") and indexes both E- and INS-numbers (including base numbers, so "500" finds "500(ii)") — making number-only entries like the phosphates findable. A small map covers true colloquialisms absent from the source (MSG, vitamin C, baking soda). The prompt also nudges the vision model to pass an E-number when the label only prints a name, since number lookups are most reliable. A handful of consumer-relevant warnings (benzene/Vitamin C interaction, PKU/phenylalanine, etc.) are overlaid on top. Additives not in the list return an honest "not found — worth noting" rather than assuming permitted.
 
 ## Memory & learning (across runs)
 

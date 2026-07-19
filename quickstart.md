@@ -46,5 +46,6 @@ otel-collector, jaeger). Then:
 | Grafana (metrics) | http://localhost:3000 |
 | Jaeger (traces) | http://localhost:16686 |
 
-Next: **[Operator guide](operator-guide.md)** to log in, then
-**[Tenant guide](tenant-guide.md)** to onboard a tenant and run agents.
+Next: read the **[Operator guide](operator-guide.md)** to log in and set safe
+defaults, then the **[Tenant guide](tenant-guide.md)** to onboard a tenant and
+run agents. For the architectural tour, see **[What Runtime is](runtime.md)**.

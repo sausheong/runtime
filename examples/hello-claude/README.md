@@ -102,9 +102,8 @@ cd ~/deploy/control-plane && sudo docker compose up -d --force-recreate runtimed
 It logs `monitoring remote agent  agent=hello-claude  url=http://10.10.0.4:8080`,
 and the agent appears in `GET /agents` and the console.
 
-> The full GCP walkthrough (VPC, firewall, the VMs) is in
-> [`../../deploy/gcp/README.md`](../../deploy/gcp/README.md); the SDK-agnostic
-> deploy path is in [Deploying SDK agents](../../docs/deploying-sdk-agents.md).
+> For a reusable, SDK-agnostic production path, see
+> [Deploying SDK agents](../../deploying-sdk-agents.md).
 
 ## Exercise it through the remote control plane
 

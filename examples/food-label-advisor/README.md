@@ -248,8 +248,6 @@ returns `not found`. A `viewer` key returns `403` on `POST /sessions`.
 
 ## References
 
-- [`instruction.md`](../../instruction.md) — machine-readable build spec for Claude Agent SDK agents on runtime
 - [`hello-claude.md`](../../hello-claude.md) — human tutorial: write + deploy a Claude SDK agent
 - [`contrib/shims/python/README.md`](../../contrib/shims/python/README.md) — shim internals and `AgentAdapter` protocol
 - [`deploy/gcp/agent-food-label/`](../../deploy/gcp/agent-food-label/) — Dockerfile, compose file, `.env.example`
-- [`deploy/gcp/USING.md`](../../deploy/gcp/USING.md) — keys, roles, invoke patterns for the live deployment

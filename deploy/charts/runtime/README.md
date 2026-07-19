@@ -176,8 +176,15 @@ part of `runtime.yaml`, **not** a secret env var.
 ```yaml
 config:
   agents:
-    - name: my-agent
+    - id: my-agent
+      name: My Agent
       model: anthropic/claude-...
+      listen_addr: 127.0.0.1:8101
+      limits:
+        turn_timeout: 2m
+        session_timeout: 30m
+        max_turns: 50
+        max_tokens: 200000
   # gateway:
   #   servers: []
   # tokens: ["..."]   # dev only
@@ -360,6 +367,12 @@ In this mode each agent entry takes `id`, `name`, `model`, and optionally
 `tenant`, `replicas` (pod count, default 1), `memory`, `gateway`. Do **not** set
 `listen_addr` or `url` — the chart generates the per-ordinal url and wires
 runtimed's `runtime.yaml` to attach.
+
+**Known limitation — lifecycle limits.** Per-agent `limits:` are supported in
+monolith mode, where `config` is rendered verbatim. The generated remote-agent
+entries in `perAgentPods` mode do not yet carry that block, so configure bounds
+inside the agent pod until the chart forwards limits through the registration
+handshake.
 
 **Scaling.** `kubectl scale statefulset <release>-agent-<id> --replicas=N` *down*
 is handled live: runtimed skips ordinals whose health probe fails. Scaling *up*

@@ -14,8 +14,8 @@ Two complete worked agents ship in the repo and are the templates to copy:
 
 | SDK | Directory |
 |---|---|
-| OpenAI Agents SDK | [`examples/nutrition-label-openai/`](../examples/nutrition-label-openai) |
-| Claude Agent SDK | [`examples/nutrition-label-claude/`](../examples/nutrition-label-claude) |
+| OpenAI Agents SDK | [`examples/nutrition-label-openai/`](examples/nutrition-label-openai) |
+| Claude Agent SDK | [`examples/nutrition-label-claude/`](examples/nutrition-label-claude) |
 
 The deployment mechanism is **identical** for both; only the adapter differs.
 
@@ -34,7 +34,7 @@ Runtime supervises any process that serves these endpoints over HTTP:
 | `POST /sessions/{id}/messages` | follow-up turn (shim extension) |
 
 You do **not** implement these yourself. The
-[`runtime_contract`](../contrib/shims/python) library
+[`runtime_contract`](contrib/shims/python) library
 (`contrib/shims/python`) is a framework-agnostic FastAPI app that serves all of
 them — persistence, SSE fan-out, `?since=N` replay, and the terminal
 `done`/`error` event. You write exactly two things:
@@ -86,9 +86,9 @@ class MyAdapter:
 ```
 
 Real adapters to copy:
-[`nutrition-label-openai/adapter.py`](../examples/nutrition-label-openai/adapter.py)
+[`nutrition-label-openai/adapter.py`](examples/nutrition-label-openai/adapter.py)
 (OpenAI Agents SDK — `Runner` + `SQLiteSession` + typed `output_type`) and
-[`nutrition-label-claude/adapter.py`](../examples/nutrition-label-claude/adapter.py)
+[`nutrition-label-claude/adapter.py`](examples/nutrition-label-claude/adapter.py)
 (Claude Agent SDK — `query()` with `resume=`, MCP tools, built-ins disabled).
 
 **Image input** arrives as `images: Sequence[Image]` (`.mime` + `.data` bytes);
@@ -111,7 +111,7 @@ serve(MyAdapter)   # reads RUNTIME_* from env; builds Store + app + uvicorn
 `make(db_path) -> AgentAdapter`. A class whose constructor takes `db_path` is
 itself a factory, so `serve(MyAdapter)` works directly and lets the adapter
 share `RUNTIME_SHIM_DB` with the contract store. See
-[`nutrition-label-openai/serve.py`](../examples/nutrition-label-openai/serve.py).
+[`nutrition-label-openai/serve.py`](examples/nutrition-label-openai/serve.py).
 
 ### The config entry
 
@@ -176,8 +176,8 @@ Two bundles ship as templates — copy whichever matches your SDK:
 
 | SDK | Bundle | Env | Port |
 |---|---|---|---|
-| OpenAI Agents SDK | [`deploy/gcp/agent-python/`](../deploy/gcp/agent-python) | `OPENAI_*` | 8302 |
-| Claude Agent SDK | [`deploy/gcp/agent-claude/`](../deploy/gcp/agent-claude) | `ANTHROPIC_*` | 8080 |
+| OpenAI Agents SDK | [`deploy/gcp/agent-python/`](deploy/gcp/agent-python) | `OPENAI_*` | 8302 |
+| Claude Agent SDK | [`deploy/gcp/agent-claude/`](deploy/gcp/agent-claude) | `ANTHROPIC_*` | 8080 |
 
 > **Claude Agent SDK specifics.** The SDK bundles its CLI inside the platform
 > wheel (`claude_agent_sdk-*-manylinux_2_17_x86_64.whl`), so an amd64 `uv sync`
@@ -203,7 +203,7 @@ docker build --platform linux/amd64 \
 ```
 
 The Dockerfile (see
-[`deploy/gcp/agent-claude/Dockerfile`](../deploy/gcp/agent-claude/Dockerfile))
+[`deploy/gcp/agent-claude/Dockerfile`](deploy/gcp/agent-claude/Dockerfile))
 copies both `contrib/shims/python` and the example dir so the
 `runtime-contract = { path = "../../contrib/shims/python" }` path dependency
 resolves, then `uv sync --no-dev`. To containerize your own agent, copy this
@@ -236,7 +236,7 @@ sudo docker compose up -d
 Add the agent to the control plane's registry as a **remote** entry — only
 `id/name/model/tenant/url` (and `auth_token` if the agent enforces a bearer).
 Spawn-time fields (`kind/command/workdir`) are rejected on a remote entry. From
-[`deploy/gcp/control-plane/runtime.remote.yaml`](../deploy/gcp/control-plane/runtime.remote.yaml):
+[`deploy/gcp/control-plane/runtime.remote.yaml`](deploy/gcp/control-plane/runtime.remote.yaml):
 
 ```yaml
 agents:
@@ -260,8 +260,8 @@ cd ~/deploy/control-plane && sudo docker compose up -d runtimed
 
 `runtimed` logs `monitoring remote agent` and the agent appears in
 `GET /agents`, the console, and is invokable through the gated edge exactly like
-a Go agent. The full GCP walkthrough (VPC, firewall, the three VMs) is in
-[`deploy/gcp/README.md`](../deploy/gcp/README.md).
+a Go agent. The files under `deploy/gcp/` provide reusable container and
+control-plane examples; adapt their network and host settings to your environment.
 
 ### Authentication note
 
@@ -284,6 +284,13 @@ runtime session id (both examples do).
 a partial run, unlike Go/harness agents' DBOS-backed per-turn durability — a
 process killed during a run loses that in-flight turn (completed sessions and
 events remain intact).
+
+**Native lifecycle limits are not enforced by the Python shim.** The shim does
+not currently consume `RUNTIME_AGENT_LIMITS` (`turn_timeout`,
+`session_timeout`, `max_turns`, and `max_tokens`). Configure equivalent bounds
+in the SDK, adapter, container, or process supervisor. If a foreign contract
+implementation adds limit enforcement, `limit_exceeded` is a valid terminal
+status and should end the SSE stream with an `error` event.
 
 ## Summary — porting your own SDK agent
 

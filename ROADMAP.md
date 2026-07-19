@@ -227,13 +227,18 @@ specs/plans dated 2026-06-07/08.
 
 ## 🔜 Remaining work
 
-> **Post-v1.0 direction (2026-07-18):** the AgentCore gap analysis and the
-> prioritized closure plan live in `docs/agentcore-gap-plan.md`. Headline: v1.1
-> = the "Guarded" phase (lifecycle guardrails → Cedar policy engine at the
-> gateway → token/cost metering + alerting); v1.2 = OAuth2/OBO + memory
-> strategies + gateway quotas; v1.3 = Evaluations pillar + isolation
+> **Post-v1.0 direction (2026-07-18, updated 2026-07-19):** the AgentCore gap
+> analysis and the prioritized closure plan live in `agentcore-gap-plan.md`.
+> Headline: v1.1 = the "Guarded" phase (lifecycle guardrails → Cedar policy
+> engine at the gateway → token/cost metering + alerting); v1.2 = OAuth2/OBO +
+> memory strategies + gateway quotas; v1.3 = Evaluations pillar + isolation
 > hardening. Payments (x402) is explicitly out of scope. Items below remain
 > the detailed per-pillar backlog; the gap plan sequences them.
+>
+> **Progress:** P1.2 lifecycle guardrails and P1.1 Cedar policy engine (M1+M2)
+> are both DONE and READY TO MERGE (branches `p1.2-lifecycle-guardrails` and
+> `p1.1-cedar-policy`, the latter containing the former). P1.3 (metering +
+> alerting) is next, completing the "Guarded" phase.
 
 ### A. Spine hardening (within this sub-project — optional, do when needed)
 
