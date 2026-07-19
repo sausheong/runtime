@@ -282,12 +282,20 @@ type GatewayConfig struct {
 // Enabled reports whether any upstream is configured.
 func (g GatewayConfig) Enabled() bool { return len(g.Servers) > 0 }
 
+// QuotaConfig is one file-configured gateway rate quota. Either key may be "*".
+type QuotaConfig struct {
+	Tenant     string `yaml:"tenant"`
+	Upstream   string `yaml:"upstream"`
+	RatePerMin int    `yaml:"rate_per_min"`
+}
+
 // Config is the parsed runtime.yaml.
 type Config struct {
 	Agents  []AgentConfig `yaml:"agents"`
 	Tokens  []TokenConfig `yaml:"tokens"`
 	Gateway GatewayConfig `yaml:"gateway"`
 	Pricing Pricing       `yaml:"pricing"`
+	Quotas  []QuotaConfig `yaml:"quotas"`
 }
 
 // Load reads and validates the config file at path.
@@ -488,6 +496,16 @@ func (c *Config) Validate() error {
 	for i := range c.Agents {
 		if c.Agents[i].Gateway.Enabled() && !c.Gateway.Enabled() {
 			return fmt.Errorf("config: agent %q has gateway: %s but no gateway.servers are configured", c.Agents[i].ID, c.Agents[i].Gateway)
+		}
+	}
+	// Gateway quotas (P2.3): an empty quotas: block is valid. Each entry needs
+	// non-empty keys (either may be "*") and a positive rate.
+	for i, q := range c.Quotas {
+		if q.Tenant == "" || q.Upstream == "" {
+			return fmt.Errorf("config: quota[%d]: tenant and upstream are required", i)
+		}
+		if q.RatePerMin <= 0 {
+			return fmt.Errorf("config: quota[%d]: rate_per_min must be > 0", i)
 		}
 	}
 	return nil

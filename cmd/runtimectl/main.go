@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/sausheong/runtime/conformance"
@@ -420,13 +422,42 @@ func runAdmin(base string, args []string) {
 		}
 		mustAdminDelete(base, path)
 		fmt.Printf("policy %s removed\n", args[2])
+	case "quota add":
+		// admin quota add --tenant <t> --upstream <u> --rate <n>
+		body := map[string]any{
+			"tenant":       flagValue(args[2:], "--tenant", ""),
+			"upstream":     flagValue(args[2:], "--upstream", ""),
+			"rate_per_min": mustAtoi(flagValue(args[2:], "--rate", "")),
+		}
+		mustAdminPostAny(base, "/admin/quotas", body)
+		fmt.Printf("quota %s/%s set\n", body["tenant"], body["upstream"])
+	case "quota ls":
+		fmt.Print(string(mustAdminGet(base, "/admin/quotas")))
+	case "quota rm":
+		// admin quota rm --tenant <t> --upstream <u>
+		q := "?upstream=" + url.QueryEscape(flagValue(args[2:], "--upstream", ""))
+		if tn := flagValue(args[2:], "--tenant", ""); tn != "" {
+			q += "&tenant=" + url.QueryEscape(tn)
+		}
+		mustAdminDelete(base, "/admin/quotas"+q)
+		fmt.Println("quota removed")
 	default:
 		adminUsage()
 	}
 }
 
+// mustAtoi parses s as an int or exits with a usage-style error.
+func mustAtoi(s string) int {
+	n, err := strconv.Atoi(strings.TrimSpace(s))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "invalid integer %q\n", s)
+		os.Exit(2)
+	}
+	return n
+}
+
 func adminUsage() {
-	fmt.Fprintln(os.Stderr, "usage: runtimectl admin <tenant create <id> [--name n]|user add <subject> --role r [--tenant t]|user ls|key create --role r [--label l] [--tenant t]|key ls|key revoke <id>|secret set <name> <value> [--tenant t]|secret ls|secret rm <name>|secret rotate [--tenant t]|upstream add --name n (--url u|--openapi spec) [--base-url b] [--cred-secret s] [--cred-header h] [--tenant t]|upstream ls|upstream rm <id>|agent add --id i --url u [--name n] [--model m] [--cred-secret s] [--tenant t]|agent ls|agent rm <id>|agent enable <id>|agent disable <id>|agent restart <id>|policy add --name n --file p.cedar [--tenant t]|policy ls [--tenant t]|policy rm <name> [--tenant t]>")
+	fmt.Fprintln(os.Stderr, "usage: runtimectl admin <tenant create <id> [--name n]|user add <subject> --role r [--tenant t]|user ls|key create --role r [--label l] [--tenant t]|key ls|key revoke <id>|secret set <name> <value> [--tenant t]|secret ls|secret rm <name>|secret rotate [--tenant t]|upstream add --name n (--url u|--openapi spec) [--base-url b] [--cred-secret s] [--cred-header h] [--tenant t]|upstream ls|upstream rm <id>|agent add --id i --url u [--name n] [--model m] [--cred-secret s] [--tenant t]|agent ls|agent rm <id>|agent enable <id>|agent disable <id>|agent restart <id>|policy add --name n --file p.cedar [--tenant t]|policy ls [--tenant t]|policy rm <name> [--tenant t]|quota add --tenant t --upstream u --rate n|quota ls|quota rm --upstream u [--tenant t]>")
 	os.Exit(2)
 }
 
@@ -500,6 +531,27 @@ func mustAdminPost(base, path string, body map[string]string) []byte {
 	out, err := adminPost(base, path, body)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	return out
+}
+
+// mustAdminPostAny is mustAdminPost for a body with non-string values (e.g. the
+// int rate_per_min in a quota). Same auth + error-exit semantics.
+func mustAdminPostAny(base, path string, body map[string]any) []byte {
+	buf, _ := json.Marshal(body)
+	req, _ := http.NewRequest("POST", base+path, bytes.NewReader(buf))
+	req.Header.Set("Content-Type", "application/json")
+	addAuth(req)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	defer resp.Body.Close()
+	out, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode >= 300 {
+		fmt.Fprintf(os.Stderr, "admin %s: %s: %s\n", path, resp.Status, strings.TrimSpace(string(out)))
 		os.Exit(1)
 	}
 	return out

@@ -25,6 +25,7 @@ import (
 	"github.com/sausheong/runtime/internal/memory"
 	"github.com/sausheong/runtime/internal/obs"
 	"github.com/sausheong/runtime/internal/policy"
+	"github.com/sausheong/runtime/internal/quota"
 	"github.com/sausheong/runtime/internal/store"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"golang.org/x/oauth2"
@@ -94,6 +95,9 @@ func main() {
 	// nil *policy.Store wrapped in the interface reads as non-nil).
 	var polStore *policy.Store
 	var polAdmin controlplane.PolicyStore
+	// quotaAdmin is the interface handed to buildRoot so /admin/quotas mounts.
+	// Assigned inside the gateway block; stays a true nil interface otherwise.
+	var quotaAdmin controlplane.QuotaStore
 
 	// Identity layer (M1). Operator config via env:
 	//   RUNTIME_OIDC_ISSUER / RUNTIME_OIDC_CLIENT_ID — enable OIDC human login.
@@ -254,6 +258,35 @@ func main() {
 			slog.Info("policy engine enabled",
 				"platform_file", os.Getenv("RUNTIME_POLICY_FILE"), "tenant_layer", "on")
 		}
+
+		// P2.3 quotas: DB store + file seed + env default, live-reloading limiter.
+		quotaStore, qerr := quota.NewStore(ctx, identityDB)
+		if qerr != nil {
+			slog.Error("quota store init failed", "err", qerr)
+			os.Exit(1)
+		}
+		envDefault := envIntOr("RUNTIME_GATEWAY_QUOTA_DEFAULT", 0)
+		limiter := quota.NewLimiter(quotaStore, envDefault, nil)
+		seed := make([]quota.Rule, 0, len(cfg.Quotas))
+		for _, q := range cfg.Quotas {
+			seed = append(seed, quota.Rule{Tenant: q.Tenant, Upstream: q.Upstream, RatePerMin: q.RatePerMin})
+		}
+		limiter.Seed(seed)
+		gwHandler.Quota = limiter
+		quotaAdmin = quotaStore // interface value for root wiring
+		// Idle-bucket reaper.
+		go func() {
+			t := time.NewTicker(5 * time.Minute)
+			defer t.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-t.C:
+					limiter.Reap(10 * time.Minute)
+				}
+			}
+		}()
 	}
 
 	configured, err := idStore.AnyConfigured(ctx)
@@ -326,6 +359,7 @@ func main() {
 		handler = obs.RequestID(tracedHandler(accessLog(buildRoot(rootOptions{
 			Registry: reg, ConsoleOIDC: console.OIDCConfig{}, SecretAdmin: secretAdmin,
 			Gateway: gwHandler, Metrics: cm, ControlStore: ctlStore, PolicyStore: polAdmin,
+			QuotaStore: quotaAdmin,
 		}), cm)))
 	} else {
 		oidcVerifier, verr := identity.NewOIDCVerifier(ctx, oidcIssuer, oidcClientID)
@@ -389,6 +423,7 @@ func main() {
 			SecretAdmin: secretAdmin, Gateway: gwHandler, UpstreamStore: gwStore,
 			GatewayMutator: gwMut, AgentStore: agentStore, AgentManager: agentManager,
 			Onboarding: onb, Metrics: cm, ControlStore: ctlStore, PolicyStore: polAdmin,
+			QuotaStore: quotaAdmin,
 		}) // mounts /admin since the store is non-nil
 		onReject := func(status int) { cm.AuthRejected(status) }
 		// When OIDC login is available, lock the browser console to OIDC sessions:

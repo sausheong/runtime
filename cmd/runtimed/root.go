@@ -27,6 +27,7 @@ type rootOptions struct {
 	Metrics        *obs.ControlMetrics
 	ControlStore   store.Store
 	PolicyStore    controlplane.PolicyStore
+	QuotaStore     controlplane.QuotaStore
 }
 
 // buildRoot assembles the root mux: console at /ui, control-plane API at /, and
@@ -44,6 +45,9 @@ func buildRoot(o rootOptions) http.Handler {
 		}
 		if o.PolicyStore != nil {
 			controlplane.RegisterPolicyAdmin(apiMux, o.AdminStore, o.PolicyStore)
+		}
+		if o.QuotaStore != nil {
+			controlplane.RegisterQuotaAdmin(apiMux, o.AdminStore, o.QuotaStore)
 		}
 	}
 	if o.Gateway != nil {
