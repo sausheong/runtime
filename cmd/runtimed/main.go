@@ -87,6 +87,13 @@ func main() {
 	// orphaned.
 	var gwHandler *gateway.Handler
 	var gwManager *gateway.Manager
+	// polStore is the tenant-policy store; polAdmin is the interface handed to
+	// buildRoot so /admin/policies mounts. Assigned inside the gateway block
+	// (same DB, same lifecycle as the engine). polAdmin stays a true nil
+	// interface when the store is absent (avoids the typed-nil trap where a
+	// nil *policy.Store wrapped in the interface reads as non-nil).
+	var polStore *policy.Store
+	var polAdmin controlplane.PolicyStore
 
 	// Identity layer (M1). Operator config via env:
 	//   RUNTIME_OIDC_ISSUER / RUNTIME_OIDC_CLIENT_ID — enable OIDC human login.
@@ -230,7 +237,8 @@ func main() {
 		// Cedar policy engine (P1.1): tenant layer is the DB-backed store; the
 		// platform layer comes from RUNTIME_POLICY_FILE. A parse error or an
 		// unreadable file is fatal (fail-closed guardrails).
-		polStore, perr := policy.NewStore(ctx, identityDB)
+		var perr error
+		polStore, perr = policy.NewStore(ctx, identityDB)
 		if perr != nil {
 			slog.Error("policy store init failed", "err", perr)
 			os.Exit(1)
@@ -242,6 +250,7 @@ func main() {
 		}
 		if engine != nil {
 			gwHandler.Policy = engine
+			polAdmin = polStore // real interface value only when the engine is on
 			slog.Info("policy engine enabled",
 				"platform_file", os.Getenv("RUNTIME_POLICY_FILE"), "tenant_layer", "on")
 		}
@@ -316,7 +325,7 @@ func main() {
 		// page. Pass literal nil for the interface params (true nil interface).
 		handler = obs.RequestID(tracedHandler(accessLog(buildRoot(rootOptions{
 			Registry: reg, ConsoleOIDC: console.OIDCConfig{}, SecretAdmin: secretAdmin,
-			Gateway: gwHandler, Metrics: cm, ControlStore: ctlStore,
+			Gateway: gwHandler, Metrics: cm, ControlStore: ctlStore, PolicyStore: polAdmin,
 		}), cm)))
 	} else {
 		oidcVerifier, verr := identity.NewOIDCVerifier(ctx, oidcIssuer, oidcClientID)
@@ -378,7 +387,7 @@ func main() {
 			Registry: reg, AdminStore: idStore, ConsoleOIDC: consoleOIDC,
 			SecretAdmin: secretAdmin, Gateway: gwHandler, UpstreamStore: gwStore,
 			GatewayMutator: gwMut, AgentStore: agentStore, AgentManager: agentManager,
-			Onboarding: onb, Metrics: cm, ControlStore: ctlStore,
+			Onboarding: onb, Metrics: cm, ControlStore: ctlStore, PolicyStore: polAdmin,
 		}) // mounts /admin since the store is non-nil
 		onReject := func(status int) { cm.AuthRejected(status) }
 		// When OIDC login is available, lock the browser console to OIDC sessions:

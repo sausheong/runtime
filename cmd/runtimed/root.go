@@ -26,6 +26,7 @@ type rootOptions struct {
 	Onboarding     *console.Onboarding
 	Metrics        *obs.ControlMetrics
 	ControlStore   store.Store
+	PolicyStore    controlplane.PolicyStore
 }
 
 // buildRoot assembles the root mux: console at /ui, control-plane API at /, and
@@ -40,6 +41,9 @@ func buildRoot(o rootOptions) http.Handler {
 		}
 		if o.AgentStore != nil && o.AgentManager != nil {
 			controlplane.RegisterAgentAdmin(apiMux, o.AgentStore, o.AdminStore, o.AgentManager)
+		}
+		if o.PolicyStore != nil {
+			controlplane.RegisterPolicyAdmin(apiMux, o.AdminStore, o.PolicyStore)
 		}
 	}
 	if o.Gateway != nil {

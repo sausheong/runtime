@@ -378,13 +378,55 @@ func runAdmin(base string, args []string) {
 		}
 		mustAdminPost(base, "/admin/agents/"+args[2]+"/restart", map[string]string{})
 		fmt.Printf("agent %s re-attached (health re-probed)\n", args[2])
+	case "policy add":
+		// admin policy add --name <n> --file <path.cedar> [--tenant t]
+		// Policies are multi-line Cedar; the text is read from --file rather
+		// than a flag literal.
+		name := flagValue(args[2:], "--name", "")
+		file := flagValue(args[2:], "--file", "")
+		if name == "" || file == "" {
+			adminUsage()
+		}
+		text, rerr := os.ReadFile(file)
+		if rerr != nil {
+			fmt.Fprintf(os.Stderr, "read policy file %q: %v\n", file, rerr)
+			os.Exit(1)
+		}
+		body := map[string]string{
+			"name":       name,
+			"cedar_text": string(text),
+			"tenant":     flagValue(args[2:], "--tenant", ""),
+		}
+		out := mustAdminPost(base, "/admin/policies", body)
+		var resp struct{ Name string }
+		if err := json.Unmarshal(out, &resp); err != nil || resp.Name == "" {
+			fmt.Fprintf(os.Stderr, "policy created but response malformed: %s\n", out)
+			os.Exit(1)
+		}
+		fmt.Printf("policy %s registered\n", resp.Name)
+	case "policy ls":
+		path := "/admin/policies"
+		if t := flagValue(args[2:], "--tenant", ""); t != "" {
+			path += "?tenant=" + t
+		}
+		fmt.Print(string(mustAdminGet(base, path)))
+	case "policy rm":
+		if len(args) < 3 {
+			adminUsage()
+		}
+		path := "/admin/policies/" + args[2]
+		if t := flagValue(args[3:], "--tenant", ""); t != "" {
+			path += "?tenant=" + t
+		}
+		mustAdminDelete(base, path)
+		fmt.Printf("policy %s removed\n", args[2])
 	default:
 		adminUsage()
 	}
 }
 
 func adminUsage() {
-	fmt.Fprintln(os.Stderr, "usage: runtimectl admin <tenant create <id> [--name n]|user add <subject> --role r [--tenant t]|user ls|key create --role r [--label l] [--tenant t]|key ls|key revoke <id>|secret set <name> <value> [--tenant t]|secret ls|secret rm <name>|secret rotate [--tenant t]|upstream add --name n (--url u|--openapi spec) [--base-url b] [--cred-secret s] [--cred-header h] [--tenant t]|upstream ls|upstream rm <id>|agent add --id i --url u [--name n] [--model m] [--cred-secret s] [--tenant t]|agent ls|agent rm <id>|agent enable <id>|agent disable <id>|agent restart <id>>")
+	fmt.Fprintln(os.Stderr, "usage: runtimectl admin <tenant create <id> [--name n]|user add <subject> --role r [--tenant t]|user ls|key create --role r [--label l] [--tenant t]|key ls|key revoke <id>|secret set <name> <value> [--tenant t]|secret ls|secret rm <name>|secret rotate [--tenant t]|upstream add --name n (--url u|--openapi spec) [--base-url b] [--cred-secret s] [--cred-header h] [--tenant t]|upstream ls|upstream rm <id>|agent add --id i --url u [--name n] [--model m] [--cred-secret s] [--tenant t]|agent ls|agent rm <id>|agent enable <id>|agent disable <id>|agent restart <id>|policy add --name n --file p.cedar [--tenant t]|policy ls [--tenant t]|policy rm <name> [--tenant t]>")
 	os.Exit(2)
 }
 
