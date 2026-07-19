@@ -40,6 +40,13 @@ type KG struct {
 	minMsgs    int
 	sem        chan struct{}
 	ingestDone func() // test hook; nil in production
+
+	// Strategy pipeline (P2.2). When non-empty it supersedes the single hardwired
+	// extractor path. putSummary/onSummaryWrite are the WriteSupersede sink+metric,
+	// wired in Task 4's NewKG change; nil is fine here (the runner guards them).
+	strategies     []Strategy
+	putSummary     func(ctx context.Context, sessionID, content string) error
+	onSummaryWrite func()
 }
 
 var _ hrt.KnowledgeGraph = (*KG)(nil)
@@ -62,6 +69,13 @@ func WithIngest(ext Extractor, dedupFloor float64, minMsgs, maxInflight int) KGO
 		g.minMsgs = minMsgs
 		g.sem = make(chan struct{}, maxInflight)
 	}
+}
+
+// WithStrategies configures the strategy pipeline. Each strategy runs at
+// end-of-turn; records persist per the strategy's WriteMode. When set, it replaces
+// the single hardwired fact path in runIngest.
+func WithStrategies(ss ...Strategy) KGOption {
+	return func(g *KG) { g.strategies = ss }
 }
 
 // NewKG builds a KnowledgeGraph backed by a tenant-pinned Store. Without any
@@ -142,7 +156,17 @@ func (g *KG) Recall(ctx context.Context, query string) string {
 // degrades silently — ingestion never affects a turn. The growth gate and the
 // inflight cap bound cost; over capacity, the turn's ingest is dropped.
 func (g *KG) Ingest(_ context.Context, thread []hrt.Message) {
-	if g.extractor == nil || g.save == nil {
+	g.ingestWith(StrategyContext{}, thread)
+}
+
+// ingestWith is the session-aware ingest entrypoint: it applies the enable gate,
+// the growth gate, and the inflight cap, then detaches the background body with
+// sctx threaded through as a parameter (never stored on the process-shared KG, so
+// concurrent sessions cannot clobber each other's SessionID). The public Ingest is
+// a thin wrapper passing an empty sctx (legacy/no-session path); Task 3 adds a
+// session-aware caller that passes a real sctx.
+func (g *KG) ingestWith(sctx StrategyContext, thread []hrt.Message) {
+	if (g.extractor == nil && len(g.strategies) == 0) || g.save == nil {
 		return
 	}
 	if len(thread) < g.minMsgs {
@@ -157,12 +181,14 @@ func (g *KG) Ingest(_ context.Context, thread []hrt.Message) {
 		}
 		return
 	}
-	go g.runIngest(thread)
+	go g.runIngest(sctx, thread)
 }
 
-// runIngest is the background body: extract → per-fact dedup → save. Holds one
-// sem slot; releases it (and recovers any panic) on exit.
-func (g *KG) runIngest(thread []hrt.Message) {
+// runIngest is the background body: it holds one sem slot (releasing it and
+// recovering any panic on exit) and delegates to the strategy pipeline when
+// configured, else the legacy single-extractor path (extract → per-fact dedup →
+// save).
+func (g *KG) runIngest(sctx StrategyContext, thread []hrt.Message) {
 	defer func() {
 		if r := recover(); r != nil {
 			slog.Warn("memory: ingest goroutine panic recovered", "panic", r)
@@ -172,6 +198,11 @@ func (g *KG) runIngest(thread []hrt.Message) {
 			g.ingestDone()
 		}
 	}()
+	if len(g.strategies) > 0 {
+		g.runStrategies(sctx, thread)
+		return
+	}
+	// Legacy single-extractor path (unchanged).
 	// Fresh context: the request ctx is typically cancelled by the time the
 	// harness fires Ingest in its end-of-Run defer. The extractor's own client
 	// timeout (30s) bounds how long a stuck extraction can hold its sem slot.
