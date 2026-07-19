@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/sausheong/runtime/internal/rheader"
 	"gopkg.in/yaml.v3"
 )
 
@@ -507,7 +508,7 @@ func (c *Config) Validate() error {
 						return fmt.Errorf("config: gateway server %q: enrich header %q collides with a static header", s.Name, header)
 					}
 				}
-				if !strings.HasPrefix(http.CanonicalHeaderKey(header), "X-Runtime-") {
+				if !strings.HasPrefix(http.CanonicalHeaderKey(header), rheader.Prefix) {
 					fmt.Fprintf(os.Stderr, "config: gateway server %q: enrich header %q does not use the reserved X-Runtime- prefix (allowed, but the convention marks platform-set claims)\n", s.Name, header)
 				}
 			}
