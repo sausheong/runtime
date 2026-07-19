@@ -109,9 +109,15 @@ func (s *Store) Delete(ctx context.Context, tenant, upstream string) (bool, erro
 }
 
 func (s *Store) Rules(ctx context.Context) ([]Rule, uint64, error) {
+	// Snapshot the generation BEFORE the read: a write committing between the
+	// SELECT and the Load would otherwise pair stale rows with the newer gen,
+	// and the limiter's gen-equality short-circuit would then mask the change
+	// until the next mutation. A gen read before the rows only ever forces one
+	// extra harmless rebuild, never a missed update.
+	gen := s.gen.Load()
 	rows, err := s.List(ctx, "")
 	if err != nil {
 		return nil, 0, err
 	}
-	return rows, s.gen.Load(), nil
+	return rows, gen, nil
 }

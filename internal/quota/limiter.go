@@ -88,6 +88,11 @@ func (l *Limiter) refresh(ctx context.Context) {
 	if l.loaded && l.clock().Sub(l.lastRefresh) < l.refreshWindow {
 		return
 	}
+	// Advance the throttle for THIS attempt regardless of outcome: on a store
+	// error (esp. a HANGING DB, not a fast-fail) an un-advanced throttle would
+	// re-query on every subsequent call under l.mu, collapsing gateway
+	// throughput — the exact availability failure fail-open exists to prevent.
+	l.lastRefresh = l.clock()
 	dbRules, gen, err := l.st.Rules(ctx)
 	if err != nil {
 		// Fail-open only when no rules have ever loaded; a transient read error
@@ -99,7 +104,6 @@ func (l *Limiter) refresh(ctx context.Context) {
 		}
 		return
 	}
-	l.lastRefresh = l.clock() // re-queried; reset the throttle regardless of gen
 	if l.loaded && gen == l.gen {
 		return
 	}

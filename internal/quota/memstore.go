@@ -63,9 +63,22 @@ func (m *MemStore) Delete(_ context.Context, tenant, upstream string) (bool, err
 }
 
 func (m *MemStore) Rules(_ context.Context) ([]Rule, uint64, error) {
-	rows, _ := m.List(context.Background(), "")
+	// Read gen and rows under a single lock so they are a consistent snapshot
+	// (a write between the two would otherwise pair stale rows with a newer gen,
+	// which the limiter's gen-equality check would then mask until the next
+	// mutation). Inlines List's collection to avoid a re-lock.
 	m.mu.RLock()
+	defer m.mu.RUnlock()
 	gen := m.gen
-	m.mu.RUnlock()
-	return rows, gen, nil
+	out := make([]Rule, 0, len(m.rows))
+	for _, r := range m.rows {
+		out = append(out, r)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Tenant != out[j].Tenant {
+			return out[i].Tenant < out[j].Tenant
+		}
+		return out[i].Upstream < out[j].Upstream
+	})
+	return out, gen, nil
 }
