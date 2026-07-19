@@ -8,6 +8,38 @@ import (
 	"github.com/sausheong/runtime/internal/rheader"
 )
 
+// TestForwardSubject_SetsAssertion: forwarding on ⇒ a caller-supplied assertion
+// spoof is stripped and the retained caller JWT (from ctx) is set, overwriting
+// the forged value.
+func TestForwardSubject_SetsAssertion(t *testing.T) {
+	r := httptest.NewRequest("POST", "/agents/x/sessions", nil)
+	r.Header.Set(rheader.Assertion, "forged") // caller-supplied spoof
+	p := identity.Principal{Subject: "alice", TenantID: "acme", Role: identity.Role("operator"), Kind: identity.KindOIDC}
+	r = withPrincipal(r, p)
+	r = r.WithContext(identity.WithAssertion(r.Context(), "real.jwt"))
+
+	forwardSubject(r, true)
+
+	if got := r.Header.Get(rheader.Assertion); got != "real.jwt" {
+		t.Fatalf("Assertion = %q, want real.jwt (forged spoof must be overwritten)", got)
+	}
+}
+
+// TestForwardSubject_NoAssertionWhenAbsent: forwarding on, principal present, but
+// no assertion on ctx ⇒ the header is stripped and nothing is set.
+func TestForwardSubject_NoAssertionWhenAbsent(t *testing.T) {
+	r := httptest.NewRequest("POST", "/agents/x/sessions", nil)
+	r.Header.Set(rheader.Assertion, "forged") // caller-supplied spoof
+	p := identity.Principal{Subject: "alice", TenantID: "acme", Role: identity.Role("operator"), Kind: identity.KindOIDC}
+	r = withPrincipal(r, p)
+
+	forwardSubject(r, true)
+
+	if got := r.Header.Get(rheader.Assertion); got != "" {
+		t.Fatalf("Assertion = %q, want empty (stripped, none on ctx)", got)
+	}
+}
+
 // TestForwardSubject_StripsThenSets: forwarding on ⇒ inbound X-Runtime-* are
 // stripped and the trio is set from the authenticated Principal, overwriting a
 // caller-supplied spoof.

@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/sausheong/runtime/internal/identity"
 	"github.com/sausheong/runtime/internal/obs"
 	"github.com/sausheong/runtime/internal/rheader"
 	"github.com/sausheong/runtime/internal/store"
@@ -44,6 +45,9 @@ func forwardSubject(r *http.Request, forwarding bool) {
 	}
 	if p.Role != "" {
 		r.Header.Set(rheader.Role, string(p.Role))
+	}
+	if jwt := identity.AssertionFrom(r.Context()); jwt != "" {
+		r.Header.Set(rheader.Assertion, jwt)
 	}
 }
 
