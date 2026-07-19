@@ -130,6 +130,105 @@ destructive sandbox code for everyone, in every tenant:
 A tenant admin cannot weaken a platform forbid: Cedar's forbid-overrides rule
 means a tenant `permit` can never re-enable a platform-forbidden call.
 
+## Gateway quotas
+
+Per-`(tenant, upstream)` request rate limiting for gateway tool calls — a
+requests-per-minute token bucket that protects an upstream from a runaway or
+noisy tenant. A quota is a triple `(tenant, upstream, rate_per_min)`; either key
+may be the wildcard `*`.
+
+**Most-specific-wins resolution.** For a call `(T, U)` the platform looks up the
+effective limit in precedence order `(T,U) → (T,*) → (*,U) → (*,*)` and the
+first match wins. The call then consumes **that one bucket** — never several. No
+match at all means the call is unlimited (**permit by default**, like the policy
+engine).
+
+Configure quotas three ways, which compose:
+
+- A top-level `quotas:` block in `runtime.yaml` — a list of
+  `{tenant, upstream, rate_per_min}`:
+
+  ```yaml
+  quotas:
+    - { tenant: acme, upstream: orders, rate_per_min: 60 }
+    - { tenant: "*",  upstream: fragile, rate_per_min: 30 }   # protect one upstream from all tenants
+  ```
+
+- `RUNTIME_GATEWAY_QUOTA_DEFAULT` — an integer requests/min applied as the
+  `(*,*)` floor (the catch-all every unmatched call falls through to).
+- The DB store, managed at runtime via `POST /admin/quotas`,
+  `runtimectl admin quota add|ls|rm`, and the console — with **live reload**: a
+  change takes effect without restarting `runtimed` (up to ~2s, bounded by the
+  limiter's refresh throttle).
+
+  ```bash
+  runtimectl admin quota add --tenant acme --upstream orders --rate 60
+  runtimectl admin quota ls
+  runtimectl admin quota rm --tenant acme --upstream orders
+  ```
+
+**Scope.** The **superuser is quota-exempt**. **Open-mode** (identity off) calls
+are **skipped** entirely — a quota keys on the tenant, and open mode has no
+principal to key on, so quotas require identity on.
+
+**Rejection.** A call over its limit comes back to the agent as the MCP tool
+error `quota exceeded: <tenant>/<upstream> (retry after Ns)` — **not** an HTTP
+`429`. MCP has no per-call status channel, so the agent sees a tool error it can
+reason about and back off. Rejections are counted in
+`runtime_gateway_quota_rejections_total{tenant,server}`.
+
+**RBAC.** A tenant-admin manages quotas only for its **own** tenant; the `*`
+tenant wildcard is **superuser-only** (a tenant-admin naming `*` is rejected
+`400`).
+
+**Fail-open — the deliberate opposite of the policy engine.** A runtime error
+reading the quota store is treated as **no limit** (calls flow). A rate limiter
+is an **availability** control, so a broken quota backend must never block all
+gateway traffic. This is the intentional inverse of the [policy
+engine](#policy-engine-cedar), which fails **closed** — a *security* control
+must not fail open. The asymmetry is by design: pick fail-open for availability
+controls, fail-closed for security controls. Note the one boot-time exception: a
+**malformed** `quotas:` block (a non-positive `rate_per_min`) is a **boot
+failure**. A malformed `RUNTIME_GATEWAY_QUOTA_DEFAULT` is *not* fatal — it is
+logged and ignored, falling back to no floor. An *absent* quota config is valid
+and simply means unlimited.
+
+### Header enrichment
+
+The gateway can inject request-time identity into an upstream's outbound headers
+so a REST backend can see *who* is calling. Add a per-upstream `enrich:` map —
+principal **claim → outbound header name** — and the platform stamps those
+headers on each call from the calling principal:
+
+```yaml
+gateway:
+  servers:
+    - name: orders
+      openapi: http://host.docker.internal:9000/openapi.yaml
+      base_url: http://host.docker.internal:9000
+      enrich:
+        tenant:  X-Runtime-Tenant
+        subject: X-Runtime-User
+```
+
+- **Fixed claim vocabulary.** The map keys are exactly `tenant`, `subject`, and
+  `role` — no other claims exist.
+- **OpenAPI-only.** `enrich` is valid **only** on `openapi:` upstreams;
+  configuring it on any other upstream is a **config load error**. The reason is
+  architectural: an MCP-over-HTTP (`url:`) upstream sets its headers once at
+  connect into a long-lived session, so per-call header variation is impossible
+  there. Only the REST/OpenAPI adapter issues a fresh HTTP request per call, so
+  only it can vary headers per principal.
+- **Platform claims overwrite.** An enriched header **overwrites** any
+  caller- or agent-supplied header of the same name — an agent can never spoof a
+  claim.
+- **`X-Runtime-*` is the reserved namespace** for platform claims. Targeting a
+  non-`X-Runtime-` header logs a load **WARNING** (not an error), so operators
+  can still match a real backend's expected header names when they must.
+- **Collisions fail fast.** An `enrich` header that collides with the upstream's
+  `cred_header` or a static `headers:` entry is a **config load error** — no
+  runtime ambiguity about which value wins.
+
 ## Cost metering
 
 Attach dollar prices to models and the platform meters per-turn LLM cost. Add a

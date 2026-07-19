@@ -1172,6 +1172,7 @@ reserved for it):
 | `runtime_gateway_tool_call_duration_seconds` | `server` | Gateway tool-call latency histogram. |
 | `runtime_gateway_upstream_up` | `server` | 1 when the gateway upstream connection is up. |
 | `runtime_gateway_policy_decisions_total` | `tenant,decision` | Cedar policy evaluations at the gateway, by `decision` (`allow`/`deny`/`error`). Emitted only when the policy engine is enabled. |
+| `runtime_gateway_quota_rejections_total` | `tenant,server` | Gateway tool calls rejected for exceeding a per-`(tenant,upstream)` rate quota. See the [operator guide](operator-guide.md#gateway-quotas). |
 | `runtime_metrics_scrape_skips_total` | `agent,reason` | Agents skipped during the fan-out scrape. Reasons: `timeout`, `unreachable`, `parse`, `no_metrics`, `status_<code>`, `reserved_name`, `type_conflict`. |
 
 **Agent metrics** (emitted per `agentd`, merged into `runtimed`'s exposition):
@@ -1925,11 +1926,21 @@ unaffected.
 | `RUNTIME_GATEWAY_KEY` | agentd | (set by runtimed) | Bearer service key for the gateway, from `gateway.agent_keys` (identity on). |
 | `RUNTIME_GATEWAY_SEARCH_FLOOR` | runtimed | `0.2` | Minimum cosine similarity for a `search_tools` match. |
 | `RUNTIME_GATEWAY_SEARCH_K` | runtimed | `5` | Default `search_tools` result count (cap 20). |
+| `RUNTIME_GATEWAY_QUOTA_DEFAULT` | runtimed | (unset) | Integer requests/min applied as the `(*,*)` catch-all gateway quota floor. See [Gateway quotas](operator-guide.md#gateway-quotas). |
 | `RUNTIME_SANDBOX_*` | sandboxd | (see [sandbox](#code-interpreter-sandbox)) | Code-interpreter sandbox tuning: image, per-tenant cap, TTLs, workspace/memory/CPU limits, gVisor runtime, direct mode. |
 | `RUNTIME_SHIM_DB` | (python shim) | `./shim.db` | SQLite path for the polyglot shim's durable session store (not used by runtimed). |
 
 `runtimed` injects `RUNTIME_LISTEN_ADDR` and `RUNTIME_AGENT_ID` into each agent
 subprocess from `runtime.yaml`; you don't set them by hand.
+
+### `runtime.yaml` blocks (selected)
+
+- **`quotas:`** (top-level) — a list of `{tenant, upstream, rate_per_min}`
+  per-`(tenant,upstream)` gateway rate limits (`*` wildcard on either key). See
+  [Gateway quotas](operator-guide.md#gateway-quotas).
+- **`gateway.servers[].enrich:`** (per-upstream, OpenAPI only) — a claim→header
+  map (`tenant`/`subject`/`role`) injecting the caller's identity into outbound
+  request headers. See [Header enrichment](operator-guide.md#header-enrichment).
 
 ### Postgres schema
 

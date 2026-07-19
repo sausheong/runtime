@@ -57,6 +57,23 @@ From the CLI: `runtimectl admin policy add --name no-drop --file no-drop.cedar`,
 are private to your tenant; you cannot see or remove the operator's platform
 guardrails.
 
+## Rate-limit an upstream (quotas)
+
+You can self-serve a requests-per-minute quota for one of your upstreams,
+scoped to **your own** tenant — the `*` tenant wildcard is operator-only:
+
+```bash
+runtimectl admin quota add --upstream orders --rate 60   # 60 req/min for this tenant→orders
+runtimectl admin quota ls
+runtimectl admin quota rm --upstream orders
+```
+
+Quotas take effect within a couple of seconds (no restart). When a quota is
+exceeded, the agent's tool call comes back as the tool error
+`quota exceeded: <tenant>/<upstream> (retry after Ns)` — not an HTTP `429`. An
+agent that sees this should **back off and retry** after the stated delay rather
+than treating it as a hard failure.
+
 ## Roles and keys
 
 Every request to the control plane carries a bearer — a human's OIDC cookie or a
