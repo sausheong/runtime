@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -41,6 +42,11 @@ type Manager struct {
 	// RUNTIME_AGENT_REPLICA). Stamped onto each session row at create so the
 	// control plane can pin session-scoped requests back to this replica.
 	replica int
+	// subjectForwarding gates reading the forwarded caller identity
+	// (X-Runtime-{User,Tenant,Role}) on POST /sessions (from
+	// RUNTIME_SUBJECT_FORWARDING). Off ⇒ the headers are ignored and turnInput
+	// carries an empty subject (today's behavior).
+	subjectForwarding bool
 	// limits is the operator-resolved lifecycle limit set (from
 	// RUNTIME_AGENT_LIMITS). Zero value ⇒ no limits. Immutable after Serve
 	// constructs the Manager, so workflow-body reads are deterministic.
@@ -425,17 +431,29 @@ func (m *Manager) sessionWorkflow(ctx dbos.DBOSContext, in turnInput) (string, e
 // with the session id as the stable DBOS workflow id. requestID is the
 // originating POST's X-Request-ID, carried into the checkpointed workflow
 // input for log correlation.
-func (m *Manager) startSession(ctx context.Context, userMsg, imageB64, imageMime, requestID string) (string, error) {
+func (m *Manager) startSession(ctx context.Context, userMsg, imageB64, imageMime, requestID, subject, tenant, role string) (string, error) {
 	sessionID, err := m.st.CreateSession(ctx, m.agentID, m.replica)
 	if err != nil {
 		return "", err
 	}
 	in := turnInput{UserMsg: userMsg, ImageB64: imageB64, ImageMime: imageMime,
-		RequestID: requestID, StartedAt: time.Now().UTC()}
+		RequestID: requestID, StartedAt: time.Now().UTC(),
+		Subject: subject, Tenant: tenant, Role: role}
 	if _, err := dbos.RunWorkflow(m.dbosCtx, m.sessionWorkflow, in, dbos.WithWorkflowID(sessionID)); err != nil {
 		return "", err
 	}
 	return sessionID, nil
+}
+
+// envBool reports whether key is set to a truthy value (1/true/yes/on,
+// case-insensitive, surrounding spaces ignored).
+func envBool(key string) bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(key))) {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
+	}
 }
 
 // Serve validates config, opens the store, launches DBOS (running recovery for
@@ -488,16 +506,17 @@ func Serve(ctx context.Context, cfg Config) error {
 		return err // fail fast: a malformed operator value must not silently mean "unlimited"
 	}
 	m := &Manager{
-		agentID:     cfg.Spec.ID,
-		cfg:         cfg,
-		dbosCtx:     dctx,
-		st:          st,
-		metrics:     obs.NewAgentMetrics(cfg.Spec.ID, os.Getenv("RUNTIME_AGENT_TENANT"), cfg.Spec.Model),
-		price:       cfg.Price,
-		authToken:   os.Getenv("RUNTIME_AGENT_AUTH_TOKEN"),
-		replica:     replica,
-		limits:      limits,
-		subscribers: map[string][]chan WireEvent{},
+		agentID:           cfg.Spec.ID,
+		cfg:               cfg,
+		dbosCtx:           dctx,
+		st:                st,
+		metrics:           obs.NewAgentMetrics(cfg.Spec.ID, os.Getenv("RUNTIME_AGENT_TENANT"), cfg.Spec.Model),
+		price:             cfg.Price,
+		authToken:         os.Getenv("RUNTIME_AGENT_AUTH_TOKEN"),
+		replica:           replica,
+		limits:            limits,
+		subjectForwarding: envBool("RUNTIME_SUBJECT_FORWARDING"),
+		subscribers:       map[string][]chan WireEvent{},
 	}
 	if m.price == nil {
 		slog.Warn("agent model has no price entry; cost will not be metered (tokens still recorded)",

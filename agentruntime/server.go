@@ -9,8 +9,20 @@ import (
 	"strconv"
 
 	"github.com/sausheong/runtime/internal/obs"
+	"github.com/sausheong/runtime/internal/rheader"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 )
+
+// readForwardedIdentity reads the caller's forwarded identity trio
+// (X-Runtime-{User,Tenant,Role}) set by the control-plane edge. It is gated by
+// the agent-side RUNTIME_SUBJECT_FORWARDING flag: when off it returns empty
+// strings regardless of any inbound headers, so isolation depends on ON.
+func readForwardedIdentity(r *http.Request, on bool) (subject, tenant, role string) {
+	if !on {
+		return "", "", ""
+	}
+	return r.Header.Get(rheader.User), r.Header.Get(rheader.Tenant), r.Header.Get(rheader.Role)
+}
 
 // maxSessionBodyBytes bounds the only agent-contract request that can carry
 // inline binary data. Sixteen MiB leaves room for a roughly 12 MiB source image
@@ -104,7 +116,8 @@ func (m *Manager) newMux() *http.ServeMux {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		id, err := m.startSession(r.Context(), body.Message, body.ImageB64, body.ImageMime, obs.RequestIDFromContext(r.Context()))
+		subject, tenant, role := readForwardedIdentity(r, m.subjectForwarding)
+		id, err := m.startSession(r.Context(), body.Message, body.ImageB64, body.ImageMime, obs.RequestIDFromContext(r.Context()), subject, tenant, role)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return

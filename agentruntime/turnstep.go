@@ -34,6 +34,13 @@ type turnInput struct {
 	// origin for session_timeout. Zero on pre-upgrade in-flight sessions
 	// (those skip the session_timeout check).
 	StartedAt time.Time `json:"started_at"`
+	// Caller identity forwarded from the control-plane edge (X-Runtime-*), part of
+	// the checkpointed workflow input so it is re-supplied identically on DBOS
+	// replay (actor-scoping stays stable across recovery). Empty when
+	// RUNTIME_SUBJECT_FORWARDING is off or the request was unauthenticated.
+	Subject string `json:"subject,omitempty"`
+	Tenant  string `json:"actor_tenant,omitempty"`
+	Role    string `json:"actor_role,omitempty"`
 }
 
 // turnOutput is the checkpointed return value of a single turn step. On replay
