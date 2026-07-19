@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	_ "embed"
@@ -38,6 +39,21 @@ type Store struct {
 	db       *sql.DB
 	tenant   string
 	embedder Embedder
+	// summaryLocks stripes a per-session mutex over PutSessionSummary so that two
+	// overlapping same-session summary writes serialize. PutSessionSummary is a
+	// non-atomic read (live prevID) then write (INSERT supersedes=prevID); without
+	// this, two concurrent writers read the same prevID and both go live, forking
+	// the supersede chain into multiple live rows. The KG is process-shared and one
+	// Store is pinned per tenant, so an in-process lock is the correct scope: all a
+	// session's ingest goroutines run in this process. Keyed by session_id (the
+	// Store is already tenant-scoped); zero value of sync.Map is usable.
+	summaryLocks sync.Map // map[string]*sync.Mutex
+}
+
+// summaryLock returns the per-session mutex, creating it on first use.
+func (s *Store) summaryLock(sessionID string) *sync.Mutex {
+	m, _ := s.summaryLocks.LoadOrStore(sessionID, &sync.Mutex{})
+	return m.(*sync.Mutex)
 }
 
 // Option configures a Store at construction.
@@ -100,6 +116,7 @@ const liveSelect = `
 SELECT e.entry_id, e.content, e.tags, e.origin, e.created_at, e.original_created_at
 FROM   memory_events e
 WHERE  e.tenant_id = $1
+  AND  e.kind <> 'summary'
   AND  e.op IN ('create','update')
   AND  NOT EXISTS (SELECT 1 FROM memory_events s
                    WHERE s.tenant_id = $1 AND s.supersedes = e.entry_id)
@@ -279,6 +296,14 @@ func (s *Store) Get(ctx context.Context, id string) (hmem.Entry, bool, error) {
 // summary is embedded when an embedder is present (harmless; recall is keyed, and
 // SearchSimilar excludes kind='summary').
 func (s *Store) PutSessionSummary(ctx context.Context, sessionID, content string) error {
+	// Serialize same-session writes over the full read+write critical section:
+	// two overlapping PutSessionSummary(S) must not both read the same live
+	// prevID and both go live (forking the supersede chain). Different sessions
+	// use distinct mutexes and do not contend.
+	lock := s.summaryLock(sessionID)
+	lock.Lock()
+	defer lock.Unlock()
+
 	now := time.Now().UTC()
 	// Find the current live summary row's entry_id + birth time (if any).
 	var prevID string

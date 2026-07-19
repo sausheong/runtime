@@ -6,6 +6,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"sync"
 	"testing"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
@@ -391,5 +392,95 @@ func TestStore_DedupFloorSeparation(t *testing.T) {
 	}
 	if !sawRelated {
 		t.Fatalf("'related' should clear the recall floor 0.7: %+v", recallHits)
+	}
+}
+
+// TestStore_SessionSummaryConcurrent defends the exact gap the final review
+// found: PutSessionSummary is a non-atomic read-then-write, and same-session
+// summary writes overlap (turn N+1's goroutine races turn N's). Without the
+// per-session lock, concurrent writers read the same prevID and both go live,
+// forking the supersede chain into multiple live rows. With it, exactly one
+// live kind='summary' row survives for the (tenant, session).
+func TestStore_SessionSummaryConcurrent(t *testing.T) {
+	st, db := freshStore(t, "acme")
+	defer db.Close()
+	ctx := context.Background()
+
+	const n = 20
+	var wg sync.WaitGroup
+	wg.Add(n)
+	for i := 0; i < n; i++ {
+		go func(i int) {
+			defer wg.Done()
+			if err := st.PutSessionSummary(ctx, "S", fmt.Sprintf("digest-%d", i)); err != nil {
+				t.Errorf("put %d: %v", i, err)
+			}
+		}(i)
+	}
+	wg.Wait()
+
+	// Exactly one live summary row: a create|update row for the session that is
+	// neither superseded nor tombstoned (mirrors liveSummaryLiveness's predicates).
+	var live int
+	if err := db.QueryRow(
+		`SELECT count(1) FROM memory_events e
+		 WHERE e.tenant_id='acme' AND e.session_id='S' AND e.kind='summary'
+		   AND e.op IN ('create','update')
+		   AND NOT EXISTS (SELECT 1 FROM memory_events s
+		                   WHERE s.tenant_id='acme' AND s.supersedes = e.entry_id)
+		   AND NOT EXISTS (SELECT 1 FROM memory_events d
+		                   WHERE d.tenant_id='acme' AND d.op='delete' AND d.entry_id = e.entry_id)`).Scan(&live); err != nil {
+		t.Fatal(err)
+	}
+	if live != 1 {
+		t.Fatalf("want exactly one live summary row after %d concurrent writes, got %d", n, live)
+	}
+	// And it is still retrievable.
+	if _, ok, err := st.GetSessionSummary(ctx, "S"); err != nil || !ok {
+		t.Fatalf("summary should still be retrievable: ok=%v err=%v", ok, err)
+	}
+}
+
+// TestStore_ListGetExcludeSummaries proves summaries do not leak into the
+// agent-facing fact queries (List/Get, built on liveSelect) while remaining
+// retrievable via the dedicated summary path (GetSessionSummary).
+func TestStore_ListGetExcludeSummaries(t *testing.T) {
+	st, db := freshStore(t, "acme")
+	defer db.Close()
+	ctx := context.Background()
+
+	fact, err := st.Save(ctx, hmem.Entry{Content: "a real fact", Tags: []string{"t"}, Origin: "agent"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.PutSessionSummary(ctx, "S", "the summary"); err != nil {
+		t.Fatal(err)
+	}
+
+	// List returns only the fact, never the summary.
+	got, err := st.List(ctx, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("List should return exactly the one fact, got %d: %+v", len(got), got)
+	}
+	if got[0].Content != "a real fact" {
+		t.Fatalf("List returned wrong entry: %+v", got[0])
+	}
+	for _, e := range got {
+		if e.Content == "the summary" || e.Origin == "summary" {
+			t.Fatalf("summary leaked into List: %+v", e)
+		}
+	}
+
+	// Get on the fact id still works.
+	if _, ok, err := st.Get(ctx, fact.ID); err != nil || !ok {
+		t.Fatalf("Get on fact: ok=%v err=%v", ok, err)
+	}
+
+	// The summary is still retrievable via the dedicated path (not broken, just hidden).
+	if s, ok, err := st.GetSessionSummary(ctx, "S"); err != nil || !ok || s != "the summary" {
+		t.Fatalf("GetSessionSummary: got=%q ok=%v err=%v", s, ok, err)
 	}
 }
