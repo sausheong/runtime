@@ -14,4 +14,6 @@ const (
 	User   = "X-Runtime-User"   // identity.Principal.Subject
 	Tenant = "X-Runtime-Tenant" // identity.Principal.TenantID
 	Role   = "X-Runtime-Role"   // identity.Principal.Role
+
+	Assertion = "X-Runtime-Assertion" // caller's raw verified OIDC JWT (OBO subject_token); bearer secret, never logged
 )
