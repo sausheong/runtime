@@ -6,6 +6,8 @@ import (
 	"github.com/sausheong/harness/llm"
 	hrt "github.com/sausheong/harness/runtime"
 	"github.com/sausheong/harness/tool"
+
+	"github.com/sausheong/runtime/internal/config"
 )
 
 // Config is the entire surface an agent author provides to Serve. It describes
@@ -18,6 +20,10 @@ type Config struct {
 	Provider llm.LLMProvider                       // resolved LLM provider for Spec.Model
 	Tools    *tool.Registry                        // the agent's tool registry
 	KGFn     func(model string) hrt.KnowledgeGraph // optional; nil ⇒ no semantic recall
+	// Price is this agent's resolved per-model price, or nil when the model is
+	// unpriced (tokens still metered, cost skipped). Set by agentd from
+	// RUNTIME_AGENT_PRICING.
+	Price *config.ModelPrice
 }
 
 // Validate checks required fields.

@@ -31,6 +31,9 @@ type Manager struct {
 	// metrics is this agent's Prometheus registry. Nil-safe: tests construct
 	// Manager without it and every obs method no-ops on a nil receiver.
 	metrics *obs.AgentMetrics
+	// price is this agent's per-model price (from cfg.Price), or nil when the
+	// model is unpriced. Passed to every TurnObserved.
+	price *config.ModelPrice
 	// authToken, when non-empty, requires every inbound request to carry
 	// Authorization: Bearer <authToken>. "" ⇒ no auth (local/loopback agents).
 	authToken string
@@ -115,7 +118,7 @@ func (m *Manager) subscribe(sessionID string) (<-chan WireEvent, func()) {
 // entry itself. Nil-safe via the obs nil-receiver no-ops, so Managers built
 // without metrics are fine.
 func (m *Manager) observeTurn(outcome string, dur time.Duration, usage *llm.Usage, entries []session.SessionEntry) {
-	m.metrics.TurnObserved(outcome, dur, usage)
+	m.metrics.TurnObserved(outcome, dur, usage, m.price)
 	for _, e := range entries {
 		if e.Type != session.EntryTypeToolCall {
 			continue
@@ -247,6 +250,11 @@ func (m *Manager) sessionWorkflow(ctx dbos.DBOSContext, in turnInput) (string, e
 	// checkpointed turn outputs, so live execution and replay rebuild the
 	// identical running total.
 	totalTokens := 0
+	// Accounting totals persisted to the sessions row each turn (idempotent
+	// absolute-set on replay, like SetTurnCount). tokensAll is the FULL token
+	// count (incl. cache); costUSD accumulates priced turns only.
+	var tokensAll int64
+	var costUSD float64
 	for turn := 0; ; turn++ {
 		if turn >= maxTurns {
 			return m.failLimit(wfID, "max_turns", int64(turn), int64(maxTurns)), nil
@@ -378,9 +386,16 @@ func (m *Manager) sessionWorkflow(ctx dbos.DBOSContext, in turnInput) (string, e
 				m.limits.TurnTimeoutMS, m.limits.TurnTimeoutMS), nil
 		}
 		totalTokens += sumTokens(out.Usage)
+		tokensAll += sumAllTokens(out.Usage)
+		if m.price != nil {
+			costUSD += m.price.Cost(out.Usage)
+		}
 
 		applyEntries(canonical, out.Entries) // SOLE mutator of canonical
 		_ = m.st.SetTurnCount(context.Background(), wfID, turn+1)
+		if err := m.st.SetSessionUsage(context.Background(), wfID, tokensAll, costUSD); err != nil {
+			slog.Warn("set session usage failed", "session", wfID, "err", err)
+		}
 		for _, ev := range publishableEvents(out.Entries) {
 			m.publish(wfID, ev)
 		}
@@ -473,11 +488,16 @@ func Serve(ctx context.Context, cfg Config) error {
 		cfg:         cfg,
 		dbosCtx:     dctx,
 		st:          st,
-		metrics:     obs.NewAgentMetrics(cfg.Spec.ID),
+		metrics:     obs.NewAgentMetrics(cfg.Spec.ID, os.Getenv("RUNTIME_AGENT_TENANT"), cfg.Spec.Model),
+		price:       cfg.Price,
 		authToken:   os.Getenv("RUNTIME_AGENT_AUTH_TOKEN"),
 		replica:     replica,
 		limits:      limits,
 		subscribers: map[string][]chan WireEvent{},
+	}
+	if m.price == nil {
+		slog.Warn("agent model has no price entry; cost will not be metered (tokens still recorded)",
+			"agent", cfg.Spec.ID, "model", cfg.Spec.Model)
 	}
 
 	// Register BEFORE Launch so recovery can find the workflow.

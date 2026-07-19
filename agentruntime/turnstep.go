@@ -67,6 +67,17 @@ func sumTokens(u *llm.Usage) int {
 	return u.InputTokens + u.OutputTokens
 }
 
+// sumAllTokens is the full accounting total for a turn: input + output + both
+// cache directions. Wider than sumTokens (the max_tokens budget), used for the
+// persisted sessions.tokens_total. Nil ⇒ 0.
+func sumAllTokens(u *llm.Usage) int64 {
+	if u == nil {
+		return 0
+	}
+	return int64(u.InputTokens + u.OutputTokens +
+		u.CacheCreationInputTokens + u.CacheReadInputTokens)
+}
+
 // breachMsg formats the uniform limit-breach event text.
 func breachMsg(limit string, observed, configured int64) string {
 	return fmt.Sprintf("limit exceeded: %s (%d/%d)", limit, observed, configured)

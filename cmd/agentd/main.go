@@ -16,6 +16,7 @@ import (
 
 	"github.com/sausheong/runtime/agentruntime"
 	"github.com/sausheong/runtime/internal/agentkind"
+	"github.com/sausheong/runtime/internal/config"
 	"github.com/sausheong/runtime/internal/store"
 )
 
@@ -42,6 +43,7 @@ func main() {
 	memoryOn := os.Getenv("RUNTIME_AGENT_MEMORY") == "1"
 	gatewayURL := os.Getenv("RUNTIME_GATEWAY_URL")
 	gatewayKey := os.Getenv("RUNTIME_GATEWAY_KEY")
+	priceJSON := os.Getenv("RUNTIME_AGENT_PRICING")
 
 	db, err := sql.Open("pgx", dsn)
 	if err != nil {
@@ -67,6 +69,11 @@ func main() {
 	})
 	if err != nil {
 		log.Fatalf("agentd: build agent kind %q: %v", kind, err)
+	}
+	if mp, ok, perr := config.ParseModelPrice(priceJSON); perr != nil {
+		log.Fatalf("agentd: RUNTIME_AGENT_PRICING: %v", perr)
+	} else if ok {
+		cfg.Price = &mp
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
