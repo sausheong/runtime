@@ -130,6 +130,82 @@ destructive sandbox code for everyone, in every tenant:
 A tenant admin cannot weaken a platform forbid: Cedar's forbid-overrides rule
 means a tenant `permit` can never re-enable a platform-forbidden call.
 
+## Cost metering
+
+Attach dollar prices to models and the platform meters per-turn LLM cost. Add a
+top-level `pricing:` block to `runtime.yaml`, keyed by the exact
+`provider/model` string the agent uses:
+
+```yaml
+pricing:
+  currency: USD
+  models:
+    anthropic/claude-opus-4-8: { input: 15.00, output: 75.00, cache_write: 18.75, cache_read: 1.50 }
+    openai/gpt-4o:             { input: 2.50,  output: 10.00 }
+```
+
+- Prices are **$ per million tokens**. Matching is **exact** on the full
+  `provider/model` key — no prefix or wildcard fallback.
+- `cache_write` defaults to `input` and `cache_read` defaults to `0` when omitted.
+- The block is **optional**. An absent or empty `pricing:` means every model is
+  unpriced — tokens still flow, only dollar cost is not computed.
+- A **malformed** block (a negative, NaN, or Inf price) is a **boot failure**
+  (fail-closed: a broken price table must never silently meter wrong costs).
+- A model with no price entry never stalls the agent: its turns still run and
+  still emit tokens, plus `agent_cost_unpriced_total` and one boot log line
+  naming the unpriced model.
+
+Three agent metrics carry the accounting (all `agent_*`, merged into runtimed's
+exposition — see [README.md](README.md) for the full inventory):
+
+- `agent_tokens_total{agent,tenant,model,direction}` — tokens by direction
+  (`input`/`output`/`cache_creation`/`cache_read`).
+- `agent_cost_usd_total{agent,tenant,model}` — dollar cost per turn (tokens ×
+  per-model price, **cache included**), emitted only for priced models.
+- `agent_cost_unpriced_total{agent,tenant,model}` — +1 per turn when the model
+  has no price entry (a cost blind spot; alertable via `UnpricedModelUsage`).
+
+Per session, cumulative `tokens_total` and `cost_usd` are persisted and shown in
+the session API (`GET /agents/<id>/sessions` and `.../sessions/<id>`) and the
+console session view.
+
+Two caveats to keep in mind:
+
+- **Metering-grade, not billing-grade.** Cost is a `float64` sum for
+  observability and rough budgeting — do not reconcile invoices against it.
+- **Cost includes cache tokens; the `max_tokens` budget does not.** The P1.2
+  lifecycle `max_tokens` guardrail counts only input + output, so a session's
+  metered cost can reflect cache traffic that never counted toward its token
+  budget.
+
+## Alerting
+
+The compose stack ships an **Alertmanager** service on `:9093`. Prometheus loads
+every rule file under `deploy/compose/rules/*.rules.yml` and forwards firing
+alerts to Alertmanager.
+
+The bundled `rules/runtime.rules.yml` has seven starter rules:
+
+| Alert | Fires when | Severity |
+|---|---|---|
+| `AgentDown` | an agent replica's `/metrics` is unreachable for 2m | critical |
+| `GatewayUpstreamDown` | a gateway upstream is unreachable for 2m | warning |
+| `HighTurnErrorRate` | an agent's turn error ratio exceeds 20% over 10m | warning |
+| `SessionLimitSpike` | lifecycle limits trip >5 times in 15m | warning |
+| `PolicyDenySpike` | a tenant sees >10 gateway policy denials in 15m | warning |
+| `UnpricedModelUsage` | a model runs with no price entry (cost blind spot) | warning |
+| `CostBurnHigh` | *(commented)* a tenant's projected spend rate is high | warning |
+
+`CostBurnHigh` is shipped **commented** because its dollars-per-hour threshold
+is deployment-specific — uncomment it in the rules file and tune the threshold
+for your fleet before enabling.
+
+By default alerts route to a **null receiver** (`deploy/compose/alertmanager.yml`),
+so the stack is self-contained and provable without an external notifier. To
+wire a real one: uncomment the Slack or PagerDuty block in `alertmanager.yml`,
+fill in its `api_url`/`routing_key`, and point `route.receiver` at that
+receiver's name. Restart Alertmanager to apply.
+
 ## Observability
 
 - **Grafana** http://localhost:3000 (anonymous viewer) — the runtime dashboard.
@@ -141,5 +217,8 @@ means a tenant `permit` can never re-enable a platform-forbidden call.
   to find sessions terminated by timeout, turn, or token guardrails.
 - **Policy decisions** — query `runtime_gateway_policy_decisions_total` to see
   gateway allow/deny/error counts per tenant; denials are also audit-logged.
+- **Cost** — query `agent_cost_usd_total` and `agent_tokens_total` (both labelled
+  `tenant`/`model`) for spend and token burn; `agent_cost_unpriced_total` flags
+  models running without a price. See [Cost metering](#cost-metering).
 
 For the complete configuration and metrics reference, see [README.md](README.md).

@@ -413,6 +413,27 @@ The bundled Python contract shim does not currently enforce
 process supervisor. The contract and control plane still understand the
 terminal `limit_exceeded` status when a foreign implementation emits it.
 
+### Cost metering (`pricing:`)
+
+An optional top-level `pricing:` block in `runtime.yaml` attaches dollar prices
+to models so the platform meters per-turn LLM cost:
+
+```yaml
+pricing:
+  currency: USD
+  models:
+    anthropic/claude-opus-4-8: { input: 15.00, output: 75.00, cache_write: 18.75, cache_read: 1.50 }
+    openai/gpt-4o:             { input: 2.50,  output: 10.00 }
+```
+
+Prices are **$ per million tokens**, keyed by the exact `provider/model`
+(`cache_write` defaults to `input`, `cache_read` to `0`). An absent/empty block
+means everything is unpriced (tokens still flow); a malformed block is a boot
+failure. Cost feeds `agent_cost_usd_total` / `agent_cost_unpriced_total` and the
+per-session `cost_usd`. Cost is **metering-grade, not billing-grade**, and
+**includes cache tokens** whereas the `max_tokens` budget above does not. See
+the [operator guide](operator-guide.md#cost-metering) for the full reference.
+
 ## Authentication & multi-tenancy
 
 The control plane enforces **multi-tenant, role-based access control** at the
@@ -1132,7 +1153,7 @@ curl -s localhost:8080/metrics | grep -E '^(runtime_|agent_)' | head
 # runtime_agent_up{agent="support"} 1
 # runtime_http_requests_total{method="POST",route="/agents/{id}/...",status="200"} 4
 # agent_turns_total{agent="support",outcome="completed"} 7
-# agent_tokens_total{agent="support",direction="input"} 18342
+# agent_tokens_total{agent="support",tenant="acme",model="anthropic/claude-opus-4-8",direction="input"} 18342
 ```
 
 ### Metrics inventory
@@ -1159,7 +1180,9 @@ reserved for it):
 |---|---|---|
 | `agent_turns_total` | `agent,outcome` | Turns by outcome (`completed`/`error`/`aborted`/`continue`/`turn_timeout`). |
 | `agent_turn_duration_seconds` | `agent` | Turn wall time (buckets sized for LLM turns: 0.1s–120s). |
-| `agent_tokens_total` | `agent,direction` | LLM tokens by direction (`input`/`output`/`cache_creation`/`cache_read`). |
+| `agent_tokens_total` | `agent,tenant,model,direction` | LLM tokens by direction (`input`/`output`/`cache_creation`/`cache_read`). |
+| `agent_cost_usd_total` | `agent,tenant,model` | LLM dollar cost, tokens × per-model price incl. cache; emitted only for priced models. |
+| `agent_cost_unpriced_total` | `agent,tenant,model` | Turns whose model has no price entry — a cost blind spot; alertable via `UnpricedModelUsage`. |
 | `agent_tool_calls_total` | `agent,tool` | Tool calls dispatched by the agent loop. |
 | `agent_session_limit_hits_total` | `agent,limit` | Sessions terminated by `turn_timeout`, `session_timeout`, `max_turns`, or `max_tokens`. |
 
@@ -1167,11 +1190,17 @@ reserved for it):
 
 `GET /metrics` is **auth-free**, like `/healthz` — it sits outside the identity
 middleware so a Prometheus scraper needs no service key. That is safe because
-every label value is an **operator-level identifier** (agent ids, gateway
-server names, tool names, route patterns) — never tenant, session, or user
-data. That is the **cardinality promise**: no per-tenant / per-session /
-per-user labels exist anywhere in the exposition, and adding one is a spec
-change, not a casual edit. On each scrape, `runtimed` fans out to every
+every label value is a **bounded identifier**: operator-level identifiers (agent
+ids, gateway server names, tool names, route patterns), plus `tenant` and
+`model` on the token/cost series (`agent_tokens_total`, `agent_cost_usd_total`,
+`agent_cost_unpriced_total`) and `tenant` on the gateway policy series
+(`runtime_gateway_policy_decisions_total`). Both added
+dimensions are bounded — the tenant count and the configured-model count are
+finite — so they do not explode cardinality. That is the **cardinality
+promise**: **no per-session and no per-user labels** (the unbounded dimensions)
+exist anywhere in the exposition, and adding one is a spec change, not a casual
+edit. Per-session cost lives in the DB and the session API, never in Prometheus.
+On each scrape, `runtimed` fans out to every
 supervised agent's `/metrics` concurrently (500ms cap per agent), parses each
 exposition, and merges families by name with **server-enforced agent labels**:
 the registered agent id is injected/overwritten on every scraped series, so a
@@ -1870,6 +1899,7 @@ unaffected.
 | `RUNTIME_LIMIT_MAX_TURNS` | runtimed | (unset) | Platform default durable-loop iteration cap. Per-agent `0` opts out of this default. |
 | `RUNTIME_LIMIT_MAX_TOKENS` | runtimed | (unset) | Platform default cumulative input + output token budget. Per-agent `0` opts out. |
 | `RUNTIME_AGENT_LIMITS` | agentd | (set by runtimed) | Resolved lifecycle limits as JSON. Operator-injected; do not set directly for supervised local agents. |
+| `RUNTIME_AGENT_PRICING` | agentd | (set by runtimed) | This agent's per-model price as JSON, resolved from the `pricing:` block. Operator-injected; do not set directly. Empty ⇒ the model is unpriced. |
 | `RUNTIME_EMBED_MODEL` | agentd | (unset) | Embedding model for semantic recall. Unset ⇒ recall disabled (tag/id memory only). |
 | `RUNTIME_EMBED_DIM` | agentd | (unset) | Embedding dimension (the `vector(N)` width). Required + positive when `RUNTIME_EMBED_MODEL` is set; invalid ⇒ fatal at startup. |
 | `RUNTIME_EMBED_RECALL_K` | agentd | `5` | Max memories injected per turn. |

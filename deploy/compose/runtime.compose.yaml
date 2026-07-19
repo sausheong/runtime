@@ -17,6 +17,17 @@ agents:
     listen_addr: 127.0.0.1:8102
     gateway: true
 
+# Cost metering. Prices are $ per MILLION tokens, keyed by the exact
+# provider/model. The bundled agents use test/scripted, priced here with nominal
+# values so the shipped stack demonstrates agent_cost_usd_total out of the box.
+# When you switch an agent to a real model, add its price here (examples below).
+pricing:
+  currency: USD
+  models:
+    test/scripted: { input: 1.00, output: 2.00 }
+    # anthropic/claude-opus-4-8: { input: 15.00, output: 75.00, cache_write: 18.75, cache_read: 1.50 }
+    # openai/gpt-4o:             { input: 2.50,  output: 10.00 }
+
 gateway:
   # With identity ON, every `gateway: true` agent needs a service key for its
   # tenant (runtimed is fail-closed: it refuses to start otherwise). On this

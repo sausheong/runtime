@@ -162,3 +162,8 @@ A session normally ends as `completed` or `error`. If the operator configured a
 turn, session, turn-count, or token guardrail, it can instead end as
 `limit_exceeded`; the terminal SSE event is still an `error` event and names the
 limit that was reached.
+
+A session's cumulative `tokens_total` and `cost_usd` are visible in the session
+API (`GET /agents/<id>/sessions` and `.../sessions/<id>`) and the console session
+view. `cost_usd` is populated only when the operator has priced the agent's
+model; otherwise the tokens are still counted but cost stays `0`.
