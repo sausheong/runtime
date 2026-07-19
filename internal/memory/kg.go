@@ -101,8 +101,21 @@ func NewKG(st *Store, k int, floor float64, opts ...KGOption) *KG {
 	for _, o := range opts {
 		o(g)
 	}
+	// The summary-only path (WithStrategies without WithIngest) leaves sem nil;
+	// a nil-channel send in ingestWith always hits the drop branch, so every turn
+	// would be dropped ("ingest at capacity"). Default an inflight bound whenever
+	// any ingest work is configured but no option set one. WithIngest, when used,
+	// has already sized sem from its maxInflight, so this only fills the gap.
+	if g.sem == nil && (len(g.strategies) > 0 || g.extractor != nil) {
+		g.sem = make(chan struct{}, defaultMaxInflight)
+	}
 	return g
 }
+
+// defaultMaxInflight bounds concurrent ingest goroutines when no explicit
+// maxInflight is configured (e.g. the summary-only KG). Matches WithIngest's
+// registry default (RUNTIME_INGEST_MAX_INFLIGHT).
+const defaultMaxInflight = 4
 
 // newKGWithSearch is the recall test seam: inject a fake embedder + search.
 func newKGWithSearch(emb Embedder, k int, floor float64, s searcher) *KG {
