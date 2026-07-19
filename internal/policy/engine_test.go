@@ -152,3 +152,60 @@ forbid (principal, action, resource) when { context.input has code };`)
 		}
 	}
 }
+
+func TestArgsEntityEscapeDoesNotBypass(t *testing.T) {
+	// A top-level "__entity" key must NOT make context.input a bare entity ref
+	// (Cedar JSON dialect escape) — the code-inspecting forbid must still fire.
+	src := []byte(`forbid (principal, action, resource)
+when { context.input has code && context.input.code like "*rm -rf*" };`)
+	e, err := NewEngine(src, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range []string{
+		`{"code":"rm -rf /","__entity":{"type":"x","id":"y"}}`,
+		`{"code":"rm -rf /","__extn":{"fn":"decimal","arg":"1.0"}}`,
+	} {
+		d := e.Evaluate(context.Background(), call("sbx__run", args))
+		if d.Allow {
+			t.Errorf("escape key %q bypassed the forbid (got allow)", args)
+		}
+	}
+}
+
+func TestArgsFloatsAllowedUnderPermitByDefault(t *testing.T) {
+	// Engine on, NO policies: benign float/bigint/scientific args must be
+	// ALLOWED (permit-by-default), not fail closed on number coercion.
+	e, err := NewEngine(nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range []string{
+		`{"temperature":0.7}`,
+		`{"n":1e5}`,
+		`{"big":99999999999999999999999999}`,
+		`{"arr":[1.5,2.5]}`,
+		`{"nested":{"x":0.1}}`,
+	} {
+		d := e.Evaluate(context.Background(), call("sbx__run", args))
+		if !d.Allow || d.Err != nil {
+			t.Errorf("benign args %q must be allowed under permit-by-default, got %+v", args, d)
+		}
+	}
+}
+
+func TestArgsIntegerComparisonStillWorks(t *testing.T) {
+	// Integral args map to Cedar Long so numeric comparisons in policies work.
+	src := []byte(`forbid (principal, action, resource)
+when { context.input has amount && context.input.amount > 500 };`)
+	e, err := NewEngine(src, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d := e.Evaluate(context.Background(), call("pay__refund", `{"amount":1000}`)); d.Allow {
+		t.Error("amount>500 must be denied")
+	}
+	if d := e.Evaluate(context.Background(), call("pay__refund", `{"amount":100}`)); !d.Allow {
+		t.Errorf("amount<=500 must pass: %+v", d)
+	}
+}

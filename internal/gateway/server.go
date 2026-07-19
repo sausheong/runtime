@@ -248,11 +248,15 @@ func (h *Handler) toolHandler(builtFor string, t tool.Tool, forwardTenant bool, 
 				}
 				h.Metrics.PolicyDecision(tenantLabel, decision)
 				// Audit: the deny is the actionable event. Never log argument
-				// values or policy text.
+				// values or policy text. d.Err is deliberately NOT logged — a
+				// Cedar evaluation error can embed argument-derived detail
+				// (e.g. a value that failed coercion); the static decision
+				// label is enough to alert, and the arg content stays out of
+				// logs (security invariant: no argument values in logs).
 				slog.Warn("gateway policy deny",
 					"tenant", tenantLabel, "subject", p.Subject,
 					"tool", t.Name(), "policy_id", d.PolicyID,
-					"decision", decision, "err", d.Err)
+					"decision", decision)
 				return errResult(msg), nil
 			}
 			h.Metrics.PolicyDecision(tenantLabel, "allow")

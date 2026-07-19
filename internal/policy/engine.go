@@ -7,6 +7,7 @@
 package policy
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -211,17 +212,31 @@ func cedarRequest(req Request) (cedar.Request, ctypes.EntityGetter, error) {
 	resourceUID := cedar.NewEntityUID("Gateway::Tool", cedar.String(req.ToolName))
 
 	// context.input: the caller's raw argument OBJECT; anything else ⇒ {}.
+	// The args are decoded with PLAIN encoding/json and mapped to Cedar values
+	// by jsonToCedar. We deliberately do NOT use cedar-go's types.UnmarshalJSON
+	// here: that reads Cedar's JSON *dialect*, in which a top-level object with
+	// a "__entity"/"__extn" key is an entity/extension reference — every other
+	// key is discarded. An agent could then append `"__entity":{...}` to make
+	// `context.input` a bare entity ref, so `context.input has <k>` is false
+	// and an argument-inspecting forbid silently misses while the upstream
+	// still receives the real payload. jsonToCedar treats every key literally.
 	inputVal := cedar.Value(cedar.NewRecord(cedar.RecordMap{}))
 	if len(req.Args) > 0 {
-		var probe map[string]any
-		if err := json.Unmarshal(req.Args, &probe); err == nil && probe != nil {
-			var v cedar.Value
-			if err := ctypes.UnmarshalJSON(req.Args, &v); err != nil {
+		dec := json.NewDecoder(bytes.NewReader(req.Args))
+		dec.UseNumber()
+		var raw any
+		if err := dec.Decode(&raw); err != nil {
+			return cedar.Request{}, nil, fmt.Errorf("policy: malformed arguments JSON: %w", err)
+		}
+		// Only a JSON object becomes the input record; any other shape
+		// (null/array/scalar) coerces to {} so `has`-style policies simply
+		// don't match rather than erroring.
+		if obj, ok := raw.(map[string]any); ok {
+			v, err := jsonToCedar(obj)
+			if err != nil {
 				return cedar.Request{}, nil, fmt.Errorf("policy: args to cedar value: %w", err)
 			}
 			inputVal = v
-		} else if err != nil && !isJSONNonObject(req.Args) {
-			return cedar.Request{}, nil, fmt.Errorf("policy: malformed arguments JSON: %w", err)
 		}
 	}
 
@@ -244,14 +259,60 @@ func cedarRequest(req Request) (cedar.Request, ctypes.EntityGetter, error) {
 	}, entities, nil
 }
 
-// isJSONNonObject reports whether raw parses as VALID JSON that is not an
-// object (null, array, string, number, bool) — those coerce to input:{}
-// rather than failing closed.
-func isJSONNonObject(raw json.RawMessage) bool {
-	var v any
-	if err := json.Unmarshal(raw, &v); err != nil {
-		return false
+// jsonToCedar converts a plain-JSON value (as produced by encoding/json with
+// UseNumber) into a cedar.Value, mapping types literally:
+//   - object → Record (every key kept verbatim; "__entity"/"__extn" are just
+//     ordinary keys, never entity/extension references)
+//   - array  → Set
+//   - json.Number → Long when integral, else Decimal (so floats and large
+//     numbers never fail closed under permit-by-default)
+//   - string → String, bool → Boolean, null → empty String
+//
+// The number policy: Cedar has no float type, only Long and Decimal. An
+// integral value that fits int64 becomes a Long (so `>` / `==` comparisons in
+// policies work). Anything else (fractional, or beyond int64) becomes a
+// Decimal when representable, else its String form — never an error, so a
+// benign `temperature: 0.7` arg cannot break a call when no policy even
+// inspects it.
+func jsonToCedar(v any) (ctypes.Value, error) {
+	switch t := v.(type) {
+	case nil:
+		return ctypes.String(""), nil
+	case bool:
+		return ctypes.Boolean(t), nil
+	case string:
+		return ctypes.String(t), nil
+	case json.Number:
+		if i, err := t.Int64(); err == nil {
+			return ctypes.Long(i), nil
+		}
+		if f, err := t.Float64(); err == nil {
+			if d, derr := ctypes.NewDecimalFromFloat(f); derr == nil {
+				return d, nil
+			}
+		}
+		return ctypes.String(t.String()), nil
+	case map[string]any:
+		m := ctypes.RecordMap{}
+		for k, val := range t {
+			cv, err := jsonToCedar(val)
+			if err != nil {
+				return nil, err
+			}
+			m[ctypes.String(k)] = cv
+		}
+		return ctypes.NewRecord(m), nil
+	case []any:
+		vals := make([]ctypes.Value, 0, len(t))
+		for _, el := range t {
+			cv, err := jsonToCedar(el)
+			if err != nil {
+				return nil, err
+			}
+			vals = append(vals, cv)
+		}
+		return ctypes.NewSet(vals...), nil
+	default:
+		return nil, fmt.Errorf("unsupported JSON type %T", v)
 	}
-	_, isObj := v.(map[string]any)
-	return !isObj
 }
