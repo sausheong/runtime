@@ -24,6 +24,7 @@ import (
 	"github.com/sausheong/runtime/internal/identity"
 	"github.com/sausheong/runtime/internal/memory"
 	"github.com/sausheong/runtime/internal/obs"
+	"github.com/sausheong/runtime/internal/policy"
 	"github.com/sausheong/runtime/internal/store"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"golang.org/x/oauth2"
@@ -224,6 +225,25 @@ func main() {
 		if verr := validateGatewaySearch(cfg, embOn); verr != nil {
 			slog.Error("gateway search misconfigured", "err", verr)
 			os.Exit(1)
+		}
+
+		// Cedar policy engine (P1.1): tenant layer is the DB-backed store; the
+		// platform layer comes from RUNTIME_POLICY_FILE. A parse error or an
+		// unreadable file is fatal (fail-closed guardrails).
+		polStore, perr := policy.NewStore(ctx, identityDB)
+		if perr != nil {
+			slog.Error("policy store init failed", "err", perr)
+			os.Exit(1)
+		}
+		engine, perr := buildPolicyEngine(os.Getenv, os.ReadFile, polStore)
+		if perr != nil {
+			slog.Error("policy engine init failed", "err", perr)
+			os.Exit(1)
+		}
+		if engine != nil {
+			gwHandler.Policy = engine
+			slog.Info("policy engine enabled",
+				"platform_file", os.Getenv("RUNTIME_POLICY_FILE"), "tenant_layer", "on")
 		}
 	}
 
@@ -669,6 +689,29 @@ func envIntOr(key string, def int) int {
 		return def
 	}
 	return n
+}
+
+// buildPolicyEngine constructs the Cedar policy engine from the environment.
+// Activation: RUNTIME_POLICY_FILE (platform .cedar file; implies enabled) or
+// RUNTIME_POLICY_ENABLED=1 (empty platform layer). Neither ⇒ (nil, nil):
+// enforcement off. tenants is the DB-backed tenant layer (nil ⇒ platform-only).
+// A missing/unreadable file or a platform parse error is a boot error
+// (fail-closed: a broken guardrail file must never mean "no guardrails").
+func buildPolicyEngine(getenv func(string) string, readFile func(string) ([]byte, error), tenants policy.TenantPolicies) (*policy.Engine, error) {
+	file := getenv("RUNTIME_POLICY_FILE")
+	enabled := getenv("RUNTIME_POLICY_ENABLED") == "1"
+	if file == "" && !enabled {
+		return nil, nil
+	}
+	var platformSrc []byte
+	if file != "" {
+		b, err := readFile(file)
+		if err != nil {
+			return nil, fmt.Errorf("policy: platform file %q: %w", file, err)
+		}
+		platformSrc = b
+	}
+	return policy.NewEngine(platformSrc, tenants)
 }
 
 // buildSecretBroker constructs a secret broker from the keyring env vars over the
