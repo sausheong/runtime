@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	_ "embed"
+	"encoding/json"
 	"errors"
 
 	"github.com/lib/pq" // pq.Array for TEXT[]; pgx stdlib is the driver
@@ -27,6 +28,7 @@ type UpstreamRow struct {
 	Operations []string
 	CredSecret string
 	CredHeader string
+	Enrich     map[string]string // openapi-only claim→header map (stored as JSONB)
 }
 
 // ToConfig maps a stored row onto config.GatewayServer. The owning tenant is
@@ -42,7 +44,34 @@ func (r UpstreamRow) ToConfig() config.GatewayServer {
 		Tenants:    []string{r.TenantID},
 		CredSecret: r.CredSecret,
 		CredHeader: r.CredHeader,
+		Enrich:     r.Enrich,
 	}
+}
+
+// marshalEnrich turns a claim→header map into a JSONB value. A nil/empty map
+// stores SQL NULL so rows created before the enrich column stay indistinguishable
+// from rows that simply have no enrichment. The JSON is returned as a string so
+// the driver sends it as text (implicitly cast to jsonb on assignment) rather
+// than as bytea.
+func marshalEnrich(m map[string]string) (any, error) {
+	if len(m) == 0 {
+		return nil, nil
+	}
+	b, err := json.Marshal(m)
+	if err != nil {
+		return nil, err
+	}
+	return string(b), nil
+}
+
+// scanEnrich unmarshals a JSONB enrich value (which may be SQL NULL for legacy
+// rows) into a map. NULL/empty ⇒ nil map.
+func scanEnrich(raw []byte, out *map[string]string) error {
+	if len(raw) == 0 {
+		*out = nil
+		return nil
+	}
+	return json.Unmarshal(raw, out)
 }
 
 // UpstreamStore persists tenant-registered upstreams in Postgres.
@@ -65,18 +94,22 @@ func (s *UpstreamStore) InsertUpstream(ctx context.Context, r UpstreamRow) error
 	if ops == nil {
 		ops = []string{}
 	}
-	_, err := s.db.ExecContext(ctx,
+	enrich, err := marshalEnrich(r.Enrich)
+	if err != nil {
+		return err
+	}
+	_, err = s.db.ExecContext(ctx,
 		`INSERT INTO gateway_upstreams
-		 (id, tenant_id, name, transport, url, openapi, base_url, operations, cred_secret, cred_header)
-		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+		 (id, tenant_id, name, transport, url, openapi, base_url, operations, cred_secret, cred_header, enrich)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
 		r.ID, r.TenantID, r.Name, r.Transport, r.URL, r.OpenAPI, r.BaseURL,
-		pq.Array(ops), r.CredSecret, r.CredHeader)
+		pq.Array(ops), r.CredSecret, r.CredHeader, enrich)
 	return err
 }
 
 // ListUpstreams returns rows for one tenant, or all rows when tenant=="".
 func (s *UpstreamStore) ListUpstreams(ctx context.Context, tenant string) ([]UpstreamRow, error) {
-	q := `SELECT id, tenant_id, name, transport, url, openapi, base_url, operations, cred_secret, cred_header
+	q := `SELECT id, tenant_id, name, transport, url, openapi, base_url, operations, cred_secret, cred_header, enrich
 	      FROM gateway_upstreams`
 	args := []any{}
 	if tenant != "" {
@@ -92,8 +125,12 @@ func (s *UpstreamStore) ListUpstreams(ctx context.Context, tenant string) ([]Ups
 	var out []UpstreamRow
 	for rows.Next() {
 		var r UpstreamRow
+		var enrich []byte
 		if err := rows.Scan(&r.ID, &r.TenantID, &r.Name, &r.Transport, &r.URL,
-			&r.OpenAPI, &r.BaseURL, pq.Array(&r.Operations), &r.CredSecret, &r.CredHeader); err != nil {
+			&r.OpenAPI, &r.BaseURL, pq.Array(&r.Operations), &r.CredSecret, &r.CredHeader, &enrich); err != nil {
+			return nil, err
+		}
+		if err := scanEnrich(enrich, &r.Enrich); err != nil {
 			return nil, err
 		}
 		out = append(out, r)
@@ -104,15 +141,19 @@ func (s *UpstreamStore) ListUpstreams(ctx context.Context, tenant string) ([]Ups
 // GetUpstream returns one row by id (ok=false when absent).
 func (s *UpstreamStore) GetUpstream(ctx context.Context, id string) (UpstreamRow, bool, error) {
 	var r UpstreamRow
+	var enrich []byte
 	err := s.db.QueryRowContext(ctx,
-		`SELECT id, tenant_id, name, transport, url, openapi, base_url, operations, cred_secret, cred_header
+		`SELECT id, tenant_id, name, transport, url, openapi, base_url, operations, cred_secret, cred_header, enrich
 		 FROM gateway_upstreams WHERE id=$1`, id).
 		Scan(&r.ID, &r.TenantID, &r.Name, &r.Transport, &r.URL,
-			&r.OpenAPI, &r.BaseURL, pq.Array(&r.Operations), &r.CredSecret, &r.CredHeader)
+			&r.OpenAPI, &r.BaseURL, pq.Array(&r.Operations), &r.CredSecret, &r.CredHeader, &enrich)
 	if errors.Is(err, sql.ErrNoRows) {
 		return UpstreamRow{}, false, nil
 	}
 	if err != nil {
+		return UpstreamRow{}, false, err
+	}
+	if err := scanEnrich(enrich, &r.Enrich); err != nil {
 		return UpstreamRow{}, false, err
 	}
 	return r, true, nil

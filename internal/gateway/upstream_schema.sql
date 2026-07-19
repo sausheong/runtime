@@ -12,3 +12,7 @@ CREATE TABLE IF NOT EXISTS gateway_upstreams (
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
     UNIQUE (tenant_id, name)
 );
+
+-- P2.3 enrichment (openapi-only): claim→header map, stored as JSONB. Nullable
+-- so pre-existing rows (created before this column) keep working (nil enrich).
+ALTER TABLE gateway_upstreams ADD COLUMN IF NOT EXISTS enrich JSONB;

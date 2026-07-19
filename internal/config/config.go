@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"net/http"
 	"net/url"
 	"os"
 	"path"
@@ -270,6 +271,12 @@ type GatewayServer struct {
 	// CredHeader is the header CredSecret's value is injected into (e.g.
 	// "Authorization"). Required iff CredSecret is set.
 	CredHeader string `yaml:"cred_header"`
+
+	// Enrich maps a fixed principal claim (tenant|subject|role) to an outbound
+	// header name, injected per-call from the calling principal. OpenAPI-only
+	// (MCP-over-HTTP sessions set headers once at connect). Platform-set headers
+	// overwrite caller values.
+	Enrich map[string]string `yaml:"enrich"`
 }
 
 // GatewayConfig is the optional top-level gateway: section.
@@ -475,6 +482,34 @@ func (c *Config) Validate() error {
 			}
 			if s.CredSecret == "" || s.CredHeader == "" {
 				return fmt.Errorf("config: gateway server %q: cred_secret and cred_header must both be set", s.Name)
+			}
+		}
+		if len(s.Enrich) > 0 {
+			if s.OpenAPI == "" {
+				return fmt.Errorf("config: gateway server %q: enrich is only valid with openapi", s.Name)
+			}
+			for claim, header := range s.Enrich {
+				switch claim {
+				case "tenant", "subject", "role":
+				default:
+					return fmt.Errorf("config: gateway server %q: unknown enrich claim %q (want tenant|subject|role)", s.Name, claim)
+				}
+				if header == "" {
+					return fmt.Errorf("config: gateway server %q: enrich claim %q has empty header name", s.Name, claim)
+				}
+				// Collision with the credential header or any static header is a
+				// load error (no runtime precedence ambiguity).
+				if s.CredHeader != "" && http.CanonicalHeaderKey(header) == http.CanonicalHeaderKey(s.CredHeader) {
+					return fmt.Errorf("config: gateway server %q: enrich header %q collides with cred_header", s.Name, header)
+				}
+				for hk := range s.Headers {
+					if http.CanonicalHeaderKey(hk) == http.CanonicalHeaderKey(header) {
+						return fmt.Errorf("config: gateway server %q: enrich header %q collides with a static header", s.Name, header)
+					}
+				}
+				if !strings.HasPrefix(http.CanonicalHeaderKey(header), "X-Runtime-") {
+					fmt.Fprintf(os.Stderr, "config: gateway server %q: enrich header %q does not use the reserved X-Runtime- prefix (allowed, but the convention marks platform-set claims)\n", s.Name, header)
+				}
 			}
 		}
 		if err := expandEnvMap(s.Headers, "gateway server "+s.Name+" headers"); err != nil {
