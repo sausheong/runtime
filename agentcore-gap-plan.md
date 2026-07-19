@@ -38,9 +38,30 @@ land in `docs/superpowers/specs/` as each item starts.
   whole-branch review MERGE-READY, no Critical/Important. Deferred (Docker
   unavailable in dev env): live v1-proof alerting run + promtool/amtool lint.
 
-**Next: Phase P2 "Scoped" (v1.2) — P2.1 gateway OAuth2 → OBO, P2.2 memory
-strategy pipeline, P2.3 gateway quotas.** master unpushed (34 commits ahead of
-origin).
+**Phase P2 "Scoped" (v1.2) — IN PROGRESS. P2.3 DONE; P2.1 + P2.2 remain.**
+
+- **P2.3 Gateway quotas + enrichment — DONE (merged 2026-07-19, ff to `5ba6232`,
+  11 commits, branch `p2.3-gateway-quotas-enrichment`).** Quotas: new
+  `internal/quota` package (store + token-bucket limiter, most-specific-wins
+  resolution `(T,U)→(T,*)→(*,U)→(*,*)`, live reload via generation + 2s refresh
+  throttle, fail-open). Gate #4 in `gateway.toolHandler` (after policy, before
+  tenant injection): superuser-exempt, open-mode-skipped, rejects with MCP tool
+  error `quota exceeded: T/U (retry after Ns)`, metric
+  `runtime_gateway_quota_rejections_total{tenant,server}`. Full admin surface:
+  `quotas:` config + `RUNTIME_GATEWAY_QUOTA_DEFAULT` env floor + `/admin/quotas`
+  (RBAC: `*` superuser-only) + `runtimectl admin quota` + DB→live-limiter seed +
+  idle reaper. Enrichment: per-upstream `enrich:` map (fixed vocab
+  tenant|subject|role → outbound header), **OpenAPI-only** (MCP-over-HTTP sets
+  headers once at connect), injected per-call from the calling principal,
+  platform claims overwrite caller headers, cred/static collision = load error,
+  `X-Runtime-` convention = load warning. Fail-OPEN (availability control) —
+  deliberately asymmetric to P1.1 policy fail-closed. Reviews caught: limiter
+  per-call DB query (throttle fix), quota RBAC guard unreachable via force-pin
+  (pass-through fix), and a final-review outage-path throttle gap — all fixed.
+- **P2.1 OBO / OAuth2 outbound creds — NEXT.**
+- **P2.2 Memory strategies — after P2.1.**
+
+master unpushed (46 commits ahead of origin).
 
 ## Prioritization principles
 
