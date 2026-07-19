@@ -132,3 +132,23 @@ func TestSuperuserSubjectToPlatformLayer(t *testing.T) {
 		t.Error("superuser must NOT bypass platform forbids")
 	}
 }
+
+func TestMultiForbidDeterministicPolicyID(t *testing.T) {
+	// Two forbids that BOTH match: the reported PolicyID must be the
+	// smallest id every time, not map-iteration luck.
+	src := []byte(`forbid (principal, action, resource) when { resource.server == "sandbox" };
+forbid (principal, action, resource) when { context.input has code };`)
+	e, err := NewEngine(src, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 20; i++ {
+		d := e.Evaluate(context.Background(), call("sandbox__run_code", `{"code":"x"}`))
+		if d.Allow {
+			t.Fatal("must deny")
+		}
+		if d.PolicyID != "platform/0" {
+			t.Fatalf("run %d: PolicyID = %q, want stable platform/0", i, d.PolicyID)
+		}
+	}
+}

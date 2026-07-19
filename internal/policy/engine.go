@@ -149,9 +149,15 @@ func (e *Engine) Evaluate(ctx context.Context, req Request) (d Decision) {
 		return Decision{Allow: false, Err: fmt.Errorf("policy: evaluation: %s", diag.Errors[0].Message)}
 	}
 	if decision == cedar.Deny {
+		// diag.Reasons follows PolicySet map-iteration order, which is
+		// nondeterministic. Pick the smallest id so the same denied call
+		// always reports the same policy (stable audit trail across
+		// replicas and re-runs).
 		id := ""
-		if len(diag.Reasons) > 0 {
-			id = string(diag.Reasons[0].PolicyID)
+		for _, r := range diag.Reasons {
+			if id == "" || string(r.PolicyID) < id {
+				id = string(r.PolicyID)
+			}
 		}
 		return Decision{Allow: false, PolicyID: id}
 	}
