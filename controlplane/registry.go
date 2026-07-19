@@ -64,12 +64,17 @@ func NewRegistry(cfg *config.Config, binPath, dsn string) *Registry {
 		r.infos[a.ID] = AgentInfo{ID: a.ID, Name: a.Name, Model: a.Model, Tenant: a.Tenant}
 		r.rr[a.ID] = &atomic.Uint64{}
 
+		var pricingJSON string
+		if mp, ok := cfg.Pricing.PriceFor(a.Model); ok {
+			pricingJSON = mp.JSON()
+		}
 		base := AgentProcess{
 			AgentID: a.ID, BinPath: binPath, PGDSN: dsn,
 			Kind: a.Kind, Command: a.Command, WorkDir: a.WorkDir, Tenant: a.Tenant,
 			Memory: a.Memory, GatewayOn: a.Gateway.Enabled(),
 			GatewaySearch: a.Gateway == config.GatewaySearch,
 			LimitsJSON:    a.Limits.JSON(),
+			PricingJSON:   pricingJSON,
 		}
 		if a.URL != "" {
 			n := a.RemotePoolSize()

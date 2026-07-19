@@ -61,6 +61,11 @@ type AgentProcess struct {
 	// injected as RUNTIME_AGENT_LIMITS. "" ⇒ no limits.
 	LimitsJSON string
 
+	// PricingJSON is this agent's resolved per-model price (config.ModelPrice.JSON()),
+	// injected as RUNTIME_AGENT_PRICING. "" ⇒ the model is unpriced (tokens flow,
+	// cost skipped). Each agent serves one model, so one price object suffices.
+	PricingJSON string
+
 	broker SecretBroker // optional; injected by the Registry. nil ⇒ no secret brokering.
 }
 
@@ -85,6 +90,9 @@ func (a AgentProcess) envDelta(ctx context.Context) ([]string, error) {
 		// Resolved lifecycle limits (P1.2). Always emitted — explicit empty when
 		// no limits, so an inherited operator var can't smuggle limits in.
 		"RUNTIME_AGENT_LIMITS=" + a.LimitsJSON,
+		// Resolved per-model price (P1.3). Always emitted — explicit empty when
+		// unpriced, so an inherited operator var can't smuggle a price in.
+		"RUNTIME_AGENT_PRICING=" + a.PricingJSON,
 	}
 	// Agents that did NOT opt in get explicit empty-value entries so an
 	// inherited operator var (e.g. a leaked RUNTIME_GATEWAY_URL) can't enable
