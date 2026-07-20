@@ -12,7 +12,7 @@ import (
 
 // searcher is the slice of *Store the KG needs (declared as a func type so the
 // KG is unit-testable without Postgres).
-type searcher func(ctx context.Context, queryVec []float32, k int, floor float64) ([]hmem.Entry, error)
+type searcher func(ctx context.Context, queryVec []float32, k int, floor float64, kind string) ([]hmem.Entry, error)
 
 // saver wraps the one Store method the ingest path needs (func type for testability).
 type saver func(ctx context.Context, e hmem.Entry) error
@@ -216,7 +216,7 @@ func (g *KG) Recall(ctx context.Context, query string) string {
 	if err != nil {
 		return ""
 	}
-	hits, err := g.search(ctx, vec, g.k, g.floor)
+	hits, err := g.search(ctx, vec, g.k, g.floor, KindFact)
 	if err != nil || len(hits) == 0 {
 		return ""
 	}
@@ -317,7 +317,7 @@ func (g *KG) isDuplicate(ctx context.Context, fact string) bool {
 	if err != nil {
 		return false
 	}
-	hits, err := g.search(ctx, vec, 1, g.dedupFloor)
+	hits, err := g.search(ctx, vec, 1, g.dedupFloor, KindFact)
 	if err != nil {
 		return false
 	}

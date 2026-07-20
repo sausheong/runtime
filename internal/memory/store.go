@@ -23,9 +23,10 @@ var schemaSQL string
 //go:embed embed_schema.sql
 var embedSchemaSQL string
 
-// KindFact / KindSummary are the memory_events.kind discriminators. Facts are the
-// existing tool/agent path (Save/Update); summaries are per-session rolling
-// digests written via PutSessionSummary and excluded from similarity recall.
+// KindFact / KindSummary / KindEpisode are the memory_events.kind discriminators.
+// Facts are the existing tool/agent path (Save/Update); summaries are per-session
+// rolling digests written via PutSessionSummary and excluded from similarity
+// recall; episodes are strategy-captured turn records (SaveKind with KindEpisode).
 const (
 	KindFact    = "fact"
 	KindSummary = "summary"
@@ -418,18 +419,18 @@ func (v pgVector) Value() (driver.Value, error) {
 // SearchSimilar returns up to k live, embedded entries for the pinned tenant
 // whose cosine similarity to queryVec is >= floor, nearest first. Reuses M1's
 // liveness clauses (superseded/tombstoned excluded) and skips NULL embeddings.
-func (s *Store) SearchSimilar(ctx context.Context, queryVec []float32, k int, floor float64) ([]hmem.Entry, error) {
+func (s *Store) SearchSimilar(ctx context.Context, queryVec []float32, k int, floor float64, kind string) ([]hmem.Entry, error) {
 	// The liveness clauses (op IN, the two NOT EXISTS) mirror the liveSelect
 	// constant; they are re-spelled inline because SearchSimilar needs $3/$4/$5
-	// for the vector/floor/limit args (actor_id is $2). Keep these in sync with
-	// liveSelect.
+	// for the vector/floor/limit args (actor_id is $2, kind is $6). Keep these in
+	// sync with liveSelect.
 	q := `
 SELECT e.entry_id, e.content, e.tags, e.origin, e.created_at, e.original_created_at
 FROM   memory_events e
 WHERE  e.tenant_id = $1
   AND  e.actor_id = $2
   AND  e.embedding IS NOT NULL
-  AND  e.kind <> 'summary'
+  AND  e.kind = $6
   AND  e.op IN ('create','update')
   AND  NOT EXISTS (SELECT 1 FROM memory_events sup
                    WHERE sup.tenant_id = $1 AND sup.supersedes = e.entry_id)
@@ -438,7 +439,7 @@ WHERE  e.tenant_id = $1
   AND  1 - (e.embedding <=> $3) >= $4
 ORDER BY e.embedding <=> $3
 LIMIT $5`
-	rows, err := s.db.QueryContext(ctx, q, s.tenant, actorFrom(ctx), pgVector(queryVec), floor, k)
+	rows, err := s.db.QueryContext(ctx, q, s.tenant, actorFrom(ctx), pgVector(queryVec), floor, k, kind)
 	if err != nil {
 		return nil, fmt.Errorf("memory: search tenant %q: %w", s.tenant, err)
 	}

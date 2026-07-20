@@ -263,7 +263,7 @@ func TestStore_SearchSimilar(t *testing.T) {
 	st.Save(ctx, hmem.Entry{Content: "felines rule"})
 	st.Save(ctx, hmem.Entry{Content: "stock prices"})
 
-	hits, err := st.SearchSimilar(ctx, []float32{1, 0, 0}, 5, 0.5)
+	hits, err := st.SearchSimilar(ctx, []float32{1, 0, 0}, 5, 0.5, KindFact)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -273,7 +273,7 @@ func TestStore_SearchSimilar(t *testing.T) {
 	if hits[0].Content != "cats are great" {
 		t.Fatalf("nearest should be exact match, got %q", hits[0].Content)
 	}
-	hits2, _ := st.SearchSimilar(ctx, []float32{1, 0, 0}, 1, 0.0)
+	hits2, _ := st.SearchSimilar(ctx, []float32{1, 0, 0}, 1, 0.0, KindFact)
 	if len(hits2) != 1 {
 		t.Fatalf("K=1 cap failed: %d", len(hits2))
 	}
@@ -291,7 +291,7 @@ func TestStore_SearchSimilarSkipsNullAndRespectsLiveness(t *testing.T) {
 	st.Save(ctx, hmem.Entry{Content: "nullrow"})
 	emb.fail = false
 
-	hits, _ := st.SearchSimilar(ctx, []float32{1, 0, 0}, 10, 0.0)
+	hits, _ := st.SearchSimilar(ctx, []float32{1, 0, 0}, 10, 0.0, KindFact)
 	if len(hits) != 1 || hits[0].ID != keep.ID {
 		t.Fatalf("want only the live, embedded entry; got %+v", hits)
 	}
@@ -307,7 +307,7 @@ func TestStore_SearchSimilarCrossTenantIsolation(t *testing.T) {
 	}
 	ctx := context.Background()
 	alpha.Save(ctx, hmem.Entry{Content: "alpha-secret"})
-	hits, _ := beta.SearchSimilar(ctx, []float32{1, 0, 0}, 10, 0.0)
+	hits, _ := beta.SearchSimilar(ctx, []float32{1, 0, 0}, 10, 0.0, KindFact)
 	if len(hits) != 0 {
 		t.Fatalf("beta must not recall alpha's memory: %+v", hits)
 	}
@@ -374,7 +374,7 @@ func TestStore_DedupFloorSeparation(t *testing.T) {
 	st.Save(ctx, hmem.Entry{Content: "related"})
 
 	// At the dedup floor, only "near" is a duplicate of the query.
-	dupHits, err := st.SearchSimilar(ctx, []float32{1, 0, 0}, 1, 0.85)
+	dupHits, err := st.SearchSimilar(ctx, []float32{1, 0, 0}, 1, 0.85, KindFact)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -384,7 +384,7 @@ func TestStore_DedupFloorSeparation(t *testing.T) {
 
 	// "related" (0.80) sits above a 0.7 recall-style floor but below the 0.85
 	// dedup floor: it would be recalled, but is NOT treated as a duplicate.
-	recallHits, _ := st.SearchSimilar(ctx, []float32{1, 0, 0}, 5, 0.7)
+	recallHits, _ := st.SearchSimilar(ctx, []float32{1, 0, 0}, 5, 0.7, KindFact)
 	var sawRelated bool
 	for _, h := range recallHits {
 		if h.Content == "related" {
@@ -752,5 +752,35 @@ func TestSaveDelegatesToFactKind(t *testing.T) {
 	}
 	if kind != KindFact {
 		t.Fatalf("Save must stamp kind=fact, got %q", kind)
+	}
+}
+
+func TestSearchSimilar_KindIsolation(t *testing.T) {
+	emb := &fixedEmbedder{vecs: map[string][]float32{
+		"fact one":    {1, 0, 0},
+		"episode one": {1, 0, 0},
+	}}
+	st, db := freshStoreEmbedded(t, "alpha", emb)
+	defer db.Close()
+	ctx := context.Background()
+	if _, err := st.SaveKind(ctx, hmem.Entry{Content: "fact one"}, KindFact); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.SaveKind(ctx, hmem.Entry{Content: "episode one"}, KindEpisode); err != nil {
+		t.Fatal(err)
+	}
+	facts, err := st.SearchSimilar(ctx, []float32{1, 0, 0}, 10, 0.0, KindFact)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(facts) != 1 || facts[0].Content != "fact one" {
+		t.Fatalf("KindFact search must return only facts, got %v", facts)
+	}
+	eps, err := st.SearchSimilar(ctx, []float32{1, 0, 0}, 10, 0.0, KindEpisode)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(eps) != 1 || eps[0].Content != "episode one" {
+		t.Fatalf("KindEpisode search must return only episodes, got %v", eps)
 	}
 }
