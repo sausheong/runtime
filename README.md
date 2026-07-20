@@ -1515,6 +1515,41 @@ goroutine that outlives its request, so a `runtimed` restart **abandons any
 in-flight run** (it stays in its last-persisted `running` state and is not
 retried). Sets and completed runs are durable; only in-flight execution is lost.
 
+### Transcript capture & online sampling
+
+Golden sets are proactive (you supply the inputs); **online sampling** scores
+what agents actually did in production. Every turn's **full transcript** is
+captured (capture-all, no sampling on the capture path) and persisted, so a
+sampled session can be scored after the fact.
+
+A per-agent **eval policy** decides what gets scored online: a `sample_rate`
+(0–100 %, the fraction of finished sessions to evaluate) and a list of
+**criteria** — each a `contains`, `regex`, or `judge` scorer (`exact` is not
+allowed online, since a live output rarely equals a fixed string). At spawn the
+control plane injects the agent's validated policy as `RUNTIME_EVAL_POLICY`;
+this is **agentd-injected, never operator-set** — you configure it through the
+admin API/CLI below, not as an environment variable. `judge` criteria reuse the
+same `RUNTIME_EVAL_JUDGE_MODEL` grader as golden sets. Scored outcomes land in
+`online_eval_results` (one row per session × criterion, upserted so replay is
+safe) and are readable via `online-results`, scoped to the caller's tenant.
+
+```bash
+# set a policy: sample 25% of sessions, score against a criteria file
+# ({"criteria":[...]} or a bare [...] of {name,scorer,rubric|pattern})
+runtimectl admin eval policy set --agent support --rate 25 --file criteria.json
+runtimectl admin eval policy ls
+runtimectl admin eval policy rm support
+
+# read online-eval outcomes (whole tenant, or one session)
+runtimectl admin eval online-results
+runtimectl admin eval online-results --session <session-id>
+```
+
+Online scoring emits the `agent_eval_*` metrics (per-agent online-eval
+counters). The posture is **best-effort and capture-all with no GC yet**:
+transcripts and results accumulate without a retention/garbage-collection sweep
+in this milestone.
+
 ## The CLI (`runtimectl`)
 
 `runtimectl` talks to the control plane at `RUNTIME_CTL_URL` (default
@@ -1546,6 +1581,10 @@ retried). Sets and completed runs are durable; only in-flight execution is lost.
 | `runtimectl admin eval run <set> --agent <id> [--tenant <t>] [--wait]` | Start a run of `<set>` against an agent; prints the run id. `--wait` polls to completion and prints the aggregate + per-case results. |
 | `runtimectl admin eval runs [--tenant <t>]` | List runs (status + aggregate). |
 | `runtimectl admin eval results <run-id>` | Show per-case results for a run. |
+| `runtimectl admin eval policy set --agent <id> --rate <0-100> --file <f> [--tenant <t>]` | Set an agent's online-sampling policy (sample rate + criteria file, `{"criteria":[...]}` or a bare `[...]`). See [Transcript capture & online sampling](#transcript-capture--online-sampling). |
+| `runtimectl admin eval policy ls [--tenant <t>]` | List online-eval policies (tenant-scoped). |
+| `runtimectl admin eval policy rm <agent>` | Delete an agent's online-eval policy. |
+| `runtimectl admin eval online-results [--session <sid>] [--tenant <t>]` | Read online-eval outcomes for the caller's tenant, or one session. |
 
 `--agent` may be omitted when exactly one agent is registered (it's auto-selected);
 it's required when there are several. The `admin` commands require an `admin`

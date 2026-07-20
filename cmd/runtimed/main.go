@@ -486,13 +486,23 @@ func main() {
 		}
 		evalInvoker := controlplane.NewEvalInvoker(reg)
 		evalJudge, _ := eval.NewJudgeFromEnv()
+		// Per-agent online-eval policy store (P3.1 M2). Fatal on init (like the
+		// eval store). The resolver injects RUNTIME_EVAL_POLICY at spawn; only the
+		// identity path has a policy store, so open-mode agents run without policies.
+		policyStore, perr := eval.NewPolicyStore(ctx, identityDB)
+		if perr != nil {
+			slog.Error("eval policy store init failed", "err", perr)
+			os.Exit(1)
+		}
+		reg.SetPolicyResolver(controlplane.NewPolicyResolver(policyStore))
 		root := buildRoot(rootOptions{
 			Registry: reg, AdminStore: idStore, ConsoleOIDC: consoleOIDC,
 			SecretAdmin: secretAdmin, Gateway: gwHandler, UpstreamStore: gwStore,
 			GatewayMutator: gwMut, AgentStore: agentStore, AgentManager: agentManager,
 			Onboarding: onb, Metrics: cm, ControlStore: ctlStore, PolicyStore: polAdmin,
 			QuotaStore: quotaAdmin, CredType: credType, SubjectForwarding: sf,
-			EvalStore: evalStore, EvalInvoker: evalInvoker, EvalJudge: evalJudge, SignalCtx: ctx,
+			EvalStore: evalStore, EvalPolicyStore: policyStore, EvalInvoker: evalInvoker,
+			EvalJudge: evalJudge, SignalCtx: ctx,
 		}) // mounts /admin since the store is non-nil
 		onReject := func(status int) { cm.AuthRejected(status) }
 		// When OIDC login is available, lock the browser console to OIDC sessions:

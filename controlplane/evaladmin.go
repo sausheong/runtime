@@ -10,13 +10,14 @@ import (
 	"github.com/sausheong/runtime/internal/eval"
 	"github.com/sausheong/runtime/internal/identity"
 	"github.com/sausheong/runtime/internal/obs"
+	"github.com/sausheong/runtime/internal/store"
 )
 
 // RegisterEvalAdmin mounts /admin/evals/* on mux. Admin-scoped; a nil EvalStore
 // ⇒ 503. ctx is the server signal context used to launch run goroutines (a run
 // must OUTLIVE the request, so run.Execute is launched with ctx, never
 // r.Context()). reg supplies the agent-visibility check for run creation.
-func RegisterEvalAdmin(ctx context.Context, mux *http.ServeMux, store AdminStore, es eval.EvalStore, inv eval.Invoker, judge eval.Judge, reg *Registry, m *obs.ControlMetrics) {
+func RegisterEvalAdmin(ctx context.Context, mux *http.ServeMux, adminStore AdminStore, es eval.EvalStore, ps eval.PolicyStoreAPI, ctlStore store.Store, inv eval.Invoker, judge eval.Judge, reg *Registry, m *obs.ControlMetrics) {
 	// --- sets ---
 
 	mux.HandleFunc("POST /admin/evals/sets", func(w http.ResponseWriter, r *http.Request) {
@@ -234,6 +235,142 @@ func RegisterEvalAdmin(ctx context.Context, mux *http.ServeMux, store AdminStore
 			return
 		}
 		writeJSON(w, http.StatusOK, results)
+	})
+
+	// --- online policies ---
+	// Per-agent online-sampling policy CRUD. A nil policy store ⇒ 503 (online
+	// sampling not configured). RBAC mirrors the sets/runs routes.
+
+	mux.HandleFunc("POST /admin/evals/policy", func(w http.ResponseWriter, r *http.Request) {
+		p, ok := requireAdmin(w, r)
+		if !ok {
+			return
+		}
+		if ps == nil {
+			http.Error(w, "eval policies not configured", http.StatusServiceUnavailable)
+			return
+		}
+		var body struct {
+			Tenant     string           `json:"tenant"`
+			Agent      string           `json:"agent"`
+			SampleRate int              `json:"sample_rate"`
+			Criteria   []eval.Criterion `json:"criteria"`
+		}
+		if !decode(w, r, &body) {
+			return
+		}
+		target, ok := evalWriteTenant(w, p, body.Tenant)
+		if !ok {
+			return
+		}
+		pol := eval.Policy{Tenant: target, AgentID: body.Agent, SampleRate: body.SampleRate, Criteria: body.Criteria}
+		if err := ps.PutPolicy(r.Context(), pol); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		slog.Info("eval policy stored", "tenant", target, "agent", body.Agent, "sample_rate", body.SampleRate, "criteria", len(body.Criteria))
+		writeJSON(w, http.StatusCreated, map[string]any{"tenant": target, "agent": body.Agent, "sample_rate": body.SampleRate, "criteria": len(body.Criteria)})
+	})
+
+	mux.HandleFunc("GET /admin/evals/policy", func(w http.ResponseWriter, r *http.Request) {
+		p, ok := requireAdmin(w, r)
+		if !ok {
+			return
+		}
+		if ps == nil {
+			http.Error(w, "eval policies not configured", http.StatusServiceUnavailable)
+			return
+		}
+		policies, err := ps.ListPolicies(r.Context(), evalReadTenant(p, r))
+		if err != nil {
+			serverError(w, "list eval policies", err)
+			return
+		}
+		writeJSON(w, http.StatusOK, policies)
+	})
+
+	mux.HandleFunc("GET /admin/evals/policy/{agent}", func(w http.ResponseWriter, r *http.Request) {
+		p, ok := requireAdmin(w, r)
+		if !ok {
+			return
+		}
+		if ps == nil {
+			http.Error(w, "eval policies not configured", http.StatusServiceUnavailable)
+			return
+		}
+		pol, found, err := ps.GetPolicy(r.Context(), evalReadTenant(p, r), r.PathValue("agent"))
+		if err != nil {
+			serverError(w, "get eval policy", err)
+			return
+		}
+		if !found {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		writeJSON(w, http.StatusOK, pol)
+	})
+
+	mux.HandleFunc("DELETE /admin/evals/policy/{agent}", func(w http.ResponseWriter, r *http.Request) {
+		p, ok := requireAdmin(w, r)
+		if !ok {
+			return
+		}
+		if ps == nil {
+			http.Error(w, "eval policies not configured", http.StatusServiceUnavailable)
+			return
+		}
+		if _, err := ps.DeletePolicy(r.Context(), evalReadTenant(p, r), r.PathValue("agent")); err != nil {
+			serverError(w, "delete eval policy", err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+
+	// --- online results ---
+	// Read-only view of online-eval outcomes. M2 keeps results tenant/session
+	// scoped: online_eval_results carries a tenant (not an agent_id) column, so
+	// there is no session→agent join here. ?session= reads one session's results
+	// (filtered to the caller's tenant so a cross-tenant caller sees empty);
+	// otherwise the caller's whole tenant is listed (newest first, capped).
+	mux.HandleFunc("GET /admin/evals/online-results", func(w http.ResponseWriter, r *http.Request) {
+		p, ok := requireAdmin(w, r)
+		if !ok {
+			return
+		}
+		if ctlStore == nil {
+			http.Error(w, "eval results not configured", http.StatusServiceUnavailable)
+			return
+		}
+		readTenant := evalReadTenant(p, r)
+		if session := r.URL.Query().Get("session"); session != "" {
+			rows, err := ctlStore.ListOnlineResults(r.Context(), session)
+			if err != nil {
+				serverError(w, "list online results", err)
+				return
+			}
+			out := make([]store.OnlineResult, 0, len(rows))
+			for _, row := range rows {
+				// Superuser scoping to "" ⇒ see all; otherwise pin to caller tenant.
+				if readTenant == "" || row.Tenant == readTenant {
+					out = append(out, row)
+				}
+			}
+			writeJSON(w, http.StatusOK, out)
+			return
+		}
+		// No session: a superuser with no ?tenant= would read "" which the store
+		// treats as an empty tenant, not "all" — pin an empty read tenant to the
+		// caller's own tenant so a plain superuser still sees its results.
+		listTenant := readTenant
+		if listTenant == "" {
+			listTenant = p.TenantID
+		}
+		rows, err := ctlStore.ListOnlineResultsByTenant(r.Context(), listTenant, 200)
+		if err != nil {
+			serverError(w, "list online results by tenant", err)
+			return
+		}
+		writeJSON(w, http.StatusOK, rows)
 	})
 }
 

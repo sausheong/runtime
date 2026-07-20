@@ -16,24 +16,25 @@ import (
 // root. Keeping this as an options object prevents startup wiring from becoming
 // an error-prone positional argument list as the platform grows.
 type rootOptions struct {
-	Registry       *controlplane.Registry
-	AdminStore     controlplane.AdminStore
-	ConsoleOIDC    console.OIDCConfig
-	SecretAdmin    controlplane.SecretAdmin
-	Gateway        *gateway.Handler
-	UpstreamStore  controlplane.UpstreamStore
-	GatewayMutator controlplane.GatewayMutator
-	AgentStore     controlplane.AgentStore
-	AgentManager   *controlplane.AgentManager
-	Onboarding     *console.Onboarding
-	Metrics        *obs.ControlMetrics
-	ControlStore   store.Store
-	PolicyStore    controlplane.PolicyStore
-	QuotaStore     controlplane.QuotaStore
-	EvalStore      eval.EvalStore
-	EvalInvoker    eval.Invoker
-	EvalJudge      eval.Judge
-	CredType       controlplane.CredTypeFunc
+	Registry        *controlplane.Registry
+	AdminStore      controlplane.AdminStore
+	ConsoleOIDC     console.OIDCConfig
+	SecretAdmin     controlplane.SecretAdmin
+	Gateway         *gateway.Handler
+	UpstreamStore   controlplane.UpstreamStore
+	GatewayMutator  controlplane.GatewayMutator
+	AgentStore      controlplane.AgentStore
+	AgentManager    *controlplane.AgentManager
+	Onboarding      *console.Onboarding
+	Metrics         *obs.ControlMetrics
+	ControlStore    store.Store
+	PolicyStore     controlplane.PolicyStore
+	QuotaStore      controlplane.QuotaStore
+	EvalStore       eval.EvalStore
+	EvalPolicyStore eval.PolicyStoreAPI
+	EvalInvoker     eval.Invoker
+	EvalJudge       eval.Judge
+	CredType        controlplane.CredTypeFunc
 	// SignalCtx is the server signal context threaded into background-launching
 	// wiring (eval run goroutines must outlive the request that starts them).
 	SignalCtx context.Context
@@ -62,7 +63,7 @@ func buildRoot(o rootOptions) http.Handler {
 			controlplane.RegisterQuotaAdmin(apiMux, o.AdminStore, o.QuotaStore)
 		}
 		if o.EvalStore != nil {
-			controlplane.RegisterEvalAdmin(o.SignalCtx, apiMux, o.AdminStore, o.EvalStore, o.EvalInvoker, o.EvalJudge, o.Registry, o.Metrics)
+			controlplane.RegisterEvalAdmin(o.SignalCtx, apiMux, o.AdminStore, o.EvalStore, o.EvalPolicyStore, o.ControlStore, o.EvalInvoker, o.EvalJudge, o.Registry, o.Metrics)
 		}
 	}
 	if o.Gateway != nil {

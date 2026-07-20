@@ -482,7 +482,7 @@ func runAdmin(base string, args []string) {
 		}
 		mustAdminDelete(base, "/admin/quotas"+q)
 		fmt.Println("quota removed")
-	case "eval set", "eval run", "eval runs", "eval results":
+	case "eval set", "eval run", "eval runs", "eval results", "eval policy", "eval online-results":
 		runEvalAdmin(base, args[1:])
 	default:
 		adminUsage()
@@ -583,9 +583,94 @@ func runEvalAdmin(base string, args []string) {
 			adminUsage()
 		}
 		fmt.Print(string(mustAdminGet(base, "/admin/evals/runs/"+args[1]+"/results")))
+	case "policy":
+		if len(args) < 2 {
+			adminUsage()
+		}
+		switch args[1] {
+		case "set":
+			// admin eval policy set --agent <id> --rate <0-100> --file <f> [--tenant <t>]
+			agent := flagValue(args[2:], "--agent", "")
+			rate := flagValue(args[2:], "--rate", "")
+			file := flagValue(args[2:], "--file", "")
+			if agent == "" || rate == "" || file == "" {
+				adminUsage()
+			}
+			raw, rerr := os.ReadFile(file)
+			if rerr != nil {
+				fmt.Fprintf(os.Stderr, "read eval policy file %q: %v\n", file, rerr)
+				os.Exit(1)
+			}
+			criteria, perr := parseEvalCriteria(raw)
+			if perr != nil {
+				fmt.Fprintf(os.Stderr, "parse eval policy file %q: %v\n", file, perr)
+				os.Exit(1)
+			}
+			body := map[string]any{
+				"agent":       agent,
+				"tenant":      flagValue(args[2:], "--tenant", ""),
+				"sample_rate": mustAtoi(rate),
+				"criteria":    criteria,
+			}
+			mustAdminPostAny(base, "/admin/evals/policy", body)
+			fmt.Printf("eval policy for %s stored (rate %s%%, %d criteria)\n", agent, rate, len(criteria))
+		case "ls":
+			// admin eval policy ls [--tenant <t>]
+			path := "/admin/evals/policy"
+			if t := flagValue(args[2:], "--tenant", ""); t != "" {
+				path += "?tenant=" + url.QueryEscape(t)
+			}
+			fmt.Print(string(mustAdminGet(base, path)))
+		case "rm":
+			// admin eval policy rm <agent>
+			if len(args) < 3 {
+				adminUsage()
+			}
+			mustAdminDelete(base, "/admin/evals/policy/"+args[2])
+			fmt.Printf("eval policy for %s removed\n", args[2])
+		default:
+			adminUsage()
+		}
+	case "online-results":
+		// admin eval online-results [--session <sid>] [--tenant <t>]
+		q := ""
+		if sid := flagValue(args[1:], "--session", ""); sid != "" {
+			q = "?session=" + url.QueryEscape(sid)
+		}
+		if t := flagValue(args[1:], "--tenant", ""); t != "" {
+			if q == "" {
+				q = "?tenant=" + url.QueryEscape(t)
+			} else {
+				q += "&tenant=" + url.QueryEscape(t)
+			}
+		}
+		fmt.Print(string(mustAdminGet(base, "/admin/evals/online-results"+q)))
 	default:
 		adminUsage()
 	}
+}
+
+// parseEvalCriteria parses an online-eval-policy criteria list from either a
+// wrapper object (`{"criteria":[...]}`) or a bare JSON array (`[...]`).
+func parseEvalCriteria(raw []byte) ([]json.RawMessage, error) {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 {
+		return nil, fmt.Errorf("empty file")
+	}
+	if trimmed[0] == '{' {
+		var wrap struct {
+			Criteria []json.RawMessage `json:"criteria"`
+		}
+		if err := json.Unmarshal(trimmed, &wrap); err != nil {
+			return nil, err
+		}
+		return wrap.Criteria, nil
+	}
+	var arr []json.RawMessage
+	if err := json.Unmarshal(trimmed, &arr); err != nil {
+		return nil, err
+	}
+	return arr, nil
 }
 
 // parseEvalCases parses a golden-set case list from either a wrapper object
@@ -691,7 +776,7 @@ func mustAtoi(s string) int {
 }
 
 func adminUsage() {
-	fmt.Fprintln(os.Stderr, "usage: runtimectl admin <tenant create <id> [--name n]|user add <subject> --role r [--tenant t]|user ls|key create --role r [--label l] [--tenant t]|key ls|key revoke <id>|secret set <name> <value> [--tenant t]|secret set-oauth2 --name n --token-url u --client-id c --client-secret s [--scope x] [--audience a] [--tenant t]|secret set-obo --name n --token-url u --client-id c --client-secret s [--scope x] [--audience a] [--subject-token-type t] [--requested-token-type t] [--tenant t]|secret ls|secret rm <name>|secret rotate [--tenant t]|upstream add --name n (--url u|--openapi spec) [--base-url b] [--cred-secret s] [--cred-header h] [--tenant t]|upstream ls|upstream rm <id>|agent add --id i --url u [--name n] [--model m] [--cred-secret s] [--tenant t]|agent ls|agent rm <id>|agent enable <id>|agent disable <id>|agent restart <id>|policy add --name n --file p.cedar [--tenant t]|policy ls [--tenant t]|policy rm <name> [--tenant t]|quota add --tenant t --upstream u --rate n|quota ls|quota rm --upstream u [--tenant t]|eval set add --name n --file f [--tenant t]|eval set ls [--tenant t]|eval set rm <name>|eval run <set> --agent id [--tenant t] [--wait]|eval runs [--tenant t]|eval results <run-id>>")
+	fmt.Fprintln(os.Stderr, "usage: runtimectl admin <tenant create <id> [--name n]|user add <subject> --role r [--tenant t]|user ls|key create --role r [--label l] [--tenant t]|key ls|key revoke <id>|secret set <name> <value> [--tenant t]|secret set-oauth2 --name n --token-url u --client-id c --client-secret s [--scope x] [--audience a] [--tenant t]|secret set-obo --name n --token-url u --client-id c --client-secret s [--scope x] [--audience a] [--subject-token-type t] [--requested-token-type t] [--tenant t]|secret ls|secret rm <name>|secret rotate [--tenant t]|upstream add --name n (--url u|--openapi spec) [--base-url b] [--cred-secret s] [--cred-header h] [--tenant t]|upstream ls|upstream rm <id>|agent add --id i --url u [--name n] [--model m] [--cred-secret s] [--tenant t]|agent ls|agent rm <id>|agent enable <id>|agent disable <id>|agent restart <id>|policy add --name n --file p.cedar [--tenant t]|policy ls [--tenant t]|policy rm <name> [--tenant t]|quota add --tenant t --upstream u --rate n|quota ls|quota rm --upstream u [--tenant t]|eval set add --name n --file f [--tenant t]|eval set ls [--tenant t]|eval set rm <name>|eval run <set> --agent id [--tenant t] [--wait]|eval runs [--tenant t]|eval results <run-id>|eval policy set --agent id --rate 0-100 --file f [--tenant t]|eval policy ls [--tenant t]|eval policy rm <agent>|eval online-results [--session sid] [--tenant t]>")
 	os.Exit(2)
 }
 

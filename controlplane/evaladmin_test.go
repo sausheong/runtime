@@ -33,7 +33,7 @@ func evalMux(t *testing.T) (*http.ServeMux, *eval.MemStore) {
 		{ID: "a1", Name: "A1", Model: "m", ListenAddr: "127.0.0.1:8401", Tenant: "t1"},
 	}}, "/bin/agentd", "dsn")
 	RegisterEvalAdmin(context.Background(), mux, newFakeAdminStore(), es,
-		fakeEvalInvoker{out: "hello world"}, nil, reg, obs.NewControlMetrics())
+		nil, nil, fakeEvalInvoker{out: "hello world"}, nil, reg, obs.NewControlMetrics())
 	return mux, es
 }
 
