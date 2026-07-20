@@ -64,6 +64,11 @@ type Handler struct {
 	// credentials. nil ⇒ oauth2 credentials disabled (static path only).
 	OAuth2 *OAuth2Manager
 
+	// OBO mints per-call RFC 8693 on-behalf-of tokens for obo upstream
+	// credentials. nil ⇒ OBO inert. Consumes the caller assertion landed by
+	// verifyCallerAssertion (the M2a X-Runtime-Assertion channel).
+	OBO *OBOManager
+
 	// Assertion re-verifies a forwarded caller JWT (X-Runtime-Assertion) for OBO.
 	// nil ⇒ no caller-assertion landing (M2a inert; today's behavior).
 	Assertion identity.OIDCVerifier
@@ -367,6 +372,23 @@ func (h *Handler) toolHandler(builtFor string, t tool.Tool, forwardTenant bool, 
 			if cerr != nil {
 				h.Metrics.CredentialError(p.TenantID, serverName)
 				slog.Warn("gateway credential unavailable",
+					"tenant", p.TenantID, "server", serverName, "cred", credSecret)
+				return errResult("credential unavailable: " + credSecret), nil
+			}
+			if applies {
+				ctx = WithCredentialHeader(ctx, credHeader, value)
+			}
+		}
+		// Gate #5 (OBO): per-call RFC 8693 on-behalf-of credential. Mints a token
+		// representing the HUMAN caller (from the assertion M2a landed on ctx), not the
+		// agent. FAIL CLOSED: no caller assertion, or a mint failure, rejects the call
+		// — an OBO upstream must never dispatch uncredentialed or as the wrong identity.
+		if h.OBO != nil && credSecret != "" && ok && !p.Superuser {
+			subject, jwt, _ := CallerAssertionFrom(ctx)
+			value, applies, cerr := h.OBO.Bearer(ctx, p.TenantID, credSecret, subject, jwt)
+			if cerr != nil {
+				h.Metrics.CredentialError(p.TenantID, serverName)
+				slog.Warn("gateway obo credential unavailable",
 					"tenant", p.TenantID, "server", serverName, "cred", credSecret)
 				return errResult("credential unavailable: " + credSecret), nil
 			}
