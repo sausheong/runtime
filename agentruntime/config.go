@@ -9,6 +9,7 @@ import (
 	"github.com/sausheong/harness/tool"
 
 	"github.com/sausheong/runtime/internal/config"
+	"github.com/sausheong/runtime/internal/eval"
 )
 
 // Config is the entire surface an agent author provides to Serve. It describes
@@ -33,6 +34,13 @@ type Config struct {
 	// episode) after AgentMetrics is built. Nil ⇒ metrics inert. Set by
 	// agentkind.wireMemory; invoked by Serve.
 	SetMemoryMetrics func(summary, episode func())
+	// EvalPolicy is this agent's standing online-scoring policy, or nil when no
+	// policy is configured (nil ⇒ no scoring). Set by agentd from the eval
+	// policy store.
+	EvalPolicy *eval.Policy
+	// EvalJudge grades judge-scorer criteria (LLM-as-judge), or nil when no judge
+	// model is configured. A nil judge fails judge criteria closed (never aborts).
+	EvalJudge eval.Judge
 }
 
 // Validate checks required fields.

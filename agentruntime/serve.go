@@ -19,6 +19,7 @@ import (
 	hrt "github.com/sausheong/harness/runtime"
 	"github.com/sausheong/harness/session"
 	"github.com/sausheong/runtime/internal/config"
+	"github.com/sausheong/runtime/internal/eval"
 	"github.com/sausheong/runtime/internal/identity"
 	"github.com/sausheong/runtime/internal/memory"
 	"github.com/sausheong/runtime/internal/obs"
@@ -61,6 +62,15 @@ type Manager struct {
 	// verdicts recovered sessions compute. Reconfiguring across a restart may
 	// therefore terminate recovered in-flight sessions with status "error".
 	limits config.Limits
+
+	// evalPolicy is this agent's standing online-scoring policy (from
+	// cfg.EvalPolicy), or nil when no policy is configured (nil ⇒ no scoring).
+	// Wired from Config in a later task; declared here so the sampler/scorer
+	// compile.
+	evalPolicy *eval.Policy
+	// evalJudge grades judge-scorer criteria, or nil when no judge model is
+	// configured (nil ⇒ judge criteria fail closed).
+	evalJudge eval.Judge
 
 	// assertions bridges the caller's raw verified OIDC JWT from POST /sessions
 	// (which has the HTTP request) to sessionWorkflow (which does not — the DBOS
