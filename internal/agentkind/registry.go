@@ -11,6 +11,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	hrt "github.com/sausheong/harness/runtime"
 	"github.com/sausheong/harness/tool"
@@ -95,6 +96,21 @@ func wireMemory(cfg *agentruntime.Config, d Deps) error {
 		return fmt.Errorf("agentkind: memory store for %q: %w", d.AgentID, err)
 	}
 	cfg.Tools.Register(&hmemory.MemoryTool{Store: st})
+
+	// Memory GC: reap dead (superseded/tombstoned) rows past a grace window.
+	// On by default (opt-out) whenever memory is on — unbounded growth is a
+	// defect, not a feature. Independent of embedder/ingest/summary.
+	if gcEnabled := os.Getenv("RUNTIME_MEMORY_GC_ENABLED"); gcEnabled == "" || envBool("RUNTIME_MEMORY_GC_ENABLED") {
+		interval := envDuration("RUNTIME_MEMORY_GC_INTERVAL", time.Hour)
+		grace := envDuration("RUNTIME_MEMORY_GC_GRACE", 24*time.Hour)
+		batch := envInt("RUNTIME_MEMORY_GC_BATCH", 1000)
+		if batch < 1 {
+			batch = 1000
+		}
+		cfg.StartMemoryGC = func(ctx context.Context, onReap func(int)) {
+			st.StartGC(ctx, interval, grace, batch, onReap)
+		}
+	}
 
 	// Assemble the strategy pipeline. The fact strategy needs the embedder (dedup
 	// + recall), so it is added only when ingestExt is set (which already required
@@ -200,6 +216,21 @@ func envFloat(key string, def float64) float64 {
 		return def
 	}
 	return f
+}
+
+// envDuration reads a Go-duration env var with a default, warning (and using
+// the default) on a malformed or non-positive value.
+func envDuration(key string, def time.Duration) time.Duration {
+	v := os.Getenv(key)
+	if v == "" {
+		return def
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil || d <= 0 {
+		slog.Warn("agentkind: ignoring malformed/non-positive env duration; using default", "key", key, "value", v, "default", def)
+		return def
+	}
+	return d
 }
 
 func buildNutrition(d Deps) (agentruntime.Config, error) {

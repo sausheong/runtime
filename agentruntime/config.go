@@ -1,6 +1,7 @@
 package agentruntime
 
 import (
+	"context"
 	"errors"
 
 	"github.com/sausheong/harness/llm"
@@ -24,6 +25,10 @@ type Config struct {
 	// unpriced (tokens still metered, cost skipped). Set by agentd from
 	// RUNTIME_AGENT_PRICING.
 	Price *config.ModelPrice
+	// StartMemoryGC, when non-nil, launches the memory GC reaper bound to ctx.
+	// onReap receives each sweep's delete count (for metrics). Nil ⇒ GC disabled.
+	// Set by agentkind.wireMemory; invoked by Serve after metrics are built.
+	StartMemoryGC func(ctx context.Context, onReap func(int))
 }
 
 // Validate checks required fields.

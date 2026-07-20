@@ -553,6 +553,14 @@ func Serve(ctx context.Context, cfg Config) error {
 			"agent", cfg.Spec.ID, "model", cfg.Spec.Model)
 	}
 
+	// Launch the memory GC reaper (opt-out; nil when disabled or no memory).
+	// Bound to the Serve ctx so it stops on shutdown; reports reaped rows to
+	// the agent metrics registry (this is where metrics exist — the seam that
+	// also fixes M1's post-wireMemory metric-ordering gap).
+	if cfg.StartMemoryGC != nil {
+		cfg.StartMemoryGC(ctx, m.metrics.MemoryGCReaped)
+	}
+
 	// Register BEFORE Launch so recovery can find the workflow.
 	dbos.RegisterWorkflow(dctx, m.sessionWorkflow)
 	if err := dbos.Launch(dctx); err != nil {

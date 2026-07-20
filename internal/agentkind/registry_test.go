@@ -3,6 +3,7 @@ package agentkind
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestGetKnownKinds(t *testing.T) {
@@ -187,5 +188,23 @@ func TestEnvBool(t *testing.T) {
 		if envBool("X_FLAG") {
 			t.Fatalf("%q should be falsy", v)
 		}
+	}
+}
+
+func TestEnvDuration(t *testing.T) {
+	if got := envDuration("RUNTIME_TEST_DUR_UNSET", time.Hour); got != time.Hour {
+		t.Fatalf("unset = %v, want 1h", got)
+	}
+	t.Setenv("RUNTIME_TEST_DUR", "30m")
+	if got := envDuration("RUNTIME_TEST_DUR", time.Hour); got != 30*time.Minute {
+		t.Fatalf("30m = %v, want 30m", got)
+	}
+	t.Setenv("RUNTIME_TEST_DUR", "garbage")
+	if got := envDuration("RUNTIME_TEST_DUR", time.Hour); got != time.Hour {
+		t.Fatalf("malformed = %v, want default 1h", got)
+	}
+	t.Setenv("RUNTIME_TEST_DUR", "-5m")
+	if got := envDuration("RUNTIME_TEST_DUR", time.Hour); got != time.Hour {
+		t.Fatalf("non-positive = %v, want default 1h", got)
 	}
 }
