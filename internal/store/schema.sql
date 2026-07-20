@@ -25,3 +25,29 @@ CREATE TABLE IF NOT EXISTS session_events (
     ts         TIMESTAMPTZ NOT NULL DEFAULT now(),
     PRIMARY KEY (session_id, seq)
 );
+
+CREATE TABLE IF NOT EXISTS session_transcripts (
+  session_id  TEXT NOT NULL REFERENCES sessions(id),
+  turn_index  INT NOT NULL,
+  tenant      TEXT NOT NULL DEFAULT '',
+  actor_id    TEXT NOT NULL DEFAULT '',
+  entries     JSONB NOT NULL,
+  stop_reason TEXT NOT NULL DEFAULT '',
+  status      TEXT NOT NULL DEFAULT '',
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (session_id, turn_index)
+);
+CREATE INDEX IF NOT EXISTS session_transcripts_tenant_idx ON session_transcripts (tenant, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS online_eval_results (
+  session_id     TEXT NOT NULL,
+  criterion_name TEXT NOT NULL,
+  tenant         TEXT NOT NULL DEFAULT '',
+  actor_id       TEXT NOT NULL DEFAULT '',
+  scorer         TEXT NOT NULL,
+  passed         BOOLEAN NOT NULL,
+  detail         TEXT NOT NULL DEFAULT '',
+  created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (session_id, criterion_name)
+);
+CREATE INDEX IF NOT EXISTS online_eval_results_tenant_idx ON online_eval_results (tenant, created_at DESC);

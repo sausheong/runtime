@@ -190,4 +190,66 @@ func (p *pgStore) EventsSince(ctx context.Context, sessionID string, afterSeq in
 	return out, rows.Err()
 }
 
+func (p *pgStore) AppendTranscript(ctx context.Context, sessionID string, turn int, tenant, actor string, entries []byte, stopReason, status string) error {
+	_, err := p.db.ExecContext(ctx,
+		`INSERT INTO session_transcripts (session_id, turn_index, tenant, actor_id, entries, stop_reason, status)
+		 VALUES ($1,$2,$3,$4,$5::jsonb,$6,$7)
+		 ON CONFLICT (session_id, turn_index) DO UPDATE SET
+		   entries=EXCLUDED.entries, tenant=EXCLUDED.tenant, actor_id=EXCLUDED.actor_id,
+		   stop_reason=EXCLUDED.stop_reason, status=EXCLUDED.status`,
+		sessionID, turn, tenant, actor, string(entries), stopReason, status)
+	if err != nil {
+		return fmt.Errorf("append transcript (%s turn %d): %w", sessionID, turn, err)
+	}
+	return nil
+}
+
+func (p *pgStore) PutOnlineResult(ctx context.Context, sessionID, criterion, tenant, actor, scorer string, passed bool, detail string) error {
+	_, err := p.db.ExecContext(ctx,
+		`INSERT INTO online_eval_results (session_id, criterion_name, tenant, actor_id, scorer, passed, detail)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7)
+		 ON CONFLICT (session_id, criterion_name) DO UPDATE SET
+		   passed=EXCLUDED.passed, detail=EXCLUDED.detail, scorer=EXCLUDED.scorer,
+		   tenant=EXCLUDED.tenant, actor_id=EXCLUDED.actor_id`,
+		sessionID, criterion, tenant, actor, scorer, passed, detail)
+	if err != nil {
+		return fmt.Errorf("put online result (%s %s): %w", sessionID, criterion, err)
+	}
+	return nil
+}
+
+func (p *pgStore) ListOnlineResults(ctx context.Context, sessionID string) ([]OnlineResult, error) {
+	rows, err := p.db.QueryContext(ctx,
+		`SELECT session_id, criterion_name, tenant, actor_id, scorer, passed, detail, created_at
+		 FROM online_eval_results WHERE session_id=$1 ORDER BY criterion_name`, sessionID)
+	if err != nil {
+		return nil, fmt.Errorf("list online results (%s): %w", sessionID, err)
+	}
+	defer rows.Close()
+	return scanOnlineResults(rows)
+}
+
+func (p *pgStore) ListOnlineResultsByTenant(ctx context.Context, tenant string, limit int) ([]OnlineResult, error) {
+	rows, err := p.db.QueryContext(ctx,
+		`SELECT session_id, criterion_name, tenant, actor_id, scorer, passed, detail, created_at
+		 FROM online_eval_results WHERE tenant=$1 ORDER BY created_at DESC LIMIT $2`, tenant, limit)
+	if err != nil {
+		return nil, fmt.Errorf("list online results by tenant (%s): %w", tenant, err)
+	}
+	defer rows.Close()
+	return scanOnlineResults(rows)
+}
+
+func scanOnlineResults(rows *sql.Rows) ([]OnlineResult, error) {
+	var out []OnlineResult
+	for rows.Next() {
+		var r OnlineResult
+		if err := rows.Scan(&r.SessionID, &r.Criterion, &r.Tenant, &r.Actor, &r.Scorer, &r.Passed, &r.Detail, &r.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
 func (p *pgStore) Close() error { return p.db.Close() }

@@ -3,18 +3,28 @@ package store
 import (
 	"context"
 	"fmt"
+	"sort"
+	"strconv"
 	"sync"
+	"time"
 )
 
 type memStore struct {
-	mu       sync.Mutex
-	seq      int
-	sessions map[string]*SessionRow
-	events   map[string][]Event
+	mu          sync.Mutex
+	seq         int
+	sessions    map[string]*SessionRow
+	events      map[string][]Event
+	transcripts map[string][]byte       // key: session\x00turn
+	results     map[string]OnlineResult // key: session\x00criterion
 }
 
 func NewMemStore() Store {
-	return &memStore{sessions: map[string]*SessionRow{}, events: map[string][]Event{}}
+	return &memStore{
+		sessions:    map[string]*SessionRow{},
+		events:      map[string][]Event{},
+		transcripts: map[string][]byte{},
+		results:     map[string]OnlineResult{},
+	}
 }
 
 func (m *memStore) CreateSession(_ context.Context, agentID string, replica int) (string, error) {
@@ -127,6 +137,66 @@ func (m *memStore) EventsSince(_ context.Context, sessionID string, afterSeq int
 		if e.Seq > afterSeq {
 			out = append(out, e)
 		}
+	}
+	return out, nil
+}
+
+func (m *memStore) AppendTranscript(_ context.Context, sessionID string, turn int, tenant, actor string, entries []byte, stopReason, status string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	cp := make([]byte, len(entries))
+	copy(cp, entries)
+	m.transcripts[sessionID+"\x00"+strconv.Itoa(turn)] = cp
+	return nil
+}
+
+func (m *memStore) PutOnlineResult(_ context.Context, sessionID, criterion, tenant, actor, scorer string, passed bool, detail string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	key := sessionID + "\x00" + criterion
+	existing, ok := m.results[key]
+	created := time.Now()
+	if ok {
+		created = existing.CreatedAt
+	}
+	m.results[key] = OnlineResult{
+		SessionID: sessionID,
+		Criterion: criterion,
+		Tenant:    tenant,
+		Actor:     actor,
+		Scorer:    scorer,
+		Passed:    passed,
+		Detail:    detail,
+		CreatedAt: created,
+	}
+	return nil
+}
+
+func (m *memStore) ListOnlineResults(_ context.Context, sessionID string) ([]OnlineResult, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var out []OnlineResult
+	for _, r := range m.results {
+		if r.SessionID == sessionID {
+			out = append(out, r)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Criterion < out[j].Criterion })
+	return out, nil
+}
+
+func (m *memStore) ListOnlineResultsByTenant(_ context.Context, tenant string, limit int) ([]OnlineResult, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var out []OnlineResult
+	for _, r := range m.results {
+		if r.Tenant == tenant {
+			out = append(out, r)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.After(out[j].CreatedAt) })
+	if limit >= 0 && len(out) > limit {
+		out = out[:limit]
 	}
 	return out, nil
 }
