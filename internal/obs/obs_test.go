@@ -297,3 +297,12 @@ func TestEpisodeWriteNilSafe(t *testing.T) {
 	var a *AgentMetrics
 	a.EpisodeWrite() // must not panic
 }
+
+func TestEvalMetricsNilSafe(t *testing.T) {
+	var c *ControlMetrics
+	c.EvalRun("t", "completed") // must not panic
+	c.EvalCase("t", "pass")
+	real := NewControlMetrics()
+	real.EvalRun("t", "completed")
+	real.EvalCase("t", "pass")
+}

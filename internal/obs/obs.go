@@ -48,6 +48,8 @@ type ControlMetrics struct {
 	policyDecisions  *prometheus.CounterVec
 	quotaRejections  *prometheus.CounterVec
 	credentialErrors *prometheus.CounterVec
+	evalRuns         *prometheus.CounterVec
+	evalCases        *prometheus.CounterVec
 }
 
 func NewControlMetrics() *ControlMetrics {
@@ -129,10 +131,18 @@ func NewControlMetrics() *ControlMetrics {
 		Name: "runtime_gateway_credential_errors_total",
 		Help: "Gateway tool calls failed closed because an outbound credential could not be minted, by tenant and upstream server.",
 	}, []string{"tenant", "server"})
+	c.evalRuns = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "runtime_eval_runs_total",
+		Help: "Golden-set eval runs finalized, by tenant and status (completed/error).",
+	}, []string{"tenant", "status"})
+	c.evalCases = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "runtime_eval_cases_total",
+		Help: "Golden-set eval cases scored, by tenant and result (pass/fail).",
+	}, []string{"tenant", "result"})
 	c.reg.MustRegister(c.httpRequests, c.httpDuration, c.agentUp, c.agentReachable, c.agentRestarts,
 		c.proxyErrors, c.agentProxyCalls, c.gwCalls, c.gwDuration, c.gwUp, c.scrapeSkips,
 		c.asDesired, c.asCurrent, c.asActive, c.asEvents, c.policyDecisions, c.quotaRejections,
-		c.credentialErrors)
+		c.credentialErrors, c.evalRuns, c.evalCases)
 	return c
 }
 
@@ -302,6 +312,24 @@ func (c *ControlMetrics) CredentialError(tenant, server string) {
 		return
 	}
 	c.credentialErrors.WithLabelValues(tenant, server).Inc()
+}
+
+// EvalRun counts one finalized golden-set eval run, by tenant and status
+// (completed/error). Nil-safe.
+func (c *ControlMetrics) EvalRun(tenant, status string) {
+	if c == nil {
+		return
+	}
+	c.evalRuns.WithLabelValues(tenant, status).Inc()
+}
+
+// EvalCase counts one scored golden-set eval case, by tenant and result
+// (pass/fail). Nil-safe.
+func (c *ControlMetrics) EvalCase(tenant, result string) {
+	if c == nil {
+		return
+	}
+	c.evalCases.WithLabelValues(tenant, result).Inc()
 }
 
 // AgentMetrics is agentd's registry. Every series carries agent=<id> so the
