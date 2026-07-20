@@ -707,3 +707,50 @@ func TestGCOnce_BatchLoopDrainsBacklog(t *testing.T) {
 		t.Fatalf("post-GC rows = %d, want 1", got)
 	}
 }
+
+func TestSaveKind_StampsKindAndListExcludesEpisodes(t *testing.T) {
+	st, db := freshStore(t, "alpha")
+	defer db.Close()
+	ctx := context.Background()
+	// A fact via the frozen Save path.
+	if _, err := st.Save(ctx, hmem.Entry{Content: "user likes go"}); err != nil {
+		t.Fatal(err)
+	}
+	// An episode via SaveKind.
+	if _, err := st.SaveKind(ctx, hmem.Entry{Content: "deployed staging", Origin: "ingest"}, KindEpisode); err != nil {
+		t.Fatal(err)
+	}
+	// The kind column is stamped correctly.
+	var episodeKinds int
+	if err := db.QueryRow(`SELECT count(*) FROM memory_events WHERE tenant_id='alpha' AND kind='episode'`).Scan(&episodeKinds); err != nil {
+		t.Fatal(err)
+	}
+	if episodeKinds != 1 {
+		t.Fatalf("episode rows = %d, want 1", episodeKinds)
+	}
+	// List (memory{list} tool) returns facts ONLY, not the episode.
+	all, err := st.List(ctx, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(all) != 1 || all[0].Content != "user likes go" {
+		t.Fatalf("List must return facts only (not episodes), got %v", all)
+	}
+}
+
+func TestSaveDelegatesToFactKind(t *testing.T) {
+	st, db := freshStore(t, "alpha")
+	defer db.Close()
+	ctx := context.Background()
+	e, err := st.Save(ctx, hmem.Entry{Content: "f1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var kind string
+	if err := db.QueryRow(`SELECT kind FROM memory_events WHERE entry_id=$1`, e.ID).Scan(&kind); err != nil {
+		t.Fatal(err)
+	}
+	if kind != KindFact {
+		t.Fatalf("Save must stamp kind=fact, got %q", kind)
+	}
+}

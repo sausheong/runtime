@@ -29,6 +29,7 @@ var embedSchemaSQL string
 const (
 	KindFact    = "fact"
 	KindSummary = "summary"
+	KindEpisode = "episode"
 )
 
 // Store is a tenant-pinned Postgres MemoryStore. Every query filters by tenant,
@@ -117,7 +118,7 @@ SELECT e.entry_id, e.content, e.tags, e.origin, e.created_at, e.original_created
 FROM   memory_events e
 WHERE  e.tenant_id = $1
   AND  e.actor_id = $2
-  AND  e.kind <> 'summary'
+  AND  e.kind = 'fact'
   AND  e.op IN ('create','update')
   AND  NOT EXISTS (SELECT 1 FROM memory_events s
                    WHERE s.tenant_id = $1 AND s.supersedes = e.entry_id)
@@ -183,9 +184,16 @@ func scanEntry(rows *sql.Rows) (hmem.Entry, error) {
 	return e, nil
 }
 
-// Save appends a create row. Origin is persisted verbatim (the MemoryTool sets
-// it from context before calling). Content validation is the tool's job.
+// Save appends a create row for a fact (the harness MemoryStore contract; the
+// MemoryTool sets Origin before calling). Content validation is the tool's job.
 func (s *Store) Save(ctx context.Context, e hmem.Entry) (hmem.Entry, error) {
+	return s.SaveKind(ctx, e, KindFact)
+}
+
+// SaveKind appends a create row with an explicit kind (KindFact | KindEpisode).
+// The strategy pipeline uses this so each accumulate-strategy stamps its own
+// kind; Save delegates here with KindFact for the tool path.
+func (s *Store) SaveKind(ctx context.Context, e hmem.Entry, kind string) (hmem.Entry, error) {
 	now := time.Now().UTC()
 	if e.ID == "" {
 		e.ID = generateID(now)
@@ -197,16 +205,16 @@ func (s *Store) Save(ctx context.Context, e hmem.Entry) (hmem.Entry, error) {
 	if s.embedder == nil {
 		_, err = s.db.ExecContext(ctx,
 			`INSERT INTO memory_events (tenant_id, op, entry_id, content, tags, origin, created_at, kind, actor_id)
-			 VALUES ($1,'create',$2,$3,$4,$5,$6,'fact',$7)`,
-			s.tenant, e.ID, e.Content, textArray(e.Tags), e.Origin, now, actor)
+			 VALUES ($1,'create',$2,$3,$4,$5,$6,$7,$8)`,
+			s.tenant, e.ID, e.Content, textArray(e.Tags), e.Origin, now, kind, actor)
 	} else {
 		_, err = s.db.ExecContext(ctx,
 			`INSERT INTO memory_events (tenant_id, op, entry_id, content, tags, origin, created_at, kind, actor_id, embedding)
-			 VALUES ($1,'create',$2,$3,$4,$5,$6,'fact',$7,$8)`,
-			s.tenant, e.ID, e.Content, textArray(e.Tags), e.Origin, now, actor, s.embedOrNil(ctx, e.ID, e.Content))
+			 VALUES ($1,'create',$2,$3,$4,$5,$6,$7,$8,$9)`,
+			s.tenant, e.ID, e.Content, textArray(e.Tags), e.Origin, now, kind, actor, s.embedOrNil(ctx, e.ID, e.Content))
 	}
 	if err != nil {
-		return hmem.Entry{}, fmt.Errorf("memory: save tenant %q id %q: %w", s.tenant, e.ID, err)
+		return hmem.Entry{}, fmt.Errorf("memory: save tenant %q id %q kind %q: %w", s.tenant, e.ID, kind, err)
 	}
 	return e, nil
 }
