@@ -42,10 +42,10 @@ func (b *Broker) SecretsFor(ctx context.Context, tenant string) (map[string]stri
 	}
 	out := make(map[string]string, len(enc))
 	for _, e := range enc {
-		// oauth2 creds are gateway-per-call only: they must NEVER enter the
-		// name->plaintext map that is injected into the agent env or resolved
+		// oauth2 and OBO creds are gateway-per-call only: they must NEVER enter
+		// the name->plaintext map that is injected into the agent env or resolved
 		// as a static credential. The client_secret must not leave the broker.
-		if e.Type == CredTypeOAuth2 {
+		if e.Type == CredTypeOAuth2 || e.Type == CredTypeOBO {
 			continue
 		}
 		pt, err := b.keyring.Open(tenant, e.Name, e.ValueEnc)
@@ -161,6 +161,29 @@ func (b *Broker) SetOAuth2(ctx context.Context, tenant, name string, cfg OAuth2C
 	return nil
 }
 
+// SetOBO seals an OBO (RFC 8693 token-exchange) config as JSON under the keyring
+// (binding tenant+name, exactly like SetOAuth2) and persists it with
+// type=oauth2_obo. The client_secret never leaves the broker in plaintext. Bumps
+// the generation so a cached TokenSource is rebuilt live.
+func (b *Broker) SetOBO(ctx context.Context, tenant, name string, cfg OBOConfig) error {
+	if err := cfg.Validate(); err != nil {
+		return err
+	}
+	raw, err := json.Marshal(cfg)
+	if err != nil {
+		return fmt.Errorf("identity: marshal obo config %q: %w", name, err)
+	}
+	enc, err := b.keyring.Seal(tenant, name, raw)
+	if err != nil {
+		return fmt.Errorf("identity: seal obo config %q for tenant %q: %w", name, tenant, err)
+	}
+	if err := b.store.PutSecret(ctx, tenant, name, enc, CredTypeOBO); err != nil {
+		return fmt.Errorf("identity: store obo config %q for tenant %q: %w", name, tenant, err)
+	}
+	b.gen.Add(1)
+	return nil
+}
+
 // CredType returns the credential type for (tenant, name): CredTypeStatic or
 // CredTypeOAuth2. Absent secret ⇒ the store's error.
 func (b *Broker) CredType(ctx context.Context, tenant, name string) (string, error) {
@@ -196,30 +219,64 @@ func (b *Broker) OAuth2ConfigFor(ctx context.Context, tenant, name string) (OAut
 	return cfg, nil
 }
 
+// OBOConfigFor decrypts and returns the OBO config for (tenant, name). Used only
+// inside the gateway process to build a per-caller token source — never surfaced
+// to an API. Errors if the secret is not an OBO credential.
+func (b *Broker) OBOConfigFor(ctx context.Context, tenant, name string) (OBOConfig, error) {
+	e, ct, err := b.store.LoadSecret(ctx, tenant, name)
+	if err != nil {
+		return OBOConfig{}, err
+	}
+	if ct != CredTypeOBO {
+		return OBOConfig{}, fmt.Errorf("identity: secret %q is not an obo credential", name)
+	}
+	pt, err := b.keyring.Open(tenant, e.Name, e.ValueEnc)
+	if err != nil {
+		return OBOConfig{}, fmt.Errorf("identity: decrypt obo config %q for tenant %q: %w", name, tenant, err)
+	}
+	var cfg OBOConfig
+	if err := json.Unmarshal(pt, &cfg); err != nil {
+		return OBOConfig{}, fmt.Errorf("identity: unmarshal obo config %q: %w", name, err)
+	}
+	return cfg, nil
+}
+
 // Generation increments on every secret write/rotate/delete. A cached oauth2
 // TokenSource keys on it to rebuild after a rotation without a restart.
 func (b *Broker) Generation() uint64 { return b.gen.Load() }
 
 // ListSecrets returns the enriched read model: type for every secret and, for
-// oauth2 creds, the NON-SECRET fields (token_url/client_id/scopes/audience).
-// client_secret is never included. A decrypt failure on one oauth2 row omits
-// its oauth fields (still lists name+type) rather than failing the whole list.
+// oauth2 and OBO creds, the NON-SECRET fields (token_url/client_id/scopes/
+// audience, plus token-type URNs for OBO). client_secret is never included. A
+// decrypt failure on one such row omits its detail (still lists name+type)
+// rather than failing the whole list.
 func (b *Broker) ListSecrets(ctx context.Context, tenant string) ([]SecretMeta, error) {
 	metas, err := b.store.ListSecretNames(ctx, tenant)
 	if err != nil {
 		return nil, err
 	}
 	for i := range metas {
-		if metas[i].Type != CredTypeOAuth2 {
-			continue
-		}
-		cfg, cerr := b.OAuth2ConfigFor(ctx, tenant, metas[i].Name)
-		if cerr != nil {
-			continue // list name+type without oauth detail rather than fail
-		}
-		metas[i].OAuth2 = &OAuth2Meta{
-			TokenURL: cfg.TokenURL, ClientID: cfg.ClientID,
-			Scopes: cfg.Scopes, Audience: cfg.Audience,
+		switch metas[i].Type {
+		case CredTypeOAuth2:
+			cfg, cerr := b.OAuth2ConfigFor(ctx, tenant, metas[i].Name)
+			if cerr != nil {
+				continue // list name+type without oauth detail rather than fail
+			}
+			metas[i].OAuth2 = &OAuth2Meta{
+				TokenURL: cfg.TokenURL, ClientID: cfg.ClientID,
+				Scopes: cfg.Scopes, Audience: cfg.Audience,
+			}
+		case CredTypeOBO:
+			cfg, cerr := b.OBOConfigFor(ctx, tenant, metas[i].Name)
+			if cerr != nil {
+				continue // list name+type without obo detail rather than fail
+			}
+			metas[i].OBO = &OBOMeta{
+				TokenURL: cfg.TokenURL, ClientID: cfg.ClientID,
+				Scopes: cfg.Scopes, Audience: cfg.Audience,
+				SubjectTokenType:   cfg.SubjectTokenType,
+				RequestedTokenType: cfg.RequestedTokenType,
+			}
 		}
 	}
 	return metas, nil

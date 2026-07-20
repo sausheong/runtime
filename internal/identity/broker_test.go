@@ -333,6 +333,120 @@ func TestBroker_SecretsForExcludesOAuth2(t *testing.T) {
 	}
 }
 
+func TestBroker_SetOBO_RoundTrip(t *testing.T) {
+	b := newTestBroker(t, &fakeSecretStore{})
+	ctx := context.Background()
+	g0 := b.Generation()
+	cfg := OBOConfig{
+		TokenURL: "https://idp/token", ClientID: "cid", ClientSecret: "sec",
+		Scopes: []string{"a", "b"}, Audience: "https://api.example",
+		SubjectTokenType: tokenTypeJWT, RequestedTokenType: tokenTypeAccessToken,
+	}
+	if err := b.SetOBO(ctx, "acme", "orders_obo", cfg); err != nil {
+		t.Fatalf("SetOBO: %v", err)
+	}
+	if b.Generation() == g0 {
+		t.Fatal("generation did not bump on SetOBO")
+	}
+	ct, err := b.CredType(ctx, "acme", "orders_obo")
+	if err != nil || ct != CredTypeOBO {
+		t.Fatalf("CredType = %q, %v", ct, err)
+	}
+	got, err := b.OBOConfigFor(ctx, "acme", "orders_obo")
+	if err != nil {
+		t.Fatalf("OBOConfigFor: %v", err)
+	}
+	if got.ClientSecret != "sec" || got.TokenURL != cfg.TokenURL || got.ClientID != "cid" ||
+		got.Audience != cfg.Audience || len(got.Scopes) != 2 ||
+		got.SubjectTokenType != tokenTypeJWT || got.RequestedTokenType != tokenTypeAccessToken {
+		t.Fatalf("OBOConfigFor round-trip mismatch: %+v", got)
+	}
+}
+
+func TestBroker_OBOConfigFor_RejectsNonOBO(t *testing.T) {
+	b := newTestBroker(t, &fakeSecretStore{})
+	ctx := context.Background()
+
+	if err := b.SetSecret(ctx, "acme", "API_KEY", "sk-static"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := b.OBOConfigFor(ctx, "acme", "API_KEY"); err == nil {
+		t.Fatal("OBOConfigFor on a static secret should error")
+	}
+
+	oa := OAuth2Config{TokenURL: "https://idp/token", ClientID: "cid", ClientSecret: "sec"}
+	if err := b.SetOAuth2(ctx, "acme", "ORDERS_OAUTH", oa); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := b.OBOConfigFor(ctx, "acme", "ORDERS_OAUTH"); err == nil {
+		t.Fatal("OBOConfigFor on an oauth2 secret should error (wrong type)")
+	}
+}
+
+// TestBroker_SecretsForExcludesOBO is the leak-guard regression: an OBO cred's
+// sealed JSON (which contains client_secret) must NEVER enter the name->plaintext
+// map used for agent env injection / static resolution. Only static rows appear.
+func TestBroker_SecretsForExcludesOBO(t *testing.T) {
+	fs := &fakeSecretStore{}
+	b := newTestBroker(t, fs)
+	ctx := context.Background()
+
+	if err := b.SetSecret(ctx, "acme", "API_KEY", "sk-static"); err != nil {
+		t.Fatal(err)
+	}
+	cfg := OBOConfig{TokenURL: "https://idp/token", ClientID: "cid", ClientSecret: "topsecret"}
+	if err := b.SetOBO(ctx, "acme", "ORDERS_OBO", cfg); err != nil {
+		t.Fatal(err)
+	}
+	fs.loaded = []EncryptedSecret{
+		{Name: "API_KEY", ValueEnc: fs.put["API_KEY"], Type: fs.typ["API_KEY"]},
+		{Name: "ORDERS_OBO", ValueEnc: fs.put["ORDERS_OBO"], Type: fs.typ["ORDERS_OBO"]},
+	}
+
+	got, err := b.SecretsFor(ctx, "acme")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := got["ORDERS_OBO"]; ok {
+		t.Fatal("SecretsFor leaked obo cred into name->plaintext map (client_secret exposure)")
+	}
+	if got["API_KEY"] != "sk-static" {
+		t.Fatalf("static secret missing/mismatched: %q", got["API_KEY"])
+	}
+	if len(got) != 1 {
+		t.Fatalf("SecretsFor returned %d entries, want 1 (static only): %v", len(got), got)
+	}
+}
+
+func TestBroker_ListSecretsEnrichesOBO(t *testing.T) {
+	b := newTestBroker(t, &fakeSecretStore{})
+	ctx := context.Background()
+	cfg := OBOConfig{
+		TokenURL: "https://idp/token", ClientID: "cid", ClientSecret: "topsecret",
+		Scopes: []string{"a"}, Audience: "https://api.example",
+		SubjectTokenType: tokenTypeJWT, RequestedTokenType: tokenTypeAccessToken,
+	}
+	if err := b.SetOBO(ctx, "acme", "ORDERS_OBO", cfg); err != nil {
+		t.Fatal(err)
+	}
+	metas, err := b.ListSecrets(ctx, "acme")
+	if err != nil || len(metas) != 1 {
+		t.Fatalf("ListSecrets = %+v, %v", metas, err)
+	}
+	m := metas[0]
+	if m.Type != CredTypeOBO || m.OBO == nil {
+		t.Fatalf("row not enriched as OBO: %+v", m)
+	}
+	if m.OAuth2 != nil {
+		t.Fatalf("OBO row must not carry OAuth2 detail: %+v", m.OAuth2)
+	}
+	if m.OBO.ClientID != "cid" || m.OBO.TokenURL != cfg.TokenURL || m.OBO.Audience != cfg.Audience ||
+		len(m.OBO.Scopes) != 1 || m.OBO.SubjectTokenType != tokenTypeJWT ||
+		m.OBO.RequestedTokenType != tokenTypeAccessToken {
+		t.Fatalf("OBOMeta fields mismatch: %+v", m.OBO)
+	}
+}
+
 func TestBrokerStaticStaysStatic(t *testing.T) {
 	b := newTestBroker(t, &fakeSecretStore{})
 	ctx := context.Background()

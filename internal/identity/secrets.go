@@ -11,6 +11,7 @@ type SecretMeta struct {
 	Name      string      `json:"name"`
 	Type      string      `json:"type"`
 	OAuth2    *OAuth2Meta `json:"oauth2,omitempty"`
+	OBO       *OBOMeta    `json:"obo,omitempty"`
 	CreatedAt time.Time   `json:"created_at"`
 	UpdatedAt time.Time   `json:"updated_at"`
 }
