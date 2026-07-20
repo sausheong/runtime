@@ -731,6 +731,17 @@ summarization LLM call per turn — a known M1 cost; smarter cadence
 summarizer failure or an empty digest skips the write and never breaks a turn.
 The counter `agent_memory_summary_writes_total` is registered for summary writes; its emission hook is wired in a later milestone (it currently reports 0).
 
+**Memory GC.** Dead rows (superseded fact edits, superseded per-session summary
+rows, tombstoned entries) accumulate in the append-only log. A background reaper
+reclaims them — on by default for any memory-enabled agent, no effect on recall:
+
+```
+export RUNTIME_MEMORY_GC_ENABLED=1     # default on; set 0 to disable
+export RUNTIME_MEMORY_GC_INTERVAL=1h   # sweep period (default 1h)
+export RUNTIME_MEMORY_GC_GRACE=24h     # only reap rows dead longer than this (default 24h)
+export RUNTIME_MEMORY_GC_BATCH=1000    # rows per DELETE; loops until drained (default 1000)
+```
+
 #### Actor-namespaced memory (subject forwarding)
 
 By default memory is **tenant-scoped**: every caller of a given agent shares one
@@ -2067,6 +2078,10 @@ unaffected.
 | `RUNTIME_INGEST_MAX_INFLIGHT` | agentd | `4` | Max concurrent extraction goroutines; turns over the cap are dropped. |
 | `RUNTIME_INGEST_DEDUP_FLOOR` | agentd | `0.85` | Cosine similarity at/above which a candidate fact is treated as a duplicate and skipped. |
 | `RUNTIME_INGEST_MAX_FACTS` | agentd | `10` | Hard cap on facts saved per turn. |
+| `RUNTIME_MEMORY_GC_ENABLED` | agentd | on | Reap dead (superseded/tombstoned) memory rows in the background. `0`/`false` disables. On by default for any memory-enabled agent; no effect on recall. |
+| `RUNTIME_MEMORY_GC_INTERVAL` | agentd | `1h` | How often the GC sweep runs (Go duration). |
+| `RUNTIME_MEMORY_GC_GRACE` | agentd | `24h` | Only rows dead longer than this are reaped (audit tail + in-flight-read safety). |
+| `RUNTIME_MEMORY_GC_BATCH` | agentd | `1000` | Max rows deleted per statement; the sweep loops until the backlog is drained. |
 | `RUNTIME_SUBJECT_FORWARDING` | runtimed + agentd | (unset) | `1`/`true`/`yes`/`on` enables forwarding the authenticated caller's subject as `X-Runtime-*` to agents (actor-scoping memory) **and** forwarding the caller's verified OIDC JWT as `X-Runtime-Assertion` to the gateway for OBO (re-verified + tenant-bound there; ephemeral, never persisted); off ⇒ tenant-wide (today's behavior). |
 | `RUNTIME_LOG_FORMAT` | runtimed | `text` | `json` switches `slog` to JSON output. |
 | `RUNTIME_CTL_URL` | runtimectl | `http://localhost:8080` | Control-plane base URL the CLI targets. |
