@@ -43,6 +43,8 @@ type Registry struct {
 	broker SecretBroker              // optional; injected into each AgentProcess on read.
 	pools  map[string]*PoolManager   // id -> manager (autoscaled agents only)
 
+	policyResolver PolicyResolver // optional; injected into each AgentProcess on read.
+
 	// mu guards the agent set (order/sets/infos/rr/managed/disabled) for runtime
 	// mutation. The file-config set is built once in NewRegistry and was
 	// historically read lock-free; dynamically-managed agents (AddRemote/
@@ -157,6 +159,19 @@ func (r *Registry) SetBroker(b SecretBroker) {
 	}
 }
 
+// SetPolicyResolver installs the eval PolicyResolver injected into every
+// AgentProcess returned by Get/Replicas/Replica. Like SetBroker: NOT safe to
+// call concurrently with reads (must happen-before the HTTP server and
+// supervisor goroutines start); nil ⇒ no eval policy. It also stamps each
+// PoolManager's base so replicas spawned later by autoscaling inherit it (policy
+// resolution at spawn time).
+func (r *Registry) SetPolicyResolver(pr PolicyResolver) {
+	r.policyResolver = pr
+	for _, pm := range r.pools {
+		pm.base.policyResolver = pr
+	}
+}
+
 // SetGateway records the gateway endpoint URL and per-tenant agent keys, stamped
 // onto every gateway-enabled replica. Like SetBroker, must complete before the
 // server and supervisor goroutines start.
@@ -190,10 +205,13 @@ func (r *Registry) AgentTenants() map[string]string {
 	return m
 }
 
-// withBroker returns a copy of ap with the registry's broker attached, so the
-// broker rides along on what callers get without mutating the stored entry.
+// withBroker returns a copy of ap with the registry's broker AND policy resolver
+// attached, so both ride along on what callers get without mutating the stored
+// entry. Called by Get/Replicas/Replica, so every returned AgentProcess (including
+// PoolManager-backed replicas) carries the resolver and spawns inject the policy.
 func (r *Registry) withBroker(ap AgentProcess) AgentProcess {
 	ap.broker = r.broker
+	ap.policyResolver = r.policyResolver
 	return ap
 }
 

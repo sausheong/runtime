@@ -551,3 +551,74 @@ func TestReverseProxy_SendsBearer(t *testing.T) {
 		t.Fatalf("backend saw Authorization = %q", gotAuth)
 	}
 }
+
+// fakePolicyResolver returns a fixed JSON (and optional error) for any lookup,
+// recording the (tenant, agentID) it was called with.
+type fakePolicyResolver struct {
+	json       string
+	err        error
+	gotTenant  string
+	gotAgentID string
+}
+
+func (f *fakePolicyResolver) PolicyJSON(_ context.Context, tenant, agentID string) (string, error) {
+	f.gotTenant, f.gotAgentID = tenant, agentID
+	return f.json, f.err
+}
+
+func TestEnvDeltaEvalPolicy(t *testing.T) {
+	const wantJSON = `{"sample_rate":50,"criteria":[{"name":"x","scorer":"contains","pattern":"y"}]}`
+	fr := &fakePolicyResolver{json: wantJSON}
+	ap := AgentProcess{
+		AgentID: "a1", PGDSN: "postgres://x", Addr: "127.0.0.1:9000", Tenant: "acme",
+		policyResolver: fr,
+	}
+	env, err := ap.envDelta(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, ok := envValue(t, env, "RUNTIME_EVAL_POLICY")
+	if !ok {
+		t.Fatal("RUNTIME_EVAL_POLICY not emitted")
+	}
+	if got != wantJSON {
+		t.Fatalf("RUNTIME_EVAL_POLICY = %q; want %q", got, wantJSON)
+	}
+	if fr.gotTenant != "acme" || fr.gotAgentID != "a1" {
+		t.Fatalf("resolver called with (%q,%q); want (acme,a1)", fr.gotTenant, fr.gotAgentID)
+	}
+}
+
+func TestEnvDeltaEvalPolicyEmptyWhenNoResolver(t *testing.T) {
+	// nil resolver ⇒ explicit empty (no inherited smuggling).
+	ap := AgentProcess{AgentID: "a1", PGDSN: "x", Addr: "y", Tenant: "acme"}
+	env, _ := ap.envDelta(context.Background())
+	got, ok := envValue(t, env, "RUNTIME_EVAL_POLICY")
+	if !ok || got != "" {
+		t.Fatalf("nil-resolver agent must emit explicit empty RUNTIME_EVAL_POLICY=; got %q ok=%v", got, ok)
+	}
+}
+
+func TestEnvDeltaEvalPolicyEmptyWhenResolverReturnsEmpty(t *testing.T) {
+	ap := AgentProcess{AgentID: "a1", PGDSN: "x", Addr: "y", Tenant: "acme",
+		policyResolver: &fakePolicyResolver{json: ""}}
+	env, _ := ap.envDelta(context.Background())
+	got, ok := envValue(t, env, "RUNTIME_EVAL_POLICY")
+	if !ok || got != "" {
+		t.Fatalf("empty-returning resolver must emit explicit empty; got %q ok=%v", got, ok)
+	}
+}
+
+func TestEnvDeltaEvalPolicyFailOpen(t *testing.T) {
+	// A resolver error must not fail the spawn: explicit empty, never an error.
+	ap := AgentProcess{AgentID: "a1", PGDSN: "x", Addr: "y", Tenant: "acme",
+		policyResolver: &fakePolicyResolver{err: errors.New("boom")}}
+	env, err := ap.envDelta(context.Background())
+	if err != nil {
+		t.Fatalf("resolver error must fail open, got envDelta err: %v", err)
+	}
+	got, ok := envValue(t, env, "RUNTIME_EVAL_POLICY")
+	if !ok || got != "" {
+		t.Fatalf("resolver error must yield explicit empty; got %q ok=%v", got, ok)
+	}
+}

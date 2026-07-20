@@ -1,9 +1,11 @@
 package eval
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"regexp"
+	"strings"
 	"time"
 )
 
@@ -79,4 +81,24 @@ func ValidatePolicy(p Policy) error {
 		}
 	}
 	return nil
+}
+
+// ParsePolicy decodes the RUNTIME_EVAL_POLICY wire form. An empty or whitespace
+// string ⇒ (Policy{}, false, nil) (no policy configured). Otherwise it unmarshals
+// the JSON and validates it: a malformed or invalid injected policy is an error
+// (the control plane only ever injects validated policies, so a parse failure
+// means corruption/tampering — the caller treats it as fatal, matching pricing).
+// Mirrors config.ParseModelPrice's (T, bool, error) shape.
+func ParsePolicy(s string) (Policy, bool, error) {
+	if strings.TrimSpace(s) == "" {
+		return Policy{}, false, nil
+	}
+	var p Policy
+	if err := json.Unmarshal([]byte(s), &p); err != nil {
+		return Policy{}, false, fmt.Errorf("eval: RUNTIME_EVAL_POLICY: %w", err)
+	}
+	if err := ValidatePolicy(p); err != nil {
+		return Policy{}, false, err
+	}
+	return p, true, nil
 }

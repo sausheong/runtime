@@ -302,6 +302,44 @@ type stubBroker struct{}
 
 func (stubBroker) SecretsFor(context.Context, string) (map[string]string, error) { return nil, nil }
 
+type stubPolicyResolver struct{}
+
+func (stubPolicyResolver) PolicyJSON(context.Context, string, string) (string, error) {
+	return "", nil
+}
+
+func TestRegistrySetPolicyResolverStampsPool(t *testing.T) {
+	cfg := &config.Config{Agents: []config.AgentConfig{
+		{ID: "as", Name: "AS", Model: "m", ListenAddr: "127.0.0.1:9310",
+			Autoscale: &config.AutoscaleConfig{Min: 1, Max: 2, TargetSessionsPerReplica: 2}},
+	}}
+	_ = cfg.Validate()
+	reg := NewRegistry(cfg, "/bin/true", "dsn")
+	reg.SetPolicyResolver(stubPolicyResolver{})
+	// PoolManager base must carry the resolver so autoscaled replicas inherit it
+	// (mirrors TestRegistrySetBrokerStampsPool). The base is what every
+	// pool-spawned replica is copied from.
+	pm := reg.pools["as"]
+	if pm.base.policyResolver == nil {
+		t.Fatal("SetPolicyResolver did not stamp the PoolManager base")
+	}
+}
+
+func TestRegistrySetPolicyResolverStampsLocalReadPath(t *testing.T) {
+	cfg := &config.Config{Agents: []config.AgentConfig{
+		{ID: "local", Name: "L", Model: "m", ListenAddr: "127.0.0.1:9320"},
+	}}
+	_ = cfg.Validate()
+	reg := NewRegistry(cfg, "/bin/true", "dsn")
+	reg.SetPolicyResolver(stubPolicyResolver{})
+	if ap, ok := reg.Get("local"); !ok || ap.policyResolver == nil {
+		t.Fatalf("Get-returned AgentProcess missing policyResolver (ok=%v)", ok)
+	}
+	if ap, ok := reg.Replica("local", 0); !ok || ap.policyResolver == nil {
+		t.Fatalf("Replica-returned AgentProcess missing policyResolver (ok=%v)", ok)
+	}
+}
+
 func TestRegistry_RemoteAgentDialIdentity(t *testing.T) {
 	cfg := &config.Config{Agents: []config.AgentConfig{
 		{ID: "local", Name: "L", Model: "m", ListenAddr: "127.0.0.1:8101"},

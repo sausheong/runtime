@@ -17,6 +17,7 @@ import (
 	"github.com/sausheong/runtime/agentruntime"
 	"github.com/sausheong/runtime/internal/agentkind"
 	"github.com/sausheong/runtime/internal/config"
+	"github.com/sausheong/runtime/internal/eval"
 	"github.com/sausheong/runtime/internal/store"
 )
 
@@ -74,6 +75,18 @@ func main() {
 		log.Fatalf("agentd: RUNTIME_AGENT_PRICING: %v", perr)
 	} else if ok {
 		cfg.Price = &mp
+	}
+	// Per-agent online eval policy, injected by the control plane at spawn time.
+	// A malformed injected policy is a boot failure (matches pricing): the control
+	// plane only injects validated policies, so a parse failure means corruption
+	// or tampering. The judge is built only when a policy exists (judge-scorer
+	// criteria need it; a nil judge fails those criteria closed, never aborts).
+	policyJSON := os.Getenv("RUNTIME_EVAL_POLICY")
+	if pol, ok, perr := eval.ParsePolicy(policyJSON); perr != nil {
+		log.Fatalf("agentd: RUNTIME_EVAL_POLICY: %v", perr)
+	} else if ok {
+		cfg.EvalPolicy = &pol
+		cfg.EvalJudge, _ = eval.NewJudgeFromEnv()
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)

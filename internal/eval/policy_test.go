@@ -43,3 +43,31 @@ func TestCriterionToCase(t *testing.T) {
 		t.Errorf("contains mapping wrong: %+v", r)
 	}
 }
+
+func TestParsePolicy(t *testing.T) {
+	// Empty / whitespace ⇒ (Policy{}, false, nil): no policy configured.
+	for _, s := range []string{"", "   ", "\t\n"} {
+		p, ok, err := ParsePolicy(s)
+		if err != nil || ok || p.AgentID != "" {
+			t.Fatalf("ParsePolicy(%q) = (%+v, %v, %v); want empty,false,nil", s, p, ok, err)
+		}
+	}
+	// Valid JSON ⇒ (policy, true, nil).
+	valid := `{"tenant":"t1","agent_id":"a1","sample_rate":50,"criteria":[{"name":"has-src","scorer":"contains","pattern":"source:"}]}`
+	p, ok, err := ParsePolicy(valid)
+	if err != nil || !ok {
+		t.Fatalf("ParsePolicy(valid) = (%+v, %v, %v); want policy,true,nil", p, ok, err)
+	}
+	if p.AgentID != "a1" || p.SampleRate != 50 || len(p.Criteria) != 1 {
+		t.Fatalf("parsed policy wrong: %+v", p)
+	}
+	// Malformed JSON ⇒ error.
+	if _, ok, err := ParsePolicy(`{not json`); err == nil || ok {
+		t.Fatalf("ParsePolicy(malformed) = (_, %v, %v); want error", ok, err)
+	}
+	// Valid JSON but invalid policy (rate 200) ⇒ error (ValidatePolicy rejects).
+	bad := `{"agent_id":"a1","sample_rate":200,"criteria":[{"name":"x","scorer":"contains","pattern":"y"}]}`
+	if _, ok, err := ParsePolicy(bad); err == nil || ok {
+		t.Fatalf("ParsePolicy(invalid policy) = (_, %v, %v); want error", ok, err)
+	}
+}

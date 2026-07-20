@@ -19,6 +19,13 @@ type SecretBroker interface {
 	SecretsFor(ctx context.Context, tenant string) (map[string]string, error)
 }
 
+// PolicyResolver resolves an agent's online eval policy JSON at spawn time.
+// "" ⇒ no policy. Mirrors SecretBroker (resolved in envDelta, nil-safe,
+// fail-open): a resolver error yields no policy, never a spawn failure.
+type PolicyResolver interface {
+	PolicyJSON(ctx context.Context, tenant, agentID string) (string, error)
+}
+
 // AgentProcess describes a supervised agent subprocess.
 type AgentProcess struct {
 	AgentID string
@@ -69,6 +76,8 @@ type AgentProcess struct {
 	PricingJSON string
 
 	broker SecretBroker // optional; injected by the Registry. nil ⇒ no secret brokering.
+
+	policyResolver PolicyResolver // optional; injected by the Registry. nil ⇒ no eval policy.
 }
 
 // envDelta returns ONLY the entries buildEnv adds on top of the inherited
@@ -96,6 +105,20 @@ func (a AgentProcess) envDelta(ctx context.Context) ([]string, error) {
 		// unpriced, so an inherited operator var can't smuggle a price in.
 		"RUNTIME_AGENT_PRICING=" + a.PricingJSON,
 	}
+	// Resolved per-agent online eval policy (P3.1). Always emitted — explicit
+	// empty when no policy, so an inherited operator var can't smuggle one in.
+	// Fail-open: a resolver error ⇒ empty policy ⇒ the agent scores nothing,
+	// never a spawn failure (unlike the broker, which fails closed).
+	policyJSON := ""
+	if a.policyResolver != nil {
+		pj, err := a.policyResolver.PolicyJSON(ctx, a.Tenant, a.AgentID)
+		if err != nil {
+			slog.Warn("eval policy resolve failed; agent runs without a policy", "tenant", a.Tenant, "agent", a.AgentID, "err", err)
+		} else {
+			policyJSON = pj
+		}
+	}
+	env = append(env, "RUNTIME_EVAL_POLICY="+policyJSON)
 	// Agents that did NOT opt in get explicit empty-value entries so an
 	// inherited operator var (e.g. a leaked RUNTIME_GATEWAY_URL) can't enable
 	// the feature: exec.Cmd uses the LAST duplicate env entry, and agentd
