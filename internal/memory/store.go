@@ -475,3 +475,34 @@ func (s *Store) GCOnce(ctx context.Context, grace time.Duration, batch int) (int
 		}
 	}
 }
+
+// StartGC runs GCOnce every interval until ctx is cancelled, in its own
+// goroutine. Best-effort: a sweep error is logged and the loop continues (GC
+// never crashes agentd, never blocks a turn). onReap (nil-safe) receives each
+// successful pass's delete count for metrics.
+func (s *Store) StartGC(ctx context.Context, interval, grace time.Duration, batch int, onReap func(int)) {
+	sweep := func(c context.Context) (int, error) { return s.GCOnce(c, grace, batch) }
+	go startGCLoop(ctx, interval, sweep, onReap)
+}
+
+// startGCLoop is the DB-free ticker body (test seam): tick → sweep → onReap,
+// logging and continuing on error, returning when ctx is cancelled.
+func startGCLoop(ctx context.Context, interval time.Duration, sweep func(context.Context) (int, error), onReap func(int)) {
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			n, err := sweep(ctx)
+			if err != nil {
+				slog.Warn("memory: gc sweep failed", "err", err)
+				continue
+			}
+			if onReap != nil {
+				onReap(n)
+			}
+		}
+	}
+}
