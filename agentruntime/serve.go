@@ -226,6 +226,20 @@ func (m *Manager) failLimit(wfID, limit string, observed, configured int64) stri
 	return "limit_exceeded"
 }
 
+// statusForReason maps a turn output to the transcript row's status column:
+// "completed" for a clean finish, "error" for any other terminal reason
+// (aborted/error), and "running" while the session is still iterating.
+func statusForReason(out turnOutput) string {
+	switch {
+	case out.Done && out.Reason == "completed":
+		return "completed"
+	case out.Done:
+		return "error"
+	default:
+		return "running"
+	}
+}
+
 // sessionWorkflow is the durable per-session loop. Registered once; run with a
 // stable workflow id == the session id so a process restart recovers exactly
 // this workflow and replays completed turns from their checkpoints.
@@ -435,6 +449,18 @@ func (m *Manager) sessionWorkflow(ctx dbos.DBOSContext, in turnInput) (string, e
 		}
 
 		applyEntries(canonical, out.Entries) // SOLE mutator of canonical
+		// Capture the complete turn transcript (best-effort, off the durable
+		// path; a marshal/append failure is logged, never fatal). Indexed by the
+		// 0-based loop var `turn` (NOT turn+1, which SetTurnCount stores as a
+		// count). AppendTranscript is idempotent on (session, turn), so a DBOS
+		// replay re-writes the identical row.
+		if entriesJSON, mErr := json.Marshal(out.Entries); mErr == nil {
+			if tErr := m.st.AppendTranscript(context.Background(), wfID, turn, in.Tenant, in.Subject, entriesJSON, out.Reason, statusForReason(out)); tErr != nil {
+				slog.Warn("append transcript failed", "session", wfID, "turn", turn, "err", tErr)
+			}
+		} else {
+			slog.Warn("marshal transcript entries failed", "session", wfID, "turn", turn, "err", mErr)
+		}
 		_ = m.st.SetTurnCount(context.Background(), wfID, turn+1)
 		if err := m.st.SetSessionUsage(context.Background(), wfID, tokensAll, costUSD); err != nil {
 			slog.Warn("set session usage failed", "session", wfID, "err", err)
@@ -453,6 +479,21 @@ func (m *Manager) sessionWorkflow(ctx dbos.DBOSContext, in turnInput) (string, e
 			} else {
 				_ = m.st.SetSessionStatus(context.Background(), wfID, "error")
 				m.publish(wfID, WireEvent{Type: "error", Err: "turn ended: " + out.Reason})
+			}
+			// Online sampling (P3.1 M2): deterministic sample of finished sessions
+			// scored against the agent's eval policy, in a background goroutine off
+			// the turn path. Deterministic decision so a DBOS replay of this block
+			// does not re-sample differently. Replay caveat: the terminal block
+			// re-runs on recovery, so scoreSession may fire again — acceptable
+			// because PutOnlineResult is an idempotent upsert (re-scoring overwrites
+			// the same rows); the metric may double-count, the same tolerance the
+			// per-turn metrics carry. Scores the clean/error out.Done path only;
+			// limit_exceeded (via failLimit) is a truncated session with no
+			// meaningful final output — captured per-turn but NOT scored.
+			if m.evalPolicy != nil && sampled(wfID, m.evalPolicy.SampleRate) {
+				entries := out.Entries
+				tenant, actor := in.Tenant, in.Subject
+				go m.scoreSession(wfID, tenant, actor, entries)
 			}
 			return out.Reason, nil
 		}
@@ -556,6 +597,8 @@ func Serve(ctx context.Context, cfg Config) error {
 		replica:           replica,
 		limits:            limits,
 		subjectForwarding: envBool("RUNTIME_SUBJECT_FORWARDING"),
+		evalPolicy:        cfg.EvalPolicy,
+		evalJudge:         cfg.EvalJudge,
 		subscribers:       map[string][]chan WireEvent{},
 	}
 	if m.price == nil {

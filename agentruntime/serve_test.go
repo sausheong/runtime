@@ -7,6 +7,30 @@ import (
 	"github.com/sausheong/runtime/internal/store"
 )
 
+// TestStatusForReason pins the transcript status mapping: only a clean
+// completed turn is "completed", any other terminal reason is "error", and a
+// non-terminal turn is "running". The full capture+score turn path needs a
+// Manager+DBOS+provider harness that does not exist at this layer, so the
+// end-to-end assertion (rate-100 policy ⇒ transcript row + result row) is
+// covered by the Task 9 e2e; this pins the one new pure helper.
+func TestStatusForReason(t *testing.T) {
+	cases := []struct {
+		name string
+		out  turnOutput
+		want string
+	}{
+		{"completed", turnOutput{Done: true, Reason: "completed"}, "completed"},
+		{"aborted", turnOutput{Done: true, Reason: "aborted"}, "error"},
+		{"error", turnOutput{Done: true, Reason: "error"}, "error"},
+		{"running", turnOutput{Done: false, Reason: "end_turn"}, "running"},
+	}
+	for _, tc := range cases {
+		if got := statusForReason(tc.out); got != tc.want {
+			t.Errorf("%s: statusForReason = %q, want %q", tc.name, got, tc.want)
+		}
+	}
+}
+
 // TestPublishFanoutAndUnsubscribe validates the concurrency core: every live
 // subscriber receives a published event, published events carry the store seq,
 // and an unsubscribed channel stops receiving.
