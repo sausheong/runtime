@@ -1,10 +1,12 @@
 package main
 
 import (
+	"context"
 	"net/http"
 
 	"github.com/sausheong/runtime/console"
 	"github.com/sausheong/runtime/controlplane"
+	"github.com/sausheong/runtime/internal/eval"
 	"github.com/sausheong/runtime/internal/gateway"
 	"github.com/sausheong/runtime/internal/obs"
 	"github.com/sausheong/runtime/internal/store"
@@ -28,7 +30,13 @@ type rootOptions struct {
 	ControlStore   store.Store
 	PolicyStore    controlplane.PolicyStore
 	QuotaStore     controlplane.QuotaStore
+	EvalStore      eval.EvalStore
+	EvalInvoker    eval.Invoker
+	EvalJudge      eval.Judge
 	CredType       controlplane.CredTypeFunc
+	// SignalCtx is the server signal context threaded into background-launching
+	// wiring (eval run goroutines must outlive the request that starts them).
+	SignalCtx context.Context
 	// SubjectForwarding gates the anti-spoof strip-then-set of X-Runtime-* at the
 	// reverse proxy (RUNTIME_SUBJECT_FORWARDING). Off ⇒ today's behavior.
 	SubjectForwarding bool
@@ -52,6 +60,9 @@ func buildRoot(o rootOptions) http.Handler {
 		}
 		if o.QuotaStore != nil {
 			controlplane.RegisterQuotaAdmin(apiMux, o.AdminStore, o.QuotaStore)
+		}
+		if o.EvalStore != nil {
+			controlplane.RegisterEvalAdmin(o.SignalCtx, apiMux, o.AdminStore, o.EvalStore, o.EvalInvoker, o.EvalJudge, o.Registry, o.Metrics)
 		}
 	}
 	if o.Gateway != nil {

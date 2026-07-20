@@ -20,6 +20,7 @@ import (
 	"github.com/sausheong/runtime/controlplane"
 	"github.com/sausheong/runtime/internal/agentstore"
 	"github.com/sausheong/runtime/internal/config"
+	"github.com/sausheong/runtime/internal/eval"
 	"github.com/sausheong/runtime/internal/gateway"
 	"github.com/sausheong/runtime/internal/identity"
 	"github.com/sausheong/runtime/internal/memory"
@@ -410,6 +411,7 @@ func main() {
 			Registry: reg, ConsoleOIDC: console.OIDCConfig{}, SecretAdmin: secretAdmin,
 			Gateway: gwHandler, Metrics: cm, ControlStore: ctlStore, PolicyStore: polAdmin,
 			QuotaStore: quotaAdmin, CredType: credType, SubjectForwarding: sf,
+			SignalCtx: ctx, // eval not mounted in open mode (no AdminStore)
 		}), cm)))
 	} else {
 		oidcVerifier, verr := identity.NewOIDCVerifier(ctx, oidcIssuer, oidcClientID)
@@ -474,12 +476,23 @@ func main() {
 				CredType:  credType, // nil when brokering is off ⇒ check skipped
 			}
 		}
+		// Golden-set evaluator (P3.1): DB store + registry-backed agent invoker +
+		// optional LLM judge. Fatal on store init (like quota); the judge is
+		// best-effort (nil when unconfigured — judge cases then fail-the-case).
+		evalStore, eerr := eval.NewStore(ctx, identityDB)
+		if eerr != nil {
+			slog.Error("eval store init failed", "err", eerr)
+			os.Exit(1)
+		}
+		evalInvoker := controlplane.NewEvalInvoker(reg)
+		evalJudge, _ := eval.NewJudgeFromEnv()
 		root := buildRoot(rootOptions{
 			Registry: reg, AdminStore: idStore, ConsoleOIDC: consoleOIDC,
 			SecretAdmin: secretAdmin, Gateway: gwHandler, UpstreamStore: gwStore,
 			GatewayMutator: gwMut, AgentStore: agentStore, AgentManager: agentManager,
 			Onboarding: onb, Metrics: cm, ControlStore: ctlStore, PolicyStore: polAdmin,
 			QuotaStore: quotaAdmin, CredType: credType, SubjectForwarding: sf,
+			EvalStore: evalStore, EvalInvoker: evalInvoker, EvalJudge: evalJudge, SignalCtx: ctx,
 		}) // mounts /admin since the store is non-nil
 		onReject := func(status int) { cm.AuthRejected(status) }
 		// When OIDC login is available, lock the browser console to OIDC sessions:
