@@ -271,3 +271,51 @@ func TestKG_IngestDropsOverCapacity(t *testing.T) {
 		t.Fatal("over-capacity ingest must drop (no extract/save)")
 	}
 }
+
+func TestRecallForSession_ThreeBlocks(t *testing.T) {
+	emb := &kgFakeEmbedder{}
+	search := func(_ context.Context, _ []float32, _ int, _ float64, kind string) ([]hmem.Entry, error) {
+		switch kind {
+		case KindFact:
+			return []hmem.Entry{{Content: "user prefers dark mode"}}, nil
+		case KindEpisode:
+			return []hmem.Entry{{Content: "deployed staging on tuesday"}}, nil
+		}
+		return nil, nil
+	}
+	g := newKGWithSearch(emb, 5, 0.0, search)
+	g.episodicK = 3
+	g.getSummary = func(_ context.Context, _ string) (string, bool, error) {
+		return "we discussed the deploy plan", true, nil
+	}
+	out := g.recallForSession(context.Background(), "what did we do", "sess-1")
+	for _, want := range []string{
+		"Relevant memories:", "user prefers dark mode",
+		"Relevant past events:", "deployed staging on tuesday",
+		"Conversation summary so far:", "we discussed the deploy plan",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("recall missing %q in:\n%s", want, out)
+		}
+	}
+	// Order: facts, then events, then summary.
+	fi := strings.Index(out, "Relevant memories:")
+	ei := strings.Index(out, "Relevant past events:")
+	si := strings.Index(out, "Conversation summary so far:")
+	if !(fi < ei && ei < si) {
+		t.Fatalf("blocks out of order: facts=%d events=%d summary=%d\n%s", fi, ei, si, out)
+	}
+}
+
+func TestRecallEpisodes_EmptyOmitsBlock(t *testing.T) {
+	emb := &kgFakeEmbedder{}
+	search := func(_ context.Context, _ []float32, _ int, _ float64, _ string) ([]hmem.Entry, error) {
+		return nil, nil // nothing for any kind
+	}
+	g := newKGWithSearch(emb, 5, 0.0, search)
+	g.episodicK = 3
+	out := g.recallForSession(context.Background(), "anything", "s1")
+	if strings.Contains(out, "Relevant past events:") {
+		t.Fatalf("empty episode search must omit the block, got:\n%s", out)
+	}
+}

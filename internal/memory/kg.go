@@ -33,6 +33,8 @@ type KG struct {
 	k        int
 	floor    float64
 
+	episodicK int // episodes injected per turn (0 ⇒ episode recall disabled)
+
 	// Ingest path. Nil extractor ⇒ Ingest is a no-op (M2 behavior).
 	extractor  Extractor
 	save       saver
@@ -83,6 +85,10 @@ func WithStrategies(ss ...Strategy) KGOption {
 // WithSummaryMetric sets a callback invoked after each successful summary write
 // (WriteSupersede). Nil is fine; the runner nil-guards it.
 func WithSummaryMetric(f func()) KGOption { return func(g *KG) { g.onSummaryWrite = f } }
+
+// WithEpisodicRecall sets how many episodes recall injects per turn (its own
+// "Relevant past events:" block). Zero leaves episode recall off.
+func WithEpisodicRecall(k int) KGOption { return func(g *KG) { g.episodicK = k } }
 
 // NewKG builds a KnowledgeGraph backed by a tenant-pinned Store. Without any
 // KGOption the Ingest path is a no-op (M2 semantic-recall-only behavior).
@@ -184,20 +190,43 @@ func (g *KG) ingestForSession(_ context.Context, thread []hrt.Message, sessionID
 // never breaking a turn.
 func (g *KG) recallForSession(ctx context.Context, query, sessionID string) string {
 	fact := g.Recall(ctx, query)
+	events := g.recallEpisodes(ctx, query)
 	var summary string
 	if g.getSummary != nil && sessionID != "" {
 		if s, ok, err := g.getSummary(ctx, sessionID); err == nil && ok && strings.TrimSpace(s) != "" {
 			summary = "Conversation summary so far:\n" + strings.TrimSpace(s) + "\n"
 		}
 	}
-	switch {
-	case fact != "" && summary != "":
-		return fact + "\n" + summary
-	case summary != "":
-		return summary
-	default:
-		return fact
+	blocks := make([]string, 0, 3)
+	for _, b := range []string{fact, events, summary} {
+		if strings.TrimSpace(b) != "" {
+			blocks = append(blocks, b)
+		}
 	}
+	return strings.Join(blocks, "\n")
+}
+
+// recallEpisodes returns the "Relevant past events:" block for the query, or ""
+// when episode recall is off, there is no embedder, nothing relevant, or any
+// error (best-effort).
+func (g *KG) recallEpisodes(ctx context.Context, query string) string {
+	if g.episodicK <= 0 || g.embedder == nil || g.search == nil {
+		return ""
+	}
+	vec, err := g.embedder.Embed(ctx, query)
+	if err != nil {
+		return ""
+	}
+	hits, err := g.search(ctx, vec, g.episodicK, g.floor, KindEpisode)
+	if err != nil || len(hits) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("Relevant past events:\n")
+	for _, h := range hits {
+		fmt.Fprintf(&b, "- %s\n", h.Content)
+	}
+	return b.String()
 }
 
 // ShouldRecall is a cheap gate: skip empty/whitespace/very short inputs where
