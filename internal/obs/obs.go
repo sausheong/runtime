@@ -319,6 +319,7 @@ type AgentMetrics struct {
 	toolCalls     *prometheus.CounterVec
 	limitHits     *prometheus.CounterVec
 	summaryWrites *prometheus.CounterVec
+	gcDeleted     *prometheus.CounterVec
 }
 
 func NewAgentMetrics(agentID, tenant, model string) *AgentMetrics {
@@ -359,7 +360,11 @@ func NewAgentMetrics(agentID, tenant, model string) *AgentMetrics {
 		Name: "agent_memory_summary_writes_total",
 		Help: "Rolling per-session summary writes (WriteSupersede).",
 	}, []string{"agent", "tenant", "model"})
-	a.reg.MustRegister(a.turns, a.turnDur, a.tokens, a.cost, a.unpriced, a.toolCalls, a.limitHits, a.summaryWrites)
+	a.gcDeleted = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "agent_memory_gc_deleted_total",
+		Help: "Dead memory rows reaped by GC.",
+	}, []string{"agent", "tenant"})
+	a.reg.MustRegister(a.turns, a.turnDur, a.tokens, a.cost, a.unpriced, a.toolCalls, a.limitHits, a.summaryWrites, a.gcDeleted)
 	return a
 }
 
@@ -415,6 +420,14 @@ func (a *AgentMetrics) SummaryWrite() {
 		return
 	}
 	a.summaryWrites.WithLabelValues(a.agentID, a.tenant, a.model).Inc()
+}
+
+// MemoryGCReaped adds n to the count of dead memory rows reaped by GC. Nil-safe.
+func (a *AgentMetrics) MemoryGCReaped(n int) {
+	if a == nil {
+		return
+	}
+	a.gcDeleted.WithLabelValues(a.agentID, a.tenant).Add(float64(n))
 }
 
 // Handler serves this registry's exposition (agentd mounts it at /metrics).

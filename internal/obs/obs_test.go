@@ -259,3 +259,22 @@ func scrapeHandler(t *testing.T, h http.Handler) string {
 	}
 	return rec.Body.String()
 }
+
+func TestMemoryGCReaped(t *testing.T) {
+	a := NewAgentMetrics("agent-x", "tenant-y", "model-z")
+	a.MemoryGCReaped(5)
+	a.MemoryGCReaped(3)
+	const want = `
+# HELP agent_memory_gc_deleted_total Dead memory rows reaped by GC.
+# TYPE agent_memory_gc_deleted_total counter
+agent_memory_gc_deleted_total{agent="agent-x",tenant="tenant-y"} 8
+`
+	if err := testutil.CollectAndCompare(a.gcDeleted, strings.NewReader(want)); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestMemoryGCReapedNilSafe(t *testing.T) {
+	var a *AgentMetrics
+	a.MemoryGCReaped(1) // must not panic
+}
