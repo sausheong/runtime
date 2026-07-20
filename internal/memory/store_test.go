@@ -784,3 +784,62 @@ func TestSearchSimilar_KindIsolation(t *testing.T) {
 		t.Fatalf("KindEpisode search must return only episodes, got %v", eps)
 	}
 }
+
+func TestEpisodes_ActorIsolation(t *testing.T) {
+	// Episodes are similarity-retrieved, so the store needs the embed schema;
+	// freshStoreEmbedded (Task 2's helper) constructs the Store with an embedder
+	// so NewStore applies the embeddings DDL. The empty fixedEmbedder maps every
+	// content to {0,0,1}; similarity with the {1,0,0} query is 0.0, which clears
+	// the 0.0 floor (>=), so each actor-scoped search returns exactly its own row.
+	st, db := freshStoreEmbedded(t, "alpha", &fixedEmbedder{})
+	defer db.Close()
+	ctxA := WithActor(context.Background(), "actorA")
+	ctxB := WithActor(context.Background(), "actorB")
+	if _, err := st.SaveKind(ctxA, hmem.Entry{Content: "A did x"}, KindEpisode); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.SaveKind(ctxB, hmem.Entry{Content: "B did y"}, KindEpisode); err != nil {
+		t.Fatal(err)
+	}
+	a, err := st.SearchSimilar(ctxA, []float32{1, 0, 0}, 10, 0.0, KindEpisode)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(a) != 1 || a[0].Content != "A did x" {
+		t.Fatalf("actorA episodes leaked/missing: %v", a)
+	}
+	b, _ := st.SearchSimilar(ctxB, []float32{1, 0, 0}, 10, 0.0, KindEpisode)
+	if len(b) != 1 || b[0].Content != "B did y" {
+		t.Fatalf("actorB episodes leaked/missing: %v", b)
+	}
+}
+
+func TestEpisodes_GCReapsOnlyDead(t *testing.T) {
+	st, db := freshStore(t, "alpha")
+	defer db.Close()
+	ctx := context.Background()
+	live, err := st.SaveKind(ctx, hmem.Entry{Content: "live episode"}, KindEpisode)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A tombstoned episode: save then remove ⇒ the create row is dead.
+	dead, _ := st.SaveKind(ctx, hmem.Entry{Content: "dead episode"}, KindEpisode)
+	if err := st.Remove(ctx, dead.ID); err != nil {
+		t.Fatal(err)
+	}
+	n, err := st.GCOnce(ctx, 0, 1000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Fatalf("GC must reap the 1 dead episode create row, got %d", n)
+	}
+	// The live episode row survives.
+	var liveCount int
+	if err := db.QueryRow(`SELECT count(*) FROM memory_events WHERE entry_id=$1 AND op='create'`, live.ID).Scan(&liveCount); err != nil {
+		t.Fatal(err)
+	}
+	if liveCount != 1 {
+		t.Fatalf("live episode must survive GC, count=%d", liveCount)
+	}
+}

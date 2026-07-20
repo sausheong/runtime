@@ -742,6 +742,19 @@ export RUNTIME_MEMORY_GC_GRACE=24h     # only reap rows dead longer than this (d
 export RUNTIME_MEMORY_GC_BATCH=1000    # rows per DELETE; loops until drained (default 1000)
 ```
 
+**Episodic memory.** Beyond durable facts and the rolling summary, an agent can
+record timestamped **events** — what the user asked for and what happened —
+retrieved in their own "Relevant past events:" recall block. Opt-in, requires
+embeddings (episodes are similarity-retrieved):
+
+```
+export RUNTIME_EPISODIC_ENABLED=1        # opt-in (off by default)
+export RUNTIME_EPISODIC_MODEL=gpt-4o-mini # falls back to RUNTIME_INGEST_MODEL
+export RUNTIME_EPISODIC_MIN_MESSAGES=2   # growth gate (default 2)
+export RUNTIME_EPISODIC_MAX=5            # cap episodes saved per turn (default 5)
+export RUNTIME_EPISODIC_RECALL_K=3       # episodes injected per turn (default 3)
+```
+
 #### Actor-namespaced memory (subject forwarding)
 
 By default memory is **tenant-scoped**: every caller of a given agent shares one
@@ -2082,6 +2095,11 @@ unaffected.
 | `RUNTIME_MEMORY_GC_INTERVAL` | agentd | `1h` | How often the GC sweep runs (Go duration). |
 | `RUNTIME_MEMORY_GC_GRACE` | agentd | `24h` | Only rows dead longer than this are reaped (audit tail + in-flight-read safety). |
 | `RUNTIME_MEMORY_GC_BATCH` | agentd | `1000` | Max rows deleted per statement; the sweep loops until the backlog is drained. |
+| `RUNTIME_EPISODIC_ENABLED` | agentd | (unset) | `1`/`true`/`yes`/`on` enables episodic event extraction. Requires embeddings; ignored (warn) if embeddings are unset. |
+| `RUNTIME_EPISODIC_MODEL` | agentd | (fallback `RUNTIME_INGEST_MODEL`) | Chat model for episode extraction (reuses `OPENAI_*`). |
+| `RUNTIME_EPISODIC_MIN_MESSAGES` | agentd | `2` | Growth gate: minimum thread messages before episodes are extracted. |
+| `RUNTIME_EPISODIC_MAX` | agentd | `5` | Hard cap on episodes saved per turn. |
+| `RUNTIME_EPISODIC_RECALL_K` | agentd | `3` | Episodes injected into the prompt per turn (own recall block). |
 | `RUNTIME_SUBJECT_FORWARDING` | runtimed + agentd | (unset) | `1`/`true`/`yes`/`on` enables forwarding the authenticated caller's subject as `X-Runtime-*` to agents (actor-scoping memory) **and** forwarding the caller's verified OIDC JWT as `X-Runtime-Assertion` to the gateway for OBO (re-verified + tenant-bound there; ephemeral, never persisted); off ⇒ tenant-wide (today's behavior). |
 | `RUNTIME_LOG_FORMAT` | runtimed | `text` | `json` switches `slog` to JSON output. |
 | `RUNTIME_CTL_URL` | runtimectl | `http://localhost:8080` | Control-plane base URL the CLI targets. |
