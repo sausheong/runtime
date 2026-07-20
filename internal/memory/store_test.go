@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"sync"
 	"testing"
+	"time"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
 	hmem "github.com/sausheong/harness/tool/memory"
@@ -482,5 +483,227 @@ func TestStore_ListGetExcludeSummaries(t *testing.T) {
 	// The summary is still retrievable via the dedicated path (not broken, just hidden).
 	if s, ok, err := st.GetSessionSummary(ctx, "S"); err != nil || !ok || s != "the summary" {
 		t.Fatalf("GetSessionSummary: got=%q ok=%v err=%v", s, ok, err)
+	}
+}
+
+// backdate ages every row in the tenant's table so grace-window tests can run
+// without waiting. Direct SQL: the Store has no API to set created_at.
+func backdate(t *testing.T, db *sql.DB, interval string) {
+	t.Helper()
+	if _, err := db.Exec(`UPDATE memory_events SET created_at = now() - $1::interval`, interval); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// countRows returns the total row count (live + dead) for the tenant.
+func countRows(t *testing.T, db *sql.DB, tenant string) int {
+	t.Helper()
+	var n int
+	if err := db.QueryRow(`SELECT count(*) FROM memory_events WHERE tenant_id=$1`, tenant).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
+
+func TestGCOnce_ReapsSupersededFacts(t *testing.T) {
+	st, db := freshStore(t, "alpha")
+	defer db.Close()
+	ctx := context.Background()
+	e, _ := st.Save(ctx, hmem.Entry{Content: "v1"})
+	e2, _ := st.Update(ctx, e.ID, "v2")
+	_, _ = st.Update(ctx, e2.ID, "v3")
+	// 3 rows: create(v1, dead) + update(v2, dead) + update(v3, live).
+	if got := countRows(t, db, "alpha"); got != 3 {
+		t.Fatalf("pre-GC rows = %d, want 3", got)
+	}
+	n, err := st.GCOnce(ctx, 0, 1000) // grace=0: reap regardless of age
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 2 {
+		t.Fatalf("GCOnce deleted %d, want 2", n)
+	}
+	if got := countRows(t, db, "alpha"); got != 1 {
+		t.Fatalf("post-GC rows = %d, want 1 (live only)", got)
+	}
+	// Live entry still readable, content intact.
+	live, ok, err := st.Get(ctx, findLiveID(t, db, "alpha"))
+	if err != nil || !ok || live.Content != "v3" {
+		t.Fatalf("live entry lost: ok=%v content=%q err=%v", ok, live.Content, err)
+	}
+}
+
+// findLiveID returns the single live fact entry_id for the tenant (test helper).
+func findLiveID(t *testing.T, db *sql.DB, tenant string) string {
+	t.Helper()
+	var id string
+	err := db.QueryRow(`
+SELECT e.entry_id FROM memory_events e
+WHERE e.tenant_id=$1 AND e.kind<>'summary' AND e.op IN ('create','update')
+  AND NOT EXISTS (SELECT 1 FROM memory_events s WHERE s.tenant_id=$1 AND s.supersedes=e.entry_id)
+  AND NOT EXISTS (SELECT 1 FROM memory_events d WHERE d.tenant_id=$1 AND d.op='delete' AND d.entry_id=e.entry_id)
+LIMIT 1`, tenant).Scan(&id)
+	if err != nil {
+		t.Fatalf("findLiveID: %v", err)
+	}
+	return id
+}
+
+func TestGCOnce_ReapsTombstonedFacts(t *testing.T) {
+	st, db := freshStore(t, "alpha")
+	defer db.Close()
+	ctx := context.Background()
+	e, _ := st.Save(ctx, hmem.Entry{Content: "doomed"})
+	if err := st.Remove(ctx, e.ID); err != nil {
+		t.Fatal(err)
+	}
+	// 2 rows: create(dead, tombstoned) + delete(tombstone, retained).
+	n, err := st.GCOnce(ctx, 0, 1000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Fatalf("GCOnce deleted %d, want 1 (the dead create row only)", n)
+	}
+	// The delete tombstone row is retained.
+	if got := countRows(t, db, "alpha"); got != 1 {
+		t.Fatalf("post-GC rows = %d, want 1 (tombstone retained)", got)
+	}
+	// Entry stays absent.
+	if _, ok, _ := st.Get(ctx, e.ID); ok {
+		t.Fatal("tombstoned entry resurrected")
+	}
+}
+
+func TestGCOnce_GraceRespected(t *testing.T) {
+	st, db := freshStore(t, "alpha")
+	defer db.Close()
+	ctx := context.Background()
+	e, _ := st.Save(ctx, hmem.Entry{Content: "v1"})
+	_, _ = st.Update(ctx, e.ID, "v2") // 1 dead + 1 live, both created "now"
+	n, err := st.GCOnce(ctx, time.Hour, 1000) // grace=1h; rows are seconds old
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 0 {
+		t.Fatalf("GCOnce deleted %d within grace, want 0", n)
+	}
+	// Backdate past grace, then it reaps.
+	backdate(t, db, "48 hours")
+	n, err = st.GCOnce(ctx, time.Hour, 1000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Fatalf("GCOnce after backdate deleted %d, want 1", n)
+	}
+}
+
+func TestGCOnce_LiveSetUntouched(t *testing.T) {
+	st, db := freshStore(t, "alpha")
+	defer db.Close()
+	ctx := context.Background()
+	_, _ = st.Save(ctx, hmem.Entry{Content: "a"})
+	_, _ = st.Save(ctx, hmem.Entry{Content: "b"})
+	n, err := st.GCOnce(ctx, 0, 1000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 0 {
+		t.Fatalf("GCOnce deleted %d live rows, want 0", n)
+	}
+	if got := countRows(t, db, "alpha"); got != 2 {
+		t.Fatalf("post-GC rows = %d, want 2", got)
+	}
+}
+
+func TestGCOnce_NoResurrectionAcrossBatches(t *testing.T) {
+	st, db := freshStore(t, "alpha")
+	defer db.Close()
+	ctx := context.Background()
+	e, _ := st.Save(ctx, hmem.Entry{Content: "v1"})
+	e2, _ := st.Update(ctx, e.ID, "v2")
+	_, _ = st.Update(ctx, e2.ID, "v3") // chain: v1<-v2<-v3 (v3 live)
+	liveBefore, _ := st.List(ctx, "")
+	// batch=1 forces multiple passes over the dead ancestors.
+	n, err := st.GCOnce(ctx, 0, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 2 {
+		t.Fatalf("GCOnce(batch=1) deleted %d, want 2", n)
+	}
+	liveAfter, _ := st.List(ctx, "")
+	if len(liveBefore) != 1 || len(liveAfter) != 1 || liveBefore[0].Content != "v3" || liveAfter[0].Content != "v3" {
+		t.Fatalf("live set changed: before=%v after=%v", liveBefore, liveAfter)
+	}
+}
+
+func TestGCOnce_ReapsSummaryChain(t *testing.T) {
+	st, db := freshStore(t, "alpha")
+	defer db.Close()
+	ctx := context.Background()
+	for i := 0; i < 5; i++ {
+		if err := st.PutSessionSummary(ctx, "sess-1", fmt.Sprintf("digest %d", i)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// 5 summary rows: 4 dead (superseded) + 1 live.
+	n, err := st.GCOnce(ctx, 0, 1000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 4 {
+		t.Fatalf("GCOnce deleted %d summary rows, want 4", n)
+	}
+	got, ok, err := st.GetSessionSummary(ctx, "sess-1")
+	if err != nil || !ok || got != "digest 4" {
+		t.Fatalf("live summary lost: ok=%v got=%q err=%v", ok, got, err)
+	}
+}
+
+func TestGCOnce_ActorIsolation(t *testing.T) {
+	st, db := freshStore(t, "alpha")
+	defer db.Close()
+	ctxA := WithActor(context.Background(), "actorA")
+	ctxB := WithActor(context.Background(), "actorB")
+	ea, _ := st.Save(ctxA, hmem.Entry{Content: "a1"})
+	_, _ = st.Update(ctxA, ea.ID, "a2") // A: 1 dead + 1 live
+	eb, _ := st.Save(ctxB, hmem.Entry{Content: "b1"})
+	_, _ = st.Update(ctxB, eb.ID, "b2") // B: 1 dead + 1 live
+	n, err := st.GCOnce(context.Background(), 0, 1000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 2 {
+		t.Fatalf("GCOnce deleted %d, want 2 (one dead per actor)", n)
+	}
+	if a, _ := st.List(ctxA, ""); len(a) != 1 || a[0].Content != "a2" {
+		t.Fatalf("actorA live set wrong: %v", a)
+	}
+	if b, _ := st.List(ctxB, ""); len(b) != 1 || b[0].Content != "b2" {
+		t.Fatalf("actorB live set wrong: %v", b)
+	}
+}
+
+func TestGCOnce_BatchLoopDrainsBacklog(t *testing.T) {
+	st, db := freshStore(t, "alpha")
+	defer db.Close()
+	ctx := context.Background()
+	e, _ := st.Save(ctx, hmem.Entry{Content: "v0"})
+	cur := e.ID
+	for i := 1; i <= 10; i++ { // 10 updates ⇒ 10 dead + 1 live
+		nx, _ := st.Update(ctx, cur, fmt.Sprintf("v%d", i))
+		cur = nx.ID
+	}
+	n, err := st.GCOnce(ctx, 0, 3) // batch=3 forces ~4 passes
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 10 {
+		t.Fatalf("GCOnce(batch=3) deleted %d, want 10", n)
+	}
+	if got := countRows(t, db, "alpha"); got != 1 {
+		t.Fatalf("post-GC rows = %d, want 1", got)
 	}
 }

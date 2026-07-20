@@ -138,6 +138,25 @@ WHERE  e.tenant_id = $1 AND e.session_id = $2 AND e.kind = 'summary'
                    WHERE d.tenant_id = $1 AND d.op = 'delete' AND d.entry_id = e.entry_id)
 ORDER BY e.seq DESC LIMIT 1`
 
+// gcSweep deletes up to $3 dead create/update rows for the tenant older than
+// $2, in ASCENDING seq order. "Dead" = superseded OR tombstoned — the exact
+// complement of liveSelect's exclusions, within create/update rows. Ascending
+// seq is the resurrection-safety ordering: a deleted row supersedes only
+// smaller-seq rows, already gone. Delete-tombstone rows (op='delete') are never
+// reaped (tiny; removing one could resurrect a surviving create row).
+const gcSweep = `
+DELETE FROM memory_events WHERE seq IN (
+  SELECT e.seq FROM memory_events e
+  WHERE e.tenant_id = $1
+    AND e.op IN ('create','update')
+    AND e.created_at < $2
+    AND ( EXISTS (SELECT 1 FROM memory_events s
+                  WHERE s.tenant_id = $1 AND s.supersedes = e.entry_id)
+       OR EXISTS (SELECT 1 FROM memory_events d
+                  WHERE d.tenant_id = $1 AND d.op = 'delete' AND d.entry_id = e.entry_id) )
+  ORDER BY e.seq ASC
+  LIMIT $3 )`
+
 const liveSummaryIDSelect = `SELECT e.entry_id, e.original_created_at ` + liveSummaryLiveness
 const liveSummaryContentSelect = `SELECT e.content ` + liveSummaryLiveness
 
@@ -425,4 +444,34 @@ LIMIT $5`
 		out = append(out, e)
 	}
 	return out, rows.Err()
+}
+
+// GCOnce reaps dead (superseded or tombstoned) create/update rows older than
+// grace, in ascending-seq batches of at most batch rows, looping until a pass
+// deletes fewer than batch (backlog drained) or ctx is cancelled. Returns the
+// total number of rows deleted. Tenant-scoped. The live set and every read path
+// are unaffected (GC only deletes rows they already exclude).
+func (s *Store) GCOnce(ctx context.Context, grace time.Duration, batch int) (int, error) {
+	if batch < 1 {
+		batch = 1
+	}
+	total := 0
+	for {
+		if err := ctx.Err(); err != nil {
+			return total, err
+		}
+		cutoff := time.Now().UTC().Add(-grace)
+		res, err := s.db.ExecContext(ctx, gcSweep, s.tenant, cutoff, batch)
+		if err != nil {
+			return total, fmt.Errorf("memory: gc sweep tenant %q: %w", s.tenant, err)
+		}
+		n, err := res.RowsAffected()
+		if err != nil {
+			return total, fmt.Errorf("memory: gc rows-affected tenant %q: %w", s.tenant, err)
+		}
+		total += int(n)
+		if int(n) < batch {
+			return total, nil
+		}
+	}
 }
