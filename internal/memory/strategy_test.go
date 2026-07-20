@@ -16,10 +16,12 @@ type fakeStrategy struct {
 	records   []string
 	ran       bool
 	shouldRun bool
+	dedup     bool
 }
 
 func (f *fakeStrategy) Kind() string    { return f.kind }
 func (f *fakeStrategy) Mode() WriteMode { return f.mode }
+func (f *fakeStrategy) Dedup() bool     { return f.dedup }
 func (f *fakeStrategy) ShouldRun(_ []hrt.Message) bool {
 	return f.shouldRun
 }
@@ -31,7 +33,7 @@ func (f *fakeStrategy) Extract(_ context.Context, _ []hrt.Message) ([]string, er
 func TestRunStrategies_AccumulateSavesEachNonDuplicate(t *testing.T) {
 	var saved []string
 	g := &KG{
-		save:       func(_ context.Context, e hmem.Entry) error { saved = append(saved, e.Content); return nil },
+		save:       func(_ context.Context, e hmem.Entry, _ string) error { saved = append(saved, e.Content); return nil },
 		dedupFloor: 0.85,
 		// no embedder ⇒ isDuplicate returns false ⇒ everything saves
 	}
@@ -45,7 +47,7 @@ func TestRunStrategies_AccumulateSavesEachNonDuplicate(t *testing.T) {
 func TestRunStrategies_AccumulateSkipsEmptyAndTrims(t *testing.T) {
 	var saved []string
 	g := &KG{
-		save:       func(_ context.Context, e hmem.Entry) error { saved = append(saved, e.Content); return nil },
+		save:       func(_ context.Context, e hmem.Entry, _ string) error { saved = append(saved, e.Content); return nil },
 		dedupFloor: 0.85,
 	}
 	g.strategies = []Strategy{&fakeStrategy{kind: KindFact, mode: WriteAccumulate, shouldRun: true, records: []string{"  spaced  ", "  ", ""}}}
@@ -58,7 +60,7 @@ func TestRunStrategies_AccumulateSkipsEmptyAndTrims(t *testing.T) {
 func TestRunStrategies_AccumulateCarriesIngestOriginAndTags(t *testing.T) {
 	var got hmem.Entry
 	g := &KG{
-		save: func(_ context.Context, e hmem.Entry) error { got = e; return nil },
+		save: func(_ context.Context, e hmem.Entry, _ string) error { got = e; return nil },
 	}
 	g.strategies = []Strategy{&fakeStrategy{kind: KindFact, mode: WriteAccumulate, shouldRun: true, records: []string{"fact"}}}
 	g.runStrategies(StrategyContext{}, nil)
@@ -70,7 +72,7 @@ func TestRunStrategies_AccumulateCarriesIngestOriginAndTags(t *testing.T) {
 func TestRunStrategies_ShouldRunGatesStrategy(t *testing.T) {
 	var saved []string
 	g := &KG{
-		save: func(_ context.Context, e hmem.Entry) error { saved = append(saved, e.Content); return nil },
+		save: func(_ context.Context, e hmem.Entry, _ string) error { saved = append(saved, e.Content); return nil },
 	}
 	fs := &fakeStrategy{kind: KindFact, mode: WriteAccumulate, shouldRun: false, records: []string{"nope"}}
 	g.strategies = []Strategy{fs}
@@ -116,6 +118,57 @@ func TestRunStrategies_SupersedeWritesSummaryAndFiresHook(t *testing.T) {
 	}
 	if !hookFired {
 		t.Fatal("onSummaryWrite hook must fire on a successful summary write")
+	}
+}
+
+func TestRunStrategies_EpisodeSkipsDedupAndStampsKind(t *testing.T) {
+	type saved struct {
+		content string
+		kind    string
+	}
+	var got []saved
+	g := &KG{
+		embedder: &kgFakeEmbedder{}, // any non-nil embedder
+		search: func(_ context.Context, _ []float32, _ int, _ float64, _ string) ([]hmem.Entry, error) {
+			return []hmem.Entry{{Content: "existing"}}, nil // isDuplicate ⇒ true for facts
+		},
+		save: func(_ context.Context, e hmem.Entry, kind string) error {
+			got = append(got, saved{e.Content, kind})
+			return nil
+		},
+		dedupFloor: 0.85,
+	}
+	// A dedup=false (episode) strategy: BOTH records must save despite the dup hit.
+	g.strategies = []Strategy{&fakeStrategy{
+		kind: KindEpisode, mode: WriteAccumulate, dedup: false, shouldRun: true,
+		records: []string{"deployed staging", "deployed staging"},
+	}}
+	g.runStrategies(StrategyContext{Actor: "a1"}, []hrt.Message{{Role: "user", Content: "hi there"}})
+	if len(got) != 2 {
+		t.Fatalf("episode (Dedup=false) must save every record incl. duplicates, got %d: %v", len(got), got)
+	}
+	if got[0].kind != KindEpisode || got[1].kind != KindEpisode {
+		t.Fatalf("episodes must be stamped kind=episode, got %v", got)
+	}
+}
+
+func TestRunStrategies_FactStillDedups(t *testing.T) {
+	var count int
+	g := &KG{
+		embedder: &kgFakeEmbedder{},
+		search: func(_ context.Context, _ []float32, _ int, _ float64, _ string) ([]hmem.Entry, error) {
+			return []hmem.Entry{{Content: "existing"}}, nil // isDuplicate ⇒ true
+		},
+		save:       func(_ context.Context, _ hmem.Entry, _ string) error { count++; return nil },
+		dedupFloor: 0.85,
+	}
+	g.strategies = []Strategy{&fakeStrategy{
+		kind: KindFact, mode: WriteAccumulate, dedup: true, shouldRun: true,
+		records: []string{"dup fact"},
+	}}
+	g.runStrategies(StrategyContext{}, []hrt.Message{{Role: "user", Content: "hi there"}})
+	if count != 0 {
+		t.Fatalf("fact (Dedup=true) must skip a duplicate, saved %d", count)
 	}
 }
 

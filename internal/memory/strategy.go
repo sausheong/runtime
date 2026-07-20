@@ -40,6 +40,10 @@ type StrategyContext struct {
 type Strategy interface {
 	Kind() string
 	Mode() WriteMode
+	// Dedup reports whether WriteAccumulate should skip records that are
+	// embedding-near-duplicates of existing memory. Facts dedup (they recur);
+	// episodes do not (each is a distinct occurrence). Ignored for WriteSupersede.
+	Dedup() bool
 	ShouldRun(thread []hrt.Message) bool
 	Extract(ctx context.Context, thread []hrt.Message) ([]string, error)
 }
@@ -63,11 +67,18 @@ func (g *KG) runStrategies(sctx StrategyContext, thread []hrt.Message) {
 		case WriteAccumulate:
 			for _, r := range records {
 				r = strings.TrimSpace(r)
-				if r == "" || g.isDuplicate(ctx, r) {
+				if r == "" {
 					continue
 				}
-				if err := g.save(ctx, hmem.Entry{Content: r, Origin: ingestOrigin, Tags: ingestTags}); err != nil {
+				if st.Dedup() && g.isDuplicate(ctx, r) {
+					continue
+				}
+				if err := g.save(ctx, hmem.Entry{Content: r, Origin: ingestOrigin, Tags: ingestTags}, st.Kind()); err != nil {
 					slog.Warn("memory: strategy save failed", "kind", st.Kind(), "err", err)
+					continue
+				}
+				if st.Kind() == KindEpisode && g.onEpisodeWrite != nil {
+					g.onEpisodeWrite()
 				}
 			}
 		case WriteSupersede:

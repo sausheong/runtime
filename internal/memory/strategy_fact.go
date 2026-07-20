@@ -21,6 +21,7 @@ func NewFactStrategy(ext Extractor, minMsgs int) *factStrategy {
 
 func (f *factStrategy) Kind() string    { return KindFact }
 func (f *factStrategy) Mode() WriteMode { return WriteAccumulate }
+func (f *factStrategy) Dedup() bool     { return true }
 func (f *factStrategy) ShouldRun(thread []hrt.Message) bool {
 	return len(thread) >= f.minMsgs
 }

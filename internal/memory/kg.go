@@ -15,7 +15,7 @@ import (
 type searcher func(ctx context.Context, queryVec []float32, k int, floor float64, kind string) ([]hmem.Entry, error)
 
 // saver wraps the one Store method the ingest path needs (func type for testability).
-type saver func(ctx context.Context, e hmem.Entry) error
+type saver func(ctx context.Context, e hmem.Entry, kind string) error
 
 // ingestOrigin / ingestTags mark auto-captured memories so they are
 // distinguishable from tool-saved ones (List/audits, a future GC pass).
@@ -48,6 +48,7 @@ type KG struct {
 	putSummary     func(ctx context.Context, sessionID, content string) error
 	getSummary     func(ctx context.Context, sessionID string) (string, bool, error)
 	onSummaryWrite func()
+	onEpisodeWrite func()
 }
 
 var _ hrt.KnowledgeGraph = (*KG)(nil)
@@ -91,8 +92,8 @@ func NewKG(st *Store, k int, floor float64, opts ...KGOption) *KG {
 		search:   st.SearchSimilar,
 		k:        k,
 		floor:    floor,
-		save: func(ctx context.Context, e hmem.Entry) error {
-			_, err := st.Save(ctx, e)
+		save: func(ctx context.Context, e hmem.Entry, kind string) error {
+			_, err := st.SaveKind(ctx, e, kind)
 			return err
 		},
 		putSummary: st.PutSessionSummary,
@@ -300,7 +301,7 @@ func (g *KG) runIngest(sctx StrategyContext, thread []hrt.Message) {
 		if g.isDuplicate(ctx, f) {
 			continue
 		}
-		if err := g.save(ctx, hmem.Entry{Content: f, Origin: ingestOrigin, Tags: ingestTags}); err != nil {
+		if err := g.save(ctx, hmem.Entry{Content: f, Origin: ingestOrigin, Tags: ingestTags}, KindFact); err != nil {
 			slog.Warn("memory: ingest save failed", "err", err)
 		}
 	}

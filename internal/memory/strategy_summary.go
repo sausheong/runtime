@@ -23,6 +23,7 @@ func NewSummaryStrategy(sum Summarizer, minMsgs int) *summaryStrategy {
 
 func (s *summaryStrategy) Kind() string    { return KindSummary }
 func (s *summaryStrategy) Mode() WriteMode { return WriteSupersede }
+func (s *summaryStrategy) Dedup() bool     { return false } // unused (WriteSupersede)
 func (s *summaryStrategy) ShouldRun(thread []hrt.Message) bool {
 	return len(thread) >= s.minMsgs
 }

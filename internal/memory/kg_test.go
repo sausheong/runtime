@@ -102,7 +102,7 @@ type recordingSaver struct {
 	calls     int
 }
 
-func (r *recordingSaver) save(_ context.Context, e hmem.Entry) error {
+func (r *recordingSaver) save(_ context.Context, e hmem.Entry, _ string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.calls++
@@ -239,7 +239,7 @@ func TestKG_IngestEmbedFailSavesAnyway(t *testing.T) {
 func TestForSession_BindsSessionIDToIngest(t *testing.T) {
 	var gotSession string
 	g := &KG{
-		save: func(_ context.Context, _ hmem.Entry) error { return nil },
+		save: func(_ context.Context, _ hmem.Entry, _ string) error { return nil },
 	}
 	// A summary strategy that records the session id it was asked to write under.
 	g.putSummary = func(_ context.Context, sessionID, _ string) error { gotSession = sessionID; return nil }
