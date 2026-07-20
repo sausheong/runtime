@@ -129,6 +129,20 @@ func wireMemory(cfg *agentruntime.Config, d Deps) error {
 			slog.Warn("agentkind: RUNTIME_SUMMARY_ENABLED set but no summary/ingest model configured; summary disabled", "agent", d.AgentID)
 		}
 	}
+	// Episodes are embedder-DEPENDENT (dedup + recall run on similarity), so they
+	// require configured embeddings; warn+disable otherwise. Opt-in via
+	// RUNTIME_EPISODIC_ENABLED; the extractor model comes from the episodic/ingest
+	// env (NewEpisodeExtractorFromEnv).
+	if envBool("RUNTIME_EPISODIC_ENABLED") {
+		if !enabled {
+			slog.Warn("agentkind: RUNTIME_EPISODIC_ENABLED set but embeddings are not configured; episodes disabled", "agent", d.AgentID)
+		} else if ext, ok := memory.NewEpisodeExtractorFromEnv(); ok {
+			epMin := envInt("RUNTIME_EPISODIC_MIN_MESSAGES", envInt("RUNTIME_INGEST_MIN_MESSAGES", 2))
+			strategies = append(strategies, memory.NewEpisodeStrategy(ext, epMin))
+		} else {
+			slog.Warn("agentkind: RUNTIME_EPISODIC_ENABLED set but no episodic/ingest model configured; episodes disabled", "agent", d.AgentID)
+		}
+	}
 
 	// Build the KG when there is anything for it to do: semantic recall (embedder)
 	// OR at least one strategy (e.g. summary-only, embedder-less). Recall k/floor
@@ -153,8 +167,15 @@ func wireMemory(cfg *agentruntime.Config, d Deps) error {
 		if len(strategies) > 0 {
 			kgOpts = append(kgOpts, memory.WithStrategies(strategies...))
 		}
+		if envBool("RUNTIME_EPISODIC_ENABLED") && enabled {
+			episodicK := envInt("RUNTIME_EPISODIC_RECALL_K", 3)
+			kgOpts = append(kgOpts, memory.WithEpisodicRecall(episodicK))
+		}
 		kg := memory.NewKG(st, k, floor, kgOpts...)
 		cfg.KGFn = func(_, sessionID, actor string) hrt.KnowledgeGraph { return kg.ForSession(sessionID, actor) }
+		// Metric hooks are settable only after Serve builds AgentMetrics (post-KG);
+		// supply the seam here — the closure wires both summary + episode writes.
+		cfg.SetMemoryMetrics = func(summary, episode func()) { kg.SetMetrics(summary, episode) }
 	}
 	return nil
 }

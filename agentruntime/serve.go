@@ -561,6 +561,12 @@ func Serve(ctx context.Context, cfg Config) error {
 		cfg.StartMemoryGC(ctx, m.metrics.MemoryGCReaped)
 	}
 
+	// Wire the memory write metrics (summary + episode) now that AgentMetrics
+	// exists — same post-wireMemory seam as the GC metric above.
+	if cfg.SetMemoryMetrics != nil {
+		cfg.SetMemoryMetrics(m.metrics.SummaryWrite, m.metrics.EpisodeWrite)
+	}
+
 	// Register BEFORE Launch so recovery can find the workflow.
 	dbos.RegisterWorkflow(dctx, m.sessionWorkflow)
 	if err := dbos.Launch(dctx); err != nil {

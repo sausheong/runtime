@@ -29,6 +29,10 @@ type Config struct {
 	// onReap receives each sweep's delete count (for metrics). Nil ⇒ GC disabled.
 	// Set by agentkind.wireMemory; invoked by Serve after metrics are built.
 	StartMemoryGC func(ctx context.Context, onReap func(int))
+	// SetMemoryMetrics, when non-nil, wires the memory write metrics (summary,
+	// episode) after AgentMetrics is built. Nil ⇒ metrics inert. Set by
+	// agentkind.wireMemory; invoked by Serve.
+	SetMemoryMetrics func(summary, episode func())
 }
 
 // Validate checks required fields.

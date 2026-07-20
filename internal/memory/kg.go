@@ -90,6 +90,15 @@ func WithSummaryMetric(f func()) KGOption { return func(g *KG) { g.onSummaryWrit
 // Nil is fine; the pipeline nil-guards it.
 func WithEpisodeMetric(f func()) KGOption { return func(g *KG) { g.onEpisodeWrite = f } }
 
+// SetMetrics wires the summary + episode write callbacks after construction.
+// The agentd metrics registry is built (in Serve) after the KG, so these hooks
+// cannot be set at NewKG time; Serve supplies them via Config.SetMemoryMetrics.
+// Either func may be nil (nil-guarded at the call sites).
+func (g *KG) SetMetrics(summary, episode func()) {
+	g.onSummaryWrite = summary
+	g.onEpisodeWrite = episode
+}
+
 // WithEpisodicRecall sets how many episodes recall injects per turn (its own
 // "Relevant past events:" block). Zero leaves episode recall off.
 func WithEpisodicRecall(k int) KGOption { return func(g *KG) { g.episodicK = k } }
