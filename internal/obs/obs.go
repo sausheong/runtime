@@ -349,6 +349,8 @@ type AgentMetrics struct {
 	summaryWrites *prometheus.CounterVec
 	gcDeleted     *prometheus.CounterVec
 	episodeWrites *prometheus.CounterVec
+	evalSessions  *prometheus.CounterVec
+	evalCriteria  *prometheus.CounterVec
 }
 
 func NewAgentMetrics(agentID, tenant, model string) *AgentMetrics {
@@ -397,7 +399,15 @@ func NewAgentMetrics(agentID, tenant, model string) *AgentMetrics {
 		Name: "agent_memory_episode_writes_total",
 		Help: "Episodic memory records written.",
 	}, []string{"agent", "tenant"})
-	a.reg.MustRegister(a.turns, a.turnDur, a.tokens, a.cost, a.unpriced, a.toolCalls, a.limitHits, a.summaryWrites, a.gcDeleted, a.episodeWrites)
+	a.evalSessions = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "agent_eval_sessions_scored_total",
+		Help: "Online-sampled sessions scored, by agent and tenant.",
+	}, []string{"agent", "tenant"})
+	a.evalCriteria = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "agent_eval_criteria_total",
+		Help: "Online eval criteria evaluated, by agent, tenant, and result (pass/fail).",
+	}, []string{"agent", "tenant", "result"})
+	a.reg.MustRegister(a.turns, a.turnDur, a.tokens, a.cost, a.unpriced, a.toolCalls, a.limitHits, a.summaryWrites, a.gcDeleted, a.episodeWrites, a.evalSessions, a.evalCriteria)
 	return a
 }
 
@@ -461,6 +471,23 @@ func (a *AgentMetrics) EpisodeWrite() {
 		return
 	}
 	a.episodeWrites.WithLabelValues(a.agentID, a.tenant).Inc()
+}
+
+// EvalSessionScored counts one online-sampled session scored. Nil-safe.
+func (a *AgentMetrics) EvalSessionScored() {
+	if a == nil {
+		return
+	}
+	a.evalSessions.WithLabelValues(a.agentID, a.tenant).Inc()
+}
+
+// EvalCriterion counts one online eval criterion evaluated, by result
+// (pass/fail). Nil-safe.
+func (a *AgentMetrics) EvalCriterion(result string) {
+	if a == nil {
+		return
+	}
+	a.evalCriteria.WithLabelValues(a.agentID, a.tenant, result).Inc()
 }
 
 // MemoryGCReaped adds n to the count of dead memory rows reaped by GC. Nil-safe.
