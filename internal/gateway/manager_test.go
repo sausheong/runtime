@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -354,5 +355,56 @@ func TestManagerCloseClosesUpstreams(t *testing.T) {
 	m.Close()
 	if !fc.closed.Load() {
 		t.Fatal("upstream conn not closed")
+	}
+}
+
+// TestDialWithOBORefusesNonOpenAPI asserts an OBO credential on a non-openapi
+// upstream (here a url: MCP-over-HTTP upstream) is refused at dial — OBO minting
+// has no per-call hook on an MCP-over-HTTP session, so dialing it uncredentialed
+// would be a fail-open. The error names "openapi".
+func TestDialWithOBORefusesNonOpenAPI(t *testing.T) {
+	dial := func(ctx context.Context, s config.GatewayServer) (upstreamConn, error) {
+		t.Fatal("dial must NOT be called for an OBO cred on a non-openapi upstream")
+		return nil, nil
+	}
+	obo := NewOBOManager(context.Background(), &fakeOBOSource{})
+	m := NewManager(nil, WithDial(dial), WithOBO(obo))
+	_, err := m.dialWith(context.Background(), config.GatewayServer{
+		Name: "orders", URL: "http://x", Tenants: []string{"t1"},
+		CredSecret: "OBO_CRED", CredHeader: "Authorization",
+	})
+	if err == nil {
+		t.Fatal("expected dial error for OBO cred on non-openapi upstream")
+	}
+	if !strings.Contains(err.Error(), "openapi") {
+		t.Fatalf("error should mention openapi, got %q", err.Error())
+	}
+}
+
+// TestDialWithOBOOpenAPIDialsWithoutBaking asserts an OBO credential on an
+// openapi upstream dials WITHOUT baking a credential header — auth is injected
+// per call in the REST path, never at dial time.
+func TestDialWithOBOOpenAPIDialsWithoutBaking(t *testing.T) {
+	dialed := make(chan map[string]string, 1)
+	dial := func(ctx context.Context, s config.GatewayServer) (upstreamConn, error) {
+		dialed <- s.Headers
+		return &fakeConn{}, nil
+	}
+	obo := NewOBOManager(context.Background(), &fakeOBOSource{})
+	m := NewManager(nil, WithDial(dial), WithOBO(obo))
+	conn, err := m.dialWith(context.Background(), config.GatewayServer{
+		Name: "orders", OpenAPI: "http://x/spec", BaseURL: "http://x",
+		Tenants: []string{"t1"}, CredSecret: "OBO_CRED", CredHeader: "Authorization",
+	})
+	if err != nil || conn == nil {
+		t.Fatalf("expected successful dial, err=%v", err)
+	}
+	select {
+	case h := <-dialed:
+		if _, ok := h["Authorization"]; ok {
+			t.Fatal("OBO cred must not be baked into a dial-time header")
+		}
+	default:
+		t.Fatal("dial not observed")
 	}
 }

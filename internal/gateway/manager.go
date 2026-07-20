@@ -48,6 +48,7 @@ type Manager struct {
 	dial       dialFunc
 	cred       CredentialResolver
 	oauth      *OAuth2Manager
+	obo        *OBOManager
 	minBackoff time.Duration
 	maxBackoff time.Duration
 
@@ -83,6 +84,9 @@ func WithCredentials(r CredentialResolver) Option { return func(m *Manager) { m.
 // WithOAuth2 sets the manager used to mint oauth2 client_credentials tokens.
 // nil ⇒ oauth2 credentials are unavailable (dial fails closed if one is named).
 func WithOAuth2(o *OAuth2Manager) Option { return func(m *Manager) { m.oauth = o } }
+
+// WithOBO sets the manager used to mint RFC 8693 on-behalf-of tokens.
+func WithOBO(o *OBOManager) Option { return func(m *Manager) { m.obo = o } }
 
 // NewManager builds a Manager for the configured servers. Call Start to begin
 // connecting.
@@ -234,6 +238,13 @@ func (m *Manager) dialWith(ctx context.Context, s config.GatewayServer) (upstrea
 					s.CredSecret, transportOf(s), s.Name)
 			}
 			return m.dial(ctx, s) // per-call injection handles auth
+		}
+		if m.obo != nil && m.obo.IsOBO(ctx, tenant, s.CredSecret) {
+			if transportOf(s) != "openapi" {
+				return nil, fmt.Errorf("gateway: obo credential %q is only valid on an openapi upstream, not %s (%q)",
+					s.CredSecret, transportOf(s), s.Name)
+			}
+			return m.dial(ctx, s) // per-call injection handles auth (never baked)
 		}
 		if m.cred != nil {
 			val, err := m.cred(ctx, tenant, s.CredSecret)
