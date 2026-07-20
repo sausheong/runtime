@@ -86,6 +86,10 @@ func WithStrategies(ss ...Strategy) KGOption {
 // (WriteSupersede). Nil is fine; the runner nil-guards it.
 func WithSummaryMetric(f func()) KGOption { return func(g *KG) { g.onSummaryWrite = f } }
 
+// WithEpisodeMetric sets a callback invoked after each successful episode write.
+// Nil is fine; the pipeline nil-guards it.
+func WithEpisodeMetric(f func()) KGOption { return func(g *KG) { g.onEpisodeWrite = f } }
+
 // WithEpisodicRecall sets how many episodes recall injects per turn (its own
 // "Relevant past events:" block). Zero leaves episode recall off.
 func WithEpisodicRecall(k int) KGOption { return func(g *KG) { g.episodicK = k } }
@@ -184,10 +188,11 @@ func (g *KG) ingestForSession(_ context.Context, thread []hrt.Message, sessionID
 	g.ingestWith(StrategyContext{SessionID: sessionID, Actor: actor}, thread)
 }
 
-// recallForSession returns the recall block for the session: the fact-similarity
-// block (unchanged from Recall) plus, when present, this session's rolling
-// summary. Best-effort throughout — a summary lookup error degrades to fact-only,
-// never breaking a turn.
+// recallForSession returns the recall block for the session, composed of up to
+// three parts: the fact-similarity block (unchanged from Recall), a "Relevant
+// past events" episode block when episodic recall is enabled, and this session's
+// rolling summary when present. Best-effort throughout — a summary lookup error
+// degrades to fact-only, never breaking a turn.
 func (g *KG) recallForSession(ctx context.Context, query, sessionID string) string {
 	fact := g.Recall(ctx, query)
 	events := g.recallEpisodes(ctx, query)

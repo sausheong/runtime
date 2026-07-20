@@ -320,6 +320,7 @@ type AgentMetrics struct {
 	limitHits     *prometheus.CounterVec
 	summaryWrites *prometheus.CounterVec
 	gcDeleted     *prometheus.CounterVec
+	episodeWrites *prometheus.CounterVec
 }
 
 func NewAgentMetrics(agentID, tenant, model string) *AgentMetrics {
@@ -364,7 +365,11 @@ func NewAgentMetrics(agentID, tenant, model string) *AgentMetrics {
 		Name: "agent_memory_gc_deleted_total",
 		Help: "Dead memory rows reaped by GC.",
 	}, []string{"agent", "tenant"})
-	a.reg.MustRegister(a.turns, a.turnDur, a.tokens, a.cost, a.unpriced, a.toolCalls, a.limitHits, a.summaryWrites, a.gcDeleted)
+	a.episodeWrites = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "agent_memory_episode_writes_total",
+		Help: "Episodic memory records written.",
+	}, []string{"agent", "tenant"})
+	a.reg.MustRegister(a.turns, a.turnDur, a.tokens, a.cost, a.unpriced, a.toolCalls, a.limitHits, a.summaryWrites, a.gcDeleted, a.episodeWrites)
 	return a
 }
 
@@ -420,6 +425,14 @@ func (a *AgentMetrics) SummaryWrite() {
 		return
 	}
 	a.summaryWrites.WithLabelValues(a.agentID, a.tenant, a.model).Inc()
+}
+
+// EpisodeWrite counts one episodic memory record written. Nil-safe.
+func (a *AgentMetrics) EpisodeWrite() {
+	if a == nil {
+		return
+	}
+	a.episodeWrites.WithLabelValues(a.agentID, a.tenant).Inc()
 }
 
 // MemoryGCReaped adds n to the count of dead memory rows reaped by GC. Nil-safe.

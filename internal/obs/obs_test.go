@@ -278,3 +278,22 @@ func TestMemoryGCReapedNilSafe(t *testing.T) {
 	var a *AgentMetrics
 	a.MemoryGCReaped(1) // must not panic
 }
+
+func TestEpisodeWrite(t *testing.T) {
+	a := NewAgentMetrics("agent-x", "tenant-y", "model-z")
+	a.EpisodeWrite()
+	a.EpisodeWrite()
+	const want = `
+# HELP agent_memory_episode_writes_total Episodic memory records written.
+# TYPE agent_memory_episode_writes_total counter
+agent_memory_episode_writes_total{agent="agent-x",tenant="tenant-y"} 2
+`
+	if err := testutil.CollectAndCompare(a.episodeWrites, strings.NewReader(want)); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestEpisodeWriteNilSafe(t *testing.T) {
+	var a *AgentMetrics
+	a.EpisodeWrite() // must not panic
+}
