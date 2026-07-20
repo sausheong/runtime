@@ -325,7 +325,7 @@ func (s *Store) Get(ctx context.Context, id string) (hmem.Entry, bool, error) {
 // summary for this session, so the live set never grows beyond one. Summaries are
 // keyed by the session_id column, not entry_id (Update rotates entry_ids). The
 // summary is embedded when an embedder is present (harmless; recall is keyed, and
-// SearchSimilar excludes kind='summary').
+// SearchSimilar is kind-scoped — callers query kind='fact'/'episode', never 'summary').
 func (s *Store) PutSessionSummary(ctx context.Context, sessionID, content string) error {
 	// Serialize same-session writes over the full read+write critical section:
 	// two overlapping PutSessionSummary(S) must not both read the same live
