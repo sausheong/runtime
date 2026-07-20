@@ -1467,6 +1467,54 @@ nested tree. Spans carry IDs and structural attributes only
 - **No per-tenant token accounting** — `agent_tokens_total` is per-agent; the
   tenant dimension is deliberately excluded (see the cardinality promise).
 
+## Evaluations
+
+A **golden set** is a named, tenant-scoped list of test **cases** — an input
+plus how to score the agent's answer — that you run against a target agent to
+measure quality over time. Runs are **measurement only, never a gate**: a run
+records pass/fail per case and an aggregate score; nothing is blocked by a
+result.
+
+Each case names one of four **scorers**:
+
+| Scorer | Passes when the agent output… |
+|---|---|
+| `exact` | equals `expected` exactly. |
+| `contains` | contains the `expected` substring. |
+| `regex` | matches the `expected` pattern (compiled at set-write time). |
+| `judge` | is graded acceptable by an LLM against `expected` and/or a `rubric`. |
+
+`judge` cases need a grader model (`RUNTIME_EVAL_JUDGE_MODEL`, reusing the
+`OPENAI_*` credentials); when it is unset those cases fail as "unavailable"
+while the deterministic scorers still run. Each case is invoked with a timeout of
+`RUNTIME_EVAL_INVOKE_TIMEOUT` (default `120s`).
+
+Drive it with `runtimectl admin eval` (admin principal required):
+
+```bash
+# store a golden set from a JSON file ({"cases":[...]} or a bare [...] array)
+runtimectl admin eval set add --name greetings --file greetings.json
+runtimectl admin eval set ls
+
+# run it against an agent and wait for the aggregate + per-case results
+runtimectl admin eval run greetings --agent support --wait
+
+# or inspect asynchronously
+runtimectl admin eval runs
+runtimectl admin eval results <run-id>
+
+runtimectl admin eval set rm greetings
+```
+
+Runs emit two Prometheus counters: `runtime_eval_runs_total` (by `tenant,status`
+— `completed`/`error`) and `runtime_eval_cases_total` (by `tenant,result` —
+`pass`/`fail`).
+
+Execution is **best-effort with no resume**: a run executes in an in-process
+goroutine that outlives its request, so a `runtimed` restart **abandons any
+in-flight run** (it stays in its last-persisted `running` state and is not
+retried). Sets and completed runs are durable; only in-flight execution is lost.
+
 ## The CLI (`runtimectl`)
 
 `runtimectl` talks to the control plane at `RUNTIME_CTL_URL` (default
@@ -1492,6 +1540,12 @@ nested tree. Spans carry IDs and structural attributes only
 | `runtimectl admin upstream add --name <n> (--url <u>\|--openapi <spec>) [--base-url <b>] [--cred-secret <s>] [--cred-header <h>] [--tenant <t>]` | Register an HTTP/OpenAPI gateway upstream at runtime (per tenant); `--cred-secret` brokers a tenant secret into header `--cred-header` at dial. |
 | `runtimectl admin upstream ls` | List the tenant's registered upstreams. |
 | `runtimectl admin upstream rm <id>` | Remove a registered upstream. |
+| `runtimectl admin eval set add --name <n> --file <f> [--tenant <t>]` | Store a golden set from a JSON file (`{"cases":[...]}` or a bare `[...]` array). See [Evaluations](#evaluations). |
+| `runtimectl admin eval set ls [--tenant <t>]` | List golden sets (names + case counts). |
+| `runtimectl admin eval set rm <name>` | Delete a golden set. |
+| `runtimectl admin eval run <set> --agent <id> [--tenant <t>] [--wait]` | Start a run of `<set>` against an agent; prints the run id. `--wait` polls to completion and prints the aggregate + per-case results. |
+| `runtimectl admin eval runs [--tenant <t>]` | List runs (status + aggregate). |
+| `runtimectl admin eval results <run-id>` | Show per-case results for a run. |
 
 `--agent` may be omitted when exactly one agent is registered (it's auto-selected);
 it's required when there are several. The `admin` commands require an `admin`
@@ -2100,6 +2154,8 @@ unaffected.
 | `RUNTIME_EPISODIC_MIN_MESSAGES` | agentd | `2` | Growth gate: minimum thread messages before episodes are extracted. |
 | `RUNTIME_EPISODIC_MAX` | agentd | `5` | Hard cap on episodes saved per turn. |
 | `RUNTIME_EPISODIC_RECALL_K` | agentd | `3` | Episodes injected into the prompt per turn (own recall block). |
+| `RUNTIME_EVAL_JUDGE_MODEL` | runtimed | (unset) | Grader chat model for `judge` scorers (reuses `OPENAI_*`). Unset ⇒ judge cases fail as "unavailable"; the other scorers still run. See [Evaluations](#evaluations). |
+| `RUNTIME_EVAL_INVOKE_TIMEOUT` | runtimed | `120s` | Per-case agent-invocation timeout (Go duration) for a golden-set run. |
 | `RUNTIME_SUBJECT_FORWARDING` | runtimed + agentd | (unset) | `1`/`true`/`yes`/`on` enables forwarding the authenticated caller's subject as `X-Runtime-*` to agents (actor-scoping memory) **and** forwarding the caller's verified OIDC JWT as `X-Runtime-Assertion` to the gateway for OBO (re-verified + tenant-bound there; ephemeral, never persisted); off ⇒ tenant-wide (today's behavior). |
 | `RUNTIME_LOG_FORMAT` | runtimed | `text` | `json` switches `slog` to JSON output. |
 | `RUNTIME_CTL_URL` | runtimectl | `http://localhost:8080` | Control-plane base URL the CLI targets. |

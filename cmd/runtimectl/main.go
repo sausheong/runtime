@@ -11,6 +11,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/sausheong/runtime/conformance"
 )
@@ -481,8 +482,201 @@ func runAdmin(base string, args []string) {
 		}
 		mustAdminDelete(base, "/admin/quotas"+q)
 		fmt.Println("quota removed")
+	case "eval set", "eval run", "eval runs", "eval results":
+		runEvalAdmin(base, args[1:])
 	default:
 		adminUsage()
+	}
+}
+
+// runEvalAdmin dispatches `runtimectl admin eval <set|run|runs|results> ...`
+// against the control plane's /admin/evals/* routes. args[0] is the first token
+// after "eval" (e.g. "set", "run", "runs", "results").
+func runEvalAdmin(base string, args []string) {
+	if len(args) < 1 {
+		adminUsage()
+	}
+	switch args[0] {
+	case "set":
+		if len(args) < 2 {
+			adminUsage()
+		}
+		switch args[1] {
+		case "add":
+			// admin eval set add --name <n> --file <f> [--tenant <t>]
+			name := flagValue(args[2:], "--name", "")
+			file := flagValue(args[2:], "--file", "")
+			if name == "" || file == "" {
+				adminUsage()
+			}
+			raw, rerr := os.ReadFile(file)
+			if rerr != nil {
+				fmt.Fprintf(os.Stderr, "read eval set file %q: %v\n", file, rerr)
+				os.Exit(1)
+			}
+			cases, perr := parseEvalCases(raw)
+			if perr != nil {
+				fmt.Fprintf(os.Stderr, "parse eval set file %q: %v\n", file, perr)
+				os.Exit(1)
+			}
+			body := map[string]any{
+				"name":   name,
+				"tenant": flagValue(args[2:], "--tenant", ""),
+				"cases":  cases,
+			}
+			mustAdminPostAny(base, "/admin/evals/sets", body)
+			fmt.Printf("eval set %s stored (%d cases)\n", name, len(cases))
+		case "ls":
+			// admin eval set ls [--tenant <t>]
+			path := "/admin/evals/sets"
+			if t := flagValue(args[2:], "--tenant", ""); t != "" {
+				path += "?tenant=" + url.QueryEscape(t)
+			}
+			fmt.Print(string(mustAdminGet(base, path)))
+		case "rm":
+			// admin eval set rm <name>
+			if len(args) < 3 {
+				adminUsage()
+			}
+			mustAdminDelete(base, "/admin/evals/sets/"+args[2])
+			fmt.Printf("eval set %s removed\n", args[2])
+		default:
+			adminUsage()
+		}
+	case "run":
+		// admin eval run <set> --agent <id> [--tenant <t>] [--wait]
+		if len(args) < 2 {
+			adminUsage()
+		}
+		set := args[1]
+		agent := flagValue(args[2:], "--agent", "")
+		if agent == "" {
+			adminUsage()
+		}
+		body := map[string]any{
+			"set":    set,
+			"agent":  agent,
+			"tenant": flagValue(args[2:], "--tenant", ""),
+		}
+		out := mustAdminPostAny(base, "/admin/evals/runs", body)
+		var resp struct {
+			RunID string `json:"run_id"`
+		}
+		if err := json.Unmarshal(out, &resp); err != nil || resp.RunID == "" {
+			fmt.Fprintf(os.Stderr, "run started but response malformed: %s\n", out)
+			os.Exit(1)
+		}
+		fmt.Printf("run %s started\n", resp.RunID)
+		if hasFlag(args[2:], "--wait") {
+			waitEvalRun(base, resp.RunID)
+		}
+	case "runs":
+		// admin eval runs [--tenant <t>]
+		path := "/admin/evals/runs"
+		if t := flagValue(args[1:], "--tenant", ""); t != "" {
+			path += "?tenant=" + url.QueryEscape(t)
+		}
+		fmt.Print(string(mustAdminGet(base, path)))
+	case "results":
+		// admin eval results <run-id>
+		if len(args) < 2 {
+			adminUsage()
+		}
+		fmt.Print(string(mustAdminGet(base, "/admin/evals/runs/"+args[1]+"/results")))
+	default:
+		adminUsage()
+	}
+}
+
+// parseEvalCases parses a golden-set case list from either a wrapper object
+// (`{"cases":[...]}`) or a bare JSON array (`[...]`).
+func parseEvalCases(raw []byte) ([]json.RawMessage, error) {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 {
+		return nil, fmt.Errorf("empty file")
+	}
+	if trimmed[0] == '{' {
+		var wrap struct {
+			Cases []json.RawMessage `json:"cases"`
+		}
+		if err := json.Unmarshal(trimmed, &wrap); err != nil {
+			return nil, err
+		}
+		return wrap.Cases, nil
+	}
+	var arr []json.RawMessage
+	if err := json.Unmarshal(trimmed, &arr); err != nil {
+		return nil, err
+	}
+	return arr, nil
+}
+
+// hasFlag reports whether name appears as a bare (boolean) flag in args.
+func hasFlag(args []string, name string) bool {
+	for _, a := range args {
+		if a == name {
+			return true
+		}
+	}
+	return false
+}
+
+// waitEvalRun polls a run every second until it reaches a terminal status, then
+// prints the run aggregate and a per-case results summary.
+func waitEvalRun(base, id string) {
+	for {
+		out := mustAdminGet(base, "/admin/evals/runs/"+id)
+		var run struct {
+			Status string  `json:"status"`
+			Total  int     `json:"total"`
+			Passed int     `json:"passed"`
+			Failed int     `json:"failed"`
+			Score  float64 `json:"score"`
+			Error  string  `json:"error"`
+		}
+		if err := json.Unmarshal(out, &run); err != nil {
+			fmt.Fprintf(os.Stderr, "poll run %s: bad response: %s\n", id, out)
+			os.Exit(1)
+		}
+		if run.Status == "completed" || run.Status == "error" {
+			fmt.Printf("status=%s total=%d passed=%d failed=%d score=%.3f\n",
+				run.Status, run.Total, run.Passed, run.Failed, run.Score)
+			if run.Error != "" {
+				fmt.Printf("error: %s\n", run.Error)
+			}
+			printEvalResults(base, id)
+			if run.Status == "error" || run.Failed > 0 {
+				os.Exit(1)
+			}
+			return
+		}
+		time.Sleep(time.Second)
+	}
+}
+
+// printEvalResults prints a one-line-per-case summary for a finished run.
+func printEvalResults(base, id string) {
+	out := mustAdminGet(base, "/admin/evals/runs/"+id+"/results")
+	var results []struct {
+		CaseIndex int    `json:"case_index"`
+		Scorer    string `json:"scorer"`
+		Passed    bool   `json:"passed"`
+		Detail    string `json:"detail"`
+	}
+	if err := json.Unmarshal(out, &results); err != nil {
+		fmt.Fprintf(os.Stderr, "results %s: bad response: %s\n", id, out)
+		os.Exit(1)
+	}
+	for _, r := range results {
+		verdict := "PASS"
+		if !r.Passed {
+			verdict = "FAIL"
+		}
+		line := fmt.Sprintf("  case %d [%s] %s", r.CaseIndex, r.Scorer, verdict)
+		if r.Detail != "" {
+			line += ": " + r.Detail
+		}
+		fmt.Println(line)
 	}
 }
 
@@ -497,7 +691,7 @@ func mustAtoi(s string) int {
 }
 
 func adminUsage() {
-	fmt.Fprintln(os.Stderr, "usage: runtimectl admin <tenant create <id> [--name n]|user add <subject> --role r [--tenant t]|user ls|key create --role r [--label l] [--tenant t]|key ls|key revoke <id>|secret set <name> <value> [--tenant t]|secret set-oauth2 --name n --token-url u --client-id c --client-secret s [--scope x] [--audience a] [--tenant t]|secret set-obo --name n --token-url u --client-id c --client-secret s [--scope x] [--audience a] [--subject-token-type t] [--requested-token-type t] [--tenant t]|secret ls|secret rm <name>|secret rotate [--tenant t]|upstream add --name n (--url u|--openapi spec) [--base-url b] [--cred-secret s] [--cred-header h] [--tenant t]|upstream ls|upstream rm <id>|agent add --id i --url u [--name n] [--model m] [--cred-secret s] [--tenant t]|agent ls|agent rm <id>|agent enable <id>|agent disable <id>|agent restart <id>|policy add --name n --file p.cedar [--tenant t]|policy ls [--tenant t]|policy rm <name> [--tenant t]|quota add --tenant t --upstream u --rate n|quota ls|quota rm --upstream u [--tenant t]>")
+	fmt.Fprintln(os.Stderr, "usage: runtimectl admin <tenant create <id> [--name n]|user add <subject> --role r [--tenant t]|user ls|key create --role r [--label l] [--tenant t]|key ls|key revoke <id>|secret set <name> <value> [--tenant t]|secret set-oauth2 --name n --token-url u --client-id c --client-secret s [--scope x] [--audience a] [--tenant t]|secret set-obo --name n --token-url u --client-id c --client-secret s [--scope x] [--audience a] [--subject-token-type t] [--requested-token-type t] [--tenant t]|secret ls|secret rm <name>|secret rotate [--tenant t]|upstream add --name n (--url u|--openapi spec) [--base-url b] [--cred-secret s] [--cred-header h] [--tenant t]|upstream ls|upstream rm <id>|agent add --id i --url u [--name n] [--model m] [--cred-secret s] [--tenant t]|agent ls|agent rm <id>|agent enable <id>|agent disable <id>|agent restart <id>|policy add --name n --file p.cedar [--tenant t]|policy ls [--tenant t]|policy rm <name> [--tenant t]|quota add --tenant t --upstream u --rate n|quota ls|quota rm --upstream u [--tenant t]|eval set add --name n --file f [--tenant t]|eval set ls [--tenant t]|eval set rm <name>|eval run <set> --agent id [--tenant t] [--wait]|eval runs [--tenant t]|eval results <run-id>>")
 	os.Exit(2)
 }
 
