@@ -50,12 +50,12 @@ type UpstreamParams struct {
 // fail-closed remains the backstop).
 type CredTypeFunc func(ctx context.Context, tenant, name string) (string, error)
 
-// checkOAuth2Openapi enforces that an oauth2 credential is only attached to an
-// openapi upstream. credType may be nil (broker unavailable) ⇒ skip the check;
-// dial-time fail-closed remains the backstop. Returns nil for static creds and
-// for oauth2 creds on openapi upstreams. A credType lookup error (e.g. the cred
-// has not been created yet) is treated as "unknown" and does not block — dial
-// fails closed.
+// checkOAuth2Openapi enforces that an oauth2 or obo credential is only attached
+// to an openapi upstream. credType may be nil (broker unavailable) ⇒ skip the
+// check; dial-time fail-closed remains the backstop. Returns nil for static
+// creds and for oauth2/obo creds on openapi upstreams. A credType lookup error
+// (e.g. the cred has not been created yet) is treated as "unknown" and does not
+// block — dial fails closed.
 func checkOAuth2Openapi(ctx context.Context, credType CredTypeFunc, tenant string, p UpstreamParams) error {
 	if credType == nil || p.CredSecret == "" {
 		return nil
@@ -64,8 +64,8 @@ func checkOAuth2Openapi(ctx context.Context, credType CredTypeFunc, tenant strin
 	if err != nil {
 		return nil // unknown cred (e.g. not created yet) — don't block; dial fails closed
 	}
-	if ct == identity.CredTypeOAuth2 && p.OpenAPI == "" {
-		return fmt.Errorf("credential %q is an oauth2 credential and is only valid on an openapi upstream", p.CredSecret)
+	if (ct == identity.CredTypeOAuth2 || ct == identity.CredTypeOBO) && p.OpenAPI == "" {
+		return fmt.Errorf("credential %q is an oauth2/obo credential and is only valid on an openapi upstream", p.CredSecret)
 	}
 	return nil
 }

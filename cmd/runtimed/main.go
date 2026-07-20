@@ -210,8 +210,8 @@ func main() {
 					continue
 				}
 				ct, cerr := secretBroker.CredType(ctx, s.Tenants[0], s.CredSecret)
-				if cerr == nil && ct == identity.CredTypeOAuth2 && s.OpenAPI == "" {
-					slog.Error("gateway upstream: oauth2 credential is only valid on an openapi upstream",
+				if cerr == nil && (ct == identity.CredTypeOAuth2 || ct == identity.CredTypeOBO) && s.OpenAPI == "" {
+					slog.Error("gateway upstream: oauth2/obo credential is only valid on an openapi upstream",
 						"upstream", s.Name, "cred", s.CredSecret)
 					os.Exit(1)
 				}
@@ -240,14 +240,23 @@ func main() {
 		// process, not any one call. WithOAuth2(nil) and a nil Handler.OAuth2 are
 		// safe no-ops (dialWith guards m.oauth != nil; gate #5 guards h.OAuth2 != nil).
 		var oauthMgr *gateway.OAuth2Manager
+		// OBO outbound credentials (P2.1 M2b): the broker exchanges the caller's
+		// token for a downstream token per (tenant, cred) via RFC 8693. Built only
+		// when a broker exists; base is context.Background() (bounds token-exchange
+		// lifetime for the whole process, not any one call). WithOBO(nil) and a nil
+		// Handler.OBO are safe no-ops (dialWith guards m.obo != nil; gate #5 guards
+		// h.OBO != nil).
+		var oboMgr *gateway.OBOManager
 		if secretBroker != nil {
 			oauthMgr = gateway.NewOAuth2Manager(context.Background(), secretBroker)
+			oboMgr = gateway.NewOBOManager(context.Background(), secretBroker)
 		}
 		// WithCredentials(nil) is safe: dialWith only invokes the resolver when
 		// m.cred != nil, so a nil resolver (file upstreams, no broker) is a no-op.
-		gwManager = gateway.NewManager(servers, gateway.WithCredentials(resolver), gateway.WithOAuth2(oauthMgr))
+		gwManager = gateway.NewManager(servers, gateway.WithCredentials(resolver), gateway.WithOAuth2(oauthMgr), gateway.WithOBO(oboMgr))
 		gwHandler = gateway.NewHandler(gwManager)
 		gwHandler.OAuth2 = oauthMgr
+		gwHandler.OBO = oboMgr
 		// Metrics wiring must precede gwManager.Start (no race on the first
 		// connect transition).
 		gwManager.Metrics = cm

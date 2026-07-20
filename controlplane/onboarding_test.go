@@ -197,3 +197,36 @@ func TestUpstreamDuplicateNameFriendlyError(t *testing.T) {
 type errMutator struct{ fakeMutator }
 
 func (e *errMutator) Add(cfg config.GatewayServer) error { return errors.New("boom") }
+
+// TestCheckOAuth2Openapi verifies that oauth2 and obo credentials are only
+// permitted on openapi upstreams, while static creds and a nil CredTypeFunc
+// (broker unavailable) are not blocked (dial-time fail-closed is the backstop).
+func TestCheckOAuth2Openapi(t *testing.T) {
+	ctf := func(typ string) CredTypeFunc {
+		return func(ctx context.Context, tenant, name string) (string, error) {
+			return typ, nil
+		}
+	}
+	cases := []struct {
+		name    string
+		ctf     CredTypeFunc
+		p       UpstreamParams
+		wantErr bool
+	}{
+		{"oauth2 no openapi blocked", ctf(identity.CredTypeOAuth2), UpstreamParams{CredSecret: "c"}, true},
+		{"oauth2 with openapi ok", ctf(identity.CredTypeOAuth2), UpstreamParams{CredSecret: "c", OpenAPI: "spec"}, false},
+		{"obo no openapi blocked", ctf(identity.CredTypeOBO), UpstreamParams{CredSecret: "c"}, true},
+		{"obo with openapi ok", ctf(identity.CredTypeOBO), UpstreamParams{CredSecret: "c", OpenAPI: "spec"}, false},
+		{"static no openapi ok", ctf(identity.CredTypeStatic), UpstreamParams{CredSecret: "c"}, false},
+		{"nil credtype skipped", nil, UpstreamParams{CredSecret: "c"}, false},
+		{"no cred secret skipped", ctf(identity.CredTypeOBO), UpstreamParams{}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := checkOAuth2Openapi(context.Background(), tc.ctf, "t1", tc.p)
+			if tc.wantErr != (err != nil) {
+				t.Fatalf("checkOAuth2Openapi err=%v, wantErr=%v", err, tc.wantErr)
+			}
+		})
+	}
+}
