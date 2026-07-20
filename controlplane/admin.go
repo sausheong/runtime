@@ -265,6 +265,7 @@ func RegisterAdmin(mux *http.ServeMux, s AdminStore, agentTenants map[string]str
 type SecretAdmin interface {
 	SetSecret(ctx context.Context, tenant, name, plaintext string) error
 	SetOAuth2(ctx context.Context, tenant, name string, cfg identity.OAuth2Config) error
+	SetOBO(ctx context.Context, tenant, name string, cfg identity.OBOConfig) error
 	ListSecretNames(ctx context.Context, tenant string) ([]identity.SecretMeta, error)
 	ListSecrets(ctx context.Context, tenant string) ([]identity.SecretMeta, error)
 	DeleteSecret(ctx context.Context, tenant, name string) error
@@ -320,6 +321,8 @@ func RegisterSecretAdmin(mux *http.ServeMux, store AdminStore, sa SecretAdmin) {
 			ClientSecret              string   `json:"client_secret"`
 			Scopes                    []string `json:"scopes"`
 			Audience                  string   `json:"audience"`
+			SubjectTokenType          string   `json:"subject_token_type"`
+			RequestedTokenType        string   `json:"requested_token_type"`
 		}
 		if !decode(w, r, &body) {
 			return
@@ -350,6 +353,23 @@ func RegisterSecretAdmin(mux *http.ServeMux, store AdminStore, sa SecretAdmin) {
 				return
 			}
 			writeJSON(w, http.StatusOK, map[string]string{"name": body.Name, "type": identity.CredTypeOAuth2})
+			return
+		}
+		if body.Type == identity.CredTypeOBO {
+			cfg := identity.OBOConfig{
+				TokenURL: body.TokenURL, ClientID: body.ClientID, ClientSecret: body.ClientSecret,
+				Scopes: body.Scopes, Audience: body.Audience,
+				SubjectTokenType: body.SubjectTokenType, RequestedTokenType: body.RequestedTokenType,
+			}
+			if err := cfg.Validate(); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			if err := sa.SetOBO(r.Context(), tenant, body.Name, cfg); err != nil {
+				serverError(w, "set obo credential", err)
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]string{"name": body.Name, "type": identity.CredTypeOBO})
 			return
 		}
 		if body.Value == "" {

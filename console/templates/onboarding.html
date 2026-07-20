@@ -172,6 +172,29 @@
         <button type="submit">Set OAuth2 credential</button>
       </div>
     </form>
+    <h3 style="margin-top:1.5rem">On-behalf-of (OBO) token exchange</h3>
+    <p class="card-desc">RFC 8693 token exchange; the runtime swaps the caller's JWT for a downstream token per human caller. OpenAPI upstreams only. The client secret is write-only and never displayed.</p>
+    <form method="post" action="/ui/onboarding/secrets">
+      <input type="hidden" name="csrf_token" value="{{.CSRF}}">
+      <input type="hidden" name="type" value="oauth2_obo">
+      <div class="row" style="margin-top:.5rem">
+        <input name="name" placeholder="ORDERS_OBO" style="flex:1">
+        <input name="token_url" placeholder="https://auth.example.com/oauth/token" style="flex:2">
+      </div>
+      <div class="row" style="margin-top:.5rem">
+        <input name="client_id" placeholder="client id" style="flex:1">
+        <input name="client_secret" placeholder="client secret" type="password" style="flex:1">
+      </div>
+      <div class="row" style="margin-top:.5rem">
+        <input name="scopes" placeholder="scope1, scope2" style="flex:1">
+        <input name="audience" placeholder="audience (optional)" style="flex:1">
+      </div>
+      <div class="row" style="margin-top:.5rem">
+        <input name="subject_token_type" placeholder="subject token type (optional)" style="flex:1">
+        <input name="requested_token_type" placeholder="requested token type (optional)" style="flex:1">
+        <button type="submit">Set OBO credential</button>
+      </div>
+    </form>
   </section>
   {{end}}
 

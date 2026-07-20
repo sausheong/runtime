@@ -419,6 +419,7 @@ func TestAdminRegisterTokens(t *testing.T) {
 type fakeSecretAdmin struct {
 	set     map[string]map[string]string // tenant -> name -> plaintext
 	oauth   map[string]map[string]identity.OAuth2Config
+	obo     map[string]map[string]identity.OBOConfig
 	names   map[string][]identity.SecretMeta
 	rotated []string
 }
@@ -462,6 +463,23 @@ func (f *fakeSecretAdmin) SetOAuth2(_ context.Context, tenant, name string, cfg 
 	})
 	return nil
 }
+func (f *fakeSecretAdmin) SetOBO(_ context.Context, tenant, name string, cfg identity.OBOConfig) error {
+	if f.obo == nil {
+		f.obo = map[string]map[string]identity.OBOConfig{}
+	}
+	if f.obo[tenant] == nil {
+		f.obo[tenant] = map[string]identity.OBOConfig{}
+	}
+	f.obo[tenant][name] = cfg
+	f.names[tenant] = append(f.names[tenant], identity.SecretMeta{
+		Name: name, Type: identity.CredTypeOBO,
+		OBO: &identity.OBOMeta{
+			TokenURL: cfg.TokenURL, ClientID: cfg.ClientID, Scopes: cfg.Scopes, Audience: cfg.Audience,
+			SubjectTokenType: cfg.SubjectTokenType, RequestedTokenType: cfg.RequestedTokenType,
+		},
+	})
+	return nil
+}
 func (f *fakeSecretAdmin) ListSecrets(ctx context.Context, tenant string) ([]identity.SecretMeta, error) {
 	return f.ListSecretNames(ctx, tenant)
 }
@@ -502,6 +520,57 @@ func TestSecretAdmin_OAuth2BadConfig400(t *testing.T) {
 	mux.ServeHTTP(w, r)
 	if w.Code != 400 {
 		t.Fatalf("expected 400 for missing token_url, got %d", w.Code)
+	}
+}
+
+func TestSecretAdmin_SetOBOAndListNoSecretLeak(t *testing.T) {
+	s := newFakeAdminStore()
+	s.CreateTenant(context.Background(), "acme", "Acme")
+	sa := newFakeSecretAdmin()
+	mux := adminMuxWithSecrets(s, sa)
+	body := `{"name":"orders_obo","type":"oauth2_obo","token_url":"https://idp/token","client_id":"cid","client_secret":"topsecret","scopes":["a"],"subject_token_type":"urn:x:jwt","requested_token_type":"urn:x:at"}`
+	r := withPrincipal(httptest.NewRequest("POST", "/admin/secrets", strings.NewReader(body)),
+		identity.Principal{TenantID: "acme", Role: identity.RoleAdmin})
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, r)
+	if w.Code != 200 {
+		t.Fatalf("create: %d %s", w.Code, w.Body)
+	}
+	got, ok := sa.obo["acme"]["orders_obo"]
+	if !ok {
+		t.Fatalf("SetOBO not recorded for orders_obo: %+v", sa.obo)
+	}
+	if got.TokenURL != "https://idp/token" || got.ClientID != "cid" || got.ClientSecret != "topsecret" ||
+		got.SubjectTokenType != "urn:x:jwt" || got.RequestedTokenType != "urn:x:at" {
+		t.Fatalf("SetOBO recorded wrong config: %+v", got)
+	}
+	lr := withPrincipal(httptest.NewRequest("GET", "/admin/secrets", nil),
+		identity.Principal{TenantID: "acme", Role: identity.RoleAdmin})
+	lw := httptest.NewRecorder()
+	mux.ServeHTTP(lw, lr)
+	if strings.Contains(lw.Body.String(), "topsecret") {
+		t.Fatalf("client_secret leaked in listing: %s", lw.Body)
+	}
+	if !strings.Contains(lw.Body.String(), "oauth2_obo") || !strings.Contains(lw.Body.String(), "cid") {
+		t.Fatalf("listing missing type/client_id: %s", lw.Body)
+	}
+}
+
+func TestSecretAdmin_OBOBadConfig400(t *testing.T) {
+	s := newFakeAdminStore()
+	s.CreateTenant(context.Background(), "acme", "Acme")
+	sa := newFakeSecretAdmin()
+	mux := adminMuxWithSecrets(s, sa)
+	body := `{"name":"bad","type":"oauth2_obo","client_id":"cid","client_secret":"s"}` // no token_url
+	r := withPrincipal(httptest.NewRequest("POST", "/admin/secrets", strings.NewReader(body)),
+		identity.Principal{TenantID: "acme", Role: identity.RoleAdmin})
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, r)
+	if w.Code != 400 {
+		t.Fatalf("expected 400 for missing token_url, got %d", w.Code)
+	}
+	if _, ok := sa.obo["acme"]["bad"]; ok {
+		t.Fatalf("invalid OBO config reached the broker")
 	}
 }
 

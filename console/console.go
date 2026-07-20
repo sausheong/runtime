@@ -446,6 +446,27 @@ func Handler(reg *controlplane.Registry, st store.Store, oidc OIDCConfig, onb *O
 				flashRedirect(w, r, "OAuth2 credential "+r.FormValue("name")+" saved.")
 				return
 			}
+			if r.FormValue("type") == identity.CredTypeOBO {
+				cfg := identity.OBOConfig{
+					TokenURL:           r.FormValue("token_url"),
+					ClientID:           r.FormValue("client_id"),
+					ClientSecret:       r.FormValue("client_secret"),
+					Scopes:             splitScopes(r.FormValue("scopes")),
+					Audience:           r.FormValue("audience"),
+					SubjectTokenType:   r.FormValue("subject_token_type"),
+					RequestedTokenType: r.FormValue("requested_token_type"),
+				}
+				if err := cfg.Validate(); err != nil {
+					http.Error(w, err.Error(), http.StatusBadRequest)
+					return
+				}
+				if err := onb.Secrets.SetOBO(r.Context(), p.TenantID, r.FormValue("name"), cfg); err != nil {
+					http.Error(w, "set obo credential failed", http.StatusBadRequest)
+					return
+				}
+				flashRedirect(w, r, "OBO credential "+r.FormValue("name")+" saved.")
+				return
+			}
 			if err := onb.Secrets.SetSecret(r.Context(), p.TenantID, r.FormValue("name"), r.FormValue("value")); err != nil {
 				http.Error(w, "set secret failed", http.StatusBadRequest)
 				return

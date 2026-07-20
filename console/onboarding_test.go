@@ -129,6 +129,10 @@ func (f *fakeSec2) SetOAuth2(ctx context.Context, tenant, name string, cfg ident
 	f.setNames = append(f.setNames, name)
 	return nil
 }
+func (f *fakeSec2) SetOBO(ctx context.Context, tenant, name string, cfg identity.OBOConfig) error {
+	f.setNames = append(f.setNames, name)
+	return nil
+}
 func (f *fakeSec2) ListSecretNames(ctx context.Context, tenant string) ([]identity.SecretMeta, error) {
 	return nil, nil
 }
@@ -260,6 +264,45 @@ func TestOnboardingSecretReservedPrefixRejected(t *testing.T) {
 	}
 	if len(sec.setNames) != 1 || sec.setNames[0] != "OPENAI_API_KEY" {
 		t.Fatalf("legit secret not stored: %v", sec.setNames)
+	}
+}
+
+// TestOnboardingSecretOBO proves the console secrets handler routes a
+// type=oauth2_obo submission to SetOBO after Validate: a valid OBO config saves
+// (303) and reaches the broker; a config missing token_url is rejected (400)
+// and never reaches the broker.
+func TestOnboardingSecretOBO(t *testing.T) {
+	sec := &fakeSec2{}
+	deps := &Onboarding{Upstreams: &fakeUpstreamStore2{}, Mutator: &fakeMut2{}, Admin: &fakeAdmin2{}, Secrets: sec}
+	h := Handler(nil, nil, OIDCConfig{}, deps)
+	token := issuedCSRF(t, h)
+
+	r := adminReq("POST", "/ui/onboarding/secrets", url.Values{
+		"csrf_token": {token}, "type": {"oauth2_obo"}, "name": {"ORDERS_OBO"},
+		"token_url": {"https://idp/token"}, "client_id": {"cid"}, "client_secret": {"topsecret"},
+		"subject_token_type": {"urn:x:jwt"}, "requested_token_type": {"urn:x:at"},
+	})
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	if w.Code != http.StatusSeeOther {
+		t.Fatalf("valid OBO: want 303 got %d (%s)", w.Code, w.Body)
+	}
+	if len(sec.setNames) != 1 || sec.setNames[0] != "ORDERS_OBO" {
+		t.Fatalf("OBO cred not stored: %v", sec.setNames)
+	}
+
+	// Missing token_url ⇒ Validate fails ⇒ 400, broker untouched.
+	rb := adminReq("POST", "/ui/onboarding/secrets", url.Values{
+		"csrf_token": {token}, "type": {"oauth2_obo"}, "name": {"BAD_OBO"},
+		"client_id": {"cid"}, "client_secret": {"s"},
+	})
+	wb := httptest.NewRecorder()
+	h.ServeHTTP(wb, rb)
+	if wb.Code != http.StatusBadRequest {
+		t.Fatalf("invalid OBO: want 400 got %d", wb.Code)
+	}
+	if len(sec.setNames) != 1 {
+		t.Fatalf("invalid OBO reached the broker: %v", sec.setNames)
 	}
 }
 
