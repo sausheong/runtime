@@ -41,10 +41,11 @@ land in `docs/superpowers/specs/` as each item starts.
 **Phase P2 "Scoped" (v1.2) — IN PROGRESS. First-milestone sweep COMPLETE: all
 three P2 sub-projects now have their first milestone merged (P2.3 DONE; P2.1 M1
 DONE; P2.2 M1 DONE). P2.2 M2 (actor namespacing) is DONE via the
-subject-forwarding keystone. P2.1 M2 is split: **M2a (caller-JWT propagation
-channel) is DONE** — the identity channel for OBO — and **M2b (the RFC 8693
-token exchange + `CredTypeOBO`) is the immediate next**. Deeper milestones remain
-across the phase.**
+subject-forwarding keystone. **P2.1 M2 (OBO) is DONE — both M2a (caller-JWT
+channel) and M2b (RFC 8693 token exchange) merged**, completing the outbound
+-credential story (M1 client-credentials + M2a channel + M2b exchange). Remaining
+P2 work: P2.1 M3 (IdP presets), and P2.2 M3 (episodic) + M4 (TTL/GC). Deeper
+milestones remain across the phase.**
 
 - **P2.3 Gateway quotas + enrichment — DONE (merged 2026-07-19, ff to `5ba6232`,
   11 commits, branch `p2.3-gateway-quotas-enrichment`).** Quotas: new
@@ -91,9 +92,22 @@ across the phase.**
     there is no `CredTypeOBO`.** Reuses `RUNTIME_SUBJECT_FORWARDING` (no new flag);
     the gateway re-verify is active whenever the handler's verifier + user store
     are wired.
-  - **M2b (OBO / RFC 8693 user-token exchange + `CredTypeOBO`) — the immediate
-    next.** Consume the M2a caller assertion as the `subject_token`, exchange it
-    for a user-scoped downstream credential, cached per (tenant, user, upstream).
+  - **M2b (OBO / RFC 8693 user-token exchange + `CredTypeOBO`) — DONE (branch
+    `p2.1-m2b-obo-token-exchange`).** A new `oauth2_obo` brokered-secret type: the
+    gateway consumes the M2a caller assertion as the `subject_token` and hand-rolls
+    an RFC 8693 token-exchange POST at the tenant's IdP, minting a user-scoped
+    downstream token cached per (tenant, credential, caller) and injected into
+    OpenAPI upstream calls via the existing `cred_secret`/`cred_header` copy-on
+    -write header injection. Created via `runtimectl admin secret set-obo`
+    (+ `/admin/secrets` `type: oauth2_obo` + console form; `client_secret`
+    write-only, excluded from `SecretsFor` so it never enters the agent env).
+    **OpenAPI-only** (rejected at registration + startup + dial), **fail-closed**
+    (no caller assertion or a mint failure ⇒ `credential unavailable: <name>`,
+    reusing the M1 `runtime_gateway_credential_errors_total{tenant,server}` metric
+    — no new metric), **per-caller** (distinct token per human, unlike M1's
+    per-tenant). **Known limit:** a caller whose subject maps to >1 tenants fails
+    closed — selected-tenant forwarding is future work. This closes the outbound
+    -credential story (M1 client-credentials + M2a channel + M2b exchange).
   - **M3 (IdP connector presets)** remains.
 - **P2.2 Memory strategies — M1 (strategy pipeline + summary) DONE (merged,
   branch `p2.2-memory-strategies`).** M1 generalizes `internal/memory/ingest.go`
@@ -273,7 +287,7 @@ propagation channel: the verified OIDC JWT is forwarded as `X-Runtime-Assertion`
 re-verified + tenant-bound at the gateway, landed at tool dispatch — the identity
 channel only, no token minted) — **DONE** — and **M2b** (the RFC 8693 token
 exchange keyed on the calling user + `CredTypeOBO`, consuming the M2a assertion as
-`subject_token`) — **the immediate next**; M3 IdP connector presets (config
+`subject_token`) — **DONE**; M3 IdP connector presets (config
 templates for common providers — docs + validation, not code per provider).
 
 **Dependencies:** P1.1 M1 (principal available on the gateway call path); M2 also

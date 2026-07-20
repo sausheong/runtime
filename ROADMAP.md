@@ -241,12 +241,16 @@ specs/plans dated 2026-06-07/08.
 > COMPLETE (all three P2 sub-projects have a merged first milestone), with deeper
 > milestones remaining: P2.3 gateway quotas + header enrichment is DONE (merged
 > 2026-07-19); P2.1 gateway OAuth2 **M1 (client_credentials) is DONE** (merged);
-> P2.1 **M2 is split — M2a (caller-JWT propagation channel) is DONE** (the
-> `RUNTIME_SUBJECT_FORWARDING` flag also forwards the caller's verified OIDC JWT
-> as `X-Runtime-Assertion` edge→agentd→gateway, where it is re-verified + tenant
-> -bound + landed at tool dispatch; ephemeral, never persisted, fail-closed — no
-> downstream token minted yet), and **M2b (the RFC 8693 token exchange +
-> `CredTypeOBO`) is the immediate next**; M3 IdP presets remain; P2.2 memory
+> P2.1 **M2 (OBO) is DONE — both M2a and M2b merged.** M2a (caller-JWT
+> propagation channel): the `RUNTIME_SUBJECT_FORWARDING` flag also forwards the
+> caller's verified OIDC JWT as `X-Runtime-Assertion` edge→agentd→gateway, where
+> it is re-verified + tenant-bound + landed at tool dispatch (ephemeral, never
+> persisted, fail-closed). M2b (RFC 8693 token exchange): the gateway now
+> EXCHANGES that landed caller assertion for a user-scoped downstream token via a
+> new `CredTypeOBO` (`oauth2_obo`) credential, minted per-caller and injected
+> into OpenAPI upstream calls — OpenAPI-only, fail-closed (no assertion or mint
+> failure ⇒ rejected, reusing `runtime_gateway_credential_errors_total`), with a
+> known multi-tenant-caller fail-closed limit; M3 IdP presets remain; P2.2 memory
 > strategies **M1 (strategy pipeline + rolling session summary) is DONE** and
 > **M2 (actor-namespaced memory) is DONE**
 > via the **subject-forwarding keystone** — the control-plane edge forwards the

@@ -789,10 +789,11 @@ the edge through agentd to the gateway's per-call tool dispatch point.
   persisted and never checkpointed (a crash-recovered turn simply has no JWT), never
   logged, and stripped at trust boundaries (it lives under the reserved
   `X-Runtime-` prefix that the edge deletes before set) so a caller cannot spoof it.
-- **No downstream token is minted yet.** This milestone builds only the identity
-  *channel*. The actual on-behalf-of token exchange (RFC 8693 — swapping the
-  caller's assertion for a user-scoped downstream credential) lands in a later
-  milestone.
+- **The token exchange now ships.** Beyond this identity channel, the gateway
+  now **exchanges** the landed caller assertion for a user-scoped downstream
+  token (RFC 8693) and injects it into OpenAPI upstream calls via a dedicated
+  on-behalf-of credential type — see
+  [On-behalf-of (OBO) outbound credentials](#on-behalf-of-obo-outbound-credentials).
 
 ### Open mode & backward compatibility
 
@@ -1023,6 +1024,64 @@ OAuth2 client-credentials flow.
 
 A runnable example lives in `examples/rest-demo/` — a tiny orders API that
 serves its own OpenAPI spec, with a README walking through federating it.
+
+### On-behalf-of (OBO) outbound credentials
+
+An OpenAPI upstream can authenticate to its backend **as the human caller**
+rather than with a shared service credential. The gateway takes the caller's
+verified OIDC JWT (landed on the tool-dispatch path by the
+[caller-JWT channel](#on-behalf-of-identity-obo--caller-jwt-forwarding) when
+`RUNTIME_SUBJECT_FORWARDING` is on) and exchanges it at the tenant's IdP for a
+downstream, user-scoped token via **RFC 8693 token exchange** — minted
+per-caller, cached, and injected into the upstream request. This is a new
+credential type (`oauth2_obo`) alongside the static and
+`oauth2_client_credentials` types, and it builds on the OAuth2
+client-credentials machinery.
+
+Register the credential once, then point an upstream at it with the existing
+`cred_secret` / `cred_header` — exactly like the other credential types (the
+minted token becomes the header value `Bearer <token>`; `cred_header` defaults
+to `Authorization`):
+
+```bash
+runtimectl admin secret set-obo \
+  --name orders_obo \
+  --token-url https://idp.example.com/oauth2/token \
+  --client-id runtime-gateway \
+  --client-secret "$IDP_CLIENT_SECRET" \
+  --scope orders.read --audience https://orders.example.com \
+  --subject-token-type urn:ietf:params:oauth:token-type:jwt \
+  --requested-token-type urn:ietf:params:oauth:token-type:access_token
+```
+
+`--subject-token-type` / `--requested-token-type` are optional and default to
+the RFC 8693 JWT / access-token URNs. The same credential can be created via
+`POST /admin/secrets` (with `"type": "oauth2_obo"`) or the console onboarding
+form. The `client_secret` is write-only — never returned by the list API,
+never shown in the console, never logged.
+
+- **OpenAPI-only.** An OBO credential is valid only on an `openapi:` upstream
+  (rejected at registration, fatal at startup for file-config, refused at
+  dial) — MCP-over-HTTP has no per-call mint hook.
+- **Per-caller tokens.** Unlike a client-credentials credential (one token per
+  tenant), an OBO token represents the individual human caller; the mint is
+  keyed per (tenant, credential, caller) so each user gets their own downstream
+  token.
+- **Fail-closed.** If there is no caller assertion on the request, or the token
+  exchange fails, the tool call is **rejected** (`credential unavailable:
+  <name>`) — the upstream is never dispatched uncredentialed or with the wrong
+  identity. Mint failures are counted in
+  `runtime_gateway_credential_errors_total{tenant,server}` (the same metric the
+  client-credentials path uses — no new metric). This is deliberately the
+  opposite of the fail-open [quota limiter](#gateway-quotas): a credential is a
+  **security** control.
+- **Multi-tenant limit (fail-closed).** A caller whose subject maps to more than
+  one tenant currently fails closed — selected-tenant forwarding for such
+  callers is future work.
+
+See the operator guide's
+[OAuth2 outbound credentials](operator-guide.md#oauth2-outbound-credentials)
+for the shared credential-injection model these build on.
 
 ### Failure model
 
@@ -1268,7 +1327,7 @@ reserved for it):
 | `runtime_gateway_upstream_up` | `server` | 1 when the gateway upstream connection is up. |
 | `runtime_gateway_policy_decisions_total` | `tenant,decision` | Cedar policy evaluations at the gateway, by `decision` (`allow`/`deny`/`error`). Emitted only when the policy engine is enabled. |
 | `runtime_gateway_quota_rejections_total` | `tenant,server` | Gateway tool calls rejected for exceeding a per-`(tenant,upstream)` rate quota. See the [operator guide](operator-guide.md#gateway-quotas). |
-| `runtime_gateway_credential_errors_total` | `tenant,server` | Gateway tool calls that failed closed because an outbound OAuth2 credential could not be minted (token endpoint unreachable/erroring). See the [operator guide](operator-guide.md#oauth2-outbound-credentials). |
+| `runtime_gateway_credential_errors_total` | `tenant,server` | Gateway tool calls that failed closed because an outbound credential could not be minted — an OAuth2 client-credentials or [OBO (RFC 8693)](#on-behalf-of-obo-outbound-credentials) token (token endpoint unreachable/erroring, or no caller assertion for an OBO credential). See the [operator guide](operator-guide.md#oauth2-outbound-credentials). |
 | `runtime_metrics_scrape_skips_total` | `agent,reason` | Agents skipped during the fan-out scrape. Reasons: `timeout`, `unreachable`, `parse`, `no_metrics`, `status_<code>`, `reserved_name`, `type_conflict`. |
 
 **Agent metrics** (emitted per `agentd`, merged into `runtimed`'s exposition):
