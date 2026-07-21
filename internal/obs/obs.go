@@ -335,15 +335,15 @@ func (c *ControlMetrics) EvalCase(tenant, result string) {
 // AgentMetrics is agentd's registry. Every series carries agent=<id> so the
 // fan-out merge produces disjoint series across agents.
 type AgentMetrics struct {
-	agentID   string
-	tenant    string
-	model     string
-	reg       *prometheus.Registry
-	turns     *prometheus.CounterVec
-	turnDur   *prometheus.HistogramVec
-	tokens    *prometheus.CounterVec
-	cost      *prometheus.CounterVec
-	unpriced  *prometheus.CounterVec
+	agentID       string
+	tenant        string
+	model         string
+	reg           *prometheus.Registry
+	turns         *prometheus.CounterVec
+	turnDur       *prometheus.HistogramVec
+	tokens        *prometheus.CounterVec
+	cost          *prometheus.CounterVec
+	unpriced      *prometheus.CounterVec
 	toolCalls     *prometheus.CounterVec
 	limitHits     *prometheus.CounterVec
 	summaryWrites *prometheus.CounterVec
@@ -351,6 +351,7 @@ type AgentMetrics struct {
 	episodeWrites *prometheus.CounterVec
 	evalSessions  *prometheus.CounterVec
 	evalCriteria  *prometheus.CounterVec
+	evalFailures  *prometheus.CounterVec
 }
 
 func NewAgentMetrics(agentID, tenant, model string) *AgentMetrics {
@@ -407,7 +408,11 @@ func NewAgentMetrics(agentID, tenant, model string) *AgentMetrics {
 		Name: "agent_eval_criteria_total",
 		Help: "Online eval criteria evaluated, by agent, tenant, and result (pass/fail).",
 	}, []string{"agent", "tenant", "result"})
-	a.reg.MustRegister(a.turns, a.turnDur, a.tokens, a.cost, a.unpriced, a.toolCalls, a.limitHits, a.summaryWrites, a.gcDeleted, a.episodeWrites, a.evalSessions, a.evalCriteria)
+	a.evalFailures = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "agent_eval_failures_total",
+		Help: "Terminal sessions classified by failure category, by agent, tenant, and category (fixed taxonomy: none/quality_fail/tool_error/agent_error/timeout/limit_exceeded).",
+	}, []string{"agent", "tenant", "category"})
+	a.reg.MustRegister(a.turns, a.turnDur, a.tokens, a.cost, a.unpriced, a.toolCalls, a.limitHits, a.summaryWrites, a.gcDeleted, a.episodeWrites, a.evalSessions, a.evalCriteria, a.evalFailures)
 	return a
 }
 
@@ -488,6 +493,15 @@ func (a *AgentMetrics) EvalCriterion(result string) {
 		return
 	}
 	a.evalCriteria.WithLabelValues(a.agentID, a.tenant, result).Inc()
+}
+
+// FailureClassified counts one terminal session classified into a failure
+// category. Nil-safe. Bounded: category is the fixed M3 taxonomy enum.
+func (a *AgentMetrics) FailureClassified(category string) {
+	if a == nil || a.evalFailures == nil {
+		return
+	}
+	a.evalFailures.WithLabelValues(a.agentID, a.tenant, category).Inc()
 }
 
 // MemoryGCReaped adds n to the count of dead memory rows reaped by GC. Nil-safe.
