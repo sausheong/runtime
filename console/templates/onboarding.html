@@ -264,5 +264,33 @@
     </form>
   </section>
   {{end}}
+
+  {{if .QuotasEnabled}}
+  <!-- ===== Quotas ===== -->
+  <section class="card">
+    <h2>Gateway quotas</h2>
+    <p class="card-desc">Per-upstream request rate limits for this tenant (requests/min; 0 = block). Applies to gateway tool calls routed to each upstream.</p>
+    <table>
+      <thead><tr><th>Upstream</th><th>Rate/min</th><th></th></tr></thead>
+      <tbody>
+      {{range .Quotas}}<tr>
+        <td class="mono">{{.Upstream}}</td>
+        <td>{{.RatePerMin}}</td>
+        <td class="actions"><form method="post" action="/ui/onboarding/quotas/delete" onsubmit="return confirm('Remove this quota?')">
+          <input type="hidden" name="csrf_token" value="{{$.CSRF}}"><input type="hidden" name="upstream" value="{{.Upstream}}"><button type="submit" class="danger">Remove</button>
+        </form></td>
+      </tr>{{else}}
+        <tr><td colspan="3" class="empty">No quotas — all upstreams unlimited for this tenant.</td></tr>
+      {{end}}
+      </tbody>
+    </table>
+    <form method="post" action="/ui/onboarding/quotas" style="margin-top:1rem">
+      <input type="hidden" name="csrf_token" value="{{.CSRF}}">
+      <p><input name="upstream" placeholder="upstream id (e.g. srv1)" required style="width:100%"></p>
+      <p><label>Rate/min<br><input name="rate" type="number" min="0" placeholder="requests per minute" required style="width:100%"></label></p>
+      <button type="submit">Save quota</button>
+    </form>
+  </section>
+  {{end}}
 </main>
 </body></html>{{end}}

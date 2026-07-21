@@ -472,8 +472,9 @@ func main() {
 				Secrets:   secretAdmin,
 				Agents:    agentStore,
 				AgentMgr:  agentManager,
-				Policies:  polAdmin, // nil interface when the policy engine is off
-				CredType:  credType, // nil when brokering is off ⇒ check skipped
+				Policies:  polAdmin,   // nil interface when the policy engine is off
+				Quotas:    quotaAdmin, // nil interface when quotas are off ⇒ panel hidden
+				CredType:  credType,   // nil when brokering is off ⇒ check skipped
 			}
 		}
 		// Golden-set evaluator (P3.1): DB store + registry-backed agent invoker +

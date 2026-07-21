@@ -14,6 +14,7 @@ import (
 	"github.com/sausheong/runtime/internal/agentstore"
 	"github.com/sausheong/runtime/internal/identity"
 	"github.com/sausheong/runtime/internal/policy"
+	"github.com/sausheong/runtime/internal/quota"
 	"github.com/sausheong/runtime/internal/store"
 )
 
@@ -88,6 +89,7 @@ type Onboarding struct {
 	Agents    controlplane.AgentStore    // dynamic managed-agent persistence; nil ⇒ section hidden
 	AgentMgr  *controlplane.AgentManager // live attach/detach; nil ⇒ section hidden
 	Policies  controlplane.PolicyStore   // tenant Cedar policy store; nil ⇒ section hidden
+	Quotas    controlplane.QuotaStore    // gateway rate-quota store; nil ⇒ section hidden
 	CredType  controlplane.CredTypeFunc  // broker-backed cred-type lookup; nil ⇒ oauth2-on-openapi check skipped
 }
 
@@ -313,6 +315,10 @@ func Handler(reg *controlplane.Registry, st store.Store, oidc OIDCConfig, onb *O
 			if onb.Policies != nil {
 				policies, _ = onb.Policies.List(r.Context(), p.TenantID)
 			}
+			var quotas []quota.Rule
+			if onb.Quotas != nil {
+				quotas, _ = controlplane.ListQuotasShared(r.Context(), onb.Quotas, p.TenantID)
+			}
 			// A freshly minted key arrives as "key:<plaintext>" — the one time it
 			// is ever shown. Split it out so the template can give it a distinct,
 			// copy-it-now treatment instead of a generic success flash.
@@ -328,6 +334,7 @@ func Handler(reg *controlplane.Registry, st store.Store, oidc OIDCConfig, onb *O
 				"SecretsEnabled": onb.Secrets != nil,
 				"Agents":         agents, "AgentsEnabled": onb.Agents != nil && onb.AgentMgr != nil,
 				"Policies": policies, "PoliciesEnabled": onb.Policies != nil,
+				"Quotas": quotas, "QuotasEnabled": onb.Quotas != nil,
 			})
 		})
 
@@ -516,6 +523,35 @@ func Handler(reg *controlplane.Registry, st store.Store, oidc OIDCConfig, onb *O
 					return
 				}
 				flashRedirect(w, r, "Policy "+r.PathValue("name")+" removed.")
+			}))
+		}
+
+		// Tenant gateway quotas: per-upstream request-rate limits. Mounted only
+		// when the quota store is on (onb.Quotas non-nil). The console is
+		// tenant-admin-only, so Insert ALWAYS uses the caller's own tenant and
+		// never the "*" wildcard (that is a superuser-only CLI capability).
+		if onb.Quotas != nil {
+			mux.HandleFunc("POST /ui/onboarding/quotas", guard(func(p identity.Principal, w http.ResponseWriter, r *http.Request) {
+				upstream := r.FormValue("upstream")
+				rate, err := strconv.Atoi(r.FormValue("rate"))
+				if upstream == "" || err != nil || rate < 0 {
+					http.Error(w, "upstream and non-negative rate required", http.StatusBadRequest)
+					return
+				}
+				if err := onb.Quotas.Insert(r.Context(), quota.Rule{Tenant: p.TenantID, Upstream: upstream, RatePerMin: rate}); err != nil {
+					http.Error(w, "save quota failed", http.StatusInternalServerError)
+					return
+				}
+				flashRedirect(w, r, "Quota for upstream "+upstream+" set to "+strconv.Itoa(rate)+"/min.")
+			}))
+
+			mux.HandleFunc("POST /ui/onboarding/quotas/delete", guard(func(p identity.Principal, w http.ResponseWriter, r *http.Request) {
+				upstream := r.FormValue("upstream")
+				if _, err := onb.Quotas.Delete(r.Context(), p.TenantID, upstream); err != nil {
+					http.Error(w, "delete quota failed", http.StatusInternalServerError)
+					return
+				}
+				flashRedirect(w, r, "Quota for upstream "+upstream+" removed.")
 			}))
 		}
 
