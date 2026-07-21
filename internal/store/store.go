@@ -6,14 +6,15 @@ import (
 )
 
 type SessionRow struct {
-	ID          string
-	AgentID     string
-	WorkflowID  string
-	Status      string // created | running | completed | error | limit_exceeded
-	TurnCount   int
-	Replica     int
-	TokensTotal int64   // cumulative input+output+cache tokens (accounting; wider than the budget sum)
-	CostUSD     float64 // cumulative dollar cost (priced turns only); metering-grade float
+	ID              string
+	AgentID         string
+	WorkflowID      string
+	Status          string // created | running | completed | error | limit_exceeded
+	TurnCount       int
+	Replica         int
+	TokensTotal     int64   // cumulative input+output+cache tokens (accounting; wider than the budget sum)
+	CostUSD         float64 // cumulative dollar cost (priced turns only); metering-grade float
+	FailureCategory string  // M3 terminal-session failure category ('' = unclassified)
 }
 
 type Event struct {
@@ -53,6 +54,14 @@ type Store interface {
 	// the recomputed running total each turn, so live execution and DBOS replay
 	// converge to the same value. Best-effort operational metadata.
 	SetSessionUsage(ctx context.Context, id string, tokens int64, cost float64) error
+	// SetFailureCategory records the session's terminal failure category as an
+	// ABSOLUTE set (idempotent, replay-safe, mirrors SetSessionUsage). Category
+	// is a fixed-taxonomy scalar; '' means unclassified.
+	SetFailureCategory(ctx context.Context, sessionID, category string) error
+	// FailureBreakdownByAgent returns per-category session counts for one agent,
+	// optionally since a cutoff (since.IsZero() ⇒ no cutoff). Unclassified ('')
+	// rows are omitted.
+	FailureBreakdownByAgent(ctx context.Context, agentID string, since time.Time) (map[string]int, error)
 	AppendEvent(ctx context.Context, sessionID, typ string, payload []byte) (int64, error)
 	EventsSince(ctx context.Context, sessionID string, afterSeq int64) ([]Event, error)
 	// AppendTranscript records the entries for one turn. Idempotent on
