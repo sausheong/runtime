@@ -1550,6 +1550,53 @@ counters). The posture is **best-effort and capture-all with no GC yet**:
 transcripts and results accumulate without a retention/garbage-collection sweep
 in this milestone.
 
+### Failure classification
+
+Sampling and golden sets tell you about quality; **failure classification**
+tells you *how* sessions end. Every **terminal** session is assigned exactly
+one failure category, **deterministically and inline in the agent** — always
+on, no sampling, no gating, no LLM. It is pure measurement: classifying a
+session never blocks or alters it.
+
+A session's category is decided by **first-match precedence** (highest to
+lowest); the first rule that matches wins:
+
+| Precedence | Category | Rule |
+|---|---|---|
+| 1 | `timeout` | a per-turn deadline fired (`limit:turn_timeout`) |
+| 2 | `limit_exceeded` | session status == `limit_exceeded` (max_turns / max_tokens / session_timeout) |
+| 3 | `agent_error` | session errored/aborted (not a limit) |
+| 4 | `tool_error` | any turn had a `tool_result` with `is_error` |
+| 5 | `quality_fail` | clean completion but ≥1 online-eval criterion failed |
+| 6 | `none` | clean completion, no failed criteria |
+
+`timeout` (a per-turn deadline) is deliberately separated from `limit_exceeded`
+(a cumulative budget) and takes precedence, since it is a distinct operational
+signal. `quality_fail` depends on the M2 online-eval criteria, so it only
+appears for sampled sessions that have a policy; without one, a clean completion
+is `none`.
+
+Read the breakdown with `runtimectl admin eval failures` — `--agent` is
+**required** and RBAC-scoped (you see your own agents; a superuser sees any):
+
+```bash
+# {category: count} breakdown for an agent (defaults to all time)
+runtimectl admin eval failures --agent support
+runtimectl admin eval failures --agent support --since 24h
+```
+
+The command wraps `GET /admin/evals/failures?agent=<id>[&since=<dur>]`.
+
+Each classified terminal session increments
+`agent_eval_failures_total{agent,tenant,category}` — a bounded counter (the
+category label is a fixed enum) in the `agent_*` namespace, incremented once per
+session. Like the other per-turn metrics it may **double-count on DBOS replay**
+(the same tolerance applies).
+
+The breakdown scopes by `agent_id` (not tenant). Out of scope for this
+milestone: LLM-driven quality sub-classification, multi-label categories,
+historical re-classification of past sessions, and a console panel.
+
 ## The CLI (`runtimectl`)
 
 `runtimectl` talks to the control plane at `RUNTIME_CTL_URL` (default
@@ -1585,6 +1632,7 @@ in this milestone.
 | `runtimectl admin eval policy ls [--tenant <t>]` | List online-eval policies (tenant-scoped). |
 | `runtimectl admin eval policy rm <agent>` | Delete an agent's online-eval policy. |
 | `runtimectl admin eval online-results [--session <sid>] [--tenant <t>]` | Read online-eval outcomes for the caller's tenant, or one session. |
+| `runtimectl admin eval failures --agent <id> [--since <dur>]` | Print an agent's terminal-session failure-category breakdown (`{category: count}`); `--agent` required, RBAC-scoped. See [Failure classification](#failure-classification). |
 
 `--agent` may be omitted when exactly one agent is registered (it's auto-selected);
 it's required when there are several. The `admin` commands require an `admin`
