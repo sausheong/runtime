@@ -1,10 +1,14 @@
 package agentruntime
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 
 	"github.com/sausheong/harness/session"
+	"github.com/sausheong/runtime/internal/obs"
+	"github.com/sausheong/runtime/internal/store"
 )
 
 func TestClassifyPrecedence(t *testing.T) {
@@ -76,4 +80,31 @@ func TestEntriesHaveToolError(t *testing.T) {
 	if entriesHaveToolError([]session.SessionEntry{bad}) {
 		t.Fatal("malformed tool_result Data ⇒ false (skipped, not fatal)")
 	}
+}
+
+// fakeCatStore captures the category set via SetFailureCategory; every other
+// store method is inherited from the embedded (nil) interface and never called.
+type fakeCatStore struct {
+	store.Store // embed to satisfy the interface; only SetFailureCategory used
+	setID       string
+	setCat      string
+	err         error
+}
+
+func (f *fakeCatStore) SetFailureCategory(_ context.Context, id, cat string) error {
+	f.setID, f.setCat = id, cat
+	return f.err
+}
+
+func TestClassifyAndPersist(t *testing.T) {
+	fs := &fakeCatStore{}
+	m := &Manager{st: fs, metrics: obs.NewAgentMetrics("a", "t", "m")}
+	m.classifyAndPersist("sess-1", "completed", "completed", true, false)
+	if fs.setID != "sess-1" || fs.setCat != CatToolError {
+		t.Fatalf("persisted (%q,%q), want (sess-1,%s)", fs.setID, fs.setCat, CatToolError)
+	}
+
+	// A store error is non-fatal (no panic, no propagation — void method).
+	fs.err = errors.New("db down")
+	m.classifyAndPersist("sess-2", "completed", "completed", false, false) // must not panic
 }

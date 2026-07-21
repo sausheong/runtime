@@ -1,7 +1,9 @@
 package agentruntime
 
 import (
+	"context"
 	"encoding/json"
+	"log/slog"
 
 	"github.com/sausheong/harness/session"
 )
@@ -67,4 +69,17 @@ func entriesHaveToolError(entries []session.SessionEntry) bool {
 		}
 	}
 	return false
+}
+
+// classifyAndPersist derives the terminal session's failure category and records
+// it (store + metric). Best-effort and non-fatal: a store error is logged, never
+// returned — classification must never affect a turn. Deterministic + idempotent
+// ⇒ a DBOS replay re-derives and re-writes the identical category.
+func (m *Manager) classifyAndPersist(sessionID, status, terminalReason string, toolErrored, qualityFailed bool) {
+	cat := classify(status, terminalReason, toolErrored, qualityFailed)
+	if err := m.st.SetFailureCategory(context.Background(), sessionID, cat); err != nil {
+		slog.Warn("eval: set failure category failed", "session", sessionID, "category", cat, "err", err)
+		return
+	}
+	m.metrics.FailureClassified(cat)
 }

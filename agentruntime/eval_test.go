@@ -75,21 +75,23 @@ func (f *fakeResultStore) PutOnlineResult(_ context.Context, s, c, t, a, sc stri
 }
 
 // newTestManagerForScoring builds a Manager with just the scoring deps set: the
-// policy + judge. metrics is left nil (nil-safe) and st is unused because the
-// test drives scoreOnto with an injected resultPutter.
+// policy + judge. metrics is left nil (nil-safe). st is a fake capturing store:
+// scoreOnto's M3 tail now calls classifyAndPersist, which persists the derived
+// category via m.st.SetFailureCategory — so st must be non-nil even though the
+// criteria loop writes through the injected resultPutter.
 func newTestManagerForScoring(pol *eval.Policy, j eval.Judge) *Manager {
-	return &Manager{evalPolicy: pol, evalJudge: j}
+	return &Manager{evalPolicy: pol, evalJudge: j, st: &fakeCatStore{}}
 }
 
 func TestScoreSessionAllCriteriaFailClosed(t *testing.T) {
 	pol := &eval.Policy{Tenant: "t1", AgentID: "a1", SampleRate: 100, Criteria: []eval.Criterion{
 		{Name: "has-final", Scorer: eval.ScorerContains, Pattern: "final"}, // pass
 		{Name: "has-zzz", Scorer: eval.ScorerContains, Pattern: "zzz"},     // fail
-		{Name: "j", Scorer: eval.ScorerJudge, Rubric: "polite"},           // judge err → fail-criterion
+		{Name: "j", Scorer: eval.ScorerJudge, Rubric: "polite"},            // judge err → fail-criterion
 	}}
 	m := newTestManagerForScoring(pol, erroringJudge{})
 	rs := &fakeResultStore{}
-	m.scoreOnto(rs, "s1", "t1", "alice", []session.SessionEntry{msgEntry("assistant", "the final answer")})
+	m.scoreOnto(rs, "s1", "t1", "alice", "completed", "completed", false, []session.SessionEntry{msgEntry("assistant", "the final answer")})
 	if len(rs.puts) != 3 {
 		t.Fatalf("want 3 criteria persisted (judge error must NOT abort), got %d", len(rs.puts))
 	}
