@@ -7,7 +7,7 @@ import (
 )
 
 // Failure-category taxonomy (P3.1 M3). One category per terminal session,
-// assigned by classify's fixed precedence. '' (unclassified) is not a member —
+// assigned by classify's fixed precedence. ” (unclassified) is not a member —
 // a non-terminal session simply never gets classified.
 const (
 	CatNone          = "none"

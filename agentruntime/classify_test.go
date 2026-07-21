@@ -9,12 +9,12 @@ import (
 
 func TestClassifyPrecedence(t *testing.T) {
 	cases := []struct {
-		name          string
-		status        string
+		name           string
+		status         string
 		terminalReason string
-		toolErrored   bool
-		qualityFailed bool
-		want          string
+		toolErrored    bool
+		qualityFailed  bool
+		want           string
 	}{
 		// Rule 6: the common clean case.
 		{"clean", "completed", "completed", false, false, CatNone},
@@ -69,5 +69,11 @@ func TestEntriesHaveToolError(t *testing.T) {
 	msg := session.SessionEntry{Type: session.EntryTypeMessage, Data: json.RawMessage(`{"text":"hi"}`)}
 	if entriesHaveToolError([]session.SessionEntry{msg}) {
 		t.Fatal("message entry ⇒ false")
+	}
+	// A tool_result whose Data is malformed JSON must be skipped, not fatal
+	// (exercises the unmarshal-error continue branch).
+	bad := session.SessionEntry{Type: session.EntryTypeToolResult, Data: json.RawMessage(`{`)}
+	if entriesHaveToolError([]session.SessionEntry{bad}) {
+		t.Fatal("malformed tool_result Data ⇒ false (skipped, not fatal)")
 	}
 }
