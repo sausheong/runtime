@@ -97,6 +97,32 @@ func (m *memStore) SetSessionUsage(_ context.Context, id string, tokens int64, c
 	return nil
 }
 
+func (m *memStore) SetFailureCategory(_ context.Context, id, category string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	s, ok := m.sessions[id]
+	if !ok {
+		return fmt.Errorf("session %q not found", id)
+	}
+	s.FailureCategory = category
+	return nil
+}
+
+func (m *memStore) FailureBreakdownByAgent(_ context.Context, agentID string, since time.Time) (map[string]int, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := map[string]int{}
+	for _, s := range m.sessions {
+		if s.AgentID != agentID || s.FailureCategory == "" {
+			continue
+		}
+		// memStore has no created_at; the since filter is a no-op here (the PG
+		// impl enforces it and the integration test covers it). Documented.
+		out[s.FailureCategory]++
+	}
+	return out, nil
+}
+
 func (m *memStore) GetSession(_ context.Context, id string) (SessionRow, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

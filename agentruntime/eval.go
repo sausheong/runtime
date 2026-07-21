@@ -49,15 +49,14 @@ type resultPutter interface {
 	PutOnlineResult(ctx context.Context, sessionID, criterion, tenant, actor, scorer string, passed bool, detail string) error
 }
 
-// scoreSession scores a finished session's output against the configured policy
-// and persists one result per criterion. Best-effort: called in a background
-// goroutine off the turn path; a judge/criterion error fails THAT criterion,
-// never the session. No-op when no policy/criteria.
-func (m *Manager) scoreSession(sessionID, tenant, actor string, entries []session.SessionEntry) {
-	if m.evalPolicy == nil || len(m.evalPolicy.Criteria) == 0 {
-		return
-	}
-	m.scoreOnto(m.st, sessionID, tenant, actor, entries)
+// scoreSession scores a finished session's output against the configured policy,
+// persists one result per criterion, THEN classifies the session (M3) at the
+// tail — after every criterion is written — so classify's qualityFailed reads
+// the online_eval_results this same goroutine just wrote (no race with the
+// terminal block). Best-effort: a judge/criterion error fails THAT criterion,
+// never the session. Always classifies, even with no criteria.
+func (m *Manager) scoreSession(sessionID, tenant, actor, status, terminalReason string, toolErrored bool, entries []session.SessionEntry) {
+	m.scoreOnto(m.st, sessionID, tenant, actor, status, terminalReason, toolErrored, entries)
 }
 
 // criterionCase maps a policy Criterion onto the eval.Case scoring vocabulary so
@@ -70,19 +69,30 @@ func criterionCase(c eval.Criterion) eval.Case {
 	return eval.Case{Scorer: c.Scorer, Expected: c.Pattern}
 }
 
-func (m *Manager) scoreOnto(rs resultPutter, sessionID, tenant, actor string, entries []session.SessionEntry) {
+func (m *Manager) scoreOnto(rs resultPutter, sessionID, tenant, actor, status, terminalReason string, toolErrored bool, entries []session.SessionEntry) {
 	ctx := context.Background()
 	output := finalAssistantText(entries)
-	for _, c := range m.evalPolicy.Criteria {
-		passed, detail := eval.Score(ctx, m.evalJudge, criterionCase(c), output)
-		if err := rs.PutOnlineResult(ctx, sessionID, c.Name, tenant, actor, string(c.Scorer), passed, detail); err != nil {
-			slog.Warn("eval: put online result failed", "session", sessionID, "criterion", c.Name, "err", err)
+	qualityFailed := false
+	if m.evalPolicy != nil {
+		for _, c := range m.evalPolicy.Criteria {
+			passed, detail := eval.Score(ctx, m.evalJudge, criterionCase(c), output)
+			if !passed {
+				qualityFailed = true
+			}
+			if err := rs.PutOnlineResult(ctx, sessionID, c.Name, tenant, actor, string(c.Scorer), passed, detail); err != nil {
+				slog.Warn("eval: put online result failed", "session", sessionID, "criterion", c.Name, "err", err)
+			}
+			res := "fail"
+			if passed {
+				res = "pass"
+			}
+			m.metrics.EvalCriterion(res)
 		}
-		res := "fail"
-		if passed {
-			res = "pass"
-		}
-		m.metrics.EvalCriterion(res)
+		m.metrics.EvalSessionScored()
 	}
-	m.metrics.EvalSessionScored()
+	// M3: classify at the tail with the qualityFailed just computed from the
+	// criteria we scored. When called from the sampled path this is the real
+	// quality signal; the no-policy inline path never reaches here (serve.go
+	// calls classifyAndPersist directly with qualityFailed=false).
+	m.classifyAndPersist(sessionID, status, terminalReason, toolErrored, qualityFailed)
 }

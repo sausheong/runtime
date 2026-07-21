@@ -6,6 +6,8 @@ import (
 	"encoding/hex"
 	"log/slog"
 	"net/http"
+	"strings"
+	"time"
 
 	"github.com/sausheong/runtime/internal/eval"
 	"github.com/sausheong/runtime/internal/identity"
@@ -371,6 +373,49 @@ func RegisterEvalAdmin(ctx context.Context, mux *http.ServeMux, adminStore Admin
 			return
 		}
 		writeJSON(w, http.StatusOK, rows)
+	})
+
+	// --- failure breakdown (M3) ---
+	// Per-agent terminal-session failure-category counts. ?agent=<id> is
+	// required and must be visible to the caller (evalAgentVisible); optional
+	// ?since=<dur> (a Go duration, e.g. "24h") bounds the window. Reads the
+	// category agentd wrote via ctlStore (native agents share its Postgres).
+	mux.HandleFunc("GET /admin/evals/failures", func(w http.ResponseWriter, r *http.Request) {
+		p, ok := requireAdmin(w, r)
+		if !ok {
+			return
+		}
+		if ctlStore == nil {
+			http.Error(w, "eval results not configured", http.StatusServiceUnavailable)
+			return
+		}
+		agent := r.URL.Query().Get("agent")
+		if agent == "" {
+			http.Error(w, "agent required", http.StatusBadRequest)
+			return
+		}
+		if !evalAgentVisible(reg, p, agent) {
+			http.Error(w, "unknown or invisible agent", http.StatusBadRequest)
+			return
+		}
+		var since time.Time
+		if s := strings.TrimSpace(r.URL.Query().Get("since")); s != "" {
+			d, err := time.ParseDuration(s)
+			if err != nil {
+				http.Error(w, "bad since duration: "+err.Error(), http.StatusBadRequest)
+				return
+			}
+			since = time.Now().Add(-d)
+		}
+		breakdown, err := ctlStore.FailureBreakdownByAgent(r.Context(), agent, since)
+		if err != nil {
+			serverError(w, "failure breakdown", err)
+			return
+		}
+		if breakdown == nil {
+			breakdown = map[string]int{}
+		}
+		writeJSON(w, http.StatusOK, breakdown)
 	})
 }
 

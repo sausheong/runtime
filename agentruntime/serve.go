@@ -223,6 +223,15 @@ func (m *Manager) failLimit(wfID, limit string, observed, configured int64) stri
 	_ = m.st.SetSessionStatus(context.Background(), wfID, "limit_exceeded")
 	m.publish(wfID, WireEvent{Type: "error", Err: breachMsg(limit, observed, configured)})
 	m.metrics.LimitHitObserved(limit)
+	// M3: classify the breach. A per-turn deadline (turn_timeout) becomes
+	// terminalReason "limit:turn_timeout" so classify reports `timeout`; the
+	// cumulative-budget limits report `limit_exceeded`. No policy criteria apply
+	// to a truncated session ⇒ qualityFailed=false. Best-effort (never fatal).
+	terminalReason := "limit_exceeded"
+	if limit == "turn_timeout" {
+		terminalReason = "limit:turn_timeout"
+	}
+	m.classifyAndPersist(wfID, "limit_exceeded", terminalReason, false, false)
 	return "limit_exceeded"
 }
 
@@ -310,6 +319,9 @@ func (m *Manager) sessionWorkflow(ctx dbos.DBOSContext, in turnInput) (string, e
 	// count (incl. cache); costUSD accumulates priced turns only.
 	var tokensAll int64
 	var costUSD float64
+	// toolErrored OR-accumulates across turns: any turn whose entries carry a
+	// tool_result with IsError marks the session for M3 tool_error classification.
+	var toolErrored bool
 	for turn := 0; ; turn++ {
 		if turn >= maxTurns {
 			return m.failLimit(wfID, "max_turns", int64(turn), int64(maxTurns)), nil
@@ -449,6 +461,9 @@ func (m *Manager) sessionWorkflow(ctx dbos.DBOSContext, in turnInput) (string, e
 		}
 
 		applyEntries(canonical, out.Entries) // SOLE mutator of canonical
+		if entriesHaveToolError(out.Entries) {
+			toolErrored = true
+		}
 		// Capture the complete turn transcript (best-effort, off the durable
 		// path; a marshal/append failure is logged, never fatal). Indexed by the
 		// 0-based loop var `turn` (NOT turn+1, which SetTurnCount stores as a
@@ -490,10 +505,23 @@ func (m *Manager) sessionWorkflow(ctx dbos.DBOSContext, in turnInput) (string, e
 			// per-turn metrics carry. Scores the clean/error out.Done path only;
 			// limit_exceeded (via failLimit) is a truncated session with no
 			// meaningful final output — captured per-turn but NOT scored.
+			// Determine the terminal status this block set (mirrors the
+			// SetSessionStatus calls just above): "completed" for a clean finish,
+			// "error" for aborted/error terminal reasons.
+			status := "completed"
+			if out.Reason != "completed" {
+				status = "error"
+			}
+			// M3 failure classification. When a policy is sampled, fold
+			// classification into the SCORING goroutine's tail so quality_fail
+			// reads the criteria results that goroutine writes (no race). Otherwise
+			// classify inline with qualityFailed=false (no criteria to fail).
 			if m.evalPolicy != nil && sampled(wfID, m.evalPolicy.SampleRate) {
 				entries := out.Entries
 				tenant, actor := in.Tenant, in.Subject
-				go m.scoreSession(wfID, tenant, actor, entries)
+				go m.scoreSession(wfID, tenant, actor, status, out.Reason, toolErrored, entries)
+			} else {
+				m.classifyAndPersist(wfID, status, out.Reason, toolErrored, false)
 			}
 			return out.Reason, nil
 		}

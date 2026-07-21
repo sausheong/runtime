@@ -308,6 +308,25 @@ func TestAgentEvalMetricsNilSafe(t *testing.T) {
 	real.EvalCriterion("fail")
 }
 
+func TestFailureClassifiedNilSafe(t *testing.T) {
+	var a *AgentMetrics
+	a.FailureClassified("none") // must not panic
+
+	real := NewAgentMetrics("agent-x", "tenant-y", "model-z")
+	real.FailureClassified("tool_error")
+	real.FailureClassified("tool_error")
+	real.FailureClassified("none")
+
+	// Scrape and assert the counter is present with the category label.
+	body := scrapeHandler(t, real.Handler())
+	if !strings.Contains(body, `agent_eval_failures_total{`) {
+		t.Fatalf("agent_eval_failures_total missing from scrape:\n%s", body)
+	}
+	if !strings.Contains(body, `category="tool_error"`) {
+		t.Fatalf("category label missing:\n%s", body)
+	}
+}
+
 func TestEvalMetricsNilSafe(t *testing.T) {
 	var c *ControlMetrics
 	c.EvalRun("t", "completed") // must not panic

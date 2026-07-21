@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	_ "embed"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 	_ "github.com/jackc/pgx/v5/stdlib"
@@ -102,7 +103,7 @@ func (p *pgStore) ActiveSessionsByReplica(ctx context.Context, agentID string) (
 
 func (p *pgStore) ListSessions(ctx context.Context, agentID string) ([]SessionRow, error) {
 	rows, err := p.db.QueryContext(ctx,
-		`SELECT id, agent_id, workflow_id, status, turn_count, replica, tokens_total, cost_usd FROM sessions WHERE agent_id=$1 ORDER BY created_at DESC`,
+		`SELECT id, agent_id, workflow_id, status, turn_count, replica, tokens_total, cost_usd, failure_category FROM sessions WHERE agent_id=$1 ORDER BY created_at DESC`,
 		agentID)
 	if err != nil {
 		return nil, err
@@ -111,7 +112,7 @@ func (p *pgStore) ListSessions(ctx context.Context, agentID string) ([]SessionRo
 	var out []SessionRow
 	for rows.Next() {
 		var s SessionRow
-		if err := rows.Scan(&s.ID, &s.AgentID, &s.WorkflowID, &s.Status, &s.TurnCount, &s.Replica, &s.TokensTotal, &s.CostUSD); err != nil {
+		if err := rows.Scan(&s.ID, &s.AgentID, &s.WorkflowID, &s.Status, &s.TurnCount, &s.Replica, &s.TokensTotal, &s.CostUSD, &s.FailureCategory); err != nil {
 			return nil, err
 		}
 		out = append(out, s)
@@ -132,11 +133,46 @@ func (p *pgStore) SetSessionUsage(ctx context.Context, id string, tokens int64, 
 	return err
 }
 
+func (p *pgStore) SetFailureCategory(ctx context.Context, id, category string) error {
+	_, err := p.db.ExecContext(ctx,
+		`UPDATE sessions SET failure_category = $2, last_active_at = now() WHERE id=$1`,
+		id, category)
+	return err
+}
+
+func (p *pgStore) FailureBreakdownByAgent(ctx context.Context, agentID string, since time.Time) (map[string]int, error) {
+	q := `SELECT failure_category, count(*) FROM sessions
+	       WHERE agent_id=$1 AND failure_category <> ''`
+	args := []any{agentID}
+	if !since.IsZero() {
+		q += ` AND created_at >= $2`
+		args = append(args, since)
+	}
+	q += ` GROUP BY failure_category`
+	rows, err := p.db.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]int{}
+	for rows.Next() {
+		var (
+			cat string
+			n   int
+		)
+		if err := rows.Scan(&cat, &n); err != nil {
+			return nil, err
+		}
+		out[cat] = n
+	}
+	return out, rows.Err()
+}
+
 func (p *pgStore) GetSession(ctx context.Context, id string) (SessionRow, error) {
 	var s SessionRow
 	err := p.db.QueryRowContext(ctx,
-		`SELECT id, agent_id, workflow_id, status, turn_count, replica, tokens_total, cost_usd FROM sessions WHERE id=$1`, id).
-		Scan(&s.ID, &s.AgentID, &s.WorkflowID, &s.Status, &s.TurnCount, &s.Replica, &s.TokensTotal, &s.CostUSD)
+		`SELECT id, agent_id, workflow_id, status, turn_count, replica, tokens_total, cost_usd, failure_category FROM sessions WHERE id=$1`, id).
+		Scan(&s.ID, &s.AgentID, &s.WorkflowID, &s.Status, &s.TurnCount, &s.Replica, &s.TokensTotal, &s.CostUSD, &s.FailureCategory)
 	if err == sql.ErrNoRows {
 		return SessionRow{}, fmt.Errorf("session %q not found", id)
 	}
