@@ -118,7 +118,8 @@ func (f *fakeAdmin2) RevokeRegistrationToken(ctx context.Context, tokenID string
 // SetSecret records the names it was called with so tests can assert a
 // rejected creation never reached the broker.
 type fakeSec2 struct {
-	setNames []string
+	setNames       []string
+	rotatedTenants []string
 }
 
 func (f *fakeSec2) SetSecret(ctx context.Context, tenant, name, plaintext string) error {
@@ -141,7 +142,8 @@ func (f *fakeSec2) ListSecrets(ctx context.Context, tenant string) ([]identity.S
 }
 func (f *fakeSec2) DeleteSecret(ctx context.Context, tenant, name string) error { return nil }
 func (f *fakeSec2) RotateSecrets(ctx context.Context, tenant string) (identity.RotateStats, error) {
-	return identity.RotateStats{}, nil
+	f.rotatedTenants = append(f.rotatedTenants, tenant)
+	return identity.RotateStats{Tenant: tenant, Total: 3, Rotated: 3}, nil
 }
 
 func adminReq(method, path string, body url.Values) *http.Request {
@@ -303,6 +305,53 @@ func TestOnboardingSecretOBO(t *testing.T) {
 	}
 	if len(sec.setNames) != 1 {
 		t.Fatalf("invalid OBO reached the broker: %v", sec.setNames)
+	}
+}
+
+// TestOnboardingRotateSecrets proves the Credentials panel exposes a keyring
+// rotate button (when SecretsEnabled) and its POST handler rotates exactly the
+// caller's own tenant with a valid CSRF + admin principal.
+func TestOnboardingRotateSecrets(t *testing.T) {
+	sec := &fakeSec2{}
+	deps := &Onboarding{Upstreams: &fakeUpstreamStore2{}, Mutator: &fakeMut2{}, Admin: &fakeAdmin2{}, Secrets: sec}
+	h := Handler(nil, nil, OIDCConfig{}, deps)
+
+	// The Credentials panel renders a rotate button/form when Secrets is on.
+	rg := adminReq("GET", "/ui/onboarding", nil)
+	wg := httptest.NewRecorder()
+	h.ServeHTTP(wg, rg)
+	if !strings.Contains(wg.Body.String(), "/ui/onboarding/secrets/rotate") {
+		t.Fatal("Credentials panel missing rotate-keyring form")
+	}
+
+	// Valid CSRF + admin ⇒ 303 and exactly one rotate for the caller's tenant.
+	token := issuedCSRF(t, h)
+	r := adminReq("POST", "/ui/onboarding/secrets/rotate", url.Values{"csrf_token": {token}})
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	if w.Code != http.StatusSeeOther {
+		t.Fatalf("rotate: want 303 got %d (%s)", w.Code, w.Body)
+	}
+	if len(sec.rotatedTenants) != 1 || sec.rotatedTenants[0] != "t1" {
+		t.Fatalf("rotate: want one rotate for t1, got %v", sec.rotatedTenants)
+	}
+}
+
+// TestOnboardingRotateSecretsRequiresCSRF proves the rotate handler is CSRF-gated:
+// a POST without a token must 403 and never reach the broker.
+func TestOnboardingRotateSecretsRequiresCSRF(t *testing.T) {
+	sec := &fakeSec2{}
+	deps := &Onboarding{Upstreams: &fakeUpstreamStore2{}, Mutator: &fakeMut2{}, Admin: &fakeAdmin2{}, Secrets: sec}
+	h := Handler(nil, nil, OIDCConfig{}, deps)
+
+	r := adminReq("POST", "/ui/onboarding/secrets/rotate", url.Values{})
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("rotate without csrf: want 403 got %d", w.Code)
+	}
+	if len(sec.rotatedTenants) != 0 {
+		t.Fatalf("rotate must not run without csrf: %v", sec.rotatedTenants)
 	}
 }
 

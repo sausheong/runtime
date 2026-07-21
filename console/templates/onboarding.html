@@ -135,6 +135,10 @@
   <!-- ===== Credentials ===== -->
   <section class="card">
     <h2>Credentials</h2>
+    <form method="post" action="/ui/onboarding/secrets/rotate" onsubmit="return confirm('Rotate the keyring? All secrets are re-sealed; this cannot be undone.')">
+      <input type="hidden" name="csrf_token" value="{{.CSRF}}">
+      <button type="submit">Rotate keyring</button>
+    </form>
     <p class="card-desc">Per-tenant secrets brokered into upstream requests. Values are never displayed.</p>
     <table>
       <thead><tr><th>Name</th><th>Type</th></tr></thead>

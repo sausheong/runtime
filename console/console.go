@@ -481,6 +481,22 @@ func Handler(reg *controlplane.Registry, st store.Store, oidc OIDCConfig, onb *O
 			flashRedirect(w, r, "Credential "+r.FormValue("name")+" saved.")
 		}))
 
+		// Rotate re-encrypts every tenant secret under the current primary key.
+		// The flash carries only counts (never a value) — a rotate re-seals, it
+		// does not reveal.
+		mux.HandleFunc("POST /ui/onboarding/secrets/rotate", guard(func(p identity.Principal, w http.ResponseWriter, r *http.Request) {
+			if onb.Secrets == nil {
+				http.Error(w, "secrets broker not configured (set RUNTIME_SECRETS_KEYS)", http.StatusServiceUnavailable)
+				return
+			}
+			st, err := onb.Secrets.RotateSecrets(r.Context(), p.TenantID)
+			if err != nil {
+				http.Error(w, "rotate failed", http.StatusInternalServerError)
+				return
+			}
+			flashRedirect(w, r, "Keyring rotated. "+strconv.Itoa(st.Rotated)+" of "+strconv.Itoa(st.Total)+" secrets re-sealed with the current key.")
+		}))
+
 		mux.HandleFunc("POST /ui/onboarding/upstreams", guard(func(p identity.Principal, w http.ResponseWriter, r *http.Request) {
 			params := controlplane.UpstreamParams{
 				Name: r.FormValue("name"), URL: r.FormValue("url"),
