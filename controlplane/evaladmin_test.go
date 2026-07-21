@@ -158,6 +158,56 @@ func TestEvalRunUnknownAgent(t *testing.T) {
 	}
 }
 
+func TestEvalFailuresRoute(t *testing.T) {
+	// Mirror the online-results fixture: a real MemStore ctlStore, an admin
+	// principal for tenant t1, and a Registry with agent a1 owned by t1.
+	mux, _, ctl := evalPolicyMux(t)
+	ctx := context.Background()
+
+	// Seed terminal sessions for a1: 3 "none", 1 "tool_error".
+	for i := 0; i < 3; i++ {
+		id, err := ctl.CreateSession(ctx, "a1", 0)
+		if err != nil {
+			t.Fatalf("create session: %v", err)
+		}
+		if err := ctl.SetFailureCategory(ctx, id, "none"); err != nil {
+			t.Fatalf("set category: %v", err)
+		}
+	}
+	id, err := ctl.CreateSession(ctx, "a1", 0)
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	if err := ctl.SetFailureCategory(ctx, id, "tool_error"); err != nil {
+		t.Fatalf("set category: %v", err)
+	}
+
+	t1 := identity.Principal{Role: identity.RoleAdmin, TenantID: "t1"}
+
+	// Visible agent → 200 + the breakdown JSON.
+	w := doJSON(t, mux, "GET", "/admin/evals/failures?agent=a1", t1, nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("failures read: want 200 got %d (%s)", w.Code, w.Body)
+	}
+	var got map[string]int
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode breakdown: %v", err)
+	}
+	if got["none"] != 3 || got["tool_error"] != 1 {
+		t.Fatalf("breakdown wrong: %+v", got)
+	}
+
+	// Missing ?agent= → 400.
+	if mw := doJSON(t, mux, "GET", "/admin/evals/failures", t1, nil); mw.Code != http.StatusBadRequest {
+		t.Fatalf("missing agent: want 400 got %d", mw.Code)
+	}
+
+	// Unknown/invisible agent → 400.
+	if iw := doJSON(t, mux, "GET", "/admin/evals/failures?agent=nope", t1, nil); iw.Code != http.StatusBadRequest {
+		t.Fatalf("invisible agent: want 400 got %d", iw.Code)
+	}
+}
+
 func TestEvalRunTenantIsolation(t *testing.T) {
 	mux, es := evalMux(t)
 	// A t1 run exists.
