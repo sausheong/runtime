@@ -215,3 +215,87 @@ func TestDockerBackendLiveLargeWrite(t *testing.T) {
 		t.Fatalf("ReadFile big.bin truncated content wrong: %d bytes", len(got))
 	}
 }
+
+// TestLiveSessionScopedIsolation proves, against a REAL Docker daemon, that a
+// SessionScoped Manager hides one session's sandbox from another session of the
+// same tenant, and that CloseSession removes the real container (the box is gone
+// afterward). This is the end-to-end gate for P3.2 session isolation + teardown.
+func TestLiveSessionScopedIsolation(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	requireLiveDocker(t, ctx)
+
+	be, err := NewDockerBackend(DockerConfig{})
+	if err != nil {
+		t.Fatalf("NewDockerBackend: %v", err)
+	}
+	m := NewManager(be, Config{
+		MaxPerTenant:  5,
+		IdleTTL:       time.Minute,
+		MaxLifetime:   time.Hour,
+		ReadLimit:     1 << 16,
+		SessionScoped: true,
+	})
+	// Reap any real containers this test leaves behind (also covers a failure
+	// path where CloseSession did not run).
+	t.Cleanup(func() { _ = m.ReapStartup(context.Background()) })
+
+	s, err := m.Create(ctx, "acme", "sessA")
+	if err != nil {
+		t.Fatalf("Create sessA: %v", err)
+	}
+	if err := m.WriteFile(ctx, "acme", "sessA", s.ID, "a.txt", []byte("hi")); err != nil {
+		t.Fatalf("WriteFile sessA: %v", err)
+	}
+
+	// Same-session access still works.
+	got, _, err := m.ReadFile(ctx, "acme", "sessA", s.ID, "a.txt")
+	if err != nil {
+		t.Fatalf("same-session ReadFile: %v", err)
+	}
+	if string(got) != "hi" {
+		t.Fatalf("same-session ReadFile = %q, want \"hi\"", got)
+	}
+
+	// Cross-session: a foreign session sees the id as nonexistent (hidden).
+	if _, _, err := m.ReadFile(ctx, "acme", "sessB", s.ID, "a.txt"); err == nil {
+		t.Fatal("cross-session read should fail (sessA's box hidden from sessB)")
+	}
+
+	// The real container exists before teardown.
+	before, err := be.ListLeftovers(ctx)
+	if err != nil {
+		t.Fatalf("ListLeftovers before: %v", err)
+	}
+	if !containsStr(before, s.ContainerID) {
+		t.Fatalf("container %s not present before CloseSession: %v", s.ContainerID, before)
+	}
+
+	// Session teardown removes the real container.
+	if err := m.CloseSession(ctx, "acme", "sessA"); err != nil {
+		t.Fatalf("CloseSession sessA: %v", err)
+	}
+
+	// The box is gone: exec against it now fails.
+	if _, err := m.ExecCode(ctx, "acme", "sessA", s.ID, "print(1)", 5); err == nil {
+		t.Fatal("ExecCode should fail after CloseSession (box gone)")
+	}
+
+	// And the real container no longer appears among live containers.
+	after, err := be.ListLeftovers(ctx)
+	if err != nil {
+		t.Fatalf("ListLeftovers after: %v", err)
+	}
+	if containsStr(after, s.ContainerID) {
+		t.Fatalf("container %s still present after CloseSession: %v", s.ContainerID, after)
+	}
+}
+
+func containsStr(ss []string, want string) bool {
+	for _, s := range ss {
+		if s == want {
+			return true
+		}
+	}
+	return false
+}

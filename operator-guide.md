@@ -45,6 +45,69 @@ network).
 - Secrets (bootstrap key, AES key, tenant credentials) are never written to logs.
 - The bundled stack runs with identity ON; the console and APIs require auth.
 
+## Sandbox & browser isolation
+
+Agents that run code (the `sandbox` tool) or drive a headless browser (the
+`browser` tool) execute untrusted work in sibling containers. The platform
+offers three layers of isolation; they compose, and the first is on by default.
+
+### 1. Session-scoped containers (the shipped default)
+
+`RUNTIME_SANDBOX_SCOPE=session` and `RUNTIME_BROWSER_SCOPE=session` — the value
+baked into the compose stack and the Helm chart — key each session's
+sandbox/browser containers to the owning session. A session's containers are
+**invisible to other sessions of the same tenant** and are **torn down at
+session end**. This closes cross-session handle reuse and lingering state: one
+session can never see, reuse, or leak into another's container.
+
+Set the scope to `tenant` to share containers across a tenant's sessions
+(longer-lived containers, warm reuse, but no per-session isolation):
+
+```bash
+RUNTIME_SANDBOX_SCOPE=tenant
+RUNTIME_BROWSER_SCOPE=tenant
+```
+
+The scope env vars are set on `runtimed` and **inherited** by the sandboxd /
+browserd stdio children it spawns — no per-server config is needed.
+
+### 2. gVisor (`runsc`) for defense-in-depth
+
+For a stronger boundary against container escape from executed code, run the
+sandbox/browser containers under [gVisor](https://gvisor.dev), a userspace
+kernel that intercepts syscalls. This is the **recommended runtime** where the
+host supports it:
+
+```bash
+RUNTIME_SANDBOX_RUNTIME=runsc
+RUNTIME_BROWSER_RUNTIME=runsc
+```
+
+It is **opt-in** because it requires `runsc` installed on the host and
+registered with the Docker daemon (a `runtimes` entry in `/etc/docker/daemon.json`);
+leave both unset on stock hosts. In the Helm chart set `sandbox.runtime` /
+`browser.runtime` (empty by default) — the env vars are emitted only when
+non-empty.
+
+### 3. One-session-per-process for process-level separation
+
+Tenants that demand process-level separation (not just container-level) can run
+each session in its own process: set `replicas: N` on the agent. Each session
+pins to one replica's DBOS executor, so sessions land on distinct processes;
+combine with idle TTLs (see [Bound agent execution](#bound-agent-execution)) to
+reclaim them.
+
+### What the runtime does NOT provide: per-session microVMs
+
+The runtime does **not** run each session in its own microVM (Firecracker-style
+hardware virtualization). This is a **deliberate, documented trade**, not an
+omission: a session pins to its owner replica's DBOS executor for durability —
+its workflow state must recover on that executor after a crash. A per-session
+microVM would move the session's execution off the executor that owns its
+durable state, breaking the replay/recovery model that makes sessions durable.
+Container-level isolation (layers 1–2) plus process-level separation (layer 3)
+are the isolation guarantees the durability model can honestly support.
+
 ## Bound agent execution
 
 Bound what any single session may consume. All limits are optional: an

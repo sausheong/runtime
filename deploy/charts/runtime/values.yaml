@@ -71,6 +71,14 @@ identity:
 features:
   dockerHost: ""          # DOCKER_HOST, e.g. tcp://localhost:2375
 
+# Sandbox & browser tool isolation (P3.2).
+sandbox:
+  scope: session      # session | tenant. session = per-session container isolation + teardown.
+  runtime: ""         # container runtime, e.g. "runsc" (gVisor). Requires host install. Empty = engine default.
+browser:
+  scope: session
+  runtime: ""
+
 service:
   type: ClusterIP
   port: 8080

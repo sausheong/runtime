@@ -23,6 +23,11 @@
 //	RUNTIME_SANDBOX_ALLOW_DIRECT    "1" ⇒ accept calls without the gateway's
 //	                                __rt_tenant key as tenant "default"
 //	                                (single-tenant direct use only)
+//	RUNTIME_SANDBOX_SCOPE           "session" ⇒ key sandboxes by (tenant, session,
+//	                                id) so a handle is invisible to other sessions
+//	                                of the same tenant, and close_session reaps a
+//	                                session's boxes at session end. Any other value
+//	                                (default) ⇒ tenant-scoped (today's behavior).
 //	RUNTIME_SANDBOX_FAKE            "1" ⇒ in-memory fake backend (tests only)
 package main
 
@@ -104,9 +109,10 @@ func main() {
 	}
 
 	m := sandbox.NewManager(be, sandbox.Config{
-		MaxPerTenant: envInt("RUNTIME_SANDBOX_MAX_PER_TENANT", 5),
-		IdleTTL:      envDur("RUNTIME_SANDBOX_IDLE_TTL", 10*time.Minute),
-		MaxLifetime:  envDur("RUNTIME_SANDBOX_MAX_LIFETIME", time.Hour),
+		MaxPerTenant:  envInt("RUNTIME_SANDBOX_MAX_PER_TENANT", 5),
+		IdleTTL:       envDur("RUNTIME_SANDBOX_IDLE_TTL", 10*time.Minute),
+		MaxLifetime:   envDur("RUNTIME_SANDBOX_MAX_LIFETIME", time.Hour),
+		SessionScoped: os.Getenv("RUNTIME_SANDBOX_SCOPE") == "session",
 	})
 
 	ctx := context.Background()

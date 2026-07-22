@@ -190,7 +190,7 @@ func wireGateway(cfg *agentruntime.Config, d Deps) {
 	s := hmcp.ServerConfig{
 		Name:       "gateway",
 		URL:        d.GatewayURL,
-		HTTPClient: &http.Client{Transport: assertionRoundTripper{base: http.DefaultTransport}},
+		HTTPClient: &http.Client{Transport: gatewayRoundTripper{base: http.DefaultTransport}},
 	}
 	if d.GatewayKey != "" {
 		s.Headers = map[string]string{"Authorization": "Bearer " + d.GatewayKey}

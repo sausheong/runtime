@@ -63,6 +63,16 @@ services:
       OPENAI_API_KEY: ""
       RUNTIME_SANDBOX_IMAGE: runtime-sandbox:latest
       RUNTIME_BROWSER_IMAGE: runtime-browser:latest
+      # Session-scoped isolation (secure-by-default): each agent session's
+      # sandbox/browser containers are invisible to other sessions of the same
+      # tenant and are torn down at session end. Set to "tenant" to share.
+      # (Inherited by the sandboxd/browserd stdio children runtimed spawns.)
+      RUNTIME_SANDBOX_SCOPE: session
+      RUNTIME_BROWSER_SCOPE: session
+      # Stronger container isolation via gVisor. Requires runsc installed on the
+      # host and registered with the Docker daemon; leave unset on stock hosts.
+      # RUNTIME_SANDBOX_RUNTIME: runsc
+      # RUNTIME_BROWSER_RUNTIME: runsc
       RUNTIME_BROWSER_CDP_DIAL_HOST: host.docker.internal
       RUNTIME_BROWSER_CDP_PUBLISH_HOST: "0.0.0.0"
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318

@@ -37,24 +37,25 @@ func clip(s string) string {
 	return s
 }
 
-// NewServer builds the browserd MCP server: the 10 browser tools over m. Tool
+// NewServer builds the browserd MCP server: the browser tools over m. Tool
 // names are unprefixed — the gateway namespaces them (browser__*). Every
-// handler pops the reserved __rt_tenant the gateway injects; an absent key
-// fails closed unless allowDirect.
+// handler pops the reserved __rt_tenant and __rt_session the gateway injects;
+// an absent tenant key fails closed unless allowDirect (session absence is fine
+// — it is "" in tenant-scoped mode).
 func NewServer(m *Manager, allowDirect bool) *sdk.Server {
 	srv := sdk.NewServer(&sdk.Implementation{Name: "runtime-browser", Version: "m2"}, nil)
 
-	add := func(name, desc, schema string, h func(ctx context.Context, tenant string, args json.RawMessage) (*sdk.CallToolResult, error)) {
+	add := func(name, desc, schema string, h func(ctx context.Context, tenant, session string, args json.RawMessage) (*sdk.CallToolResult, error)) {
 		srv.AddTool(&sdk.Tool{Name: name, Description: desc, InputSchema: json.RawMessage(schema)},
 			func(ctx context.Context, req *sdk.CallToolRequest) (*sdk.CallToolResult, error) {
-				tenant, present, rest, err := popTenant(req.Params.Arguments)
+				tenant, present, session, rest, err := popReserved(req.Params.Arguments)
 				if err != nil {
 					return errResult("invalid arguments: " + err.Error()), nil
 				}
 				if !present && !allowDirect {
 					return errResult("missing gateway tenant: browserd must be served behind the platform gateway with forward_tenant: true (or set RUNTIME_BROWSER_ALLOW_DIRECT=1 for single-tenant direct use)"), nil
 				}
-				res, err := h(ctx, tenant, rest)
+				res, err := h(ctx, tenant, session, rest)
 				if err != nil {
 					return errResult(err.Error()), nil
 				}
@@ -73,8 +74,8 @@ func NewServer(m *Manager, allowDirect bool) *sdk.Server {
 	add("create_browser",
 		"Create an isolated headless-browser sandbox (Chromium). Returns a browser_id for the other browser tools. Network access is governed by the platform egress policy."+sessionNote,
 		`{"type":"object","properties":{}}`,
-		func(ctx context.Context, tenant string, _ json.RawMessage) (*sdk.CallToolResult, error) {
-			s, err := m.Create(ctx, tenant)
+		func(ctx context.Context, tenant, session string, _ json.RawMessage) (*sdk.CallToolResult, error) {
+			s, err := m.Create(ctx, tenant, session)
 			if err != nil {
 				return nil, err
 			}
@@ -89,7 +90,7 @@ func NewServer(m *Manager, allowDirect bool) *sdk.Server {
 			"wait_for":{"type":"string","description":"optional CSS selector to wait for (SPAs)"},
 			"wait_ms":{"type":"integer","description":"optional extra settle time in ms after load"}
 		},"required":["browser_id","url"]}`,
-		func(ctx context.Context, tenant string, raw json.RawMessage) (*sdk.CallToolResult, error) {
+		func(ctx context.Context, tenant, session string, raw json.RawMessage) (*sdk.CallToolResult, error) {
 			var a struct {
 				BrowserID string `json:"browser_id"`
 				URL       string `json:"url"`
@@ -105,7 +106,7 @@ func NewServer(m *Manager, allowDirect bool) *sdk.Server {
 			if err := validateNavURL(a.URL); err != nil {
 				return nil, err
 			}
-			s, err := m.Lookup(tenant, a.BrowserID)
+			s, err := m.Lookup(tenant, session, a.BrowserID)
 			if err != nil {
 				return nil, err
 			}
@@ -122,7 +123,7 @@ func NewServer(m *Manager, allowDirect bool) *sdk.Server {
 			"browser_id":{"type":"string"},"selector":{"type":"string"},
 			"wait_for":{"type":"string","description":"optional selector to wait for before clicking"}
 		},"required":["browser_id","selector"]}`,
-		func(ctx context.Context, tenant string, raw json.RawMessage) (*sdk.CallToolResult, error) {
+		func(ctx context.Context, tenant, session string, raw json.RawMessage) (*sdk.CallToolResult, error) {
 			var in struct {
 				BrowserID string `json:"browser_id"`
 				Selector  string `json:"selector"`
@@ -134,7 +135,7 @@ func NewServer(m *Manager, allowDirect bool) *sdk.Server {
 			if in.BrowserID == "" || in.Selector == "" {
 				return nil, errMissing("browser_id, selector")
 			}
-			s, err := m.Lookup(tenant, in.BrowserID)
+			s, err := m.Lookup(tenant, session, in.BrowserID)
 			if err != nil {
 				return nil, err
 			}
@@ -149,7 +150,7 @@ func NewServer(m *Manager, allowDirect bool) *sdk.Server {
 		`{"type":"object","properties":{
 			"browser_id":{"type":"string"},"selector":{"type":"string"},"text":{"type":"string"}
 		},"required":["browser_id","selector","text"]}`,
-		func(ctx context.Context, tenant string, raw json.RawMessage) (*sdk.CallToolResult, error) {
+		func(ctx context.Context, tenant, session string, raw json.RawMessage) (*sdk.CallToolResult, error) {
 			var in struct {
 				BrowserID string  `json:"browser_id"`
 				Selector  string  `json:"selector"`
@@ -161,7 +162,7 @@ func NewServer(m *Manager, allowDirect bool) *sdk.Server {
 			if in.BrowserID == "" || in.Selector == "" || in.Text == nil {
 				return nil, errMissing("browser_id, selector, text")
 			}
-			s, err := m.Lookup(tenant, in.BrowserID)
+			s, err := m.Lookup(tenant, session, in.BrowserID)
 			if err != nil {
 				return nil, err
 			}
@@ -176,7 +177,7 @@ func NewServer(m *Manager, allowDirect bool) *sdk.Server {
 		`{"type":"object","properties":{
 			"browser_id":{"type":"string"},"selector":{"type":"string"}
 		},"required":["browser_id"]}`,
-		func(ctx context.Context, tenant string, raw json.RawMessage) (*sdk.CallToolResult, error) {
+		func(ctx context.Context, tenant, session string, raw json.RawMessage) (*sdk.CallToolResult, error) {
 			var in struct {
 				BrowserID string `json:"browser_id"`
 				Selector  string `json:"selector"`
@@ -187,7 +188,7 @@ func NewServer(m *Manager, allowDirect bool) *sdk.Server {
 			if in.BrowserID == "" {
 				return nil, errMissing("browser_id")
 			}
-			s, err := m.Lookup(tenant, in.BrowserID)
+			s, err := m.Lookup(tenant, session, in.BrowserID)
 			if err != nil {
 				return nil, err
 			}
@@ -203,7 +204,7 @@ func NewServer(m *Manager, allowDirect bool) *sdk.Server {
 		`{"type":"object","properties":{
 			"browser_id":{"type":"string"},"selector":{"type":"string"}
 		},"required":["browser_id"]}`,
-		func(ctx context.Context, tenant string, raw json.RawMessage) (*sdk.CallToolResult, error) {
+		func(ctx context.Context, tenant, session string, raw json.RawMessage) (*sdk.CallToolResult, error) {
 			var in struct {
 				BrowserID string `json:"browser_id"`
 				Selector  string `json:"selector"`
@@ -214,7 +215,7 @@ func NewServer(m *Manager, allowDirect bool) *sdk.Server {
 			if in.BrowserID == "" {
 				return nil, errMissing("browser_id")
 			}
-			s, err := m.Lookup(tenant, in.BrowserID)
+			s, err := m.Lookup(tenant, session, in.BrowserID)
 			if err != nil {
 				return nil, err
 			}
@@ -228,7 +229,7 @@ func NewServer(m *Manager, allowDirect bool) *sdk.Server {
 	add("screenshot",
 		"Capture a screenshot of the current page. Returns an image."+sessionNote,
 		`{"type":"object","properties":{"browser_id":{"type":"string"}},"required":["browser_id"]}`,
-		func(ctx context.Context, tenant string, raw json.RawMessage) (*sdk.CallToolResult, error) {
+		func(ctx context.Context, tenant, session string, raw json.RawMessage) (*sdk.CallToolResult, error) {
 			var in struct {
 				BrowserID string `json:"browser_id"`
 			}
@@ -238,7 +239,7 @@ func NewServer(m *Manager, allowDirect bool) *sdk.Server {
 			if in.BrowserID == "" {
 				return nil, errMissing("browser_id")
 			}
-			s, err := m.Lookup(tenant, in.BrowserID)
+			s, err := m.Lookup(tenant, session, in.BrowserID)
 			if err != nil {
 				return nil, err
 			}
@@ -257,7 +258,7 @@ func NewServer(m *Manager, allowDirect bool) *sdk.Server {
 		`{"type":"object","properties":{
 			"browser_id":{"type":"string"},"script":{"type":"string"}
 		},"required":["browser_id","script"]}`,
-		func(ctx context.Context, tenant string, raw json.RawMessage) (*sdk.CallToolResult, error) {
+		func(ctx context.Context, tenant, session string, raw json.RawMessage) (*sdk.CallToolResult, error) {
 			var in struct {
 				BrowserID string `json:"browser_id"`
 				Script    string `json:"script"`
@@ -268,7 +269,7 @@ func NewServer(m *Manager, allowDirect bool) *sdk.Server {
 			if in.BrowserID == "" || in.Script == "" {
 				return nil, errMissing("browser_id, script")
 			}
-			s, err := m.Lookup(tenant, in.BrowserID)
+			s, err := m.Lookup(tenant, session, in.BrowserID)
 			if err != nil {
 				return nil, err
 			}
@@ -282,8 +283,8 @@ func NewServer(m *Manager, allowDirect bool) *sdk.Server {
 	add("list_browsers",
 		"List your live browser sandboxes with their timestamps and current URL.",
 		`{"type":"object","properties":{}}`,
-		func(_ context.Context, tenant string, _ json.RawMessage) (*sdk.CallToolResult, error) {
-			sessions := m.List(tenant)
+		func(_ context.Context, tenant, session string, _ json.RawMessage) (*sdk.CallToolResult, error) {
+			sessions := m.List(tenant, session)
 			out := make([]map[string]any, 0, len(sessions))
 			for i := range sessions {
 				s := &sessions[i]
@@ -299,7 +300,7 @@ func NewServer(m *Manager, allowDirect bool) *sdk.Server {
 	add("close_browser",
 		"Close a browser sandbox and discard its state. Idempotent.",
 		`{"type":"object","properties":{"browser_id":{"type":"string"}},"required":["browser_id"]}`,
-		func(ctx context.Context, tenant string, raw json.RawMessage) (*sdk.CallToolResult, error) {
+		func(ctx context.Context, tenant, session string, raw json.RawMessage) (*sdk.CallToolResult, error) {
 			var in struct {
 				BrowserID string `json:"browser_id"`
 			}
@@ -309,7 +310,17 @@ func NewServer(m *Manager, allowDirect bool) *sdk.Server {
 			if in.BrowserID == "" {
 				return nil, errMissing("browser_id")
 			}
-			if err := m.Close(ctx, tenant, in.BrowserID); err != nil {
+			if err := m.Close(ctx, tenant, session, in.BrowserID); err != nil {
+				return nil, err
+			}
+			return jsonResult(map[string]any{"closed": true})
+		})
+
+	add("close_session",
+		"Close all browser sandboxes created in the current agent session and discard their state. Called automatically at session end. Idempotent.",
+		`{"type":"object","properties":{}}`,
+		func(ctx context.Context, tenant, session string, _ json.RawMessage) (*sdk.CallToolResult, error) {
+			if err := m.CloseSession(ctx, tenant, session); err != nil {
 				return nil, err
 			}
 			return jsonResult(map[string]any{"closed": true})

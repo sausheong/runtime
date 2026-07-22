@@ -22,6 +22,14 @@ func startServer(t *testing.T) *sdk.ClientSession {
 func startServerMode(t *testing.T, allowDirect bool) *sdk.ClientSession {
 	t.Helper()
 	m := NewManager(NewFakeBackend(), Config{MaxPerTenant: 2})
+	return startServerManager(t, m, allowDirect)
+}
+
+// startServerManager wraps a caller-supplied Manager in the MCP server and
+// connects an in-memory client session to it. Used by tests that need to
+// inspect the Manager (e.g. session-scoped teardown) after driving tools.
+func startServerManager(t *testing.T, m *Manager, allowDirect bool) *sdk.ClientSession {
+	t.Helper()
 	srv := NewServer(m, allowDirect)
 
 	ct, st := sdk.NewInMemoryTransports()
@@ -70,7 +78,7 @@ func text(t *testing.T, res *sdk.CallToolResult) string {
 	return res.Content[0].(*sdk.TextContent).Text
 }
 
-func TestToolsListExactlySeven(t *testing.T) {
+func TestToolsListExactlyEight(t *testing.T) {
 	sess := startServer(t)
 	res, err := sess.ListTools(context.Background(), &sdk.ListToolsParams{})
 	if err != nil {
@@ -82,8 +90,8 @@ func TestToolsListExactlySeven(t *testing.T) {
 	}
 	sort.Strings(got)
 	want := []string{
-		"close_sandbox", "create_sandbox", "execute_code", "list_sandboxes",
-		"read_file", "run_command", "write_file",
+		"close_sandbox", "close_session", "create_sandbox", "execute_code",
+		"list_sandboxes", "read_file", "run_command", "write_file",
 	}
 	if len(got) != len(want) {
 		t.Fatalf("want %d tools, got %v", len(want), got)
@@ -314,6 +322,63 @@ func TestToolsAllowDirectAbsentTenantIsDefault(t *testing.T) {
 	}
 	if boxes, _ := out["sandboxes"].([]any); len(boxes) != 1 {
 		t.Fatalf("default tenant should see 1 sandbox, got %v", out["sandboxes"])
+	}
+}
+
+// TestToolsCloseSessionReapsSessionBoxes drives the close_session tool against
+// a session-scoped manager: a box created under __rt_session "s1" must be gone
+// from the manager after close_session, while a same-tenant box under a
+// different session survives.
+func TestToolsCloseSessionReapsSessionBoxes(t *testing.T) {
+	m := NewManager(NewFakeBackend(), Config{MaxPerTenant: 5, SessionScoped: true})
+	sess := startServerManager(t, m, false)
+
+	// Box in session s1.
+	_, out := call(t, sess, "create_sandbox", map[string]any{
+		"__rt_tenant": "acme", "__rt_session": "s1",
+	})
+	id1, _ := out["sandbox_id"].(string)
+	if id1 == "" {
+		t.Fatalf("create_sandbox (s1) missing sandbox_id: %v", out)
+	}
+	// Box in session s2 (same tenant).
+	_, out = call(t, sess, "create_sandbox", map[string]any{
+		"__rt_tenant": "acme", "__rt_session": "s2",
+	})
+	id2, _ := out["sandbox_id"].(string)
+	if id2 == "" {
+		t.Fatalf("create_sandbox (s2) missing sandbox_id: %v", out)
+	}
+
+	if got := len(m.List("acme", "s1")); got != 1 {
+		t.Fatalf("s1 should see 1 box before close, got %d", got)
+	}
+
+	// close_session for s1.
+	res, out := call(t, sess, "close_session", map[string]any{
+		"__rt_tenant": "acme", "__rt_session": "s1",
+	})
+	if res.IsError {
+		t.Fatalf("close_session errored: %s", text(t, res))
+	}
+	if closed, _ := out["closed"].(bool); !closed {
+		t.Fatalf("close_session closed = %v, want true", out["closed"])
+	}
+
+	// s1's box is gone; s2's box survives.
+	if got := len(m.List("acme", "s1")); got != 0 {
+		t.Fatalf("s1 should see 0 boxes after close_session, got %d", got)
+	}
+	if got := len(m.List("acme", "s2")); got != 1 {
+		t.Fatalf("s2 box should survive s1 close_session, got %d", got)
+	}
+
+	// Idempotent: closing s1 again still succeeds.
+	res, _ = call(t, sess, "close_session", map[string]any{
+		"__rt_tenant": "acme", "__rt_session": "s1",
+	})
+	if res.IsError {
+		t.Fatalf("second close_session should succeed (idempotent): %s", text(t, res))
 	}
 }
 

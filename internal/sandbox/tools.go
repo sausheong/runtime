@@ -49,12 +49,12 @@ func execOut(res ExecResult) map[string]any {
 	}
 }
 
-// NewServer builds the sandboxd MCP server: the 7 sandbox tools over m.
+// NewServer builds the sandboxd MCP server: the 8 sandbox tools over m.
 // Tool names are unprefixed — the gateway namespaces them (sandbox__*).
-// Every handler first pops the reserved __rt_tenant argument the gateway
-// injects (present-but-empty ⇒ "default", the gateway's open mode), so
-// tenancy never appears in any schema and the model can never choose its
-// own tenant.
+// Every handler first pops the reserved __rt_tenant and __rt_session
+// arguments the gateway injects (present-but-empty tenant ⇒ "default", the
+// gateway's open mode), so tenancy and session scoping never appear in any
+// schema and the model can never choose its own tenant or session.
 //
 // When allowDirect is false, an ABSENT __rt_tenant key fails closed: the
 // gateway always injects the key for forward_tenant upstreams (open mode
@@ -67,20 +67,20 @@ func execOut(res ExecResult) map[string]any {
 func NewServer(m *Manager, allowDirect bool) *sdk.Server {
 	srv := sdk.NewServer(&sdk.Implementation{Name: "runtime-sandbox", Version: "m1"}, nil)
 
-	add := func(name, desc, schema string, h func(ctx context.Context, tenant string, args json.RawMessage) (any, error)) {
+	add := func(name, desc, schema string, h func(ctx context.Context, tenant, session string, args json.RawMessage) (any, error)) {
 		srv.AddTool(&sdk.Tool{
 			Name:        name,
 			Description: desc,
 			InputSchema: json.RawMessage(schema),
 		}, func(ctx context.Context, req *sdk.CallToolRequest) (*sdk.CallToolResult, error) {
-			tenant, present, rest, err := popTenant(req.Params.Arguments)
+			tenant, present, session, rest, err := popReserved(req.Params.Arguments)
 			if err != nil {
 				return errResult("invalid arguments: " + err.Error()), nil
 			}
 			if !present && !allowDirect {
 				return errResult("missing gateway tenant: sandboxd must be served behind the platform gateway with forward_tenant: true (or set RUNTIME_SANDBOX_ALLOW_DIRECT=1 for single-tenant direct use)"), nil
 			}
-			out, err := h(ctx, tenant, rest)
+			out, err := h(ctx, tenant, session, rest)
 			if err != nil {
 				return errResult(err.Error()), nil
 			}
@@ -97,8 +97,8 @@ func NewServer(m *Manager, allowDirect bool) *sdk.Server {
 	add("create_sandbox",
 		"Create an isolated code-execution sandbox (Python 3.12 + numpy/pandas/matplotlib; no network access). Returns a sandbox_id for use with the other sandbox tools."+persistNote,
 		`{"type":"object","properties":{}}`,
-		func(ctx context.Context, tenant string, _ json.RawMessage) (any, error) {
-			s, err := m.Create(ctx, tenant)
+		func(ctx context.Context, tenant, session string, _ json.RawMessage) (any, error) {
+			s, err := m.Create(ctx, tenant, session)
 			if err != nil {
 				return nil, err
 			}
@@ -115,7 +115,7 @@ func NewServer(m *Manager, allowDirect bool) *sdk.Server {
 			"code":{"type":"string","description":"Python source to execute"},
 			"timeout_s":{"type":"integer","description":"wall-clock timeout in seconds (default 30, max 120)"}
 		},"required":["sandbox_id","code"]}`,
-		func(ctx context.Context, tenant string, raw json.RawMessage) (any, error) {
+		func(ctx context.Context, tenant, session string, raw json.RawMessage) (any, error) {
 			var a struct {
 				SandboxID string `json:"sandbox_id"`
 				Code      string `json:"code"`
@@ -127,7 +127,7 @@ func NewServer(m *Manager, allowDirect bool) *sdk.Server {
 			if a.SandboxID == "" || a.Code == "" {
 				return nil, errMissing("sandbox_id, code")
 			}
-			res, err := m.ExecCode(ctx, tenant, a.SandboxID, a.Code, a.TimeoutS)
+			res, err := m.ExecCode(ctx, tenant, session, a.SandboxID, a.Code, a.TimeoutS)
 			if err != nil {
 				return nil, err
 			}
@@ -141,7 +141,7 @@ func NewServer(m *Manager, allowDirect bool) *sdk.Server {
 			"command":{"type":"string","description":"shell command to run"},
 			"timeout_s":{"type":"integer","description":"wall-clock timeout in seconds (default 30, max 120)"}
 		},"required":["sandbox_id","command"]}`,
-		func(ctx context.Context, tenant string, raw json.RawMessage) (any, error) {
+		func(ctx context.Context, tenant, session string, raw json.RawMessage) (any, error) {
 			var a struct {
 				SandboxID string `json:"sandbox_id"`
 				Command   string `json:"command"`
@@ -153,7 +153,7 @@ func NewServer(m *Manager, allowDirect bool) *sdk.Server {
 			if a.SandboxID == "" || a.Command == "" {
 				return nil, errMissing("sandbox_id, command")
 			}
-			res, err := m.ExecCommand(ctx, tenant, a.SandboxID, a.Command, a.TimeoutS)
+			res, err := m.ExecCommand(ctx, tenant, session, a.SandboxID, a.Command, a.TimeoutS)
 			if err != nil {
 				return nil, err
 			}
@@ -167,7 +167,7 @@ func NewServer(m *Manager, allowDirect bool) *sdk.Server {
 			"path":{"type":"string","description":"file path under /workspace"},
 			"content":{"type":"string","description":"file content"}
 		},"required":["sandbox_id","path","content"]}`,
-		func(ctx context.Context, tenant string, raw json.RawMessage) (any, error) {
+		func(ctx context.Context, tenant, session string, raw json.RawMessage) (any, error) {
 			var a struct {
 				SandboxID string  `json:"sandbox_id"`
 				Path      string  `json:"path"`
@@ -181,7 +181,7 @@ func NewServer(m *Manager, allowDirect bool) *sdk.Server {
 			if a.SandboxID == "" || a.Path == "" || a.Content == nil {
 				return nil, errMissing("sandbox_id, path, content")
 			}
-			if err := m.WriteFile(ctx, tenant, a.SandboxID, a.Path, []byte(*a.Content)); err != nil {
+			if err := m.WriteFile(ctx, tenant, session, a.SandboxID, a.Path, []byte(*a.Content)); err != nil {
 				return nil, err
 			}
 			return map[string]any{"path": a.Path, "bytes": len(*a.Content)}, nil
@@ -193,7 +193,7 @@ func NewServer(m *Manager, allowDirect bool) *sdk.Server {
 			"sandbox_id":{"type":"string","description":"id from create_sandbox"},
 			"path":{"type":"string","description":"file path under /workspace"}
 		},"required":["sandbox_id","path"]}`,
-		func(ctx context.Context, tenant string, raw json.RawMessage) (any, error) {
+		func(ctx context.Context, tenant, session string, raw json.RawMessage) (any, error) {
 			var a struct {
 				SandboxID string `json:"sandbox_id"`
 				Path      string `json:"path"`
@@ -204,7 +204,7 @@ func NewServer(m *Manager, allowDirect bool) *sdk.Server {
 			if a.SandboxID == "" || a.Path == "" {
 				return nil, errMissing("sandbox_id, path")
 			}
-			content, truncated, err := m.ReadFile(ctx, tenant, a.SandboxID, a.Path)
+			content, truncated, err := m.ReadFile(ctx, tenant, session, a.SandboxID, a.Path)
 			if err != nil {
 				return nil, err
 			}
@@ -218,8 +218,8 @@ func NewServer(m *Manager, allowDirect bool) *sdk.Server {
 	add("list_sandboxes",
 		"List your live sandboxes with their creation, last-use and expiry times.",
 		`{"type":"object","properties":{}}`,
-		func(_ context.Context, tenant string, _ json.RawMessage) (any, error) {
-			sessions := m.List(tenant)
+		func(_ context.Context, tenant, session string, _ json.RawMessage) (any, error) {
+			sessions := m.List(tenant, session)
 			boxes := make([]map[string]any, 0, len(sessions)) // [] not null
 			for _, s := range sessions {
 				boxes = append(boxes, map[string]any{
@@ -237,7 +237,7 @@ func NewServer(m *Manager, allowDirect bool) *sdk.Server {
 		`{"type":"object","properties":{
 			"sandbox_id":{"type":"string","description":"id from create_sandbox"}
 		},"required":["sandbox_id"]}`,
-		func(ctx context.Context, tenant string, raw json.RawMessage) (any, error) {
+		func(ctx context.Context, tenant, session string, raw json.RawMessage) (any, error) {
 			var a struct {
 				SandboxID string `json:"sandbox_id"`
 			}
@@ -247,7 +247,17 @@ func NewServer(m *Manager, allowDirect bool) *sdk.Server {
 			if a.SandboxID == "" {
 				return nil, errMissing("sandbox_id")
 			}
-			if err := m.Close(ctx, tenant, a.SandboxID); err != nil {
+			if err := m.Close(ctx, tenant, session, a.SandboxID); err != nil {
+				return nil, err
+			}
+			return map[string]any{"closed": true}, nil
+		})
+
+	add("close_session",
+		"Close all sandboxes created in the current agent session and discard their /workspace contents. Called automatically at session end; agents rarely need this directly. Idempotent.",
+		`{"type":"object","properties":{}}`,
+		func(ctx context.Context, tenant, session string, _ json.RawMessage) (any, error) {
+			if err := m.CloseSession(ctx, tenant, session); err != nil {
 				return nil, err
 			}
 			return map[string]any{"closed": true}, nil
