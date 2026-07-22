@@ -22,6 +22,11 @@
 //	RUNTIME_BROWSER_EGRESS_ALLOW    comma-separated hostname globs (allow-list mode)
 //	RUNTIME_BROWSER_PROXY_ADDR      host:port the egress proxy listens on (default 0.0.0.0:0 → ephemeral, all interfaces). Binding all interfaces is safe: the proxy is Policy-gated (deny-all by default) so it only ever grants policy-permitted egress, and the container reaches it via host.docker.internal. Pin to a specific IP (e.g. the docker bridge gateway) to tighten the bind.
 //	RUNTIME_BROWSER_ALLOW_DIRECT    "1" ⇒ accept calls without the gateway's __rt_tenant key
+//	RUNTIME_BROWSER_SCOPE           "session" ⇒ key browsers by (tenant, session,
+//	                                id) so a handle is invisible to other sessions
+//	                                of the same tenant, and close_session reaps a
+//	                                session's browsers at session end. Any other
+//	                                value (default) ⇒ tenant-scoped (today's behavior).
 //	RUNTIME_BROWSER_FAKE            "1" ⇒ in-memory fake backend (tests only)
 package main
 
@@ -144,10 +149,11 @@ func main() {
 	}
 
 	m := browser.NewManager(be, browser.Config{
-		MaxPerTenant: envInt("RUNTIME_BROWSER_MAX_PER_TENANT", 5),
-		IdleTTL:      envDur("RUNTIME_BROWSER_IDLE_TTL", 10*time.Minute),
-		MaxLifetime:  envDur("RUNTIME_BROWSER_MAX_LIFETIME", time.Hour),
-		ProxyAddr:    actualProxyAddr,
+		MaxPerTenant:  envInt("RUNTIME_BROWSER_MAX_PER_TENANT", 5),
+		IdleTTL:       envDur("RUNTIME_BROWSER_IDLE_TTL", 10*time.Minute),
+		MaxLifetime:   envDur("RUNTIME_BROWSER_MAX_LIFETIME", time.Hour),
+		ProxyAddr:     actualProxyAddr,
+		SessionScoped: os.Getenv("RUNTIME_BROWSER_SCOPE") == "session",
 	})
 
 	ctx := context.Background()
