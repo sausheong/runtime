@@ -74,7 +74,7 @@ func NewServer(m *Manager, allowDirect bool) *sdk.Server {
 		"Create an isolated headless-browser sandbox (Chromium). Returns a browser_id for the other browser tools. Network access is governed by the platform egress policy."+sessionNote,
 		`{"type":"object","properties":{}}`,
 		func(ctx context.Context, tenant string, _ json.RawMessage) (*sdk.CallToolResult, error) {
-			s, err := m.Create(ctx, tenant)
+			s, err := m.Create(ctx, tenant, "") // TODO(P3.2 T7): thread real session via popReserved
 			if err != nil {
 				return nil, err
 			}
@@ -105,7 +105,7 @@ func NewServer(m *Manager, allowDirect bool) *sdk.Server {
 			if err := validateNavURL(a.URL); err != nil {
 				return nil, err
 			}
-			s, err := m.Lookup(tenant, a.BrowserID)
+			s, err := m.Lookup(tenant, "", a.BrowserID) // TODO(P3.2 T7): thread real session via popReserved
 			if err != nil {
 				return nil, err
 			}
@@ -134,7 +134,7 @@ func NewServer(m *Manager, allowDirect bool) *sdk.Server {
 			if in.BrowserID == "" || in.Selector == "" {
 				return nil, errMissing("browser_id, selector")
 			}
-			s, err := m.Lookup(tenant, in.BrowserID)
+			s, err := m.Lookup(tenant, "", in.BrowserID) // TODO(P3.2 T7): thread real session via popReserved
 			if err != nil {
 				return nil, err
 			}
@@ -161,7 +161,7 @@ func NewServer(m *Manager, allowDirect bool) *sdk.Server {
 			if in.BrowserID == "" || in.Selector == "" || in.Text == nil {
 				return nil, errMissing("browser_id, selector, text")
 			}
-			s, err := m.Lookup(tenant, in.BrowserID)
+			s, err := m.Lookup(tenant, "", in.BrowserID) // TODO(P3.2 T7): thread real session via popReserved
 			if err != nil {
 				return nil, err
 			}
@@ -187,7 +187,7 @@ func NewServer(m *Manager, allowDirect bool) *sdk.Server {
 			if in.BrowserID == "" {
 				return nil, errMissing("browser_id")
 			}
-			s, err := m.Lookup(tenant, in.BrowserID)
+			s, err := m.Lookup(tenant, "", in.BrowserID) // TODO(P3.2 T7): thread real session via popReserved
 			if err != nil {
 				return nil, err
 			}
@@ -214,7 +214,7 @@ func NewServer(m *Manager, allowDirect bool) *sdk.Server {
 			if in.BrowserID == "" {
 				return nil, errMissing("browser_id")
 			}
-			s, err := m.Lookup(tenant, in.BrowserID)
+			s, err := m.Lookup(tenant, "", in.BrowserID) // TODO(P3.2 T7): thread real session via popReserved
 			if err != nil {
 				return nil, err
 			}
@@ -238,7 +238,7 @@ func NewServer(m *Manager, allowDirect bool) *sdk.Server {
 			if in.BrowserID == "" {
 				return nil, errMissing("browser_id")
 			}
-			s, err := m.Lookup(tenant, in.BrowserID)
+			s, err := m.Lookup(tenant, "", in.BrowserID) // TODO(P3.2 T7): thread real session via popReserved
 			if err != nil {
 				return nil, err
 			}
@@ -268,7 +268,7 @@ func NewServer(m *Manager, allowDirect bool) *sdk.Server {
 			if in.BrowserID == "" || in.Script == "" {
 				return nil, errMissing("browser_id, script")
 			}
-			s, err := m.Lookup(tenant, in.BrowserID)
+			s, err := m.Lookup(tenant, "", in.BrowserID) // TODO(P3.2 T7): thread real session via popReserved
 			if err != nil {
 				return nil, err
 			}
@@ -283,7 +283,7 @@ func NewServer(m *Manager, allowDirect bool) *sdk.Server {
 		"List your live browser sandboxes with their timestamps and current URL.",
 		`{"type":"object","properties":{}}`,
 		func(_ context.Context, tenant string, _ json.RawMessage) (*sdk.CallToolResult, error) {
-			sessions := m.List(tenant)
+			sessions := m.List(tenant, "") // TODO(P3.2 T7): thread real session via popReserved
 			out := make([]map[string]any, 0, len(sessions))
 			for i := range sessions {
 				s := &sessions[i]
@@ -309,7 +309,7 @@ func NewServer(m *Manager, allowDirect bool) *sdk.Server {
 			if in.BrowserID == "" {
 				return nil, errMissing("browser_id")
 			}
-			if err := m.Close(ctx, tenant, in.BrowserID); err != nil {
+			if err := m.Close(ctx, tenant, "", in.BrowserID); err != nil { // TODO(P3.2 T7): thread real session via popReserved
 				return nil, err
 			}
 			return jsonResult(map[string]any{"closed": true})

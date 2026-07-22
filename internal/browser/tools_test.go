@@ -79,7 +79,7 @@ func TestCreateBrowserToolFakeBackend(t *testing.T) {
 	// Direct Manager check stands in for the create_browser handler path
 	// (the fake backend has no CDP endpoint, so action tools can't run, but
 	// create/list/close lifecycle works).
-	s, err := m.Create(context.Background(), "default")
+	s, err := m.Create(context.Background(), "default", "")
 	if err != nil {
 		t.Fatal(err)
 	}
