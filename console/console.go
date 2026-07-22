@@ -94,7 +94,12 @@ type Onboarding struct {
 	Quotas       controlplane.QuotaStore    // gateway rate-quota store; nil ⇒ section hidden
 	EvalStore    eval.EvalStore             // golden-set store; nil ⇒ section hidden
 	EvalPolicies eval.PolicyStoreAPI        // per-agent online-eval policy store; nil ⇒ section hidden
-	CredType     controlplane.CredTypeFunc  // broker-backed cred-type lookup; nil ⇒ oauth2-on-openapi check skipped
+	// Eval-run launch deps (observability page). A nil EvalStore hides the whole
+	// eval-runs section; Invoker/Judge/SignalCtx are only consulted at launch.
+	EvalInvoker   eval.Invoker              // registry-backed agent invoker for launched runs
+	EvalJudge     eval.Judge                // optional LLM judge (nil ⇒ judge cases fail-the-case)
+	EvalSignalCtx context.Context           // server signal ctx: a launched run outlives the request
+	CredType      controlplane.CredTypeFunc // broker-backed cred-type lookup; nil ⇒ oauth2-on-openapi check skipped
 }
 
 // Handler returns the console's HTTP handler. The read-only views render the
@@ -236,6 +241,7 @@ func Handler(reg *controlplane.Registry, st store.Store, oidc OIDCConfig, onb *O
 	mux.HandleFunc("GET /ui/observability", func(w http.ResponseWriter, r *http.Request) {
 		agents := visibleAgents(r, reg)
 		fleet := buildFleetObs(r.Context(), reg, aclient, httpProbe, agents)
+		data := map[string]any{"Fleet": fleet, "Agents": agents}
 		if onb != nil {
 			// onb is non-nil only when identity is on, and IdentityMiddleware then
 			// always injects a principal on a successful request — so the else
@@ -243,11 +249,24 @@ func Handler(reg *controlplane.Registry, st store.Store, oidc OIDCConfig, onb *O
 			// kept for safety and to mirror principalCanSeeTenant's open-mode rule.
 			if p, ok := controlplane.PrincipalFromContext(r.Context()); ok {
 				fleet.Upstreams = onb.Mutator.Status(p.TenantID)
+				// Eval runs: the launch form + runs table, tenant-scoped. Only when a
+				// golden-set store is wired (nil ⇒ section hidden, never a panic).
+				if onb.EvalStore != nil {
+					runs, _ := onb.EvalStore.ListRuns(r.Context(), p.TenantID)
+					sets, _ := onb.EvalStore.ListSets(r.Context(), p.TenantID)
+					data["EvalRuns"] = runs
+					data["EvalSets"] = sets
+					data["EvalRunsEnabled"] = true
+					// The launch form is a state-changing POST → carry a CSRF token
+					// bound to this session (the observability GET otherwise has none).
+					data["CSRF"] = csrf.issue(sessionValue(r))
+				}
 			} else {
 				fleet.Upstreams = onb.Mutator.Status("")
 			}
+			data["Fleet"] = fleet
 		}
-		render(w, "observability.html", map[string]any{"Fleet": fleet})
+		render(w, "observability.html", data)
 	})
 
 	mux.HandleFunc("GET /ui/agents/{id}", func(w http.ResponseWriter, r *http.Request) {
@@ -659,6 +678,72 @@ func Handler(reg *controlplane.Registry, st store.Store, oidc OIDCConfig, onb *O
 			}))
 		}
 
+		// Eval runs (observability page): launch a golden-set run against an agent,
+		// then drill into its per-case results. Mounted only when the golden-set
+		// store is wired. The launch mirrors the /admin/evals/runs create sequence:
+		// validate set exists + agent visible, mint a run id, CreateRun, then run
+		// asynchronously on the SIGNAL ctx (a run must outlive the request).
+		if onb.EvalStore != nil {
+			mux.HandleFunc("POST /ui/observability/eval-runs", guard(func(p identity.Principal, w http.ResponseWriter, r *http.Request) {
+				set := r.FormValue("set")
+				agent := r.FormValue("agent")
+				if set == "" || agent == "" {
+					http.Error(w, "set and agent required", http.StatusBadRequest)
+					return
+				}
+				// The set must exist under the caller's tenant.
+				if _, found, err := onb.EvalStore.GetSet(r.Context(), p.TenantID, set); err != nil {
+					http.Error(w, "get set failed", http.StatusInternalServerError)
+					return
+				} else if !found {
+					http.Error(w, "unknown set", http.StatusBadRequest)
+					return
+				}
+				// The agent must be visible to the caller (own tenant, or superuser).
+				info, ok := reg.Get(agent)
+				if !ok || !(p.Superuser || info.Tenant == p.TenantID) {
+					http.Error(w, "unknown or invisible agent", http.StatusBadRequest)
+					return
+				}
+				id, err := controlplane.MintEvalRunID()
+				if err != nil {
+					http.Error(w, "mint run id failed", http.StatusInternalServerError)
+					return
+				}
+				if err := onb.EvalStore.CreateRun(r.Context(), eval.Run{
+					RunID: id, Tenant: p.TenantID, SetName: set, AgentID: agent, Status: eval.StatusPending,
+				}); err != nil {
+					http.Error(w, "create run failed", http.StatusInternalServerError)
+					return
+				}
+				// Launch on the server signal ctx (nil-safe metrics), never r.Context():
+				// the goroutine must outlive this request.
+				go eval.Execute(onb.EvalSignalCtx, onb.EvalStore, onb.EvalInvoker, onb.EvalJudge, id, nil)
+				observabilityRedirect(w, r)
+			}))
+
+			// Per-run results drill-in. GET (not state-changing) so no CSRF, but a
+			// principal is required and a cross-tenant run 404s (no oracle).
+			mux.HandleFunc("GET /ui/observability/eval-runs/{id}", func(w http.ResponseWriter, r *http.Request) {
+				p, ok := controlplane.PrincipalFromContext(r.Context())
+				if !ok {
+					http.NotFound(w, r)
+					return
+				}
+				run, found, err := onb.EvalStore.GetRun(r.Context(), r.PathValue("id"))
+				if err != nil {
+					http.Error(w, "get run failed", http.StatusInternalServerError)
+					return
+				}
+				if !found || !(p.Superuser || run.Tenant == p.TenantID) {
+					http.NotFound(w, r)
+					return
+				}
+				results, _ := onb.EvalStore.ListResults(r.Context(), run.RunID)
+				render(w, "eval-run.html", map[string]any{"Run": run, "Results": results})
+			})
+		}
+
 		// Managed agents: register/deregister/enable/disable/re-attach remote
 		// agents at runtime. Mounted only when the store + live manager exist.
 		if onb.Agents != nil && onb.AgentMgr != nil {
@@ -733,6 +818,12 @@ func sessionValue(r *http.Request) string {
 func flashRedirect(w http.ResponseWriter, r *http.Request, msg string) {
 	http.SetCookie(w, &http.Cookie{Name: "rt_flash", Value: msg, Path: "/ui/onboarding", MaxAge: 30, HttpOnly: true, SameSite: http.SameSiteLaxMode})
 	http.Redirect(w, r, "/ui/onboarding", http.StatusSeeOther)
+}
+
+// observabilityRedirect performs POST-redirect-GET back to the observability
+// page after a launch, so a browser refresh does not re-submit the run.
+func observabilityRedirect(w http.ResponseWriter, r *http.Request) {
+	http.Redirect(w, r, "/ui/observability", http.StatusSeeOther)
 }
 
 // splitScopes parses the oauth2 scopes form field, which lets an admin separate

@@ -483,24 +483,29 @@ func main() {
 			slog.Error("eval policy store init failed", "err", perr)
 			os.Exit(1)
 		}
+		// Built before the onboarding literal so the console's eval-run launch form
+		// (observability page) shares the same invoker/judge as the /admin path.
+		evalInvoker := controlplane.NewEvalInvoker(reg)
+		evalJudge, _ := eval.NewJudgeFromEnv()
 		if gwManager != nil {
 			gwMut = gwManager
 			onb = &console.Onboarding{
-				Upstreams:    gwStore,
-				Mutator:      gwManager,
-				Admin:        idStore,
-				Secrets:      secretAdmin,
-				Agents:       agentStore,
-				AgentMgr:     agentManager,
-				Policies:     polAdmin,    // nil interface when the policy engine is off
-				Quotas:       quotaAdmin,  // nil interface when quotas are off ⇒ panel hidden
-				EvalStore:    evalStore,   // golden-set store ⇒ eval-sets panel
-				EvalPolicies: policyStore, // per-agent online-eval policy store ⇒ online-policies panel
-				CredType:     credType,    // nil when brokering is off ⇒ check skipped
+				Upstreams:     gwStore,
+				Mutator:       gwManager,
+				Admin:         idStore,
+				Secrets:       secretAdmin,
+				Agents:        agentStore,
+				AgentMgr:      agentManager,
+				Policies:      polAdmin,    // nil interface when the policy engine is off
+				Quotas:        quotaAdmin,  // nil interface when quotas are off ⇒ panel hidden
+				EvalStore:     evalStore,   // golden-set store ⇒ eval-sets panel + eval-runs section
+				EvalPolicies:  policyStore, // per-agent online-eval policy store ⇒ online-policies panel
+				EvalInvoker:   evalInvoker, // registry-backed invoker for launched runs
+				EvalJudge:     evalJudge,   // optional LLM judge (nil when unconfigured)
+				EvalSignalCtx: ctx,         // server signal ctx: a launched run outlives the request
+				CredType:      credType,    // nil when brokering is off ⇒ check skipped
 			}
 		}
-		evalInvoker := controlplane.NewEvalInvoker(reg)
-		evalJudge, _ := eval.NewJudgeFromEnv()
 		reg.SetPolicyResolver(controlplane.NewPolicyResolver(policyStore))
 		root := buildRoot(rootOptions{
 			Registry: reg, AdminStore: idStore, ConsoleOIDC: consoleOIDC,

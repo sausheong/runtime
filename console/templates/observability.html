@@ -61,5 +61,46 @@
     </table>
   </section>
   {{end}}
+
+  {{if .EvalRunsEnabled}}
+  <section class="card">
+    <h2>Eval runs</h2>
+    <p class="subtitle">Run a golden set against an agent, then drill into per-case results.</p>
+    <form method="post" action="/ui/observability/eval-runs" class="inline-form">
+      <input type="hidden" name="csrf_token" value="{{.CSRF}}">
+      <label>Golden set
+        <select name="set" required>
+          {{range .EvalSets}}<option value="{{.Name}}">{{.Name}} ({{len .Cases}} cases)</option>{{else}}<option value="" disabled>No sets — add one in Onboarding</option>{{end}}
+        </select>
+      </label>
+      <label>Agent
+        <select name="agent" required>
+          {{range .Agents}}<option value="{{.ID}}">{{.ID}}{{if .Name}} — {{.Name}}{{end}}</option>{{else}}<option value="" disabled>No visible agents</option>{{end}}
+        </select>
+      </label>
+      <button type="submit">Launch run</button>
+    </form>
+    <table>
+      <thead><tr><th>Run</th><th>Set</th><th>Agent</th><th>Status</th><th>Score</th><th>Created</th></tr></thead>
+      <tbody>
+      {{range .EvalRuns}}<tr>
+        <td><a href="/ui/observability/eval-runs/{{.RunID}}" class="mono">{{.RunID}}</a></td>
+        <td>{{.SetName}}</td>
+        <td class="mono">{{.AgentID}}</td>
+        <td>
+          {{if eq .Status "completed"}}<span class="badge badge-ok">completed</span>
+          {{else if eq .Status "running"}}<span class="badge badge-muted">running</span>
+          {{else if eq .Status "error"}}<span class="badge badge-danger">error</span>
+          {{else}}<span class="badge badge-muted">{{.Status}}</span>{{end}}
+        </td>
+        <td>{{if eq .Status "completed"}}{{.Passed}}/{{.Total}}{{else}}—{{end}}</td>
+        <td class="subtitle">{{.CreatedAt.Format "2006-01-02 15:04"}}</td>
+      </tr>{{else}}
+        <tr><td colspan="6" class="empty">No runs yet — launch one above.</td></tr>
+      {{end}}
+      </tbody>
+    </table>
+  </section>
+  {{end}}
 </main>
 </body></html>

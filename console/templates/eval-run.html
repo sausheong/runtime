@@ -1,0 +1,49 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Runtime — Eval run {{.Run.RunID}}</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="/ui/static/style.css"></head><body>
+<header class="topbar">
+  <a class="brand" href="/ui"><span class="logo">R</span> Runtime</a>
+  <nav>
+    <a href="/ui">Agents</a>
+    <a href="/ui/observability">Observability</a>
+    <a href="/ui/onboarding">Onboarding</a>
+    <form method="post" action="/ui/logout"><button type="submit" class="navbtn">Sign out</button></form>
+  </nav>
+</header>
+<main class="container">
+  <div class="page-head">
+    <h1>Eval run <span class="mono">{{.Run.RunID}}</span></h1>
+    <p class="subtitle"><a href="/ui/observability">&larr; Back to observability</a></p>
+  </div>
+
+  <section class="card">
+    <h2>Summary</h2>
+    <div class="row">
+      <div class="stat"><div class="stat-num">{{.Run.SetName}}</div><div class="stat-label">Set</div></div>
+      <div class="stat"><div class="stat-num">{{.Run.AgentID}}</div><div class="stat-label">Agent</div></div>
+      <div class="stat"><div class="stat-num">{{.Run.Status}}</div><div class="stat-label">Status</div></div>
+      <div class="stat"><div class="stat-num">{{.Run.Passed}}/{{.Run.Total}}</div><div class="stat-label">Passed</div></div>
+    </div>
+    {{if .Run.Error}}<p class="subtitle">Error: {{.Run.Error}}</p>{{end}}
+  </section>
+
+  <section class="card">
+    <h2>Results</h2>
+    <table>
+      <thead><tr><th>#</th><th>Input</th><th>Output</th><th>Scorer</th><th>Passed</th><th>Detail</th></tr></thead>
+      <tbody>
+      {{range .Results}}<tr>
+        <td>{{.CaseIndex}}</td>
+        <td>{{.Input}}</td>
+        <td>{{.Output}}</td>
+        <td><span class="badge badge-muted">{{.Scorer}}</span></td>
+        <td>{{if .Passed}}<span class="badge badge-ok">pass</span>{{else}}<span class="badge badge-danger">fail</span>{{end}}</td>
+        <td class="subtitle">{{.Detail}}</td>
+      </tr>{{else}}
+        <tr><td colspan="6" class="empty">No results yet — the run may still be pending or running.</td></tr>
+      {{end}}
+      </tbody>
+    </table>
+  </section>
+</main>
+</body></html>
