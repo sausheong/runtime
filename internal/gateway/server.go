@@ -204,6 +204,13 @@ func (h *Handler) HTTP() http.Handler {
 				}
 			}
 		}
+		// Session id for session-scoped sandbox/browser upstreams. Not a
+		// secret, not verified: it only selects an isolation bucket, so it is
+		// forwarded as received (no re-verification, no store lookup). Absent
+		// header ⇒ nothing landed ⇒ upstream falls back to tenant scope.
+		if sess := r.Header.Get(rheader.Session); sess != "" {
+			r = r.WithContext(WithSessionForward(r.Context(), sess))
+		}
 		mcp.ServeHTTP(w, r)
 	})
 }
@@ -346,6 +353,17 @@ func (h *Handler) toolHandler(builtFor string, t tool.Tool, forwardTenant bool, 
 				return errResult("invalid arguments: " + err.Error()), nil
 			}
 			args = injected
+			// Session bucket for session-scoped sandbox/browser tools. Injected on
+			// the SAME upstreams that get tenant, and only when the caller forwarded
+			// a session id. Session is not policy-relevant, so like tenant this runs
+			// AFTER the policy/quota gates (policies see the agent's raw args).
+			if sess, sok := SessionForwardFrom(ctx); sok && sess != "" {
+				injected, err = injectSession(args, sess)
+				if err != nil {
+					return errResult("invalid arguments: " + err.Error()), nil
+				}
+				args = injected
+			}
 		}
 		serverName, _, _ := strings.Cut(t.Name(), "__") // sound: "__" banned in server names
 		// Per-call header enrichment (OpenAPI upstreams): resolve the principal's

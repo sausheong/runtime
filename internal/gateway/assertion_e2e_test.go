@@ -89,9 +89,9 @@ func (o *observerTool) captured() landed {
 }
 
 // fixedAssertionRoundTripper sets X-Runtime-Assertion to a fixed value (mirrors
-// Task 5's assertionRoundTripper, but with a test-controlled fixed value so each
-// case can drive an exact inbound header). An empty value sets no header — the
-// "no header" case.
+// gatewayRoundTripper, but with a test-controlled fixed value so each case can
+// drive an exact inbound header). An empty value sets no header — the "no
+// header" case.
 type fixedAssertionRoundTripper struct {
 	base  http.RoundTripper
 	value string
