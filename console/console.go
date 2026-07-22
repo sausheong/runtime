@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/sausheong/runtime/controlplane"
 	"github.com/sausheong/runtime/internal/agentstore"
@@ -250,6 +251,21 @@ func Handler(reg *controlplane.Registry, st store.Store, oidc OIDCConfig, onb *O
 			// kept for safety and to mirror principalCanSeeTenant's open-mode rule.
 			if p, ok := controlplane.PrincipalFromContext(r.Context()); ok {
 				fleet.Upstreams = onb.Mutator.Status(p.TenantID)
+				// Eval read-only views: recent online-eval results (tenant-scoped by
+				// the store) and per-agent failure-category counts (scoped by looping
+				// only the caller's visible agents). st is nil in some console wirings
+				// (e.g. onboarding-only tests) — guard it so the page still renders.
+				if st != nil {
+					online, _ := st.ListOnlineResultsByTenant(r.Context(), p.TenantID, 100)
+					data["OnlineResults"] = online
+					failures := map[string]map[string]int{} // agent -> category -> count
+					for _, a := range agents {              // agents == visible to this principal
+						if bd, err := st.FailureBreakdownByAgent(r.Context(), a.ID, time.Time{}); err == nil && len(bd) > 0 {
+							failures[a.ID] = bd
+						}
+					}
+					data["Failures"] = failures
+				}
 				// Eval runs: the launch form + runs table, tenant-scoped. Only when a
 				// golden-set store is wired (nil ⇒ section hidden, never a panic).
 				if onb.EvalStore != nil {

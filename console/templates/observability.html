@@ -102,5 +102,41 @@
     </table>
   </section>
   {{end}}
+
+  <section class="card">
+    <h2>Online eval results</h2>
+    <p class="subtitle">Recent per-session online-eval outcomes, newest first.</p>
+    <table>
+      <thead><tr><th>Session</th><th>Criterion</th><th>Scorer</th><th>Result</th><th>Actor</th><th>When</th></tr></thead>
+      <tbody>
+      {{range .OnlineResults}}<tr>
+        <td class="mono">{{.SessionID}}</td>
+        <td>{{.Criterion}}</td>
+        <td><span class="badge badge-muted">{{.Scorer}}</span></td>
+        <td>{{if .Passed}}<span class="badge badge-ok">pass</span>{{else}}<span class="badge badge-danger">fail</span>{{end}}</td>
+        <td class="subtitle">{{.Actor}}</td>
+        <td class="subtitle">{{.CreatedAt.Format "2006-01-02 15:04"}}</td>
+      </tr>{{else}}
+        <tr><td colspan="6" class="empty">No online-eval results yet.</td></tr>
+      {{end}}
+      </tbody>
+    </table>
+  </section>
+
+  <section class="card">
+    <h2>Failure breakdown by agent</h2>
+    <p class="subtitle">Terminal failure categories per agent, all-time.</p>
+    <table>
+      <thead><tr><th>Agent</th><th>Failures by category</th></tr></thead>
+      <tbody>
+      {{range $agent, $cats := .Failures}}<tr>
+        <td class="mono">{{$agent}}</td>
+        <td>{{range $cat, $n := $cats}}<span class="badge badge-danger">{{$cat}}: {{$n}}</span> {{end}}</td>
+      </tr>{{else}}
+        <tr><td colspan="2" class="empty">No classified failures recorded.</td></tr>
+      {{end}}
+      </tbody>
+    </table>
+  </section>
 </main>
 </body></html>
