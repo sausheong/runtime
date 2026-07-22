@@ -249,6 +249,39 @@ func statusForReason(out turnOutput) string {
 	}
 }
 
+// closeSessionSandboxes best-effort tears down this session's sandbox and browser
+// containers at session end, by invoking the gateway close_session tools with the
+// session id on ctx (forwarded via X-Runtime-Session). Non-fatal: any failure is
+// logged and swallowed — the sandboxd/browserd idle/lifetime reaper is the backstop
+// (same rationale as reap-on-start backstopping a crashed daemon). A no-op for
+// agents without the sandbox/browser gateway upstreams (the tools are absent) or
+// in tenant-scoped deployments (the upstream CloseSession no-ops).
+//
+// sandboxd/browserd are separate stdio processes reached only via the gateway;
+// agentd has no in-process handle to their managers, so routing teardown through
+// the gateway close_session tool is the only path that respects the process
+// boundary and reuses the __rt_session injection plumbing.
+func (m *Manager) closeSessionSandboxes(sessionID string) {
+	if m.cfg.Tools == nil || sessionID == "" {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	ctx = identity.WithSession(ctx, sessionID)
+	for _, name := range []string{
+		"mcp__gateway__sandbox__close_session",
+		"mcp__gateway__browser__close_session",
+	} {
+		if _, ok := m.cfg.Tools.Get(name); !ok {
+			continue
+		}
+		if _, err := m.cfg.Tools.Execute(ctx, name, json.RawMessage(`{}`)); err != nil {
+			slog.Debug("session teardown: close_session failed (reaper is backstop)",
+				"session", sessionID, "tool", name, "err", err)
+		}
+	}
+}
+
 // sessionWorkflow is the durable per-session loop. Registered once; run with a
 // stable workflow id == the session id so a process restart recovers exactly
 // this workflow and replays completed turns from their checkpoints.
@@ -264,6 +297,11 @@ func (m *Manager) sessionWorkflow(ctx dbos.DBOSContext, in turnInput) (string, e
 		callerJWT, _ = v.(string)
 	}
 	defer m.assertions.Delete(wfID)
+	// Best-effort teardown of this session's sandbox/browser containers. A plain
+	// defer is correct: DBOS does not re-run a completed workflow body, and a
+	// mid-run panic that triggers this defer degrades exactly like a crashed
+	// daemon (the sandboxd/browserd reaper is the backstop).
+	defer m.closeSessionSandboxes(wfID)
 
 	// canonical is the authoritative session, rebuilt turn-by-turn from each
 	// turn step's checkpointed entries. It is mutated ONLY by applyEntries
