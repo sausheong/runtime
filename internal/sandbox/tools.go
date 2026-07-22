@@ -98,7 +98,8 @@ func NewServer(m *Manager, allowDirect bool) *sdk.Server {
 		"Create an isolated code-execution sandbox (Python 3.12 + numpy/pandas/matplotlib; no network access). Returns a sandbox_id for use with the other sandbox tools."+persistNote,
 		`{"type":"object","properties":{}}`,
 		func(ctx context.Context, tenant string, _ json.RawMessage) (any, error) {
-			s, err := m.Create(ctx, tenant)
+			// TODO(P3.2 T5): thread real session via popReserved
+			s, err := m.Create(ctx, tenant, "")
 			if err != nil {
 				return nil, err
 			}
@@ -127,7 +128,8 @@ func NewServer(m *Manager, allowDirect bool) *sdk.Server {
 			if a.SandboxID == "" || a.Code == "" {
 				return nil, errMissing("sandbox_id, code")
 			}
-			res, err := m.ExecCode(ctx, tenant, a.SandboxID, a.Code, a.TimeoutS)
+			// TODO(P3.2 T5): thread real session via popReserved
+			res, err := m.ExecCode(ctx, tenant, "", a.SandboxID, a.Code, a.TimeoutS)
 			if err != nil {
 				return nil, err
 			}
@@ -153,7 +155,8 @@ func NewServer(m *Manager, allowDirect bool) *sdk.Server {
 			if a.SandboxID == "" || a.Command == "" {
 				return nil, errMissing("sandbox_id, command")
 			}
-			res, err := m.ExecCommand(ctx, tenant, a.SandboxID, a.Command, a.TimeoutS)
+			// TODO(P3.2 T5): thread real session via popReserved
+			res, err := m.ExecCommand(ctx, tenant, "", a.SandboxID, a.Command, a.TimeoutS)
 			if err != nil {
 				return nil, err
 			}
@@ -181,7 +184,8 @@ func NewServer(m *Manager, allowDirect bool) *sdk.Server {
 			if a.SandboxID == "" || a.Path == "" || a.Content == nil {
 				return nil, errMissing("sandbox_id, path, content")
 			}
-			if err := m.WriteFile(ctx, tenant, a.SandboxID, a.Path, []byte(*a.Content)); err != nil {
+			// TODO(P3.2 T5): thread real session via popReserved
+			if err := m.WriteFile(ctx, tenant, "", a.SandboxID, a.Path, []byte(*a.Content)); err != nil {
 				return nil, err
 			}
 			return map[string]any{"path": a.Path, "bytes": len(*a.Content)}, nil
@@ -204,7 +208,8 @@ func NewServer(m *Manager, allowDirect bool) *sdk.Server {
 			if a.SandboxID == "" || a.Path == "" {
 				return nil, errMissing("sandbox_id, path")
 			}
-			content, truncated, err := m.ReadFile(ctx, tenant, a.SandboxID, a.Path)
+			// TODO(P3.2 T5): thread real session via popReserved
+			content, truncated, err := m.ReadFile(ctx, tenant, "", a.SandboxID, a.Path)
 			if err != nil {
 				return nil, err
 			}
@@ -219,7 +224,8 @@ func NewServer(m *Manager, allowDirect bool) *sdk.Server {
 		"List your live sandboxes with their creation, last-use and expiry times.",
 		`{"type":"object","properties":{}}`,
 		func(_ context.Context, tenant string, _ json.RawMessage) (any, error) {
-			sessions := m.List(tenant)
+			// TODO(P3.2 T5): thread real session via popReserved
+			sessions := m.List(tenant, "")
 			boxes := make([]map[string]any, 0, len(sessions)) // [] not null
 			for _, s := range sessions {
 				boxes = append(boxes, map[string]any{
@@ -247,7 +253,8 @@ func NewServer(m *Manager, allowDirect bool) *sdk.Server {
 			if a.SandboxID == "" {
 				return nil, errMissing("sandbox_id")
 			}
-			if err := m.Close(ctx, tenant, a.SandboxID); err != nil {
+			// TODO(P3.2 T5): thread real session via popReserved
+			if err := m.Close(ctx, tenant, "", a.SandboxID); err != nil {
 				return nil, err
 			}
 			return map[string]any{"closed": true}, nil

@@ -24,11 +24,82 @@ func testManager(t *testing.T) (*Manager, Backend, *time.Time) {
 	return m, be, &now
 }
 
+func testManagerScoped(t *testing.T) (*Manager, *time.Time) {
+	t.Helper()
+	be := NewFakeBackend()
+	now := time.Date(2026, 6, 10, 12, 0, 0, 0, time.UTC)
+	m := NewManager(be, Config{
+		MaxPerTenant: 5, IdleTTL: 10 * time.Minute, MaxLifetime: time.Hour,
+		ReadLimit: 1024, SessionScoped: true,
+	})
+	m.now = func() time.Time { return now }
+	return m, &now
+}
+
+func TestSessionScopedCrossSessionHidden(t *testing.T) {
+	ctx := context.Background()
+	m, _ := testManagerScoped(t)
+	s, err := m.Create(ctx, "acme", "sessA")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Same session: works.
+	if _, err := m.ExecCode(ctx, "acme", "sessA", s.ID, "print(1)", 0); err != nil {
+		t.Fatalf("same-session exec failed: %v", err)
+	}
+	// Different session, same tenant: hidden as not-found.
+	if _, err := m.ExecCode(ctx, "acme", "sessB", s.ID, "print(1)", 0); err == nil {
+		t.Fatal("cross-session exec should return errNoSandbox")
+	}
+}
+
+func TestSessionScopedListIsolation(t *testing.T) {
+	ctx := context.Background()
+	m, _ := testManagerScoped(t)
+	if _, err := m.Create(ctx, "acme", "sessA"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.Create(ctx, "acme", "sessB"); err != nil {
+		t.Fatal(err)
+	}
+	if got := m.List("acme", "sessA"); len(got) != 1 {
+		t.Fatalf("List(sessA) = %d, want 1", len(got))
+	}
+}
+
+func TestCloseSessionReapsOnlyTarget(t *testing.T) {
+	ctx := context.Background()
+	m, _ := testManagerScoped(t)
+	a, _ := m.Create(ctx, "acme", "sessA")
+	b, _ := m.Create(ctx, "acme", "sessB")
+	if err := m.CloseSession(ctx, "acme", "sessA"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.ExecCode(ctx, "acme", "sessA", a.ID, "x", 0); err == nil {
+		t.Fatal("sessA box should be gone")
+	}
+	if _, err := m.ExecCode(ctx, "acme", "sessB", b.ID, "print(1)", 0); err != nil {
+		t.Fatalf("sessB box should survive: %v", err)
+	}
+}
+
+func TestCloseSessionNoopWhenTenantScoped(t *testing.T) {
+	ctx := context.Background()
+	m, _, _ := testManager(t) // tenant-scoped
+	s, _ := m.Create(ctx, "acme", "")
+	if err := m.CloseSession(ctx, "acme", "anything"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.ExecCode(ctx, "acme", "", s.ID, "print(1)", 0); err != nil {
+		t.Fatalf("tenant-scoped box must survive CloseSession no-op: %v", err)
+	}
+}
+
 func TestCreateExecCloseRoundTrip(t *testing.T) {
 	ctx := context.Background()
 	m, _, _ := testManager(t)
 
-	s, err := m.Create(ctx, "acme")
+	s, err := m.Create(ctx, "acme", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -36,7 +107,7 @@ func TestCreateExecCloseRoundTrip(t *testing.T) {
 		t.Fatalf("bad id %q", s.ID)
 	}
 
-	res, err := m.ExecCode(ctx, "acme", s.ID, "print(1)", 0)
+	res, err := m.ExecCode(ctx, "acme", "", s.ID, "print(1)", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -44,13 +115,13 @@ func TestCreateExecCloseRoundTrip(t *testing.T) {
 		t.Fatalf("exec didn't run python3: %+v", res)
 	}
 
-	if err := m.Close(ctx, "acme", s.ID); err != nil {
+	if err := m.Close(ctx, "acme", "", s.ID); err != nil {
 		t.Fatal(err)
 	}
-	if err := m.Close(ctx, "acme", s.ID); err != nil {
+	if err := m.Close(ctx, "acme", "", s.ID); err != nil {
 		t.Fatal("second close should be nil (idempotent)")
 	}
-	if _, err := m.ExecCode(ctx, "acme", s.ID, "x", 0); err == nil {
+	if _, err := m.ExecCode(ctx, "acme", "", s.ID, "x", 0); err == nil {
 		t.Fatal("exec after close should fail")
 	}
 }
@@ -58,10 +129,10 @@ func TestCreateExecCloseRoundTrip(t *testing.T) {
 func TestCrossTenantHiddenAsNotFound(t *testing.T) {
 	ctx := context.Background()
 	m, _, _ := testManager(t)
-	s, _ := m.Create(ctx, "acme")
+	s, _ := m.Create(ctx, "acme", "")
 
-	_, errCross := m.ExecCode(ctx, "globex", s.ID, "x", 0)
-	_, errMissing := m.ExecCode(ctx, "globex", "sbx-doesnotexist", "x", 0)
+	_, errCross := m.ExecCode(ctx, "globex", "", s.ID, "x", 0)
+	_, errMissing := m.ExecCode(ctx, "globex", "", "sbx-doesnotexist", "x", 0)
 	if errCross == nil || errMissing == nil {
 		t.Fatal("both must error")
 	}
@@ -70,10 +141,10 @@ func TestCrossTenantHiddenAsNotFound(t *testing.T) {
 			errCross, errMissing)
 	}
 
-	if got := m.List("globex"); len(got) != 0 {
+	if got := m.List("globex", ""); len(got) != 0 {
 		t.Fatalf("globex sees %d sandboxes", len(got))
 	}
-	if got := m.List("acme"); len(got) != 1 {
+	if got := m.List("acme", ""); len(got) != 1 {
 		t.Fatalf("acme sees %d sandboxes", len(got))
 	}
 }
@@ -81,17 +152,17 @@ func TestCrossTenantHiddenAsNotFound(t *testing.T) {
 func TestPerTenantCap(t *testing.T) {
 	ctx := context.Background()
 	m, _, _ := testManager(t) // cap 2
-	if _, err := m.Create(ctx, "acme"); err != nil {
+	if _, err := m.Create(ctx, "acme", ""); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := m.Create(ctx, "acme"); err != nil {
+	if _, err := m.Create(ctx, "acme", ""); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := m.Create(ctx, "acme"); err == nil ||
+	if _, err := m.Create(ctx, "acme", ""); err == nil ||
 		!strings.Contains(err.Error(), "limit") {
 		t.Fatalf("third create should hit the cap, got %v", err)
 	}
-	if _, err := m.Create(ctx, "globex"); err != nil {
+	if _, err := m.Create(ctx, "globex", ""); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -125,7 +196,7 @@ func TestPerTenantCapUnderConcurrency(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			_, err := m.Create(ctx, "acme")
+			_, err := m.Create(ctx, "acme", "")
 			switch {
 			case err == nil:
 				ok.Add(1)
@@ -141,7 +212,7 @@ func TestPerTenantCapUnderConcurrency(t *testing.T) {
 	if ok.Load() != 2 || limited.Load() != 4 {
 		t.Fatalf("got %d successes / %d limit errors, want 2 / 4", ok.Load(), limited.Load())
 	}
-	if got := m.List("acme"); len(got) != 2 {
+	if got := m.List("acme", ""); len(got) != 2 {
 		t.Fatalf("manager tracks %d sessions, want 2", len(got))
 	}
 	ids, _ := be.ListLeftovers(ctx)
@@ -183,17 +254,17 @@ func TestCloseDuringCreateDoesNotLeakContainer(t *testing.T) {
 
 	errCh := make(chan error, 1)
 	go func() {
-		_, err := m.Create(ctx, "acme")
+		_, err := m.Create(ctx, "acme", "")
 		errCh <- err
 	}()
 
 	<-be.entered // be.Create is in flight; the reservation is visible
 
-	sessions := m.List("acme")
+	sessions := m.List("acme", "")
 	if len(sessions) != 1 {
 		t.Fatalf("expected 1 reserved session, got %d", len(sessions))
 	}
-	if err := m.Close(ctx, "acme", sessions[0].ID); err != nil {
+	if err := m.Close(ctx, "acme", "", sessions[0].ID); err != nil {
 		t.Fatal(err)
 	}
 
@@ -209,7 +280,7 @@ func TestCloseDuringCreateDoesNotLeakContainer(t *testing.T) {
 	if len(ids) != 0 {
 		t.Fatalf("container leaked: %v", ids)
 	}
-	if got := m.List("acme"); len(got) != 0 {
+	if got := m.List("acme", ""); len(got) != 0 {
 		t.Fatalf("manager still tracks %d sessions", len(got))
 	}
 }
@@ -239,15 +310,15 @@ func TestClampTimeout(t *testing.T) {
 func TestFilesConfinedAndLimited(t *testing.T) {
 	ctx := context.Background()
 	m, _, _ := testManager(t)
-	s, _ := m.Create(ctx, "acme")
+	s, _ := m.Create(ctx, "acme", "")
 
-	if err := m.WriteFile(ctx, "acme", s.ID, "../etc/passwd", []byte("x")); err == nil {
+	if err := m.WriteFile(ctx, "acme", "", s.ID, "../etc/passwd", []byte("x")); err == nil {
 		t.Fatal("escape should be rejected")
 	}
-	if err := m.WriteFile(ctx, "acme", s.ID, "big.txt", []byte(strings.Repeat("a", 2048))); err != nil {
+	if err := m.WriteFile(ctx, "acme", "", s.ID, "big.txt", []byte(strings.Repeat("a", 2048))); err != nil {
 		t.Fatal(err)
 	}
-	content, truncated, err := m.ReadFile(ctx, "acme", s.ID, "big.txt")
+	content, truncated, err := m.ReadFile(ctx, "acme", "", s.ID, "big.txt")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -260,25 +331,25 @@ func TestReaperIdleAndMaxLifetime(t *testing.T) {
 	ctx := context.Background()
 	m, be, now := testManager(t)
 
-	idle, _ := m.Create(ctx, "acme")
-	busy, _ := m.Create(ctx, "acme")
+	idle, _ := m.Create(ctx, "acme", "")
+	busy, _ := m.Create(ctx, "acme", "")
 
 	*now = now.Add(9 * time.Minute)
-	if _, err := m.ExecCode(ctx, "acme", busy.ID, "x", 0); err != nil {
+	if _, err := m.ExecCode(ctx, "acme", "", busy.ID, "x", 0); err != nil {
 		t.Fatal(err)
 	}
 	*now = now.Add(2 * time.Minute)
 	m.ReapOnce(ctx)
-	if _, err := m.ExecCode(ctx, "acme", idle.ID, "x", 0); err == nil {
+	if _, err := m.ExecCode(ctx, "acme", "", idle.ID, "x", 0); err == nil {
 		t.Fatal("idle sandbox should be reaped")
 	}
-	if _, err := m.ExecCode(ctx, "acme", busy.ID, "x", 0); err != nil {
+	if _, err := m.ExecCode(ctx, "acme", "", busy.ID, "x", 0); err != nil {
 		t.Fatalf("busy sandbox reaped early: %v", err)
 	}
 
 	*now = now.Add(50 * time.Minute)
 	m.ReapOnce(ctx)
-	if _, err := m.ExecCode(ctx, "acme", busy.ID, "x", 0); err == nil {
+	if _, err := m.ExecCode(ctx, "acme", "", busy.ID, "x", 0); err == nil {
 		t.Fatal("sandbox past max lifetime should be reaped")
 	}
 	ids, _ := be.ListLeftovers(ctx)
@@ -294,7 +365,7 @@ func TestReaperMaxLifetimeDespiteActivity(t *testing.T) {
 	ctx := context.Background()
 	m, _, now := testManager(t) // IdleTTL 10m, MaxLifetime 1h
 
-	s, err := m.Create(ctx, "acme")
+	s, err := m.Create(ctx, "acme", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -303,13 +374,13 @@ func TestReaperMaxLifetimeDespiteActivity(t *testing.T) {
 	for elapsed <= time.Hour {
 		*now = now.Add(5 * time.Minute)
 		elapsed += 5 * time.Minute
-		if _, err := m.ExecCode(ctx, "acme", s.ID, "x", 0); err != nil {
+		if _, err := m.ExecCode(ctx, "acme", "", s.ID, "x", 0); err != nil {
 			t.Fatalf("exec at +%v: %v", elapsed, err)
 		}
 	}
 
 	m.ReapOnce(ctx)
-	if _, err := m.ExecCode(ctx, "acme", s.ID, "x", 0); err == nil {
+	if _, err := m.ExecCode(ctx, "acme", "", s.ID, "x", 0); err == nil {
 		t.Fatal("active sandbox past max lifetime must still be reaped")
 	}
 }

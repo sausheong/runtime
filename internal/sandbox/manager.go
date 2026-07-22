@@ -28,12 +28,18 @@ type Config struct {
 	IdleTTL      time.Duration // close after this long unused (default 10m)
 	MaxLifetime  time.Duration // close this long after create (default 1h)
 	ReadLimit    int           // read_file byte cap (default 256 KiB)
+
+	// SessionScoped keys sandboxes by (tenant, session, id) instead of
+	// (tenant, id): a handle minted in one agent session is invisible to
+	// other sessions of the same tenant. Default false (tenant-scoped).
+	SessionScoped bool
 }
 
 // Session is one live sandbox.
 type Session struct {
 	ID          string
 	Tenant      string
+	Session     string // owning agent session; "" in tenant-scoped mode
 	ContainerID string
 	CreatedAt   time.Time
 	LastUsed    time.Time
@@ -90,17 +96,20 @@ func newSandboxID() string {
 // concurrent Creates at cap-1 cannot all pass the count check during a slow
 // be.Create. The ID is generated before any backend work, so a crypto/rand
 // panic cannot leak a container.
-func (m *Manager) Create(ctx context.Context, tenant string) (*Session, error) {
+func (m *Manager) Create(ctx context.Context, tenant, session string) (*Session, error) {
 	now := m.now()
 	s := &Session{
 		ID:        newSandboxID(),
 		Tenant:    tenant,
+		Session:   session,
 		CreatedAt: now,
 		LastUsed:  now,
 		ExpiresAt: now.Add(m.cfg.MaxLifetime),
 	}
 
 	m.mu.Lock()
+	// Cap-counting is per-tenant across ALL sessions regardless of scope
+	// (documented invariant): session scoping isolates handles, not quota.
 	count := 0
 	for _, other := range m.sessions {
 		if other.Tenant == tenant {
@@ -145,13 +154,17 @@ func (m *Manager) Create(ctx context.Context, tenant string) (*Session, error) {
 }
 
 // lookup resolves a sandbox id for tenant, touching LastUsed. A missing id
-// and a foreign tenant's id return the identical errNoSandbox.
-func (m *Manager) lookup(tenant, id string) (*Session, error) {
+// and a foreign tenant's id return the identical errNoSandbox. When
+// SessionScoped, a foreign session's id is hidden identically to nonexistent.
+func (m *Manager) lookup(tenant, session, id string) (*Session, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	s, ok := m.sessions[id]
 	if !ok || s.Tenant != tenant {
 		return nil, errNoSandbox
+	}
+	if m.cfg.SessionScoped && s.Session != session {
+		return nil, errNoSandbox // foreign session hidden identically to nonexistent
 	}
 	s.LastUsed = m.now()
 	return s, nil
@@ -195,8 +208,8 @@ func clampTimeout(seconds int) time.Duration {
 }
 
 // ExecCode runs Python code inside the sandbox.
-func (m *Manager) ExecCode(ctx context.Context, tenant, id, code string, timeoutSeconds int) (ExecResult, error) {
-	s, err := m.lookup(tenant, id)
+func (m *Manager) ExecCode(ctx context.Context, tenant, session, id, code string, timeoutSeconds int) (ExecResult, error) {
+	s, err := m.lookup(tenant, session, id)
 	if err != nil {
 		return ExecResult{}, err
 	}
@@ -205,8 +218,8 @@ func (m *Manager) ExecCode(ctx context.Context, tenant, id, code string, timeout
 }
 
 // ExecCommand runs a shell command inside the sandbox.
-func (m *Manager) ExecCommand(ctx context.Context, tenant, id, command string, timeoutSeconds int) (ExecResult, error) {
-	s, err := m.lookup(tenant, id)
+func (m *Manager) ExecCommand(ctx context.Context, tenant, session, id, command string, timeoutSeconds int) (ExecResult, error) {
+	s, err := m.lookup(tenant, session, id)
 	if err != nil {
 		return ExecResult{}, err
 	}
@@ -215,12 +228,12 @@ func (m *Manager) ExecCommand(ctx context.Context, tenant, id, command string, t
 }
 
 // WriteFile writes content to a /workspace-confined path in the sandbox.
-func (m *Manager) WriteFile(ctx context.Context, tenant, id, path string, content []byte) error {
+func (m *Manager) WriteFile(ctx context.Context, tenant, session, id, path string, content []byte) error {
 	confined, err := confinePath(path)
 	if err != nil {
 		return err
 	}
-	s, err := m.lookup(tenant, id)
+	s, err := m.lookup(tenant, session, id)
 	if err != nil {
 		return err
 	}
@@ -229,12 +242,12 @@ func (m *Manager) WriteFile(ctx context.Context, tenant, id, path string, conten
 
 // ReadFile reads a /workspace-confined path from the sandbox, capped at
 // cfg.ReadLimit bytes.
-func (m *Manager) ReadFile(ctx context.Context, tenant, id, path string) ([]byte, bool, error) {
+func (m *Manager) ReadFile(ctx context.Context, tenant, session, id, path string) ([]byte, bool, error) {
 	confined, err := confinePath(path)
 	if err != nil {
 		return nil, false, err
 	}
-	s, err := m.lookup(tenant, id)
+	s, err := m.lookup(tenant, session, id)
 	if err != nil {
 		return nil, false, err
 	}
@@ -242,25 +255,31 @@ func (m *Manager) ReadFile(ctx context.Context, tenant, id, path string) ([]byte
 	return content, truncated, m.maskIfGone(id, err)
 }
 
-// List returns copies of tenant's live sessions.
-func (m *Manager) List(tenant string) []Session {
+// List returns copies of tenant's live sessions. When SessionScoped, only the
+// calling session's sandboxes are returned.
+func (m *Manager) List(tenant, session string) []Session {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	var out []Session
 	for _, s := range m.sessions {
-		if s.Tenant == tenant {
-			out = append(out, *s)
+		if s.Tenant != tenant {
+			continue
 		}
+		if m.cfg.SessionScoped && s.Session != session {
+			continue
+		}
+		out = append(out, *s)
 	}
 	return out
 }
 
 // Close removes the sandbox. It is idempotent and never reveals existence:
-// an unknown or foreign id returns nil.
-func (m *Manager) Close(ctx context.Context, tenant, id string) error {
+// an unknown, foreign-tenant, or (when SessionScoped) foreign-session id
+// returns nil.
+func (m *Manager) Close(ctx context.Context, tenant, session, id string) error {
 	m.mu.Lock()
 	s, ok := m.sessions[id]
-	if !ok || s.Tenant != tenant {
+	if !ok || s.Tenant != tenant || (m.cfg.SessionScoped && s.Session != session) {
 		m.mu.Unlock()
 		return nil
 	}
@@ -270,6 +289,32 @@ func (m *Manager) Close(ctx context.Context, tenant, id string) error {
 	if err := m.be.Remove(ctx, s.ContainerID); err != nil {
 		slog.Warn("sandbox close: container remove failed",
 			"sandbox_id", s.ID, "container_id", s.ContainerID, "err", err)
+	}
+	return nil
+}
+
+// CloseSession removes every sandbox owned by (tenant, session). It is a no-op
+// when scope=tenant — session-end teardown must never tear down tenant-shared
+// boxes. Idempotent; never reveals existence.
+func (m *Manager) CloseSession(ctx context.Context, tenant, session string) error {
+	if !m.cfg.SessionScoped {
+		return nil
+	}
+	m.mu.Lock()
+	var victims []*Session
+	for id, s := range m.sessions {
+		if s.Tenant == tenant && s.Session == session {
+			victims = append(victims, s)
+			delete(m.sessions, id)
+		}
+	}
+	m.mu.Unlock()
+	for _, s := range victims {
+		if err := m.be.Remove(ctx, s.ContainerID); err != nil {
+			slog.Warn("sandbox close-session: container remove failed",
+				"sandbox_id", s.ID, "tenant", tenant, "session", session,
+				"container_id", s.ContainerID, "err", err)
+		}
 	}
 	return nil
 }
