@@ -104,6 +104,18 @@ spec:
             - name: DOCKER_HOST
               value: {{ .Values.features.dockerHost | quote }}
             {{- end }}
+            - name: RUNTIME_SANDBOX_SCOPE
+              value: {{ .Values.sandbox.scope | quote }}
+            - name: RUNTIME_BROWSER_SCOPE
+              value: {{ .Values.browser.scope | quote }}
+            {{- if .Values.sandbox.runtime }}
+            - name: RUNTIME_SANDBOX_RUNTIME
+              value: {{ .Values.sandbox.runtime | quote }}
+            {{- end }}
+            {{- if .Values.browser.runtime }}
+            - name: RUNTIME_BROWSER_RUNTIME
+              value: {{ .Values.browser.runtime | quote }}
+            {{- end }}
           ports:
             - name: http
               containerPort: 8080
