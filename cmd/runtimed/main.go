@@ -463,6 +463,16 @@ func main() {
 		// trap — a nil *gateway.Manager stored in the interface would be != nil.
 		var gwMut controlplane.GatewayMutator
 		var onb *console.Onboarding
+		// Golden-set evaluator (P3.1): DB store + registry-backed agent invoker +
+		// optional LLM judge. Fatal on store init (like quota); the judge is
+		// best-effort (nil when unconfigured — judge cases then fail-the-case).
+		// Built before the onboarding literal so the console's eval-sets panel can
+		// share the same store.
+		evalStore, eerr := eval.NewStore(ctx, identityDB)
+		if eerr != nil {
+			slog.Error("eval store init failed", "err", eerr)
+			os.Exit(1)
+		}
 		if gwManager != nil {
 			gwMut = gwManager
 			onb = &console.Onboarding{
@@ -474,16 +484,9 @@ func main() {
 				AgentMgr:  agentManager,
 				Policies:  polAdmin,   // nil interface when the policy engine is off
 				Quotas:    quotaAdmin, // nil interface when quotas are off ⇒ panel hidden
+				EvalStore: evalStore,  // golden-set store ⇒ eval-sets panel
 				CredType:  credType,   // nil when brokering is off ⇒ check skipped
 			}
-		}
-		// Golden-set evaluator (P3.1): DB store + registry-backed agent invoker +
-		// optional LLM judge. Fatal on store init (like quota); the judge is
-		// best-effort (nil when unconfigured — judge cases then fail-the-case).
-		evalStore, eerr := eval.NewStore(ctx, identityDB)
-		if eerr != nil {
-			slog.Error("eval store init failed", "err", eerr)
-			os.Exit(1)
 		}
 		evalInvoker := controlplane.NewEvalInvoker(reg)
 		evalJudge, _ := eval.NewJudgeFromEnv()

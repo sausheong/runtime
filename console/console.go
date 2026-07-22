@@ -4,6 +4,7 @@ package console
 import (
 	"context"
 	"embed"
+	"encoding/json"
 	"html/template"
 	"io/fs"
 	"net/http"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/sausheong/runtime/controlplane"
 	"github.com/sausheong/runtime/internal/agentstore"
+	"github.com/sausheong/runtime/internal/eval"
 	"github.com/sausheong/runtime/internal/identity"
 	"github.com/sausheong/runtime/internal/policy"
 	"github.com/sausheong/runtime/internal/quota"
@@ -90,6 +92,7 @@ type Onboarding struct {
 	AgentMgr  *controlplane.AgentManager // live attach/detach; nil ⇒ section hidden
 	Policies  controlplane.PolicyStore   // tenant Cedar policy store; nil ⇒ section hidden
 	Quotas    controlplane.QuotaStore    // gateway rate-quota store; nil ⇒ section hidden
+	EvalStore eval.EvalStore             // golden-set store; nil ⇒ section hidden
 	CredType  controlplane.CredTypeFunc  // broker-backed cred-type lookup; nil ⇒ oauth2-on-openapi check skipped
 }
 
@@ -319,6 +322,10 @@ func Handler(reg *controlplane.Registry, st store.Store, oidc OIDCConfig, onb *O
 			if onb.Quotas != nil {
 				quotas, _ = controlplane.ListQuotasShared(r.Context(), onb.Quotas, p.TenantID)
 			}
+			var evalSets []eval.Set
+			if onb.EvalStore != nil {
+				evalSets, _ = onb.EvalStore.ListSets(r.Context(), p.TenantID)
+			}
 			// A freshly minted key arrives as "key:<plaintext>" — the one time it
 			// is ever shown. Split it out so the template can give it a distinct,
 			// copy-it-now treatment instead of a generic success flash.
@@ -335,6 +342,7 @@ func Handler(reg *controlplane.Registry, st store.Store, oidc OIDCConfig, onb *O
 				"Agents":         agents, "AgentsEnabled": onb.Agents != nil && onb.AgentMgr != nil,
 				"Policies": policies, "PoliciesEnabled": onb.Policies != nil,
 				"Quotas": quotas, "QuotasEnabled": onb.Quotas != nil,
+				"EvalSets": evalSets, "EvalSetsEnabled": onb.EvalStore != nil,
 			})
 		})
 
@@ -568,6 +576,40 @@ func Handler(reg *controlplane.Registry, st store.Store, oidc OIDCConfig, onb *O
 					return
 				}
 				flashRedirect(w, r, "Quota for upstream "+upstream+" removed.")
+			}))
+		}
+
+		// Golden-set eval sets: add/delete tenant-scoped sets whose cases are pasted
+		// as a JSON array into a textarea (mirrors the CLI --file). Mounted only when
+		// the eval store is on (onb.EvalStore non-nil). Malformed JSON or a set that
+		// fails ValidateSet is a 400 (mirrors the quota bad-rate handling); the
+		// tenant is ALWAYS the caller's own, never form-supplied.
+		if onb.EvalStore != nil {
+			mux.HandleFunc("POST /ui/onboarding/eval-sets", guard(func(p identity.Principal, w http.ResponseWriter, r *http.Request) {
+				name := r.FormValue("name")
+				var cases []eval.Case
+				if err := json.Unmarshal([]byte(r.FormValue("cases")), &cases); err != nil {
+					http.Error(w, "cases must be a valid JSON array", http.StatusBadRequest)
+					return
+				}
+				if err := eval.ValidateSet(name, cases); err != nil {
+					http.Error(w, err.Error(), http.StatusBadRequest)
+					return
+				}
+				if err := onb.EvalStore.PutSet(r.Context(), eval.Set{Tenant: p.TenantID, Name: name, Cases: cases}); err != nil {
+					http.Error(w, "save set failed", http.StatusInternalServerError)
+					return
+				}
+				flashRedirect(w, r, "Eval set "+name+" saved ("+strconv.Itoa(len(cases))+" cases).")
+			}))
+
+			mux.HandleFunc("POST /ui/onboarding/eval-sets/{name}/delete", guard(func(p identity.Principal, w http.ResponseWriter, r *http.Request) {
+				name := r.PathValue("name")
+				if _, err := onb.EvalStore.DeleteSet(r.Context(), p.TenantID, name); err != nil {
+					http.Error(w, "delete set failed", http.StatusInternalServerError)
+					return
+				}
+				flashRedirect(w, r, "Eval set "+name+" removed.")
 			}))
 		}
 

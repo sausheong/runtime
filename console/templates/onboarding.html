@@ -296,5 +296,34 @@
     </form>
   </section>
   {{end}}
+
+  {{if .EvalSetsEnabled}}
+  <!-- ===== Eval sets ===== -->
+  <section class="card">
+    <h2>Eval sets</h2>
+    <p class="card-desc">Named golden sets of cases (input + scorer + expected/rubric) run against an agent to measure quality. Paste cases as a JSON array; validated at save.</p>
+    <table>
+      <thead><tr><th>Name</th><th>Cases</th><th></th></tr></thead>
+      <tbody>
+      {{range .EvalSets}}<tr>
+        <td class="mono">{{.Name}}</td>
+        <td>{{len .Cases}}</td>
+        <td class="actions"><form method="post" action="/ui/onboarding/eval-sets/{{.Name}}/delete" onsubmit="return confirm('Remove this eval set?')">
+          <input type="hidden" name="csrf_token" value="{{$.CSRF}}"><button type="submit" class="danger">Remove</button>
+        </form></td>
+      </tr>{{else}}
+        <tr><td colspan="3" class="empty">No eval sets yet.</td></tr>
+      {{end}}
+      </tbody>
+    </table>
+    <form method="post" action="/ui/onboarding/eval-sets" style="margin-top:1rem">
+      <input type="hidden" name="csrf_token" value="{{.CSRF}}">
+      <p><input name="name" placeholder="set name (e.g. greetings)" required style="width:100%"></p>
+      <p><label>Cases (JSON array)<br>
+        <textarea name="cases" rows="8" style="width:100%;font-family:monospace" placeholder='[{"input":"hi","scorer":"contains","expected":"hello"},&#10; {"input":"2+2?","scorer":"exact","expected":"4"}]' required></textarea></label></p>
+      <button type="submit">Add eval set</button>
+    </form>
+  </section>
+  {{end}}
 </main>
 </body></html>{{end}}
