@@ -16,4 +16,6 @@ const (
 	Role   = "X-Runtime-Role"   // identity.Principal.Role
 
 	Assertion = "X-Runtime-Assertion" // caller's raw verified OIDC JWT (OBO subject_token); bearer secret, never logged
+
+	Session = "X-Runtime-Session" // agent session id: isolation bucket for session-scoped sandbox/browser tools; NOT a secret
 )
