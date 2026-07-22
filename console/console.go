@@ -98,6 +98,7 @@ type Onboarding struct {
 	// eval-runs section; Invoker/Judge/SignalCtx are only consulted at launch.
 	EvalInvoker   eval.Invoker              // registry-backed agent invoker for launched runs
 	EvalJudge     eval.Judge                // optional LLM judge (nil ⇒ judge cases fail-the-case)
+	EvalMetrics   eval.Metricer             // eval run/case counters; nil ⇒ no metrics (nil-safe in Execute)
 	EvalSignalCtx context.Context           // server signal ctx: a launched run outlives the request
 	CredType      controlplane.CredTypeFunc // broker-backed cred-type lookup; nil ⇒ oauth2-on-openapi check skipped
 }
@@ -716,9 +717,16 @@ func Handler(reg *controlplane.Registry, st store.Store, oidc OIDCConfig, onb *O
 					http.Error(w, "create run failed", http.StatusInternalServerError)
 					return
 				}
-				// Launch on the server signal ctx (nil-safe metrics), never r.Context():
-				// the goroutine must outlive this request.
-				go eval.Execute(onb.EvalSignalCtx, onb.EvalStore, onb.EvalInvoker, onb.EvalJudge, id, nil)
+				// Launch on the server signal ctx, never r.Context(): the goroutine
+				// must outlive this request. EvalMetrics gives console-launched runs
+				// the SAME eval counters as the CLI/admin path (parity); it and the
+				// judge are nil-safe in Execute. Default a missing signal ctx to
+				// Background so a run can never fire on a nil ctx.
+				runCtx := onb.EvalSignalCtx
+				if runCtx == nil {
+					runCtx = context.Background()
+				}
+				go eval.Execute(runCtx, onb.EvalStore, onb.EvalInvoker, onb.EvalJudge, id, onb.EvalMetrics)
 				observabilityRedirect(w, r)
 			}))
 

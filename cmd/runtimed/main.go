@@ -502,6 +502,7 @@ func main() {
 				EvalPolicies:  policyStore, // per-agent online-eval policy store ⇒ online-policies panel
 				EvalInvoker:   evalInvoker, // registry-backed invoker for launched runs
 				EvalJudge:     evalJudge,   // optional LLM judge (nil when unconfigured)
+				EvalMetrics:   cm,          // same eval counters as the CLI/admin path (parity)
 				EvalSignalCtx: ctx,         // server signal ctx: a launched run outlives the request
 				CredType:      credType,    // nil when brokering is off ⇒ check skipped
 			}
