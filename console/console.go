@@ -84,16 +84,17 @@ type OIDCConfig struct {
 // Onboarding bundles the dependencies for the self-service onboarding page.
 // nil ⇒ onboarding disabled (open mode / no identity); the page 404s.
 type Onboarding struct {
-	Upstreams controlplane.UpstreamStore
-	Mutator   controlplane.GatewayMutator
-	Admin     controlplane.AdminStore
-	Secrets   controlplane.SecretAdmin
-	Agents    controlplane.AgentStore    // dynamic managed-agent persistence; nil ⇒ section hidden
-	AgentMgr  *controlplane.AgentManager // live attach/detach; nil ⇒ section hidden
-	Policies  controlplane.PolicyStore   // tenant Cedar policy store; nil ⇒ section hidden
-	Quotas    controlplane.QuotaStore    // gateway rate-quota store; nil ⇒ section hidden
-	EvalStore eval.EvalStore             // golden-set store; nil ⇒ section hidden
-	CredType  controlplane.CredTypeFunc  // broker-backed cred-type lookup; nil ⇒ oauth2-on-openapi check skipped
+	Upstreams    controlplane.UpstreamStore
+	Mutator      controlplane.GatewayMutator
+	Admin        controlplane.AdminStore
+	Secrets      controlplane.SecretAdmin
+	Agents       controlplane.AgentStore    // dynamic managed-agent persistence; nil ⇒ section hidden
+	AgentMgr     *controlplane.AgentManager // live attach/detach; nil ⇒ section hidden
+	Policies     controlplane.PolicyStore   // tenant Cedar policy store; nil ⇒ section hidden
+	Quotas       controlplane.QuotaStore    // gateway rate-quota store; nil ⇒ section hidden
+	EvalStore    eval.EvalStore             // golden-set store; nil ⇒ section hidden
+	EvalPolicies eval.PolicyStoreAPI        // per-agent online-eval policy store; nil ⇒ section hidden
+	CredType     controlplane.CredTypeFunc  // broker-backed cred-type lookup; nil ⇒ oauth2-on-openapi check skipped
 }
 
 // Handler returns the console's HTTP handler. The read-only views render the
@@ -326,6 +327,10 @@ func Handler(reg *controlplane.Registry, st store.Store, oidc OIDCConfig, onb *O
 			if onb.EvalStore != nil {
 				evalSets, _ = onb.EvalStore.ListSets(r.Context(), p.TenantID)
 			}
+			var evalPolicies []eval.Policy
+			if onb.EvalPolicies != nil {
+				evalPolicies, _ = onb.EvalPolicies.ListPolicies(r.Context(), p.TenantID)
+			}
 			// A freshly minted key arrives as "key:<plaintext>" — the one time it
 			// is ever shown. Split it out so the template can give it a distinct,
 			// copy-it-now treatment instead of a generic success flash.
@@ -343,6 +348,7 @@ func Handler(reg *controlplane.Registry, st store.Store, oidc OIDCConfig, onb *O
 				"Policies": policies, "PoliciesEnabled": onb.Policies != nil,
 				"Quotas": quotas, "QuotasEnabled": onb.Quotas != nil,
 				"EvalSets": evalSets, "EvalSetsEnabled": onb.EvalStore != nil,
+				"EvalPolicies": evalPolicies, "EvalPoliciesEnabled": onb.EvalPolicies != nil,
 			})
 		})
 
@@ -610,6 +616,46 @@ func Handler(reg *controlplane.Registry, st store.Store, oidc OIDCConfig, onb *O
 					return
 				}
 				flashRedirect(w, r, "Eval set "+name+" removed.")
+			}))
+		}
+
+		// Online eval policies: add/delete per-agent sampling policies whose criteria
+		// are pasted as a JSON array into a textarea. Mounted only when the policy
+		// store is on (onb.EvalPolicies non-nil). A non-numeric rate, malformed JSON,
+		// or a policy that fails ValidatePolicy (rate outside 0..100, no criteria,
+		// bad scorer/regex) is a 400; the tenant is ALWAYS the caller's own.
+		if onb.EvalPolicies != nil {
+			mux.HandleFunc("POST /ui/onboarding/eval-policies", guard(func(p identity.Principal, w http.ResponseWriter, r *http.Request) {
+				agent := r.FormValue("agent")
+				rate, err := strconv.Atoi(r.FormValue("rate"))
+				if err != nil {
+					http.Error(w, "rate must be 0-100", http.StatusBadRequest)
+					return
+				}
+				var criteria []eval.Criterion
+				if err := json.Unmarshal([]byte(r.FormValue("criteria")), &criteria); err != nil {
+					http.Error(w, "criteria must be a valid JSON array", http.StatusBadRequest)
+					return
+				}
+				pol := eval.Policy{Tenant: p.TenantID, AgentID: agent, SampleRate: rate, Criteria: criteria}
+				if err := eval.ValidatePolicy(pol); err != nil {
+					http.Error(w, err.Error(), http.StatusBadRequest)
+					return
+				}
+				if err := onb.EvalPolicies.PutPolicy(r.Context(), pol); err != nil {
+					http.Error(w, "save policy failed", http.StatusInternalServerError)
+					return
+				}
+				flashRedirect(w, r, "Online eval policy for "+agent+" saved (rate "+strconv.Itoa(rate)+"%).")
+			}))
+
+			mux.HandleFunc("POST /ui/onboarding/eval-policies/{agent}/delete", guard(func(p identity.Principal, w http.ResponseWriter, r *http.Request) {
+				agent := r.PathValue("agent")
+				if _, err := onb.EvalPolicies.DeletePolicy(r.Context(), p.TenantID, agent); err != nil {
+					http.Error(w, "delete policy failed", http.StatusInternalServerError)
+					return
+				}
+				flashRedirect(w, r, "Online eval policy for "+agent+" removed.")
 			}))
 		}
 

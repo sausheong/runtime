@@ -325,5 +325,37 @@
     </form>
   </section>
   {{end}}
+
+  {{if .EvalPoliciesEnabled}}
+  <!-- ===== Online eval policies ===== -->
+  <section class="card">
+    <h2>Online eval policies</h2>
+    <p class="card-desc">Per-agent online-sampling policies: score a percentage of finished sessions against a set of criteria (judge/contains/regex). Paste criteria as a JSON array; validated at save.</p>
+    <table>
+      <thead><tr><th>Agent</th><th>Sample rate</th><th>Criteria</th><th></th></tr></thead>
+      <tbody>
+      {{range .EvalPolicies}}<tr>
+        <td class="mono">{{.AgentID}}</td>
+        <td>{{.SampleRate}}%</td>
+        <td>{{len .Criteria}}</td>
+        <td class="actions"><form method="post" action="/ui/onboarding/eval-policies/{{.AgentID}}/delete" onsubmit="return confirm('Remove this online eval policy?')">
+          <input type="hidden" name="csrf_token" value="{{$.CSRF}}"><button type="submit" class="danger">Remove</button>
+        </form></td>
+      </tr>{{else}}
+        <tr><td colspan="4" class="empty">No online eval policies yet.</td></tr>
+      {{end}}
+      </tbody>
+    </table>
+    <form method="post" action="/ui/onboarding/eval-policies" style="margin-top:1rem">
+      <input type="hidden" name="csrf_token" value="{{.CSRF}}">
+      <p><input name="agent" placeholder="agent id (e.g. support)" required style="width:100%"></p>
+      <p><label>Sample rate (%)<br>
+        <input type="number" name="rate" min="0" max="100" value="10" required></label></p>
+      <p><label>Criteria (JSON array)<br>
+        <textarea name="criteria" rows="8" style="width:100%;font-family:monospace" placeholder='[{"name":"polite","scorer":"judge","rubric":"Is the reply polite?"}]' required></textarea></label></p>
+      <button type="submit">Add online eval policy</button>
+    </form>
+  </section>
+  {{end}}
 </main>
 </body></html>{{end}}

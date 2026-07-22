@@ -161,3 +161,173 @@ func TestEvalSets_AddRequiresAdmin(t *testing.T) {
 		t.Fatalf("non-admin add: want 403 got %d", w.Code)
 	}
 }
+
+// consoleWithEvalPolicies wires a console whose onboarding deps include a real
+// in-memory policy store (PolicyMemStore implements eval.PolicyStoreAPI), so the
+// online eval policies UI is active.
+func consoleWithEvalPolicies(t *testing.T) (http.Handler, *eval.PolicyMemStore) {
+	t.Helper()
+	ps := eval.NewPolicyMemStore()
+	deps := &Onboarding{
+		Upstreams:    &fakeUpstreamStore2{},
+		Mutator:      &fakeMut2{},
+		Admin:        &fakeAdmin2{},
+		Secrets:      &fakeSec2{},
+		EvalPolicies: ps,
+	}
+	return Handler(nil, nil, OIDCConfig{}, deps), ps
+}
+
+func TestEvalPolicies_SectionRenders(t *testing.T) {
+	h, ps := consoleWithEvalPolicies(t)
+	_ = ps.PutPolicy(context.Background(), eval.Policy{
+		Tenant: "t1", AgentID: "support", SampleRate: 10,
+		Criteria: []eval.Criterion{{Name: "polite", Scorer: eval.ScorerJudge, Rubric: "Is the reply polite?"}},
+	})
+	r := adminReq("GET", "/ui/onboarding", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	body := w.Body.String()
+	if !strings.Contains(body, "Online eval policies") {
+		t.Fatal("online eval policies section missing")
+	}
+	if !strings.Contains(body, "support") {
+		t.Fatal("expected seeded agent id in the policies table")
+	}
+}
+
+func TestEvalPolicies_HiddenWhenNil(t *testing.T) {
+	h, _ := newTestConsole() // no EvalPolicies dep
+	r := adminReq("GET", "/ui/onboarding", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	if strings.Contains(w.Body.String(), "Online eval policies") {
+		t.Fatal("online eval policies section must be hidden when the dep is nil")
+	}
+}
+
+func TestEvalPolicies_AddRequiresCSRF(t *testing.T) {
+	h, _ := consoleWithEvalPolicies(t)
+	form := url.Values{"agent": {"support"}, "rate": {"10"}, "criteria": {`[{"name":"polite","scorer":"judge","rubric":"Is the reply polite?"}]`}} // no csrf
+	r := adminReq("POST", "/ui/onboarding/eval-policies", form)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("add without csrf: want 403 got %d", w.Code)
+	}
+}
+
+func TestEvalPolicies_AddValid(t *testing.T) {
+	h, ps := consoleWithEvalPolicies(t)
+	token := issuedCSRF(t, h)
+	form := url.Values{
+		"csrf_token": {token}, "agent": {"support"}, "rate": {"10"},
+		"criteria": {`[{"name":"polite","scorer":"judge","rubric":"Is the reply polite?"}]`},
+	}
+	r := adminReq("POST", "/ui/onboarding/eval-policies", form)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	if w.Code != http.StatusSeeOther {
+		t.Fatalf("add: want 303 got %d (%s)", w.Code, w.Body.String())
+	}
+	pols, _ := ps.ListPolicies(context.Background(), "t1")
+	if len(pols) != 1 || pols[0].AgentID != "support" || pols[0].Tenant != "t1" || pols[0].SampleRate != 10 || len(pols[0].Criteria) != 1 {
+		t.Fatalf("policy not stored as (t1, support, rate 10, 1 criterion): %+v", pols)
+	}
+	if pols[0].Criteria[0].Scorer != eval.ScorerJudge || pols[0].Criteria[0].Rubric != "Is the reply polite?" {
+		t.Fatalf("criterion not parsed from JSON textarea: %+v", pols[0].Criteria)
+	}
+}
+
+func TestEvalPolicies_AddRejectsMalformedJSON(t *testing.T) {
+	h, ps := consoleWithEvalPolicies(t)
+	token := issuedCSRF(t, h)
+	form := url.Values{"csrf_token": {token}, "agent": {"support"}, "rate": {"10"}, "criteria": {"not json"}}
+	r := adminReq("POST", "/ui/onboarding/eval-policies", form)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("malformed criteria: want 400 got %d", w.Code)
+	}
+	if pols, _ := ps.ListPolicies(context.Background(), "t1"); len(pols) != 0 {
+		t.Fatalf("malformed-criteria policy must not persist: %+v", pols)
+	}
+}
+
+func TestEvalPolicies_AddRejectsBadRate(t *testing.T) {
+	h, ps := consoleWithEvalPolicies(t)
+	token := issuedCSRF(t, h)
+	// Non-numeric rate ⇒ strconv.Atoi fails ⇒ 400.
+	form := url.Values{"csrf_token": {token}, "agent": {"support"}, "rate": {"abc"},
+		"criteria": {`[{"name":"polite","scorer":"judge","rubric":"Is the reply polite?"}]`}}
+	r := adminReq("POST", "/ui/onboarding/eval-policies", form)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("bad rate: want 400 got %d", w.Code)
+	}
+	if pols, _ := ps.ListPolicies(context.Background(), "t1"); len(pols) != 0 {
+		t.Fatalf("bad-rate policy must not persist: %+v", pols)
+	}
+}
+
+func TestEvalPolicies_AddRejectsInvalidPolicy(t *testing.T) {
+	h, ps := consoleWithEvalPolicies(t)
+	token := issuedCSRF(t, h)
+	// Valid JSON, numeric rate, but rate 101 ⇒ ValidatePolicy fails ⇒ 400.
+	form := url.Values{"csrf_token": {token}, "agent": {"support"}, "rate": {"101"},
+		"criteria": {`[{"name":"polite","scorer":"judge","rubric":"Is the reply polite?"}]`}}
+	r := adminReq("POST", "/ui/onboarding/eval-policies", form)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("invalid policy (rate 101): want 400 got %d", w.Code)
+	}
+	if pols, _ := ps.ListPolicies(context.Background(), "t1"); len(pols) != 0 {
+		t.Fatalf("invalid policy must not persist: %+v", pols)
+	}
+}
+
+func TestEvalPolicies_Delete(t *testing.T) {
+	h, ps := consoleWithEvalPolicies(t)
+	_ = ps.PutPolicy(context.Background(), eval.Policy{
+		Tenant: "t1", AgentID: "support", SampleRate: 10,
+		Criteria: []eval.Criterion{{Name: "polite", Scorer: eval.ScorerJudge, Rubric: "Is the reply polite?"}},
+	})
+	token := issuedCSRF(t, h)
+	form := url.Values{"csrf_token": {token}}
+	r := adminReq("POST", "/ui/onboarding/eval-policies/support/delete", form)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	if w.Code != http.StatusSeeOther {
+		t.Fatalf("delete: want 303 got %d (%s)", w.Code, w.Body.String())
+	}
+	if pols, _ := ps.ListPolicies(context.Background(), "t1"); len(pols) != 0 {
+		t.Fatalf("policy not deleted: %+v", pols)
+	}
+}
+
+func TestEvalPolicies_DeleteRequiresCSRF(t *testing.T) {
+	h, _ := consoleWithEvalPolicies(t)
+	r := adminReq("POST", "/ui/onboarding/eval-policies/support/delete", url.Values{}) // no csrf
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("delete without csrf: want 403 got %d", w.Code)
+	}
+}
+
+func TestEvalPolicies_AddRequiresAdmin(t *testing.T) {
+	h, _ := consoleWithEvalPolicies(t)
+	token := issuedCSRF(t, h)
+	form := url.Values{
+		"csrf_token": {token}, "agent": {"support"}, "rate": {"10"},
+		"criteria": {`[{"name":"polite","scorer":"judge","rubric":"Is the reply polite?"}]`},
+	}
+	r := nonAdminReq("POST", "/ui/onboarding/eval-policies", form)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("non-admin add: want 403 got %d", w.Code)
+	}
+}

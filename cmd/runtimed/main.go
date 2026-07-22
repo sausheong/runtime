@@ -473,31 +473,34 @@ func main() {
 			slog.Error("eval store init failed", "err", eerr)
 			os.Exit(1)
 		}
-		if gwManager != nil {
-			gwMut = gwManager
-			onb = &console.Onboarding{
-				Upstreams: gwStore,
-				Mutator:   gwManager,
-				Admin:     idStore,
-				Secrets:   secretAdmin,
-				Agents:    agentStore,
-				AgentMgr:  agentManager,
-				Policies:  polAdmin,   // nil interface when the policy engine is off
-				Quotas:    quotaAdmin, // nil interface when quotas are off ⇒ panel hidden
-				EvalStore: evalStore,  // golden-set store ⇒ eval-sets panel
-				CredType:  credType,   // nil when brokering is off ⇒ check skipped
-			}
-		}
-		evalInvoker := controlplane.NewEvalInvoker(reg)
-		evalJudge, _ := eval.NewJudgeFromEnv()
 		// Per-agent online-eval policy store (P3.1 M2). Fatal on init (like the
 		// eval store). The resolver injects RUNTIME_EVAL_POLICY at spawn; only the
 		// identity path has a policy store, so open-mode agents run without policies.
+		// Built before the onboarding literal so the console's online-policies panel
+		// can share the same store (also fed to SetPolicyResolver below).
 		policyStore, perr := eval.NewPolicyStore(ctx, identityDB)
 		if perr != nil {
 			slog.Error("eval policy store init failed", "err", perr)
 			os.Exit(1)
 		}
+		if gwManager != nil {
+			gwMut = gwManager
+			onb = &console.Onboarding{
+				Upstreams:    gwStore,
+				Mutator:      gwManager,
+				Admin:        idStore,
+				Secrets:      secretAdmin,
+				Agents:       agentStore,
+				AgentMgr:     agentManager,
+				Policies:     polAdmin,    // nil interface when the policy engine is off
+				Quotas:       quotaAdmin,  // nil interface when quotas are off ⇒ panel hidden
+				EvalStore:    evalStore,   // golden-set store ⇒ eval-sets panel
+				EvalPolicies: policyStore, // per-agent online-eval policy store ⇒ online-policies panel
+				CredType:     credType,    // nil when brokering is off ⇒ check skipped
+			}
+		}
+		evalInvoker := controlplane.NewEvalInvoker(reg)
+		evalJudge, _ := eval.NewJudgeFromEnv()
 		reg.SetPolicyResolver(controlplane.NewPolicyResolver(policyStore))
 		root := buildRoot(rootOptions{
 			Registry: reg, AdminStore: idStore, ConsoleOIDC: consoleOIDC,
