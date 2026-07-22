@@ -387,6 +387,7 @@ func (m *Manager) sessionWorkflow(ctx dbos.DBOSContext, in turnInput) (string, e
 			start := time.Now()
 			actorCtx := memory.WithActor(runCtx, in.Subject)
 			actorCtx = identity.WithAssertion(actorCtx, callerJWT) // caller JWT for OBO; no-ops when "" (e.g. replay); never checkpointed
+			actorCtx = identity.WithSession(actorCtx, wfID)        // session bucket for session-scoped sandbox/browser tools; forwarded via X-Runtime-Session
 			tr, terr := rt.RunTurn(actorCtx, userMsg, images, nil) // headless (emit=nil); actor on ctx for the memory tool + recall path
 			elapsed := time.Since(start)
 			// Harness v0.3.2 contract: RunTurn returns a nil error on EVERY
