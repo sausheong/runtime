@@ -584,7 +584,9 @@ runtimectl admin secret rotate
 export RUNTIME_SECRETS_KEYS="v2:$NEW_B64"
 ```
 
-`rotate` is idempotent and re-runnable, and exits non-zero if any row failed.
+A tenant admin can also trigger `rotate` from the Credentials panel in the
+console at [`/ui/onboarding`](#web-console). `rotate` is idempotent and
+re-runnable, and exits non-zero if any row failed.
 Legacy single-key (`RUNTIME_SECRETS_KEY`-only) deployments keep working unchanged;
 their rows decrypt transparently until rotated. Base64 uses standard encoding
 (not URL-safe).
@@ -1506,6 +1508,10 @@ runtimectl admin eval results <run-id>
 runtimectl admin eval set rm greetings
 ```
 
+Golden sets are also managed in the console at
+[`/ui/onboarding`](#web-console), and runs can be launched and inspected
+(including per-case results) at [`/ui/observability`](#web-console).
+
 Runs emit two Prometheus counters: `runtime_eval_runs_total` (by `tenant,status`
 — `completed`/`error`) and `runtime_eval_cases_total` (by `tenant,result` —
 `pass`/`fail`).
@@ -1544,6 +1550,10 @@ runtimectl admin eval policy rm support
 runtimectl admin eval online-results
 runtimectl admin eval online-results --session <session-id>
 ```
+
+Online-sampling policies are also managed in the console at
+[`/ui/onboarding`](#web-console), and recent online-eval results are listed at
+[`/ui/observability`](#web-console).
 
 Online scoring emits the `agent_eval_*` metrics (per-agent online-eval
 counters). The posture is **best-effort and capture-all with no GC yet**:
@@ -1593,9 +1603,10 @@ category label is a fixed enum) in the `agent_*` namespace, incremented once per
 session. Like the other per-turn metrics it may **double-count on DBOS replay**
 (the same tolerance applies).
 
-The breakdown scopes by `agent_id` (not tenant). Out of scope for this
-milestone: LLM-driven quality sub-classification, multi-label categories,
-historical re-classification of past sessions, and a console panel.
+The breakdown is also rendered as a per-agent table in the console at
+[`/ui/observability`](#web-console). It scopes by `agent_id` (not tenant). Out
+of scope for this milestone: LLM-driven quality sub-classification, multi-label
+categories, and historical re-classification of past sessions.
 
 ## The CLI (`runtimectl`)
 
@@ -1650,9 +1661,16 @@ principal (send it via `RUNTIME_TOKEN`).
 - **`/ui/agents/{id}/sessions/{sid}`** — live session view, streaming events via
   `EventSource`.
 - **`/ui/onboarding`** — a tenant-admin self-service page: mint agent keys,
-  register HTTP/OpenAPI gateway upstreams, and attach per-tenant credentials
-  (the one mutating flow; CSRF-protected with an HMAC-of-session token). See the
-  [Tenant guide](tenant-guide.md).
+  register HTTP/OpenAPI gateway upstreams, attach per-tenant credentials (with a
+  keyring **rotate** button), set per-`(tenant,upstream)` [gateway
+  quotas](#mcp-gateway), and manage [evaluation](#evaluations) golden sets and
+  per-agent online-sampling policies (the mutating flows; CSRF-protected with an
+  HMAC-of-session token). See the [Tenant guide](tenant-guide.md).
+- **`/ui/observability`** — a read-only fleet snapshot: agents, sessions, and
+  gateway upstreams, plus [evaluation](#evaluations) runs (launch a golden set
+  against an agent and drill into per-case results at
+  `/ui/observability/eval-runs/{id}`), recent online-eval results, and the
+  per-agent [failure-category breakdown](#failure-classification).
 
 When auth is enabled, the console redirects to **`/ui/login`**: with OIDC
 configured it bounces to the identity provider and stores the validated token in
@@ -2269,7 +2287,9 @@ subprocess from `runtime.yaml`; you don't set them by hand.
 ### `runtime.yaml` blocks (selected)
 
 - **`quotas:`** (top-level) — a list of `{tenant, upstream, rate_per_min}`
-  per-`(tenant,upstream)` gateway rate limits (`*` wildcard on either key). See
+  per-`(tenant,upstream)` gateway rate limits (`*` wildcard on either key). Also
+  managed at runtime in the console at [`/ui/onboarding`](#web-console) (and via
+  `runtimectl admin quota add/ls/rm`). See
   [Gateway quotas](operator-guide.md#gateway-quotas).
 - **`gateway.servers[].enrich:`** (per-upstream, OpenAPI only) — a claim→header
   map (`tenant`/`subject`/`role`) injecting the caller's identity into outbound

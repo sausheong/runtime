@@ -14,6 +14,57 @@ import (
 	"github.com/sausheong/runtime/internal/store"
 )
 
+// TestObservability_EvalReadViews proves the observability page surfaces the two
+// read-only eval views: recent online-eval results (tenant-scoped) and the
+// per-agent failure-category breakdown (scoped to visible agents). It also
+// asserts tenant isolation: a foreign tenant's online result never appears.
+func TestObservability_EvalReadViews(t *testing.T) {
+	st := store.NewMemStore()
+	ctx := context.Background()
+
+	// A visible agent (t1) with a classified failure, plus a foreign agent (t2).
+	sid, _ := st.CreateSession(ctx, "support", 0)
+	_ = st.SetSessionStatus(ctx, sid, "error")
+	if err := st.SetFailureCategory(ctx, sid, "tool_error"); err != nil {
+		t.Fatalf("set failure category: %v", err)
+	}
+
+	// Online results: one for the caller's tenant (t1), one for a foreign tenant.
+	if err := st.PutOnlineResult(ctx, sid, "helpful", "t1", "user@t1", "contains", true, ""); err != nil {
+		t.Fatalf("put online result (t1): %v", err)
+	}
+	if err := st.PutOnlineResult(ctx, "foreign-sess", "secret_criterion", "t2", "user@t2", "contains", false, ""); err != nil {
+		t.Fatalf("put online result (t2): %v", err)
+	}
+
+	deps := &Onboarding{Upstreams: &fakeUpstreamStore2{}, Mutator: &fakeMut2{}, Admin: &fakeAdmin2{}}
+	h := Handler(evalRunsReg(t), st, OIDCConfig{}, deps)
+	r := adminReq("GET", "/ui/observability", nil) // principal tenant = t1
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	if w.Code != http.StatusOK {
+		t.Fatalf("GET observability: want 200 got %d", w.Code)
+	}
+	body := w.Body.String()
+
+	if !strings.Contains(body, "Online eval results") {
+		t.Fatal("missing Online eval results section")
+	}
+	if !strings.Contains(body, "helpful") {
+		t.Fatal("online results table missing the t1 criterion")
+	}
+	if !strings.Contains(body, "Failure breakdown") {
+		t.Fatal("missing Failure breakdown section")
+	}
+	if !strings.Contains(body, "tool_error") {
+		t.Fatal("failure breakdown missing the seeded category")
+	}
+	// Tenant isolation: the t2 result must not leak to a t1 caller.
+	if strings.Contains(body, "secret_criterion") {
+		t.Fatal("foreign tenant's online result leaked into the page")
+	}
+}
+
 // fakeAgentClient serves canned sessions/events per agent for hermetic tests.
 type fakeAgentClient struct {
 	sessions  map[string][]sessionRow // keyed by ap.AgentID

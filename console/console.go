@@ -4,16 +4,20 @@ package console
 import (
 	"context"
 	"embed"
+	"encoding/json"
 	"html/template"
 	"io/fs"
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/sausheong/runtime/controlplane"
 	"github.com/sausheong/runtime/internal/agentstore"
+	"github.com/sausheong/runtime/internal/eval"
 	"github.com/sausheong/runtime/internal/identity"
 	"github.com/sausheong/runtime/internal/policy"
+	"github.com/sausheong/runtime/internal/quota"
 	"github.com/sausheong/runtime/internal/store"
 )
 
@@ -81,14 +85,23 @@ type OIDCConfig struct {
 // Onboarding bundles the dependencies for the self-service onboarding page.
 // nil ⇒ onboarding disabled (open mode / no identity); the page 404s.
 type Onboarding struct {
-	Upstreams controlplane.UpstreamStore
-	Mutator   controlplane.GatewayMutator
-	Admin     controlplane.AdminStore
-	Secrets   controlplane.SecretAdmin
-	Agents    controlplane.AgentStore    // dynamic managed-agent persistence; nil ⇒ section hidden
-	AgentMgr  *controlplane.AgentManager // live attach/detach; nil ⇒ section hidden
-	Policies  controlplane.PolicyStore   // tenant Cedar policy store; nil ⇒ section hidden
-	CredType  controlplane.CredTypeFunc  // broker-backed cred-type lookup; nil ⇒ oauth2-on-openapi check skipped
+	Upstreams    controlplane.UpstreamStore
+	Mutator      controlplane.GatewayMutator
+	Admin        controlplane.AdminStore
+	Secrets      controlplane.SecretAdmin
+	Agents       controlplane.AgentStore    // dynamic managed-agent persistence; nil ⇒ section hidden
+	AgentMgr     *controlplane.AgentManager // live attach/detach; nil ⇒ section hidden
+	Policies     controlplane.PolicyStore   // tenant Cedar policy store; nil ⇒ section hidden
+	Quotas       controlplane.QuotaStore    // gateway rate-quota store; nil ⇒ section hidden
+	EvalStore    eval.EvalStore             // golden-set store; nil ⇒ section hidden
+	EvalPolicies eval.PolicyStoreAPI        // per-agent online-eval policy store; nil ⇒ section hidden
+	// Eval-run launch deps (observability page). A nil EvalStore hides the whole
+	// eval-runs section; Invoker/Judge/SignalCtx are only consulted at launch.
+	EvalInvoker   eval.Invoker              // registry-backed agent invoker for launched runs
+	EvalJudge     eval.Judge                // optional LLM judge (nil ⇒ judge cases fail-the-case)
+	EvalMetrics   eval.Metricer             // eval run/case counters; nil ⇒ no metrics (nil-safe in Execute)
+	EvalSignalCtx context.Context           // server signal ctx: a launched run outlives the request
+	CredType      controlplane.CredTypeFunc // broker-backed cred-type lookup; nil ⇒ oauth2-on-openapi check skipped
 }
 
 // Handler returns the console's HTTP handler. The read-only views render the
@@ -230,6 +243,7 @@ func Handler(reg *controlplane.Registry, st store.Store, oidc OIDCConfig, onb *O
 	mux.HandleFunc("GET /ui/observability", func(w http.ResponseWriter, r *http.Request) {
 		agents := visibleAgents(r, reg)
 		fleet := buildFleetObs(r.Context(), reg, aclient, httpProbe, agents)
+		data := map[string]any{"Fleet": fleet, "Agents": agents}
 		if onb != nil {
 			// onb is non-nil only when identity is on, and IdentityMiddleware then
 			// always injects a principal on a successful request — so the else
@@ -237,11 +251,39 @@ func Handler(reg *controlplane.Registry, st store.Store, oidc OIDCConfig, onb *O
 			// kept for safety and to mirror principalCanSeeTenant's open-mode rule.
 			if p, ok := controlplane.PrincipalFromContext(r.Context()); ok {
 				fleet.Upstreams = onb.Mutator.Status(p.TenantID)
+				// Eval read-only views: recent online-eval results (tenant-scoped by
+				// the store) and per-agent failure-category counts (scoped by looping
+				// only the caller's visible agents). st is nil in some console wirings
+				// (e.g. onboarding-only tests) — guard it so the page still renders.
+				if st != nil {
+					online, _ := st.ListOnlineResultsByTenant(r.Context(), p.TenantID, 100)
+					data["OnlineResults"] = online
+					failures := map[string]map[string]int{} // agent -> category -> count
+					for _, a := range agents {              // agents == visible to this principal
+						if bd, err := st.FailureBreakdownByAgent(r.Context(), a.ID, time.Time{}); err == nil && len(bd) > 0 {
+							failures[a.ID] = bd
+						}
+					}
+					data["Failures"] = failures
+				}
+				// Eval runs: the launch form + runs table, tenant-scoped. Only when a
+				// golden-set store is wired (nil ⇒ section hidden, never a panic).
+				if onb.EvalStore != nil {
+					runs, _ := onb.EvalStore.ListRuns(r.Context(), p.TenantID)
+					sets, _ := onb.EvalStore.ListSets(r.Context(), p.TenantID)
+					data["EvalRuns"] = runs
+					data["EvalSets"] = sets
+					data["EvalRunsEnabled"] = true
+					// The launch form is a state-changing POST → carry a CSRF token
+					// bound to this session (the observability GET otherwise has none).
+					data["CSRF"] = csrf.issue(sessionValue(r))
+				}
 			} else {
 				fleet.Upstreams = onb.Mutator.Status("")
 			}
+			data["Fleet"] = fleet
 		}
-		render(w, "observability.html", map[string]any{"Fleet": fleet})
+		render(w, "observability.html", data)
 	})
 
 	mux.HandleFunc("GET /ui/agents/{id}", func(w http.ResponseWriter, r *http.Request) {
@@ -313,6 +355,18 @@ func Handler(reg *controlplane.Registry, st store.Store, oidc OIDCConfig, onb *O
 			if onb.Policies != nil {
 				policies, _ = onb.Policies.List(r.Context(), p.TenantID)
 			}
+			var quotas []quota.Rule
+			if onb.Quotas != nil {
+				quotas, _ = controlplane.ListQuotasShared(r.Context(), onb.Quotas, p.TenantID)
+			}
+			var evalSets []eval.Set
+			if onb.EvalStore != nil {
+				evalSets, _ = onb.EvalStore.ListSets(r.Context(), p.TenantID)
+			}
+			var evalPolicies []eval.Policy
+			if onb.EvalPolicies != nil {
+				evalPolicies, _ = onb.EvalPolicies.ListPolicies(r.Context(), p.TenantID)
+			}
 			// A freshly minted key arrives as "key:<plaintext>" — the one time it
 			// is ever shown. Split it out so the template can give it a distinct,
 			// copy-it-now treatment instead of a generic success flash.
@@ -328,6 +382,9 @@ func Handler(reg *controlplane.Registry, st store.Store, oidc OIDCConfig, onb *O
 				"SecretsEnabled": onb.Secrets != nil,
 				"Agents":         agents, "AgentsEnabled": onb.Agents != nil && onb.AgentMgr != nil,
 				"Policies": policies, "PoliciesEnabled": onb.Policies != nil,
+				"Quotas": quotas, "QuotasEnabled": onb.Quotas != nil,
+				"EvalSets": evalSets, "EvalSetsEnabled": onb.EvalStore != nil,
+				"EvalPolicies": evalPolicies, "EvalPoliciesEnabled": onb.EvalPolicies != nil,
 			})
 		})
 
@@ -474,6 +531,22 @@ func Handler(reg *controlplane.Registry, st store.Store, oidc OIDCConfig, onb *O
 			flashRedirect(w, r, "Credential "+r.FormValue("name")+" saved.")
 		}))
 
+		// Rotate re-encrypts every tenant secret under the current primary key.
+		// The flash carries only counts (never a value) — a rotate re-seals, it
+		// does not reveal.
+		mux.HandleFunc("POST /ui/onboarding/secrets/rotate", guard(func(p identity.Principal, w http.ResponseWriter, r *http.Request) {
+			if onb.Secrets == nil {
+				http.Error(w, "secrets broker not configured (set RUNTIME_SECRETS_KEYS)", http.StatusServiceUnavailable)
+				return
+			}
+			st, err := onb.Secrets.RotateSecrets(r.Context(), p.TenantID)
+			if err != nil {
+				http.Error(w, "rotate failed", http.StatusInternalServerError)
+				return
+			}
+			flashRedirect(w, r, "Keyring rotated. "+strconv.Itoa(st.Rotated)+" of "+strconv.Itoa(st.Total)+" secrets re-sealed with the current key.")
+		}))
+
 		mux.HandleFunc("POST /ui/onboarding/upstreams", guard(func(p identity.Principal, w http.ResponseWriter, r *http.Request) {
 			params := controlplane.UpstreamParams{
 				Name: r.FormValue("name"), URL: r.FormValue("url"),
@@ -517,6 +590,182 @@ func Handler(reg *controlplane.Registry, st store.Store, oidc OIDCConfig, onb *O
 				}
 				flashRedirect(w, r, "Policy "+r.PathValue("name")+" removed.")
 			}))
+		}
+
+		// Tenant gateway quotas: per-upstream request-rate limits. Mounted only
+		// when the quota store is on (onb.Quotas non-nil). The console is
+		// tenant-admin-only, so Insert ALWAYS uses the caller's own tenant and
+		// never the "*" wildcard (that is a superuser-only CLI capability).
+		if onb.Quotas != nil {
+			mux.HandleFunc("POST /ui/onboarding/quotas", guard(func(p identity.Principal, w http.ResponseWriter, r *http.Request) {
+				upstream := r.FormValue("upstream")
+				rate, err := strconv.Atoi(r.FormValue("rate"))
+				if upstream == "" || err != nil || rate < 0 {
+					http.Error(w, "upstream and non-negative rate required", http.StatusBadRequest)
+					return
+				}
+				if err := onb.Quotas.Insert(r.Context(), quota.Rule{Tenant: p.TenantID, Upstream: upstream, RatePerMin: rate}); err != nil {
+					http.Error(w, "save quota failed", http.StatusInternalServerError)
+					return
+				}
+				flashRedirect(w, r, "Quota for upstream "+upstream+" set to "+strconv.Itoa(rate)+"/min.")
+			}))
+
+			mux.HandleFunc("POST /ui/onboarding/quotas/delete", guard(func(p identity.Principal, w http.ResponseWriter, r *http.Request) {
+				upstream := r.FormValue("upstream")
+				if _, err := onb.Quotas.Delete(r.Context(), p.TenantID, upstream); err != nil {
+					http.Error(w, "delete quota failed", http.StatusInternalServerError)
+					return
+				}
+				flashRedirect(w, r, "Quota for upstream "+upstream+" removed.")
+			}))
+		}
+
+		// Golden-set eval sets: add/delete tenant-scoped sets whose cases are pasted
+		// as a JSON array into a textarea (mirrors the CLI --file). Mounted only when
+		// the eval store is on (onb.EvalStore non-nil). Malformed JSON or a set that
+		// fails ValidateSet is a 400 (mirrors the quota bad-rate handling); the
+		// tenant is ALWAYS the caller's own, never form-supplied.
+		if onb.EvalStore != nil {
+			mux.HandleFunc("POST /ui/onboarding/eval-sets", guard(func(p identity.Principal, w http.ResponseWriter, r *http.Request) {
+				name := r.FormValue("name")
+				var cases []eval.Case
+				if err := json.Unmarshal([]byte(r.FormValue("cases")), &cases); err != nil {
+					http.Error(w, "cases must be a valid JSON array", http.StatusBadRequest)
+					return
+				}
+				if err := eval.ValidateSet(name, cases); err != nil {
+					http.Error(w, err.Error(), http.StatusBadRequest)
+					return
+				}
+				if err := onb.EvalStore.PutSet(r.Context(), eval.Set{Tenant: p.TenantID, Name: name, Cases: cases}); err != nil {
+					http.Error(w, "save set failed", http.StatusInternalServerError)
+					return
+				}
+				flashRedirect(w, r, "Eval set "+name+" saved ("+strconv.Itoa(len(cases))+" cases).")
+			}))
+
+			mux.HandleFunc("POST /ui/onboarding/eval-sets/{name}/delete", guard(func(p identity.Principal, w http.ResponseWriter, r *http.Request) {
+				name := r.PathValue("name")
+				if _, err := onb.EvalStore.DeleteSet(r.Context(), p.TenantID, name); err != nil {
+					http.Error(w, "delete set failed", http.StatusInternalServerError)
+					return
+				}
+				flashRedirect(w, r, "Eval set "+name+" removed.")
+			}))
+		}
+
+		// Online eval policies: add/delete per-agent sampling policies whose criteria
+		// are pasted as a JSON array into a textarea. Mounted only when the policy
+		// store is on (onb.EvalPolicies non-nil). A non-numeric rate, malformed JSON,
+		// or a policy that fails ValidatePolicy (rate outside 0..100, no criteria,
+		// bad scorer/regex) is a 400; the tenant is ALWAYS the caller's own.
+		if onb.EvalPolicies != nil {
+			mux.HandleFunc("POST /ui/onboarding/eval-policies", guard(func(p identity.Principal, w http.ResponseWriter, r *http.Request) {
+				agent := r.FormValue("agent")
+				rate, err := strconv.Atoi(r.FormValue("rate"))
+				if err != nil {
+					http.Error(w, "rate must be 0-100", http.StatusBadRequest)
+					return
+				}
+				var criteria []eval.Criterion
+				if err := json.Unmarshal([]byte(r.FormValue("criteria")), &criteria); err != nil {
+					http.Error(w, "criteria must be a valid JSON array", http.StatusBadRequest)
+					return
+				}
+				pol := eval.Policy{Tenant: p.TenantID, AgentID: agent, SampleRate: rate, Criteria: criteria}
+				if err := eval.ValidatePolicy(pol); err != nil {
+					http.Error(w, err.Error(), http.StatusBadRequest)
+					return
+				}
+				if err := onb.EvalPolicies.PutPolicy(r.Context(), pol); err != nil {
+					http.Error(w, "save policy failed", http.StatusInternalServerError)
+					return
+				}
+				flashRedirect(w, r, "Online eval policy for "+agent+" saved (rate "+strconv.Itoa(rate)+"%).")
+			}))
+
+			mux.HandleFunc("POST /ui/onboarding/eval-policies/{agent}/delete", guard(func(p identity.Principal, w http.ResponseWriter, r *http.Request) {
+				agent := r.PathValue("agent")
+				if _, err := onb.EvalPolicies.DeletePolicy(r.Context(), p.TenantID, agent); err != nil {
+					http.Error(w, "delete policy failed", http.StatusInternalServerError)
+					return
+				}
+				flashRedirect(w, r, "Online eval policy for "+agent+" removed.")
+			}))
+		}
+
+		// Eval runs (observability page): launch a golden-set run against an agent,
+		// then drill into its per-case results. Mounted only when the golden-set
+		// store is wired. The launch mirrors the /admin/evals/runs create sequence:
+		// validate set exists + agent visible, mint a run id, CreateRun, then run
+		// asynchronously on the SIGNAL ctx (a run must outlive the request).
+		if onb.EvalStore != nil {
+			mux.HandleFunc("POST /ui/observability/eval-runs", guard(func(p identity.Principal, w http.ResponseWriter, r *http.Request) {
+				set := r.FormValue("set")
+				agent := r.FormValue("agent")
+				if set == "" || agent == "" {
+					http.Error(w, "set and agent required", http.StatusBadRequest)
+					return
+				}
+				// The set must exist under the caller's tenant.
+				if _, found, err := onb.EvalStore.GetSet(r.Context(), p.TenantID, set); err != nil {
+					http.Error(w, "get set failed", http.StatusInternalServerError)
+					return
+				} else if !found {
+					http.Error(w, "unknown set", http.StatusBadRequest)
+					return
+				}
+				// The agent must be visible to the caller (own tenant, or superuser).
+				info, ok := reg.Get(agent)
+				if !ok || !(p.Superuser || info.Tenant == p.TenantID) {
+					http.Error(w, "unknown or invisible agent", http.StatusBadRequest)
+					return
+				}
+				id, err := controlplane.MintEvalRunID()
+				if err != nil {
+					http.Error(w, "mint run id failed", http.StatusInternalServerError)
+					return
+				}
+				if err := onb.EvalStore.CreateRun(r.Context(), eval.Run{
+					RunID: id, Tenant: p.TenantID, SetName: set, AgentID: agent, Status: eval.StatusPending,
+				}); err != nil {
+					http.Error(w, "create run failed", http.StatusInternalServerError)
+					return
+				}
+				// Launch on the server signal ctx, never r.Context(): the goroutine
+				// must outlive this request. EvalMetrics gives console-launched runs
+				// the SAME eval counters as the CLI/admin path (parity); it and the
+				// judge are nil-safe in Execute. Default a missing signal ctx to
+				// Background so a run can never fire on a nil ctx.
+				runCtx := onb.EvalSignalCtx
+				if runCtx == nil {
+					runCtx = context.Background()
+				}
+				go eval.Execute(runCtx, onb.EvalStore, onb.EvalInvoker, onb.EvalJudge, id, onb.EvalMetrics)
+				observabilityRedirect(w, r)
+			}))
+
+			// Per-run results drill-in. GET (not state-changing) so no CSRF, but a
+			// principal is required and a cross-tenant run 404s (no oracle).
+			mux.HandleFunc("GET /ui/observability/eval-runs/{id}", func(w http.ResponseWriter, r *http.Request) {
+				p, ok := controlplane.PrincipalFromContext(r.Context())
+				if !ok {
+					http.NotFound(w, r)
+					return
+				}
+				run, found, err := onb.EvalStore.GetRun(r.Context(), r.PathValue("id"))
+				if err != nil {
+					http.Error(w, "get run failed", http.StatusInternalServerError)
+					return
+				}
+				if !found || !(p.Superuser || run.Tenant == p.TenantID) {
+					http.NotFound(w, r)
+					return
+				}
+				results, _ := onb.EvalStore.ListResults(r.Context(), run.RunID)
+				render(w, "eval-run.html", map[string]any{"Run": run, "Results": results})
+			})
 		}
 
 		// Managed agents: register/deregister/enable/disable/re-attach remote
@@ -593,6 +842,12 @@ func sessionValue(r *http.Request) string {
 func flashRedirect(w http.ResponseWriter, r *http.Request, msg string) {
 	http.SetCookie(w, &http.Cookie{Name: "rt_flash", Value: msg, Path: "/ui/onboarding", MaxAge: 30, HttpOnly: true, SameSite: http.SameSiteLaxMode})
 	http.Redirect(w, r, "/ui/onboarding", http.StatusSeeOther)
+}
+
+// observabilityRedirect performs POST-redirect-GET back to the observability
+// page after a launch, so a browser refresh does not re-submit the run.
+func observabilityRedirect(w http.ResponseWriter, r *http.Request) {
+	http.Redirect(w, r, "/ui/observability", http.StatusSeeOther)
 }
 
 // splitScopes parses the oauth2 scopes form field, which lets an admin separate

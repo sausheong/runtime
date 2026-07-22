@@ -467,3 +467,7 @@ func mintEvalRunID() (string, error) {
 	}
 	return hex.EncodeToString(b[:]), nil
 }
+
+// MintEvalRunID is the exported run-id minter shared with the console's launch
+// handler, which mirrors the /admin/evals/runs create sequence.
+func MintEvalRunID() (string, error) { return mintEvalRunID() }

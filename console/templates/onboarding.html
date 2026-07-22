@@ -135,6 +135,10 @@
   <!-- ===== Credentials ===== -->
   <section class="card">
     <h2>Credentials</h2>
+    <form method="post" action="/ui/onboarding/secrets/rotate" onsubmit="return confirm('Rotate the keyring? All secrets are re-sealed; this cannot be undone.')">
+      <input type="hidden" name="csrf_token" value="{{.CSRF}}">
+      <button type="submit">Rotate keyring</button>
+    </form>
     <p class="card-desc">Per-tenant secrets brokered into upstream requests. Values are never displayed.</p>
     <table>
       <thead><tr><th>Name</th><th>Type</th></tr></thead>
@@ -261,6 +265,95 @@
       <p><label>Cedar policy (exactly one statement)<br>
         <textarea name="cedar_text" rows="4" style="width:100%;font-family:monospace" placeholder='forbid (principal, action == Gateway::Action::"call_tool", resource) when &#123; resource.server == "sandbox" &#125;;' required></textarea></label></p>
       <button type="submit">Add policy</button>
+    </form>
+  </section>
+  {{end}}
+
+  {{if .QuotasEnabled}}
+  <!-- ===== Quotas ===== -->
+  <section class="card">
+    <h2>Gateway quotas</h2>
+    <p class="card-desc">Per-upstream request rate limits for this tenant (requests/min; 0 = block). Applies to gateway tool calls routed to each upstream.</p>
+    <table>
+      <thead><tr><th>Upstream</th><th>Rate/min</th><th></th></tr></thead>
+      <tbody>
+      {{range .Quotas}}<tr>
+        <td class="mono">{{.Upstream}}</td>
+        <td>{{.RatePerMin}}</td>
+        <td class="actions"><form method="post" action="/ui/onboarding/quotas/delete" onsubmit="return confirm('Remove this quota?')">
+          <input type="hidden" name="csrf_token" value="{{$.CSRF}}"><input type="hidden" name="upstream" value="{{.Upstream}}"><button type="submit" class="danger">Remove</button>
+        </form></td>
+      </tr>{{else}}
+        <tr><td colspan="3" class="empty">No quotas — all upstreams unlimited for this tenant.</td></tr>
+      {{end}}
+      </tbody>
+    </table>
+    <form method="post" action="/ui/onboarding/quotas" style="margin-top:1rem">
+      <input type="hidden" name="csrf_token" value="{{.CSRF}}">
+      <p><input name="upstream" placeholder="upstream id (e.g. srv1)" required style="width:100%"></p>
+      <p><label>Rate/min<br><input name="rate" type="number" min="0" placeholder="requests per minute" required style="width:100%"></label></p>
+      <button type="submit">Save quota</button>
+    </form>
+  </section>
+  {{end}}
+
+  {{if .EvalSetsEnabled}}
+  <!-- ===== Eval sets ===== -->
+  <section class="card">
+    <h2>Eval sets</h2>
+    <p class="card-desc">Named golden sets of cases (input + scorer + expected/rubric) run against an agent to measure quality. Paste cases as a JSON array; validated at save.</p>
+    <table>
+      <thead><tr><th>Name</th><th>Cases</th><th></th></tr></thead>
+      <tbody>
+      {{range .EvalSets}}<tr>
+        <td class="mono">{{.Name}}</td>
+        <td>{{len .Cases}}</td>
+        <td class="actions"><form method="post" action="/ui/onboarding/eval-sets/{{.Name}}/delete" onsubmit="return confirm('Remove this eval set?')">
+          <input type="hidden" name="csrf_token" value="{{$.CSRF}}"><button type="submit" class="danger">Remove</button>
+        </form></td>
+      </tr>{{else}}
+        <tr><td colspan="3" class="empty">No eval sets yet.</td></tr>
+      {{end}}
+      </tbody>
+    </table>
+    <form method="post" action="/ui/onboarding/eval-sets" style="margin-top:1rem">
+      <input type="hidden" name="csrf_token" value="{{.CSRF}}">
+      <p><input name="name" placeholder="set name (e.g. greetings)" required style="width:100%"></p>
+      <p><label>Cases (JSON array)<br>
+        <textarea name="cases" rows="8" style="width:100%;font-family:monospace" placeholder='[{"input":"hi","scorer":"contains","expected":"hello"},&#10; {"input":"2+2?","scorer":"exact","expected":"4"}]' required></textarea></label></p>
+      <button type="submit">Add eval set</button>
+    </form>
+  </section>
+  {{end}}
+
+  {{if .EvalPoliciesEnabled}}
+  <!-- ===== Online eval policies ===== -->
+  <section class="card">
+    <h2>Online eval policies</h2>
+    <p class="card-desc">Per-agent online-sampling policies: score a percentage of finished sessions against a set of criteria (judge/contains/regex). Paste criteria as a JSON array; validated at save.</p>
+    <table>
+      <thead><tr><th>Agent</th><th>Sample rate</th><th>Criteria</th><th></th></tr></thead>
+      <tbody>
+      {{range .EvalPolicies}}<tr>
+        <td class="mono">{{.AgentID}}</td>
+        <td>{{.SampleRate}}%</td>
+        <td>{{len .Criteria}}</td>
+        <td class="actions"><form method="post" action="/ui/onboarding/eval-policies/{{.AgentID}}/delete" onsubmit="return confirm('Remove this online eval policy?')">
+          <input type="hidden" name="csrf_token" value="{{$.CSRF}}"><button type="submit" class="danger">Remove</button>
+        </form></td>
+      </tr>{{else}}
+        <tr><td colspan="4" class="empty">No online eval policies yet.</td></tr>
+      {{end}}
+      </tbody>
+    </table>
+    <form method="post" action="/ui/onboarding/eval-policies" style="margin-top:1rem">
+      <input type="hidden" name="csrf_token" value="{{.CSRF}}">
+      <p><input name="agent" placeholder="agent id (e.g. support)" required style="width:100%"></p>
+      <p><label>Sample rate (%)<br>
+        <input type="number" name="rate" min="0" max="100" value="10" required></label></p>
+      <p><label>Criteria (JSON array)<br>
+        <textarea name="criteria" rows="8" style="width:100%;font-family:monospace" placeholder='[{"name":"polite","scorer":"judge","rubric":"Is the reply polite?"}]' required></textarea></label></p>
+      <button type="submit">Add online eval policy</button>
     </form>
   </section>
   {{end}}
