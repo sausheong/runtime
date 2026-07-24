@@ -1,8 +1,11 @@
-# Control-plane registry for the GCP distributed deployment. Both agents are
+# Control-plane registry for the GCP distributed deployment. All agents are
 # REMOTE: runtimed attaches (health + proxy + status) over the VPC and never
 # spawns them. A remote entry sets only id/name/model/tenant/url/auth_token — NOT
 # kind/command/workdir/memory/gateway (spawn-time-only; rejected at load).
-# Replace the 10.10.0.x hosts with the internal IPs printed by provision.sh.
+# These are the stable internal addresses assigned by provision.sh in the
+# runtime-vpc subnet. Update them here if the instances are recreated with
+# different addresses. File-configured remotes are an operator trust decision;
+# tenant-managed remotes intentionally reject private addresses to prevent SSRF.
 #
 # tenant: agents are scoped to a tenant. With identity ON, the console only shows
 # agents in the logged-in admin's tenant, so this MUST match the tenant your
@@ -13,15 +16,27 @@ agents:
     name: SG Nutrition Investigator (Go)
     model: openai/gpt-5.4          # display only; B's OPENAI_MODEL is authoritative
     tenant: acme
-    url: http://10.10.0.AGENT_GO_IP:8080
+    url: http://10.10.0.3:8080
     auth_token: ${NUTRITION_GO_TOKEN}
 
   - id: nutrition-openai
     name: SG Nutrition Investigator (OpenAI SDK)
     model: openai/gpt-5.4          # display only; C's OPENAI_MODEL is authoritative
     tenant: acme
-    url: http://10.10.0.AGENT_PY_IP:8302
+    url: http://10.10.0.4:8302
     # The Python contract shim does not enforce a bearer (see deploy_plan.md §7).
     # Port 8302 is VPC-internal only via the firewall. Leave auth_token off so the
     # config does not imply protection the shim doesn't provide. Add it back only
     # after the shim grows a bearer middleware.
+
+  - id: hello-claude
+    name: Hello Claude
+    model: anthropic/claude-sonnet-4-5
+    tenant: acme
+    url: http://10.10.0.4:8080
+
+  - id: food-label-advisor
+    name: Food Label Advisor
+    model: anthropic/claude-sonnet-4-5
+    tenant: acme
+    url: http://10.10.0.4:8310
