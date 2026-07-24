@@ -56,6 +56,29 @@ func (f *fakeAgentStore) SetEnabled(_ context.Context, tenant, id string, enable
 	return false, nil
 }
 
+func TestAgentManagerAttachDoesNotOverrideFileConfiguredAgent(t *testing.T) {
+	reg := NewRegistry(&config.Config{Agents: []config.AgentConfig{{
+		ID: "shared", Name: "Operator agent", Model: "test/model",
+		Tenant: "acme", URL: "http://10.10.0.4:8302",
+	}}}, "", "")
+	mgr := NewAgentManager(reg, nil, nil)
+
+	err := mgr.Attach(context.Background(), agentstore.AgentRow{
+		ID: "shared", TenantID: "acme", Name: "Managed agent",
+		Model: "test/model", URL: "http://10.10.0.4:9999", Enabled: true,
+	})
+	if err == nil || !strings.Contains(err.Error(), "operator file") {
+		t.Fatalf("Attach error = %v, want operator-file collision", err)
+	}
+	ap, ok := reg.Get("shared")
+	if !ok || ap.BaseURL != "http://10.10.0.4:8302" {
+		t.Fatalf("file-configured agent was replaced: ok=%v base=%q", ok, ap.BaseURL)
+	}
+	if reg.IsManaged("shared") {
+		t.Fatal("file-configured agent was incorrectly marked managed")
+	}
+}
+
 type dupErr struct{}
 
 func (dupErr) Error() string { return "duplicate key value" }

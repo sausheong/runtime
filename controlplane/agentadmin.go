@@ -61,6 +61,9 @@ func (m *AgentManager) process(ctx context.Context, row agentstore.AgentRow) (Ag
 // monitor. If the row is disabled, it is registered but immediately marked
 // disabled (kept out of routing). Used at boot and by the register API.
 func (m *AgentManager) Attach(ctx context.Context, row agentstore.AgentRow) error {
+	if _, exists := m.reg.Get(row.ID); exists && !m.reg.IsManaged(row.ID) {
+		return fmt.Errorf("agent %q is configured in the operator file; persisted managed row ignored", row.ID)
+	}
 	info, ap, err := m.process(ctx, row)
 	if err != nil {
 		return err
