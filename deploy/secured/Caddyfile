@@ -1,0 +1,24 @@
+# Caddy reverse proxy for the runtime control plane — cloud-agnostic TLS.
+#
+# TLS behaviour is selected by init.sh, which writes the imported `tls.caddy`:
+#   - real domain  -> tls.caddy is EMPTY  -> Caddy auto-obtains a Let's Encrypt
+#     cert over HTTP-01/TLS-ALPN and auto-renews. Needs ports 80+443 reachable
+#     from the internet and the domain's A/AAAA record pointing at this host.
+#   - no domain    -> tls.caddy is `tls internal` -> Caddy's locally-trusted
+#     self-signed cert (on-prem / air-gapped / IP-only access).
+#
+# Everything proxies to runtimed:8080 — both the console (/ui) and the
+# control-plane API (/) live on that single port. No cloud load balancer and no
+# cloud-managed certificate service: this runs on any host with Docker.
+{
+	email {$ACME_EMAIL:admin@example.com}
+}
+
+{$SITE_ADDRESS} {
+	# Empty when a real domain is set (Caddy uses automatic public ACME);
+	# `tls internal` for self-signed. Written by init.sh, mounted read-only.
+	import tls.caddy
+
+	encode gzip
+	reverse_proxy runtimed:8080
+}

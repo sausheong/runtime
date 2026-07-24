@@ -119,14 +119,19 @@ docker-image: ## Build the all-binaries image from this repository
 
 # ---- Helm chart ----
 CHART ?= deploy/charts/runtime
+HELM_TEST_VALUES ?= --set 'secrets.pgDsn=postgres://x:x@h:5432/d?sslmode=disable' \
+	--set 'config.agents[0].id=test' \
+	--set 'config.agents[0].name=Test' \
+	--set 'config.agents[0].model=test/scripted' \
+	--set 'config.agents[0].listen_addr=127.0.0.1:8101'
 
 .PHONY: helm-lint
 helm-lint: ## Lint the Helm chart
-	helm lint $(CHART) --set secrets.pgDsn=postgres://x:x@h:5432/d?sslmode=disable
+	helm lint $(CHART) $(HELM_TEST_VALUES)
 
 .PHONY: helm-template
 helm-template: ## Render the chart with a dummy DSN (quick check)
-	helm template r $(CHART) --set secrets.pgDsn=postgres://x:x@h:5432/d?sslmode=disable
+	helm template r $(CHART) $(HELM_TEST_VALUES)
 
 .PHONY: helm-deps
 helm-deps: ## Vendor + unpack chart dependencies (Postgres subchart)

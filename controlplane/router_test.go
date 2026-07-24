@@ -117,6 +117,40 @@ func TestAPI_NewSessionRoundRobinsAndPins(t *testing.T) {
 	}
 }
 
+func TestAPI_RejectsSessionOwnedByAnotherAgent(t *testing.T) {
+	var hitsA int32
+	backendA := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		atomic.AddInt32(&hitsA, 1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer backendA.Close()
+	backendB := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer backendB.Close()
+
+	cfg := &config.Config{Agents: []config.AgentConfig{
+		{ID: "a", Name: "A", Model: "m", ListenAddr: strings.TrimPrefix(backendA.URL, "http://"), Tenant: "alpha"},
+		{ID: "b", Name: "B", Model: "m", ListenAddr: strings.TrimPrefix(backendB.URL, "http://"), Tenant: "beta"},
+	}}
+	reg := NewRegistry(cfg, "/bin/agentd", "dsn")
+	st := store.NewMemStore()
+	sessionB, err := st.CreateSession(context.Background(), "b", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(NewAPI(reg, nil, st, false))
+	defer srv.Close()
+
+	code := httpGetCode(t, srv.URL+"/agents/a/sessions/"+sessionB+"/events")
+	if code != http.StatusNotFound {
+		t.Fatalf("cross-agent known session id: got %d, want 404", code)
+	}
+	if got := atomic.LoadInt32(&hitsA); got != 0 {
+		t.Fatalf("cross-agent session request reached authorized agent A backend: hits=%d", got)
+	}
+}
+
 // twoReplicaRegistry builds a registry for one agent whose two replicas dial the
 // given full base URLs (httptest servers), bypassing port derivation.
 func twoReplicaRegistry(t *testing.T, id, base0, base1 string) *Registry {

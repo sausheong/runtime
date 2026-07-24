@@ -14,6 +14,7 @@ type memStore struct {
 	seq         int
 	sessions    map[string]*SessionRow
 	events      map[string][]Event
+	eventKeys   map[string]map[string]int64
 	transcripts map[string][]byte       // key: session\x00turn
 	results     map[string]OnlineResult // key: session\x00criterion
 }
@@ -22,10 +23,13 @@ func NewMemStore() Store {
 	return &memStore{
 		sessions:    map[string]*SessionRow{},
 		events:      map[string][]Event{},
+		eventKeys:   map[string]map[string]int64{},
 		transcripts: map[string][]byte{},
 		results:     map[string]OnlineResult{},
 	}
 }
+
+func (m *memStore) Ping(context.Context) error { return nil }
 
 func (m *memStore) CreateSession(_ context.Context, agentID string, replica int) (string, error) {
 	m.mu.Lock()
@@ -145,13 +149,38 @@ func (m *memStore) SetSessionStatus(_ context.Context, id, status string) error 
 }
 
 func (m *memStore) AppendEvent(_ context.Context, sessionID, typ string, payload []byte) (int64, error) {
+	return m.appendEvent(sessionID, "", typ, payload)
+}
+
+func (m *memStore) AppendEventOnce(_ context.Context, sessionID, eventKey, typ string, payload []byte) (int64, error) {
+	if eventKey == "" {
+		return 0, fmt.Errorf("event key is required")
+	}
+	return m.appendEvent(sessionID, eventKey, typ, payload)
+}
+
+func (m *memStore) appendEvent(sessionID, eventKey, typ string, payload []byte) (int64, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if _, ok := m.sessions[sessionID]; !ok {
+		return 0, fmt.Errorf("session %q not found", sessionID)
+	}
+	if eventKey != "" {
+		if seq, ok := m.eventKeys[sessionID][eventKey]; ok {
+			return seq, nil
+		}
+	}
 	evs := m.events[sessionID]
 	next := int64(len(evs) + 1)
 	cp := make([]byte, len(payload))
 	copy(cp, payload)
 	m.events[sessionID] = append(evs, Event{Seq: next, Type: typ, Payload: cp})
+	if eventKey != "" {
+		if m.eventKeys[sessionID] == nil {
+			m.eventKeys[sessionID] = map[string]int64{}
+		}
+		m.eventKeys[sessionID][eventKey] = next
+	}
 	return next, nil
 }
 
@@ -225,6 +254,12 @@ func (m *memStore) ListOnlineResultsByTenant(_ context.Context, tenant string, l
 		out = out[:limit]
 	}
 	return out, nil
+}
+
+// The hermetic store does not retain timestamps for transcripts; production
+// retention behaviour is covered by the PostgreSQL integration path.
+func (m *memStore) ReapEvaluationData(context.Context, time.Time) (int64, error) {
+	return 0, nil
 }
 
 func (m *memStore) Close() error { return nil }

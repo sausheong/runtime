@@ -45,8 +45,9 @@ func (s *MonitorSet) Start(ap AgentProcess) {
 	ctx, cancel := context.WithCancel(s.parent)
 	s.cancels[id] = cancel
 	hm := &HealthMonitor{
-		BaseURL: ap.DialBase(),
-		Token:   ap.AuthToken,
+		BaseURL:   ap.DialBase(),
+		Token:     ap.AuthToken,
+		Transport: agentOutboundTransport(ap),
 		OnChange: func(ok bool) {
 			if s.onState != nil {
 				s.onState(id, 0, ok)

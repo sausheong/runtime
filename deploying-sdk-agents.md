@@ -25,7 +25,8 @@ Runtime supervises any process that serves these endpoints over HTTP:
 
 | Endpoint | Purpose |
 |---|---|
-| `GET /healthz` | liveness (health-gating) |
+| `GET /healthz` | process liveness |
+| `GET /readyz` | dependency-backed readiness |
 | `GET /meta` | agent id / model surfaced to the control plane |
 | `POST /sessions` | start a run; returns a `session_id` |
 | `GET /sessions/{id}/stream?since=N` | SSE event stream; replay from seq N |
@@ -52,7 +53,7 @@ through:
 | `RUNTIME_LISTEN_ADDR` | `host:port` to bind | injected by `runtimed` |
 | `RUNTIME_AGENT_ID` | agent id on `/meta` | injected by `runtimed` |
 | `RUNTIME_SHIM_DB` | SQLite path for the durable session store | optional; defaults under `workdir` |
-| `OPENAI_*` / `ANTHROPIC_*` | your model credentials | inherited from `runtimed`'s env |
+| `OPENAI_*` / `ANTHROPIC_*` | your model credentials | tenant secret, explicit agent env, or named safe passthrough |
 
 ## 2. The adapter + entrypoint
 
@@ -144,18 +145,19 @@ agents:
 ```
 
 When an agent entry sets `command`, `runtimed`'s supervisor execs that argv in
-`workdir` (instead of the bundled `agentd`), injecting the `RUNTIME_*` vars and
-inheriting the parent environment so your `OPENAI_*` / `ANTHROPIC_*` flow
-through. Credentials themselves go in a local `.env` next to the agent
-(gitignored) — see each example's `.env.example`.
+`workdir` (instead of the bundled `agentd`) with a minimal platform environment,
+not the control plane's complete environment. Store provider credentials in the
+tenant secrets broker, configure them explicitly for the agent, or name
+additional non-reserved operator variables in
+`RUNTIME_AGENT_ENV_PASSTHROUGH`. A local `.env` next to the agent may also be
+loaded by the agent's own entrypoint (and should remain gitignored); see each
+example's `.env.example`.
 
 > **Session ownership.** A `command:`-spawned shim agent keeps its sessions in
 > its own SQLite store (`RUNTIME_SHIM_DB`), not the control plane's Postgres — so
 > the control plane routes session-scoped requests (stream/get) straight to it
-> rather than resolving affinity from its own store. This works out of the box;
-> it requires `runtimed` built at the commit that taught `pickReplica` to treat
-> command-spawned agents like remotes (they own their sessions). Older `runtimed`
-> 404s "unknown session" on the stream after a successful `POST /sessions`.
+> rather than resolving affinity from its own store. Command-spawned agents own
+> their sessions and are routed like remotes; this works out of the box.
 
 ## 3. Run and gate it locally
 
@@ -302,11 +304,11 @@ process killed during a run loses that in-flight turn (completed sessions and
 events remain intact).
 
 **Native lifecycle limits are not enforced by the Python shim.** The shim does
-not currently consume `RUNTIME_AGENT_LIMITS` (`turn_timeout`,
-`session_timeout`, `max_turns`, and `max_tokens`). Configure equivalent bounds
-in the SDK, adapter, container, or process supervisor. If a foreign contract
-implementation adds limit enforcement, `limit_exceeded` is a valid terminal
-status and should end the SSE stream with an `error` event.
+not consume `RUNTIME_AGENT_LIMITS` (`turn_timeout`, `session_timeout`,
+`max_turns`, and `max_tokens`). Configure equivalent bounds in the SDK, adapter,
+container, or process supervisor. If a foreign contract implementation adds limit
+enforcement, `limit_exceeded` is a valid terminal status and should end the SSE
+stream with an `error` event.
 
 ## Summary — porting your own SDK agent
 

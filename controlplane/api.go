@@ -1,6 +1,7 @@
 package controlplane
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"strings"
@@ -63,6 +64,16 @@ func NewAPI(reg *Registry, m *obs.ControlMetrics, st store.Store, subjectForward
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
+	})
+	mux.HandleFunc("GET /readyz", func(w http.ResponseWriter, r *http.Request) {
+		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+		defer cancel()
+		if err := st.Ping(ctx); err != nil {
+			http.Error(w, "not ready", http.StatusServiceUnavailable)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ready"))
 	})
 
 	mux.HandleFunc("GET /agents", func(w http.ResponseWriter, r *http.Request) {
@@ -145,7 +156,7 @@ func NewAPI(reg *Registry, m *obs.ControlMetrics, st store.Store, subjectForward
 		}
 		m.ProxyCall(id, proxyKind(r.Method, r.URL.Path))
 		forwardSubject(r, subjectForwarding)
-		reverseProxy(ap.baseURL(), ap.AuthToken, func() { m.ProxyError(id) }).ServeHTTP(w, r)
+		reverseProxyWithTransport(ap.baseURL(), ap.AuthToken, agentOutboundTransport(ap), func() { m.ProxyError(id) }).ServeHTTP(w, r)
 	})
 
 	return mux
@@ -181,7 +192,7 @@ func pickReplica(r *http.Request, reg *Registry, st store.Store, id string) (Age
 		return reg.Replica(id, reg.NextReplica(id))
 	}
 	if sid, ok := sessionID(path); ok {
-		i, err := st.SessionReplica(r.Context(), sid)
+		session, err := st.GetSession(r.Context(), sid)
 		if err != nil {
 			// Some agents own their OWN session store, so the control plane's
 			// store never recorded this session — a miss here is expected, not
@@ -198,12 +209,19 @@ func pickReplica(r *http.Request, reg *Registry, st store.Store, id string) (Age
 			}
 			return AgentProcess{}, false // native agent: session truly unknown
 		}
+		// Authentication authorizes the agent named in the URL. A session id is
+		// not an authority token: it must also belong to that exact agent before
+		// its replica affinity may influence routing. Without this check, a known
+		// session id from agent B could be read through an authorized path for A.
+		if session.AgentID != id {
+			return AgentProcess{}, false
+		}
 		// A known session whose stored owner index is now out of range (e.g. the
 		// agent was reconfigured to fewer replicas than when this session was
 		// created) is unroutable: only that original executor can resume its
 		// workflow. reg.Replica returns false here and the caller 404s. Honest:
 		// the session exists but its owner replica no longer does.
-		return reg.Replica(id, i)
+		return reg.Replica(id, session.Replica)
 	}
 	return reg.Replica(id, 0)
 }

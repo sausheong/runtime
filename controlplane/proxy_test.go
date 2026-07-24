@@ -219,19 +219,46 @@ func TestEnvDelta_SubjectForwardingExplicit(t *testing.T) {
 	}
 }
 
-func TestBuildEnvIsEnvironPlusDelta(t *testing.T) {
-	t.Setenv("RUNTIME_C3M2_SENTINEL2", "keep")
+func TestBuildEnvExcludesControlPlaneEnvironment(t *testing.T) {
+	t.Setenv("RUNTIME_C3M2_SENTINEL2", "do-not-copy")
+	t.Setenv("RUNTIME_SECRETS_KEYS", "primary:master-key")
+	t.Setenv("RUNTIME_ADMIN_BOOTSTRAP", "svk-superuser")
+	t.Setenv("RUNTIME_OIDC_CLIENT_SECRET", "oidc-secret")
+	t.Setenv("OPENAI_API_KEY", "operator-provider-key")
 	ap := AgentProcess{AgentID: "a1", Addr: "127.0.0.1:8081", PGDSN: "dsn://x", Tenant: "t1"}
 	full, err := ap.buildEnv(context.Background())
 	if err != nil {
 		t.Fatalf("buildEnv: %v", err)
 	}
 	joined := strings.Join(full, "\n")
-	if !strings.Contains(joined, "RUNTIME_C3M2_SENTINEL2=keep") {
-		t.Fatalf("buildEnv dropped inherited env")
+	for _, forbidden := range []string{
+		"RUNTIME_C3M2_SENTINEL2", "do-not-copy",
+		"RUNTIME_SECRETS_KEYS", "master-key",
+		"RUNTIME_ADMIN_BOOTSTRAP", "svk-superuser",
+		"RUNTIME_OIDC_CLIENT_SECRET", "oidc-secret",
+		"OPENAI_API_KEY", "operator-provider-key",
+	} {
+		if strings.Contains(joined, forbidden) {
+			t.Fatalf("buildEnv leaked %q from control-plane environment:\n%s", forbidden, joined)
+		}
 	}
 	if !strings.Contains(joined, "RUNTIME_AGENT_ID=a1") {
 		t.Fatalf("buildEnv dropped delta")
+	}
+}
+
+func TestBuildEnvExplicitPassthrough(t *testing.T) {
+	t.Setenv("MODEL_ROUTER_URL", "https://router.internal")
+	t.Setenv("RUNTIME_AGENT_ENV_PASSTHROUGH", " MODEL_ROUTER_URL, RUNTIME_SECRETS_KEYS ")
+	t.Setenv("RUNTIME_SECRETS_KEYS", "must-not-pass")
+	ap := AgentProcess{AgentID: "a1", Addr: "127.0.0.1:8081", PGDSN: "dsn://x", Tenant: "t1"}
+	full, err := ap.buildEnv(context.Background())
+	if err != nil {
+		t.Fatalf("buildEnv: %v", err)
+	}
+	assertHasEnv(t, full, "MODEL_ROUTER_URL=https://router.internal")
+	if _, ok := envValue(t, full, "RUNTIME_SECRETS_KEYS"); ok {
+		t.Fatal("reserved platform variable passed through")
 	}
 }
 
@@ -303,7 +330,7 @@ func TestBuildEnv_TenantSecretsShadowAfterRuntimeVars(t *testing.T) {
 	}
 }
 
-func TestBuildEnv_NilBrokerMatchesLegacy(t *testing.T) {
+func TestBuildEnv_NilBrokerDoesNotInheritProviderSecret(t *testing.T) {
 	// Ensure the operator env doesn't leak a same-named var into the assertion:
 	// the nil-broker path must inject nothing, regardless of inherited env.
 	t.Setenv("OPENAI_API_KEY", "")
@@ -314,7 +341,7 @@ func TestBuildEnv_NilBrokerMatchesLegacy(t *testing.T) {
 		t.Fatal(err)
 	}
 	if lastIndexWithPrefix(env, "OPENAI_API_KEY=") >= 0 {
-		t.Fatal("nil broker must not inject secrets")
+		t.Fatal("nil broker must neither inject nor inherit provider secrets")
 	}
 	if lastIndexWithPrefix(env, "RUNTIME_AGENT_ID=a1") < 0 {
 		t.Fatal("RUNTIME_AGENT_ID still expected with nil broker")

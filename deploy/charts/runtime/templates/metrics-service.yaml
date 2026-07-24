@@ -1,0 +1,19 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "runtime.fullname" . }}-metrics
+  labels:
+    {{- include "runtime.labels" . | nindent 4 }}
+    runtime.sausheong.io/metrics: "true"
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "runtime.selectorLabels" . | nindent 4 }}
+    {{- if eq .Values.scheduling.mode "perAgentPods" }}
+    app.kubernetes.io/component: control-plane
+    {{- end }}
+  ports:
+    - name: metrics
+      port: 9091
+      targetPort: metrics
+      protocol: TCP

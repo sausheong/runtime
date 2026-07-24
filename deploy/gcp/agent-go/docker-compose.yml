@@ -1,0 +1,54 @@
+# Instance B — native Go nutrition agent, self-contained with its own Postgres.
+# Reuses runtime:latest (agentd is already built into it) with the CMD overridden
+# from /app/runtimed to /app/agentd. The bundled Postgres is plain postgres:16:
+# the nutrition kind needs no pgvector (its learning is a JSON file; platform
+# pgvector memory is opt-in and off for a remote agent).
+#
+#   cp .env.example .env        # set the auth token (match A) + LLM creds
+#   docker compose up -d
+#
+# The control plane (Instance A) dials this agent at http://<B-internal-ip>:8080.
+name: runtime-agent-go
+
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: runtime
+      POSTGRES_PASSWORD: runtime
+      POSTGRES_DB: runtime
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U runtime"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  nutrition-go:
+    image: ${RUNTIME_IMAGE:-asia-southeast1-docker.pkg.dev/mhi-exp-chang-sau-sheong/runtime/runtime:latest}
+    command: ["/app/agentd"]      # override the default runtimed CMD
+    depends_on:
+      postgres:
+        condition: service_healthy
+    # Shared LLM-proxy routing (OPENAI_BASE_URL + OPENAI_MODEL) comes from the
+    # untracked ../llm.env (one file for all agent VMs). Secrets stay in this
+    # dir's own .env: OPENAI_API_KEY + NUTRITION_GO_TOKEN.
+    env_file:
+      - ../llm.env
+    environment:
+      RUNTIME_PG_DSN: postgres://runtime:runtime@postgres:5432/runtime?sslmode=disable
+      RUNTIME_AGENT_ID: nutrition-go
+      RUNTIME_AGENT_KIND: nutrition
+      RUNTIME_LISTEN_ADDR: ":8080"
+      RUNTIME_AGENT_AUTH_TOKEN: ${NUTRITION_GO_TOKEN}   # MUST equal A's NUTRITION_GO_TOKEN
+      RUNTIME_NUTRITION_DATA_DIR: /data
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+    volumes:
+      - nutrition-data:/data       # persists nutrition_memory.json across restarts
+    ports:
+      - "8080:8080"                # VPC-internal only (firewall); A dials this
+
+volumes:
+  pgdata:
+  nutrition-data:

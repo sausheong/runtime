@@ -1,0 +1,84 @@
+# Cloud-agnostic SECURED overlay: runtime control plane behind Caddy TLS, with
+# runtime identity turned ON. Runs on any Docker host — no cloud load balancer,
+# no cloud-managed certs, no cloud IAM. Access control is runtime's own identity
+# system (Postgres-backed), so this deployment is portable across GCP, other
+# clouds, and bare metal / on-prem (air-gap with self-signed TLS).
+#
+#   ./init.sh [domain]          # generate .env + select TLS mode
+#   docker compose up -d        # Caddy + runtimed + Postgres
+#
+# runtimed is NOT published to the host — only Caddy is. All console + API
+# traffic enters through Caddy (TLS) and is reverse-proxied to runtimed:8080.
+name: runtime-secured
+
+services:
+  caddy:
+    image: caddy:2.11.3
+    restart: unless-stopped
+    depends_on:
+      - runtimed
+    environment:
+      SITE_ADDRESS: ${SITE_ADDRESS:?run ./init.sh first}
+      ACME_EMAIL: ${ACME_EMAIL:-admin@example.com}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./tls.caddy:/etc/caddy/tls.caddy:ro
+      - caddy_data:/data      # persisted certs + ACME account (survives restarts)
+      - caddy_config:/config
+    ports:
+      - "80:80"               # ACME HTTP-01 (real domain) + HTTP->HTTPS redirect
+      - "443:443"
+
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: runtime
+      POSTGRES_PASSWORD: runtime
+      POSTGRES_DB: runtime
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U runtime"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  runtimed:
+    # Override RUNTIME_IMAGE for your registry/host; defaults to the image built
+    # from runtime/deploy/Dockerfile (see deploy/gcp/README.md for build+push).
+    image: ${RUNTIME_IMAGE:-runtime:latest}
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      RUNTIME_PG_DSN: postgres://runtime:runtime@postgres:5432/runtime?sslmode=disable
+      RUNTIME_CTL_ADDR: ":8080"
+      # Management metrics stay inside the Compose network and are not routed
+      # through Caddy. Add a private Prometheus service if metrics are needed.
+      RUNTIME_METRICS_ADDR: ":9091"
+      RUNTIME_CONFIG: /app/runtime.remote.yaml
+      # Identity ON:
+      RUNTIME_ADMIN_BOOTSTRAP: ${RUNTIME_ADMIN_BOOTSTRAP:?run ./init.sh first}
+      RUNTIME_SECRETS_KEYS: ${RUNTIME_SECRETS_KEYS:?run ./init.sh first}
+      RUNTIME_SECRETS_PRIMARY: ${RUNTIME_SECRETS_PRIMARY:?run ./init.sh first}
+      # OIDC console login (optional; blank => service-key login). init.sh leaves
+      # these unset by default — fill them in .env to enable an OIDC IdP.
+      RUNTIME_OIDC_ISSUER: ${RUNTIME_OIDC_ISSUER:-}
+      RUNTIME_OIDC_CLIENT_ID: ${RUNTIME_OIDC_CLIENT_ID:-}
+      RUNTIME_OIDC_CLIENT_SECRET: ${RUNTIME_OIDC_CLIENT_SECRET:-}
+      RUNTIME_OIDC_REDIRECT_URL: ${RUNTIME_OIDC_REDIRECT_URL:-}
+    volumes:
+      - ./runtime.remote.yaml:/app/runtime.remote.yaml:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    # No ports: runtimed is reached ONLY through Caddy (defense in depth).
+    expose:
+      - "8080"
+      - "9091"
+
+volumes:
+  pgdata:
+  caddy_data:
+  caddy_config:

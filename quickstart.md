@@ -20,7 +20,7 @@ commands run from there.
 
 ```bash
 cd runtime
-make compose-init                            # generates .env with a bootstrap key + secrets key
+make compose-init                            # generates bootstrap, secrets, and Grafana credentials
 cd deploy/compose
 docker compose --profile build-only build    # builds runtimed, embedder, AND sandbox/browser images
 docker compose up                            # starts all six pillars
@@ -45,6 +45,11 @@ otel-collector, jaeger). Then:
 | Console (web UI) | http://localhost:8080/ui |
 | Grafana (metrics) | http://localhost:3000 |
 | Jaeger (traces) | http://localhost:16686 |
+
+Prometheus, Grafana, and Jaeger are bound to host loopback. Log into Grafana as
+`admin` using `GRAFANA_ADMIN_PASSWORD` from `deploy/compose/.env`; anonymous
+access is disabled. The OTLP collector and Runtime's `:9091` management metrics
+listener are Compose-internal and are not published to the host.
 
 Next: read the **[Operator guide](operator-guide.md)** to log in and set safe
 defaults, then the **[Tenant guide](tenant-guide.md)** to onboard a tenant and

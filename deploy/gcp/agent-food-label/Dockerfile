@@ -7,7 +7,7 @@
 # The relative path ../../contrib/shims/python from the example dir resolves to
 # /app/contrib/shims/python in this layout.
 FROM python:3.12-slim
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
+COPY --from=ghcr.io/astral-sh/uv:0.11.16 /uv /uvx /bin/
 WORKDIR /app
 COPY runtime/contrib/shims/python /app/contrib/shims/python
 COPY runtime/examples/food-label-advisor /app/examples/food-label-advisor

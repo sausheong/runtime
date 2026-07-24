@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"sync/atomic"
+	"time"
 
 	"github.com/sausheong/runtime/internal/store"
 )
@@ -29,6 +30,7 @@ type EvalStore interface {
 	FinishRun(ctx context.Context, runID, status string, total, passed, failed int, score float64, errMsg string) error
 	PutResult(ctx context.Context, runID string, res Result) error
 	ListResults(ctx context.Context, runID string) ([]Result, error)
+	ReapBefore(ctx context.Context, before time.Time) (int64, error)
 }
 
 // Store persists eval sets/runs/results in Postgres with a generation counter
@@ -253,6 +255,23 @@ func (s *Store) ListResults(ctx context.Context, runID string) ([]Result, error)
 		out = append(out, res)
 	}
 	return out, rows.Err()
+}
+
+// ReapBefore deletes completed/error runs older than before. Results cascade;
+// pending/running work is retained for startup recovery.
+func (s *Store) ReapBefore(ctx context.Context, before time.Time) (int64, error) {
+	res, err := s.db.ExecContext(ctx,
+		`DELETE FROM eval_runs
+		  WHERE created_at < $1 AND status IN ($2,$3)`,
+		before, StatusCompleted, StatusError)
+	if err != nil {
+		return 0, err
+	}
+	n, err := res.RowsAffected()
+	if n > 0 {
+		s.gen.Add(1)
+	}
+	return n, err
 }
 
 var _ EvalStore = (*Store)(nil)

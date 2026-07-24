@@ -120,6 +120,30 @@ func TestStore_EventLogAppendAndReplay(t *testing.T) {
 	}
 }
 
+func TestStore_AppendEventOnceIsIdempotent(t *testing.T) {
+	s := NewMemStore()
+	ctx := context.Background()
+	id, _ := s.CreateSession(ctx, "a", 0)
+	first, err := s.AppendEventOnce(ctx, id, "turn:0:event:0", "text", []byte(`{"text":"first"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	replayed, err := s.AppendEventOnce(ctx, id, "turn:0:event:0", "text", []byte(`{"text":"different replay payload"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if replayed != first {
+		t.Fatalf("replayed seq=%d want original %d", replayed, first)
+	}
+	events, err := s.EventsSince(ctx, id, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 1 || string(events[0].Payload) != `{"text":"first"}` {
+		t.Fatalf("events=%+v, want one original event", events)
+	}
+}
+
 func TestStore_CreateSessionPersistsReplica(t *testing.T) {
 	s := NewMemStore()
 	ctx := context.Background()

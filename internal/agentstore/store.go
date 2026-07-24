@@ -92,17 +92,26 @@ func (s *Store) Get(ctx context.Context, id string) (AgentRow, bool, error) {
 	return r, true, nil
 }
 
-// Delete removes a row scoped to its owning tenant (idempotent).
-func (s *Store) Delete(ctx context.Context, tenant, id string) error {
-	_, err := s.db.ExecContext(ctx,
+// Delete removes a row scoped to its owning tenant. removed=false means the
+// caller did not own (or no longer has) that id.
+func (s *Store) Delete(ctx context.Context, tenant, id string) (removed bool, err error) {
+	res, err := s.db.ExecContext(ctx,
 		`DELETE FROM managed_agents WHERE id=$1 AND tenant_id=$2`, id, tenant)
-	return err
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n == 1, err
 }
 
-// SetEnabled flips the enabled flag, scoped to the owning tenant (idempotent).
-func (s *Store) SetEnabled(ctx context.Context, tenant, id string, enabled bool) error {
-	_, err := s.db.ExecContext(ctx,
+// SetEnabled flips the enabled flag, scoped to the owning tenant.
+func (s *Store) SetEnabled(ctx context.Context, tenant, id string, enabled bool) (updated bool, err error) {
+	res, err := s.db.ExecContext(ctx,
 		`UPDATE managed_agents SET enabled=$3 WHERE id=$1 AND tenant_id=$2`,
 		id, tenant, enabled)
-	return err
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n == 1, err
 }

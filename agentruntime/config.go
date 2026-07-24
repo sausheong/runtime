@@ -18,9 +18,9 @@ import (
 // from the environment the control plane injects, so an agent builder never has
 // to know or carry them.
 type Config struct {
-	Spec     hrt.AgentSpec                         // harness agent spec (id, model, system prompt, ...)
-	Provider llm.LLMProvider                       // resolved LLM provider for Spec.Model
-	Tools    *tool.Registry                        // the agent's tool registry
+	Spec     hrt.AgentSpec                                           // harness agent spec (id, model, system prompt, ...)
+	Provider llm.LLMProvider                                         // resolved LLM provider for Spec.Model
+	Tools    *tool.Registry                                          // the agent's tool registry
 	KGFn     func(model, sessionID, actor string) hrt.KnowledgeGraph // optional; nil ⇒ no semantic recall
 	// Price is this agent's resolved per-model price, or nil when the model is
 	// unpriced (tokens still metered, cost skipped). Set by agentd from

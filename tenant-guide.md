@@ -81,9 +81,9 @@ If one of your OpenAPI upstreams authenticates with an OAuth2
 once and point the upstream at it. From the CLI:
 
 ```bash
-runtimectl admin secret set-oauth2 \
+printf %s "$SECRET" | runtimectl admin secret set-oauth2 \
   --name orders_oauth --token-url https://idp.example.com/oauth/token \
-  --client-id svc-orders --client-secret "$SECRET" --scope orders.read
+  --client-id svc-orders --client-secret-stdin --scope orders.read
 ```
 
 (You can also create it from the console's secrets page.) Then reference it on
@@ -91,7 +91,7 @@ the upstream with `cred_secret: orders_oauth` — the platform mints, caches, an
 auto-refreshes the token and sends it as `Bearer <token>` (the header defaults
 to `Authorization`; override with `cred_header`).
 
-- The `--client-secret` is **write-only**: once set it never appears in
+- The client secret is **write-only**: once set it never appears in
   `secret ls`, the API, the console, or logs. To rotate it, just re-run
   `set-oauth2` — the change applies without a restart.
 - OAuth2 credentials are **OpenAPI-only**. Attaching one to a non-OpenAPI

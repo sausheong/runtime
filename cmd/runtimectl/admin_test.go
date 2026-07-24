@@ -54,3 +54,20 @@ func TestFlagValue(t *testing.T) {
 		t.Error("default")
 	}
 }
+
+func TestSecretInputFromStdin(t *testing.T) {
+	got, err := secretInput([]string{"secret", "set", "API_KEY", "--value-stdin"}, 3, "", "--value-stdin", strings.NewReader("s3cr3t\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "s3cr3t" {
+		t.Fatalf("secret = %q", got)
+	}
+}
+
+func TestSecretInputRejectsAmbiguousValue(t *testing.T) {
+	_, err := secretInput([]string{"secret", "set", "API_KEY", "visible", "--value-stdin"}, 3, "", "--value-stdin", strings.NewReader("hidden"))
+	if err == nil {
+		t.Fatal("expected ambiguous secret input to fail")
+	}
+}

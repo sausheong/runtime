@@ -36,15 +36,16 @@ type UpstreamRow struct {
 // upstream to exactly that tenant.
 func (r UpstreamRow) ToConfig() config.GatewayServer {
 	return config.GatewayServer{
-		Name:       r.Name,
-		URL:        r.URL,
-		OpenAPI:    r.OpenAPI,
-		BaseURL:    r.BaseURL,
-		Operations: r.Operations,
-		Tenants:    []string{r.TenantID},
-		CredSecret: r.CredSecret,
-		CredHeader: r.CredHeader,
-		Enrich:     r.Enrich,
+		Name:             r.Name,
+		URL:              r.URL,
+		OpenAPI:          r.OpenAPI,
+		BaseURL:          r.BaseURL,
+		Operations:       r.Operations,
+		Tenants:          []string{r.TenantID},
+		CredSecret:       r.CredSecret,
+		CredHeader:       r.CredHeader,
+		Enrich:           r.Enrich,
+		RestrictOutbound: true,
 	}
 }
 

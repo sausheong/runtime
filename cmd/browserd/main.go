@@ -18,6 +18,8 @@
 //	RUNTIME_BROWSER_CPUS            cpu limit (default 1.0)
 //	RUNTIME_BROWSER_PROFILE_MB      tmpfs profile size (default 256)
 //	RUNTIME_BROWSER_RUNTIME         engine runtime, e.g. runsc
+//	RUNTIME_BROWSER_NETWORK         private Docker network for browser/CDP traffic
+//	RUNTIME_BROWSER_PROXY_HOST      browserd hostname on that private network
 //	RUNTIME_BROWSER_EGRESS_MODE     deny-all | allow-list | allow-all-public (default deny-all)
 //	RUNTIME_BROWSER_EGRESS_ALLOW    comma-separated hostname globs (allow-list mode)
 //	RUNTIME_BROWSER_PROXY_ADDR      host:port the egress proxy listens on (default 0.0.0.0:0 → ephemeral, all interfaces). Binding all interfaces is safe: the proxy is Policy-gated (deny-all by default) so it only ever grants policy-permitted egress, and the container reaches it via host.docker.internal. Pin to a specific IP (e.g. the docker bridge gateway) to tighten the bind.
@@ -51,7 +53,7 @@ func envInt(key string, def int) int {
 		return def
 	}
 	n, err := strconv.Atoi(v)
-	if err != nil {
+	if err != nil || n <= 0 {
 		slog.Warn("browserd: bad integer env, using default", "key", key, "value", v, "default", def)
 		return def
 	}
@@ -64,7 +66,7 @@ func envFloat(key string, def float64) float64 {
 		return def
 	}
 	f, err := strconv.ParseFloat(v, 64)
-	if err != nil {
+	if err != nil || f <= 0 {
 		slog.Warn("browserd: bad float env, using default", "key", key, "value", v, "default", def)
 		return def
 	}
@@ -77,7 +79,7 @@ func envDur(key string, def time.Duration) time.Duration {
 		return def
 	}
 	d, err := time.ParseDuration(v)
-	if err != nil {
+	if err != nil || d <= 0 {
 		slog.Warn("browserd: bad duration env, using default", "key", key, "value", v, "default", def)
 		return def
 	}
@@ -141,6 +143,8 @@ func main() {
 			CPUs:      envFloat("RUNTIME_BROWSER_CPUS", 1.0),
 			ProfileMB: envInt("RUNTIME_BROWSER_PROFILE_MB", 256),
 			Runtime:   os.Getenv("RUNTIME_BROWSER_RUNTIME"),
+			Network:   os.Getenv("RUNTIME_BROWSER_NETWORK"),
+			ProxyHost: os.Getenv("RUNTIME_BROWSER_PROXY_HOST"),
 		})
 		if err != nil {
 			slog.Error("browserd: docker backend init failed", "err", err)

@@ -4,7 +4,7 @@
 
 ### What is Runtime?
 
-Runtime is an open-source, on-prem platform for hosting and operating LLM agents. It provides the infrastructure around an agent—the durable execution loop, process supervision, identity, memory, tool access, isolation, observability, and operator surfaces—so application teams can concentrate on the agent's instructions, models, and domain tools.
+Runtime is a source-available, on-prem platform for hosting and operating LLM agents. It provides the infrastructure around an agent—the durable execution loop, process supervision, identity, memory, tool access, isolation, observability, and operator surfaces—so application teams can concentrate on the agent's instructions, models, and domain tools. The repository does not yet contain a licence file, so it should not be described as open source until one is added.
 
 It is designed as a self-hosted counterpart to services such as AWS Bedrock AgentCore. Runtime keeps the control plane, agent processes, session history, credentials, and operational telemetry under your control. Its smallest useful deployment is a single Runtime process plus Postgres; its turnkey deployment adds identity, memory, gateway services, sandboxes, metrics, and tracing with Docker Compose.
 
@@ -95,8 +95,8 @@ still counts.
 
 The durability boundary is a **completed turn**, not an individual external side effect. If a tool performs a side effect and the process dies before that turn is checkpointed, Runtime may call the tool again. Side-effecting tools should therefore use idempotency keys or otherwise tolerate at-least-once execution.
 
-Native Go agents receive full DBOS-backed turn recovery. Python contract-shim agents persist sessions and event replay in SQLite, but do not currently resume an in-flight SDK invocation after a process crash.
-The Python shim also does not currently enforce Runtime's native lifecycle
+Native Go agents receive full DBOS-backed turn recovery. Python contract-shim agents persist sessions and event replay in SQLite, but do not resume an in-flight SDK invocation after a process crash.
+The Python shim also does not enforce Runtime's native lifecycle
 limits; SDK agents should configure equivalent limits in their framework or
 process supervisor.
 
@@ -131,7 +131,7 @@ Runtime supports:
 
 Cross-tenant resources are hidden with `404`, rather than revealing their existence with `403`. Within a tenant, role violations return `403`; missing or invalid credentials return `401`.
 
-Provider and upstream credentials can be stored per tenant. Runtime encrypts them with AES-256-GCM, stores only ciphertext, never returns secret values through the API, and injects resolved values into an agent's environment when it starts. A multi-key keyring supports online rotation and explicit re-encryption of existing records.
+Provider and upstream credentials can be stored per tenant. Runtime encrypts them with AES-256-GCM, stores only ciphertext, never returns secret values through the API, and injects resolved values into an agent's environment when it starts. A multi-key keyring supports online rotation and explicit re-encryption of existing records. Child processes start with a minimal platform environment rather than inheriting all control-plane secrets. Operators can explicitly pass additional non-reserved variables and should give agents a restricted database role through `RUNTIME_AGENT_PG_DSN`.
 
 This lets each tenant bring its own model or API credentials without changing the agent's normal `os.Getenv`-style configuration.
 
@@ -147,7 +147,7 @@ The memory stack has three layers:
 
 Recall and ingestion are best-effort. An embedding or extraction failure does not fail the user's turn. Operators can tune result counts, similarity floors, ingestion concurrency, and duplicate thresholds. The embedding model and vector dimension must agree, and pgvector must be installed in the target database.
 
-Runtime currently scopes memory per tenant. Per-user and per-agent memory boundaries, TTL/compaction, and session-level synthesis remain future work.
+Runtime scopes memory per tenant. Per-user and per-agent memory boundaries, TTL/compaction, and session-level synthesis are not provided.
 
 ### 2.5 MCP and REST Tool Gateway
 
@@ -168,7 +168,7 @@ Tenant administrators can register HTTP and OpenAPI upstreams at runtime through
 The gateway can expose two stateful, per-session execution environments:
 
 - **Code interpreter:** Python and shell execution inside a locked-down Docker container with a read-only root filesystem, resource limits, no network access, and an isolated workspace.
-- **Browser:** Chromium controlled through a sandbox service, with outbound traffic constrained by hostname allow/deny policy.
+- **Browser:** Chromium controlled through a sandbox service, with outbound traffic constrained by hostname allow/deny policy. The turnkey deployment keeps CDP on an internal Docker network instead of publishing its unauthenticated port.
 
 Both environments are tenant-scoped and session-owned. State can survive across calls within a session without exposing the agent host filesystem or placing execution libraries inside the agent process.
 
@@ -176,7 +176,7 @@ The single-host implementation uses the Docker socket to create these containers
 
 ### 2.7 Observability and Operations
 
-Runtime exposes one Prometheus endpoint for the entire fleet. The control plane merges its own metrics with metrics scraped from agents and enforces the registered agent label so an agent cannot impersonate another series.
+Runtime exposes one Prometheus endpoint for the entire fleet on a separate management listener (`RUNTIME_METRICS_ADDR`, loopback by default). The public control-plane listener does not mount `/metrics`. The control plane merges its own metrics with metrics scraped from agents and enforces the registered agent label so an agent cannot impersonate another series.
 
 The observability stack includes:
 
@@ -195,7 +195,8 @@ Runtime integrates agents through a small HTTP and SSE contract:
 
 | Endpoint | Purpose |
 |---|---|
-| `GET /healthz` | Liveness and readiness |
+| `GET /healthz` | Process liveness |
+| `GET /readyz` | Database-backed readiness |
 | `GET /meta` | Agent identity and contract version |
 | `POST /sessions` | Create a session and begin work |
 | `GET /sessions` | List an agent's sessions |
@@ -401,7 +402,8 @@ Runtime can route, health-check, enable, disable, and reattach these agents. Sta
 - Remove the bootstrap credential after creating the first tenant administrator.
 - Store tenant credentials through the encrypted broker and maintain recoverable keyring backups.
 - Keep agent and upstream tenant assignments explicit.
-- Restrict access to `/metrics` at the network layer if operator-level identifiers are sensitive; the endpoint is intentionally unauthenticated for Prometheus.
+- Keep `RUNTIME_METRICS_ADDR` on a private management network. It is intentionally unauthenticated for Prometheus and is not mounted on the public API listener.
+- Give local agents a restricted database role with `RUNTIME_AGENT_PG_DSN`. Local subprocesses are trusted platform code and are not a malicious-code isolation boundary.
 - Treat access to the Docker socket as root-equivalent and isolate the sandbox host accordingly.
 - Review code and browser egress policies for the deployment's threat model.
 - Make side-effecting tools idempotent.
@@ -418,22 +420,22 @@ Runtime can route, health-check, enable, disable, and reattach these agents. Sta
 
 ## 7. Feature Matrix and Current Scope
 
-Runtime has met the repository's documented v1.0 acceptance bar, but the latest formal repository tag is currently `v0.2.0`. Treat the current tree as a v1.0 release candidate until a formal v1.0 release is published.
+The platform provides a durable execution spine and six surrounding pillars — identity, memory, gateway, sandboxes, observability, and turnkey operations. The matrix below lists what each area provides and its known limitations.
 
-| Area | Implemented now | Notable remaining work |
+| Area | Provided | Known limitations |
 |---|---|---|
 | Durable runtime | Native per-turn checkpoints, event replay, supervision | Cross-binary-version recovery policy and finer side-effect semantics |
 | Lifecycle safety | Native turn/session timeouts, turn cap, token budget, terminal breach status and metric | Shim-native enforcement and aggregate tenant budgets |
 | Scale | Replica pools, affinity, load-based local autoscaling, drain | Richer scaling signals and force-drain deadlines |
 | Identity | OIDC, service keys, fixed tenant roles, encrypted secrets, rotation | Custom RBAC, local password accounts, cross-tenant users |
 | Memory | Durable store, pgvector recall, automatic ingestion | TTL/GC, per-user scopes, compaction and synthesis |
-| Gateway | MCP federation, semantic search, REST/OpenAPI adapters, dynamic HTTP upstreams | Resources/prompts passthrough, OAuth upstreams, rate limits |
+| Gateway | MCP federation, semantic search, REST/OpenAPI adapters, dynamic HTTP upstreams, OAuth/OBO, quotas, and Cedar policy | Resources/prompts passthrough and distributed quota state |
 | Sandboxes | Stateful code and browser containers, network controls | Kernel persistence, runtime package installation, per-user scope |
-| Observability | Prometheus, Grafana, request IDs, OTel, Jaeger | Token accounting by tenant, alerts, log shipping, sandbox internals |
+| Observability | Prometheus, Grafana, request IDs, OTel, Jaeger, token/cost accounting, and alerts | Log shipping and sandbox internals |
 | Polyglot | Go SDK, Python contract shim, OpenAI and Claude examples | In-flight shim recovery, TypeScript shim, more framework adapters |
 | Deployment | Single host, Compose, Helm, remote agents, per-agent pods | Kubernetes operator/CRDs and mTLS |
 
-Runtime does not currently implement every AWS AgentCore feature. In particular, it does not claim equivalents for AgentCore Policy/Cedar, Evaluations, or Payments. Its present focus is the self-hosted execution spine and six surrounding pillars: identity, memory, gateway, sandboxes, observability, and turnkey operations.
+Runtime does not implement every AWS AgentCore feature; in particular, it does not provide an equivalent for AgentCore Payments. Its focus is the self-hosted execution spine and six surrounding pillars: identity, memory, gateway, sandboxes, observability, and turnkey operations.
 
 ## 8. Choosing Runtime
 

@@ -1,47 +1,49 @@
 # Observability overlay: Prometheus + Grafana + OTel Collector + Jaeger.
 # Usage:
 #   docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.obs.yml up -d
-# Grafana: http://localhost:3000 (anonymous viewer enabled), Prometheus: http://localhost:9090
+# Development-only local overlay. Every host port is loopback-bound.
+# Set GRAFANA_ADMIN_PASSWORD before starting it.
+# Grafana: http://localhost:3000, Prometheus: http://localhost:9090
 # Jaeger UI (traces): http://localhost:16686
 # Host-run binaries export traces by setting OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318
 # (the OTel Collector receives OTLP/HTTP on :4318 and forwards to Jaeger).
 services:
   prometheus:
-    image: prom/prometheus:latest
+    image: prom/prometheus:v3.12.0
     command: ["--config.file=/etc/prometheus/prometheus.yml"]
     volumes:
       - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
     ports:
-      - "9090:9090"
+      - "127.0.0.1:9090:9090"
     extra_hosts:
       - "host.docker.internal:host-gateway"
 
   grafana:
-    image: grafana/grafana:latest
+    image: grafana/grafana:13.1.0
     environment:
-      GF_AUTH_ANONYMOUS_ENABLED: "true"
-      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?set GRAFANA_ADMIN_PASSWORD}
     volumes:
       - ./grafana/provisioning:/etc/grafana/provisioning:ro
       - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
     ports:
-      - "3000:3000"
+      - "127.0.0.1:3000:3000"
     depends_on:
       - prometheus
 
   otel-collector:
-    image: otel/opentelemetry-collector-contrib:latest
+    image: otel/opentelemetry-collector-contrib:0.153.0
     command: ["--config=/etc/otel/collector-config.yaml"]
     volumes:
       - ./otel/collector-config.yaml:/etc/otel/collector-config.yaml:ro
     ports:
-      - "4318:4318"   # OTLP HTTP (host-run binaries export here)
+      - "127.0.0.1:4318:4318"   # OTLP HTTP (host-run binaries export here)
     depends_on:
       - jaeger
 
   jaeger:
-    image: jaegertracing/all-in-one:latest
+    image: jaegertracing/all-in-one:2.18.0
     environment:
       COLLECTOR_OTLP_ENABLED: "true"
     ports:
-      - "16686:16686"  # Jaeger UI
+      - "127.0.0.1:16686:16686"  # Jaeger UI

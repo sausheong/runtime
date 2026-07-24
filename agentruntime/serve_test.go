@@ -40,7 +40,9 @@ func TestPublishFanoutAndUnsubscribe(t *testing.T) {
 	ch1, unsub1 := m.subscribe(id)
 	ch2, _ := m.subscribe(id)
 
-	m.publish(id, WireEvent{Type: "text", Text: "x"})
+	if err := m.publish(id, "event-x", WireEvent{Type: "text", Text: "x"}); err != nil {
+		t.Fatal(err)
+	}
 	if got := (<-ch1).Text; got != "x" {
 		t.Fatalf("ch1 got %q", got)
 	}
@@ -48,14 +50,18 @@ func TestPublishFanoutAndUnsubscribe(t *testing.T) {
 		t.Fatalf("ch2 got %q", got)
 	}
 	// the published event must carry a seq from the store
-	m.publish(id, WireEvent{Type: "text", Text: "y"})
+	if err := m.publish(id, "event-y", WireEvent{Type: "text", Text: "y"}); err != nil {
+		t.Fatal(err)
+	}
 	e2 := <-ch2
 	if e2.Seq == 0 {
 		t.Fatalf("expected non-zero seq on published event, got %+v", e2)
 	}
 
 	unsub1()
-	m.publish(id, WireEvent{Type: "text", Text: "z"})
+	if err := m.publish(id, "event-z", WireEvent{Type: "text", Text: "z"}); err != nil {
+		t.Fatal(err)
+	}
 	select {
 	case ev := <-ch2:
 		if ev.Text != "z" {
@@ -77,5 +83,23 @@ func TestPublishFanoutAndUnsubscribe(t *testing.T) {
 	case ev := <-ch1:
 		t.Fatalf("ch1 received after unsub: %+v", ev)
 	default:
+	}
+}
+
+func TestPublishReplayDoesNotDuplicateDurableEvent(t *testing.T) {
+	m := &Manager{agentID: "a", st: store.NewMemStore(), subscribers: map[string][]chan WireEvent{}}
+	id, _ := m.st.CreateSession(context.Background(), "a", 0)
+	if err := m.publish(id, "turn:0:event:0", WireEvent{Type: "text", Text: "first"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.publish(id, "turn:0:event:0", WireEvent{Type: "text", Text: "replayed"}); err != nil {
+		t.Fatal(err)
+	}
+	events, err := m.st.EventsSince(context.Background(), id, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("durable events=%d, want exactly one", len(events))
 	}
 }

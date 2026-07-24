@@ -104,13 +104,18 @@ func (m *Manager) buildRuntime(sess *session.Session, sessionID, actor string) (
 	)
 }
 
-// publish fans an event out to live subscribers and appends it to the store
-// log for later re-attach/replay. Keyed by sessionID (== workflow id).
-func (m *Manager) publish(sessionID string, ev WireEvent) {
+// publish persists an event exactly once before making it visible to live
+// subscribers. eventKey is deterministic within the workflow, so DBOS replay
+// returns the original sequence instead of duplicating already-published
+// output. A persistence failure is returned to the workflow and therefore
+// retried rather than creating a live-only, unreplayable response.
+func (m *Manager) publish(sessionID, eventKey string, ev WireEvent) error {
 	payload, _ := json.Marshal(ev)
-	seq, err := m.st.AppendEvent(context.Background(), sessionID, ev.Type, payload)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	seq, err := m.st.AppendEventOnce(ctx, sessionID, eventKey, ev.Type, payload)
 	if err != nil {
-		slog.Warn("append event failed", "session", sessionID, "type", ev.Type, "err", err)
+		return fmt.Errorf("append event %q: %w", eventKey, err)
 	}
 	ev.Seq = seq
 
@@ -123,6 +128,7 @@ func (m *Manager) publish(sessionID string, ev WireEvent) {
 		default: // drop on slow consumer; events are durable in the store
 		}
 	}
+	return nil
 }
 
 func (m *Manager) subscribe(sessionID string) (<-chan WireEvent, func()) {
@@ -219,9 +225,13 @@ func isTurnTimeout(stopReason string, runCtxErr, stepCtxErr error) bool {
 // status, client-facing error event naming the limit, and the metric. The
 // workflow then returns normally — a breached session is a COMPLETED
 // workflow, never a dangling/retried one.
-func (m *Manager) failLimit(wfID, limit string, observed, configured int64) string {
-	_ = m.st.SetSessionStatus(context.Background(), wfID, "limit_exceeded")
-	m.publish(wfID, WireEvent{Type: "error", Err: breachMsg(limit, observed, configured)})
+func (m *Manager) failLimit(wfID, limit string, observed, configured int64) (string, error) {
+	if err := m.st.SetSessionStatus(context.Background(), wfID, "limit_exceeded"); err != nil {
+		return "error", fmt.Errorf("set limit status: %w", err)
+	}
+	if err := m.publish(wfID, "limit:"+limit, WireEvent{Type: "error", Err: breachMsg(limit, observed, configured)}); err != nil {
+		return "error", err
+	}
 	m.metrics.LimitHitObserved(limit)
 	// M3: classify the breach. A per-turn deadline (turn_timeout) becomes
 	// terminalReason "limit:turn_timeout" so classify reports `timeout`; the
@@ -232,7 +242,7 @@ func (m *Manager) failLimit(wfID, limit string, observed, configured int64) stri
 		terminalReason = "limit:turn_timeout"
 	}
 	m.classifyAndPersist(wfID, "limit_exceeded", terminalReason, false, false)
-	return "limit_exceeded"
+	return "limit_exceeded", nil
 }
 
 // statusForReason maps a turn output to the transcript row's status column:
@@ -362,12 +372,12 @@ func (m *Manager) sessionWorkflow(ctx dbos.DBOSContext, in turnInput) (string, e
 	var toolErrored bool
 	for turn := 0; ; turn++ {
 		if turn >= maxTurns {
-			return m.failLimit(wfID, "max_turns", int64(turn), int64(maxTurns)), nil
+			return m.failLimit(wfID, "max_turns", int64(turn), int64(maxTurns))
 		}
 		// max_tokens: pure arithmetic over checkpointed per-turn usage —
 		// deterministic on replay by construction.
 		if m.limits.MaxTokens > 0 && totalTokens >= m.limits.MaxTokens {
-			return m.failLimit(wfID, "max_tokens", int64(totalTokens), int64(m.limits.MaxTokens)), nil
+			return m.failLimit(wfID, "max_tokens", int64(totalTokens), int64(m.limits.MaxTokens))
 		}
 		// session_timeout: the clock is read ONCE per live iteration inside a
 		// checkpointed decision step; replay gets the recorded verdict and
@@ -382,7 +392,7 @@ func (m *Manager) sessionWorkflow(ctx dbos.DBOSContext, in turnInput) (string, e
 				// must not be silent either.
 				slog.Warn("session timeout check failed", "session", wfID, "err", cerr)
 			} else if chk.Exceeded {
-				return m.failLimit(wfID, "session_timeout", chk.ElapsedMS, m.limits.SessionTimeoutMS), nil
+				return m.failLimit(wfID, "session_timeout", chk.ElapsedMS, m.limits.SessionTimeoutMS)
 			}
 		}
 		prior := canonical.Entries() // snapshot of history for this turn
@@ -483,7 +493,9 @@ func (m *Manager) sessionWorkflow(ctx dbos.DBOSContext, in turnInput) (string, e
 		})
 		if stepErr != nil {
 			_ = m.st.SetSessionStatus(context.Background(), wfID, "error")
-			m.publish(wfID, WireEvent{Type: "error", Err: stepErr.Error()})
+			if pubErr := m.publish(wfID, fmt.Sprintf("turn:%d:step-error", turn), WireEvent{Type: "error", Err: stepErr.Error()}); pubErr != nil {
+				return "error", errors.Join(stepErr, pubErr)
+			}
 			return "error", stepErr
 		}
 		// Turn-timeout verdict: classified in the workflow body from the
@@ -491,7 +503,7 @@ func (m *Manager) sessionWorkflow(ctx dbos.DBOSContext, in turnInput) (string, e
 		// timed-out turn's partial work never reaches canonical.
 		if out.Reason == "limit:turn_timeout" {
 			return m.failLimit(wfID, "turn_timeout",
-				m.limits.TurnTimeoutMS, m.limits.TurnTimeoutMS), nil
+				m.limits.TurnTimeoutMS, m.limits.TurnTimeoutMS)
 		}
 		totalTokens += sumTokens(out.Usage)
 		tokensAll += sumAllTokens(out.Usage)
@@ -508,7 +520,7 @@ func (m *Manager) sessionWorkflow(ctx dbos.DBOSContext, in turnInput) (string, e
 		// 0-based loop var `turn` (NOT turn+1, which SetTurnCount stores as a
 		// count). AppendTranscript is idempotent on (session, turn), so a DBOS
 		// replay re-writes the identical row.
-		if entriesJSON, mErr := json.Marshal(out.Entries); mErr == nil {
+		if entriesJSON, mErr := marshalTranscript(out.Entries); mErr == nil {
 			if tErr := m.st.AppendTranscript(context.Background(), wfID, turn, in.Tenant, in.Subject, entriesJSON, out.Reason, statusForReason(out)); tErr != nil {
 				slog.Warn("append transcript failed", "session", wfID, "turn", turn, "err", tErr)
 			}
@@ -519,8 +531,10 @@ func (m *Manager) sessionWorkflow(ctx dbos.DBOSContext, in turnInput) (string, e
 		if err := m.st.SetSessionUsage(context.Background(), wfID, tokensAll, costUSD); err != nil {
 			slog.Warn("set session usage failed", "session", wfID, "err", err)
 		}
-		for _, ev := range publishableEvents(out.Entries) {
-			m.publish(wfID, ev)
+		for eventIndex, ev := range publishableEvents(out.Entries) {
+			if err := m.publish(wfID, fmt.Sprintf("turn:%d:event:%d", turn, eventIndex), ev); err != nil {
+				return "error", err
+			}
 		}
 		if out.Done {
 			// RunTurn returns Done=true for "completed", "aborted", and
@@ -528,11 +542,19 @@ func (m *Manager) sessionWorkflow(ctx dbos.DBOSContext, in turnInput) (string, e
 			// surface the others as an error event so clients aren't told a
 			// turn that aborted/errored succeeded.
 			if out.Reason == "completed" {
-				_ = m.st.SetSessionStatus(context.Background(), wfID, "completed")
-				m.publish(wfID, WireEvent{Type: "done"})
+				if err := m.st.SetSessionStatus(context.Background(), wfID, "completed"); err != nil {
+					return "error", fmt.Errorf("set completed status: %w", err)
+				}
+				if err := m.publish(wfID, fmt.Sprintf("turn:%d:terminal", turn), WireEvent{Type: "done"}); err != nil {
+					return "error", err
+				}
 			} else {
-				_ = m.st.SetSessionStatus(context.Background(), wfID, "error")
-				m.publish(wfID, WireEvent{Type: "error", Err: "turn ended: " + out.Reason})
+				if err := m.st.SetSessionStatus(context.Background(), wfID, "error"); err != nil {
+					return "error", fmt.Errorf("set error status: %w", err)
+				}
+				if err := m.publish(wfID, fmt.Sprintf("turn:%d:terminal", turn), WireEvent{Type: "error", Err: "turn ended: " + out.Reason}); err != nil {
+					return "error", err
+				}
 			}
 			// Online sampling (P3.1 M2): deterministic sample of finished sessions
 			// scored against the agent's eval policy, in a background goroutine off
@@ -694,7 +716,13 @@ func Serve(ctx context.Context, cfg Config) error {
 	}
 	defer dbos.Shutdown(dctx, 10*time.Second)
 
-	srv := &http.Server{Addr: listenAddr, Handler: m.handler()}
+	srv := &http.Server{
+		Addr:              listenAddr,
+		Handler:           m.handler(),
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       120 * time.Second,
+		MaxHeaderBytes:    1 << 20,
+	}
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- srv.ListenAndServe() }()
 

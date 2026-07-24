@@ -27,5 +27,6 @@ services:
     environment:
       RUNTIME_PG_DSN: postgres://runtime:runtime@postgres:5432/runtime?sslmode=disable
       RUNTIME_CTL_ADDR: ":8080"
+      RUNTIME_METRICS_ADDR: ":9091"
     ports:
       - "8080:8080"

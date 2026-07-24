@@ -1,0 +1,25 @@
+# Agent registry for the secured control-plane overlay.
+#
+# This starts EMPTY: the secured overlay's purpose is the access-controlled
+# control plane (Caddy TLS + identity ON + console user management). Add your
+# agents here — local kinds, foreign (command) agents, or REMOTE agents on other
+# hosts (id + url + auth_token). For remote-agent fields and examples see
+# deploy/gcp/control-plane/runtime.remote.yaml.
+#
+# A single bare scripted agent (no LLM key, no memory/gateway deps) so the
+# overlay boots standalone — runtimed requires at least one agent. Replace or add
+# your own: local kinds, foreign (command) agents, or REMOTE agents on other
+# hosts (id + url + auth_token). For remote-agent fields and examples see
+# deploy/gcp/control-plane/runtime.remote.yaml.
+#
+# Example (remote agent on another host):
+#   - id: my-agent
+#     name: My Agent
+#     model: openai/gpt-5.4
+#     url: http://10.0.0.5:8080
+#     auth_token: ${MY_AGENT_TOKEN}
+agents:
+  - id: demo
+    name: Demo Agent
+    model: test/scripted
+    listen_addr: 127.0.0.1:8101

@@ -11,10 +11,11 @@ import (
 // restarts the agent — runtimed does not own a remote process; it only
 // observes. This is the remote-agent counterpart to Supervisor.
 type HealthMonitor struct {
-	BaseURL  string               // full base "scheme://host:port"
-	Token    string               // optional bearer ("" ⇒ none)
-	Interval time.Duration        // poll period (default 10s)
-	OnChange func(reachable bool) // fired only when reachability flips; nil ⇒ no-op
+	BaseURL   string               // full base "scheme://host:port"
+	Token     string               // optional bearer ("" ⇒ none)
+	Transport http.RoundTripper    // optional outbound policy transport
+	Interval  time.Duration        // poll period (default 10s)
+	OnChange  func(reachable bool) // fired only when reachability flips; nil ⇒ no-op
 }
 
 // Run polls until ctx is cancelled. The first observation always fires OnChange
@@ -24,7 +25,7 @@ func (h *HealthMonitor) Run(ctx context.Context) {
 	if interval == 0 {
 		interval = 10 * time.Second
 	}
-	client := &http.Client{Timeout: 2 * time.Second}
+	client := &http.Client{Timeout: 2 * time.Second, Transport: h.Transport}
 	var last int // 0=unknown, 1=reachable, -1=unreachable
 	probe := func() {
 		ok := h.healthy(ctx, client)

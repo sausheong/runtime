@@ -76,7 +76,9 @@ func (l *Limiter) Seed(rules []Rule) {
 }
 
 // refresh rebuilds the resolved rule map from seed + store when the generation
-// moved. Caller holds l.mu. Fail-open on store error.
+// moved. The database call is deliberately outside l.mu so one slow refresh
+// cannot serialize every gateway tool call. Fail-open on the first store error;
+// later errors retain the last-good snapshot.
 func (l *Limiter) refresh(ctx context.Context) {
 	// Throttle store reads off the hot path: Allow runs under l.mu, and for the
 	// Postgres store l.st.Rules is a full SELECT, so an unthrottled refresh runs
@@ -85,7 +87,9 @@ func (l *Limiter) refresh(ctx context.Context) {
 	// process-local, so a rule edited on replica A never bumps replica B's gen —
 	// the periodic re-query is what makes cross-replica edits eventually visible.
 	// The window bounds staleness while keeping that freshness.
+	l.mu.Lock()
 	if l.loaded && l.clock().Sub(l.lastRefresh) < l.refreshWindow {
+		l.mu.Unlock()
 		return
 	}
 	// Advance the throttle for THIS attempt regardless of outcome: on a store
@@ -93,7 +97,14 @@ func (l *Limiter) refresh(ctx context.Context) {
 	// re-query on every subsequent call under l.mu, collapsing gateway
 	// throughput — the exact availability failure fail-open exists to prevent.
 	l.lastRefresh = l.clock()
-	dbRules, gen, err := l.st.Rules(ctx)
+	l.mu.Unlock()
+
+	readCtx, cancel := context.WithTimeout(ctx, time.Second)
+	defer cancel()
+	dbRules, gen, err := l.st.Rules(readCtx)
+
+	l.mu.Lock()
+	defer l.mu.Unlock()
 	if err != nil {
 		// Fail-open only when no rules have ever loaded; a transient read error
 		// after load keeps enforcing last-good rules.
@@ -145,9 +156,9 @@ func (l *Limiter) resolveRule(tenant, upstream string) (rate int, bucketKey stri
 
 // Allow consumes one token for (tenant,upstream). No applicable rule ⇒ allowed.
 func (l *Limiter) Allow(ctx context.Context, tenant, upstream string) (bool, time.Duration) {
+	l.refresh(ctx)
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	l.refresh(ctx)
 	rate, bk, ok := l.resolveRule(tenant, upstream)
 	if !ok {
 		return true, 0

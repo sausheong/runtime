@@ -40,6 +40,47 @@ agents:
 	}
 }
 
+func TestLoad_RejectsUnknownFieldAndMultipleDocuments(t *testing.T) {
+	t.Run("unknown field", func(t *testing.T) {
+		p := writeTmp(t, `
+agents:
+  - id: support
+    name: Support
+    model: test/scripted
+    listen_addr: 127.0.0.1:8101
+    forward_tenent: true
+`)
+		if _, err := Load(p); err == nil || !strings.Contains(err.Error(), "field forward_tenent not found") {
+			t.Fatalf("Load error=%v, want unknown-field failure", err)
+		}
+	})
+	t.Run("multiple documents", func(t *testing.T) {
+		p := writeTmp(t, `
+agents:
+  - id: support
+    name: Support
+    model: test/scripted
+    listen_addr: 127.0.0.1:8101
+---
+agents: []
+`)
+		if _, err := Load(p); err == nil || !strings.Contains(err.Error(), "multiple YAML documents") {
+			t.Fatalf("Load error=%v, want multiple-document failure", err)
+		}
+	})
+}
+
+func TestValidateRejectsUnsafeIdentifiers(t *testing.T) {
+	for _, id := range []string{"with/slash", "with space", ".leading", strings.Repeat("a", 65)} {
+		cfg := &Config{Agents: []AgentConfig{{
+			ID: id, Name: "Agent", Model: "test/scripted", ListenAddr: "127.0.0.1:8101",
+		}}}
+		if err := cfg.Validate(); err == nil {
+			t.Errorf("agent id %q accepted", id)
+		}
+	}
+}
+
 func TestLoadKind(t *testing.T) {
 	dir := t.TempDir()
 	p := filepath.Join(dir, "c.yaml")

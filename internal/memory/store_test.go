@@ -580,7 +580,7 @@ func TestGCOnce_GraceRespected(t *testing.T) {
 	defer db.Close()
 	ctx := context.Background()
 	e, _ := st.Save(ctx, hmem.Entry{Content: "v1"})
-	_, _ = st.Update(ctx, e.ID, "v2") // 1 dead + 1 live, both created "now"
+	_, _ = st.Update(ctx, e.ID, "v2")         // 1 dead + 1 live, both created "now"
 	n, err := st.GCOnce(ctx, time.Hour, 1000) // grace=1h; rows are seconds old
 	if err != nil {
 		t.Fatal(err)

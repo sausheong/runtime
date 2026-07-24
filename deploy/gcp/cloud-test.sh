@@ -77,7 +77,7 @@ code=$(curl -sS -o /dev/null -w '%{http_code}' "$BASE/healthz")
 [ "$code" = 200 ] && pass "healthz 200" || fail "healthz code=$code (want 200)"
 
 code=$(curl -sS -o /dev/null -w '%{http_code}' "$BASE/metrics")
-[ "$code" = 200 ] && pass "metrics endpoint 200 (prometheus scrape surface)" || fail "metrics code=$code (want 200)"
+[ "$code" = 404 ] && pass "public metrics endpoint is not mounted" || fail "metrics code=$code (want 404)"
 
 code=$(curl -sS -o /dev/null -w '%{http_code}' "$BASE/ui")
 [ "$code" = 303 ] && pass "console /ui redirects unauthenticated (303, identity ON)" || fail "/ui code=$code (want 303)"

@@ -19,8 +19,10 @@ restarted like a native agent.
 Runtime hosts a library consumer through the generalized `command:`/`workdir:`
 config fields: when an agent entry sets `command`, `runtimed`'s supervisor execs
 that argv in `workdir` instead of the bundled `agentd` binary, injecting
-`RUNTIME_LISTEN_ADDR`, `RUNTIME_AGENT_ID`, etc., and inheriting the parent
-environment (so the framework's own credentials, e.g. `OPENAI_*`, flow through).
+`RUNTIME_LISTEN_ADDR`, `RUNTIME_AGENT_ID`, etc. The child receives a minimal
+environment rather than every control-plane secret. Provider credentials come
+from tenant secrets, explicit agent configuration, or variables named in
+`RUNTIME_AGENT_ENV_PASSTHROUGH`.
 
 ## Architecture
 

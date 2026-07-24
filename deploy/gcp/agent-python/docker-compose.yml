@@ -1,0 +1,35 @@
+# Instance C — OpenAI Agents SDK nutrition agent via the contract shim.
+# Self-contained: SQLite at /data/shim.db, no external DB.
+#
+#   cp .env.example .env        # set LLM creds
+#   docker compose up -d
+#
+# The control plane (Instance A) dials this agent at http://<C-internal-ip>:8302.
+# NOTE: the shim enforces no bearer auth — port 8302 is protected by the VPC
+# firewall (internal-only). See deploy_plan.md §7.
+name: runtime-agent-python
+
+services:
+  nutrition-openai:
+    image: ${NUTRITION_OPENAI_IMAGE:-asia-southeast1-docker.pkg.dev/mhi-exp-chang-sau-sheong/runtime/nutrition-openai:latest}
+    # Shared LLM-proxy routing (OPENAI_BASE_URL + OPENAI_MODEL) comes from the
+    # untracked ../llm.env (one file for all agent VMs). The API key stays in
+    # this dir's own .env.
+    env_file:
+      - ../llm.env
+    environment:
+      RUNTIME_AGENT_ID: nutrition-openai
+      # Must bind 0.0.0.0, not the shim's loopback default: with ":8302" the
+      # shim's host.partition(":") yields an empty host and uvicorn falls back to
+      # 127.0.0.1, unreachable through Docker's port publish. (The Go agentd binds
+      # all interfaces on ":port"; uvicorn needs the host spelled out.)
+      RUNTIME_LISTEN_ADDR: "0.0.0.0:8302"
+      RUNTIME_SHIM_DB: /data/shim.db
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+    volumes:
+      - shim-data:/data              # persists shim.db + agent_memory.json
+    ports:
+      - "8302:8302"                  # VPC-internal only (firewall); A dials this
+
+volumes:
+  shim-data:

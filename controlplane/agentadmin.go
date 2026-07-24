@@ -8,6 +8,8 @@ import (
 	"strings"
 
 	"github.com/sausheong/runtime/internal/agentstore"
+	"github.com/sausheong/runtime/internal/config"
+	"github.com/sausheong/runtime/internal/netpolicy"
 )
 
 // AgentStore is the persistence the dynamic-agent API needs (satisfied by
@@ -16,8 +18,8 @@ type AgentStore interface {
 	Insert(ctx context.Context, r agentstore.AgentRow) error
 	List(ctx context.Context, tenant string) ([]agentstore.AgentRow, error)
 	Get(ctx context.Context, id string) (agentstore.AgentRow, bool, error)
-	Delete(ctx context.Context, tenant, id string) error
-	SetEnabled(ctx context.Context, tenant, id string, enabled bool) error
+	Delete(ctx context.Context, tenant, id string) (bool, error)
+	SetEnabled(ctx context.Context, tenant, id string, enabled bool) (bool, error)
 }
 
 // AgentManager applies a stored managed-agent row to the live registry + health
@@ -48,7 +50,10 @@ func (m *AgentManager) process(ctx context.Context, row agentstore.AgentRow) (Ag
 		token = t
 	}
 	info := AgentInfo{ID: row.ID, Name: row.Name, Model: row.Model, Tenant: row.TenantID}
-	ap := AgentProcess{AgentID: row.ID, BaseURL: row.URL, AuthToken: token, Tenant: row.TenantID}
+	ap := AgentProcess{
+		AgentID: row.ID, BaseURL: row.URL, AuthToken: token, Tenant: row.TenantID,
+		RestrictOutbound: true,
+	}
 	return info, ap, nil
 }
 
@@ -103,11 +108,8 @@ type AgentParams struct {
 // live registry + monitors. HTTP-agnostic (callers map the error to a status).
 func RegisterAgentShared(ctx context.Context, store AgentStore, mgr *AgentManager, tenant string, p AgentParams) (agentstore.AgentRow, error) {
 	id := strings.TrimSpace(p.ID)
-	if id == "" {
-		return agentstore.AgentRow{}, fmt.Errorf("id required")
-	}
-	if strings.ContainsAny(id, "/ ") {
-		return agentstore.AgentRow{}, fmt.Errorf("id must not contain spaces or '/'")
+	if err := config.ValidateIdentifier("agent id", id); err != nil {
+		return agentstore.AgentRow{}, err
 	}
 	if _, exists := mgr.reg.Get(id); exists {
 		return agentstore.AgentRow{}, fmt.Errorf("an agent with id %q already exists", id)
@@ -115,6 +117,9 @@ func RegisterAgentShared(ctx context.Context, store AgentStore, mgr *AgentManage
 	u, err := url.Parse(strings.TrimSpace(p.URL))
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
 		return agentstore.AgentRow{}, fmt.Errorf("url must be an absolute http(s) URL")
+	}
+	if err := netpolicy.ValidatePublicHTTPURL(p.URL); err != nil {
+		return agentstore.AgentRow{}, fmt.Errorf("url: %w", err)
 	}
 	row := agentstore.AgentRow{
 		ID: id, TenantID: tenant, Name: p.Name, Model: p.Model,
@@ -128,7 +133,7 @@ func RegisterAgentShared(ctx context.Context, store AgentStore, mgr *AgentManage
 	}
 	if err := mgr.Attach(ctx, row); err != nil {
 		// roll back persistence so DB and live state stay consistent
-		_ = store.Delete(ctx, tenant, id)
+		_, _ = store.Delete(ctx, tenant, id)
 		return agentstore.AgentRow{}, err
 	}
 	return row, nil
@@ -140,8 +145,19 @@ func DeregisterAgentShared(ctx context.Context, store AgentStore, mgr *AgentMana
 	if _, ok := mgr.reg.Get(id); ok && !mgr.IsManaged(id) {
 		return fmt.Errorf("agent %q is file-configured, not dynamically managed; edit runtime config to remove it", id)
 	}
-	if err := store.Delete(ctx, tenant, id); err != nil {
+	row, ok, err := store.Get(ctx, id)
+	if err != nil {
 		return err
+	}
+	if !ok || row.TenantID != tenant {
+		return fmt.Errorf("agent not found")
+	}
+	removed, err := store.Delete(ctx, tenant, id)
+	if err != nil {
+		return err
+	}
+	if !removed {
+		return fmt.Errorf("agent not found")
 	}
 	mgr.Detach(id)
 	return nil
@@ -208,8 +224,22 @@ func RegisterAgentAdmin(mux *http.ServeMux, s AgentStore, adminStore AdminStore,
 				http.Error(w, "agent is not dynamically managed", http.StatusBadRequest)
 				return
 			}
-			if err := s.SetEnabled(r.Context(), tenant, id, enabled); err != nil {
+			row, found, err := s.Get(r.Context(), id)
+			if err != nil {
+				serverError(w, "get agent", err)
+				return
+			}
+			if !found || row.TenantID != tenant {
+				http.Error(w, "agent not found", http.StatusNotFound)
+				return
+			}
+			updated, err := s.SetEnabled(r.Context(), tenant, id, enabled)
+			if err != nil {
 				serverError(w, "set enabled", err)
+				return
+			}
+			if !updated {
+				http.Error(w, "agent not found", http.StatusNotFound)
 				return
 			}
 			mgr.SetEnabled(id, enabled)
@@ -220,12 +250,26 @@ func RegisterAgentAdmin(mux *http.ServeMux, s AgentStore, adminStore AdminStore,
 	mux.HandleFunc("POST /admin/agents/{id}/disable", setEnabled(false))
 
 	mux.HandleFunc("POST /admin/agents/{id}/restart", func(w http.ResponseWriter, r *http.Request) {
-		if _, ok := requireAdmin(w, r); !ok {
+		p, ok := requireAdmin(w, r)
+		if !ok {
 			return
 		}
 		id := r.PathValue("id")
+		tenant, ok := effectiveTenant(w, r, adminStore, p, r.URL.Query().Get("tenant"))
+		if !ok {
+			return
+		}
 		if !mgr.IsManaged(id) {
 			http.Error(w, "agent is not dynamically managed", http.StatusBadRequest)
+			return
+		}
+		row, found, err := s.Get(r.Context(), id)
+		if err != nil {
+			serverError(w, "get agent", err)
+			return
+		}
+		if !found || row.TenantID != tenant {
+			http.Error(w, "agent not found", http.StatusNotFound)
 			return
 		}
 		mgr.Reattach(id)

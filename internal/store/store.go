@@ -38,6 +38,7 @@ type OnlineResult struct {
 }
 
 type Store interface {
+	Ping(ctx context.Context) error
 	CreateSession(ctx context.Context, agentID string, replica int) (string, error)
 	GetSession(ctx context.Context, id string) (SessionRow, error)
 	ListSessions(ctx context.Context, agentID string) ([]SessionRow, error)
@@ -63,6 +64,10 @@ type Store interface {
 	// rows are omitted.
 	FailureBreakdownByAgent(ctx context.Context, agentID string, since time.Time) (map[string]int, error)
 	AppendEvent(ctx context.Context, sessionID, typ string, payload []byte) (int64, error)
+	// AppendEventOnce appends a durable event exactly once for the supplied
+	// deterministic key. Repeating the same (sessionID,eventKey) returns the
+	// original sequence without creating a duplicate.
+	AppendEventOnce(ctx context.Context, sessionID, eventKey, typ string, payload []byte) (int64, error)
 	EventsSince(ctx context.Context, sessionID string, afterSeq int64) ([]Event, error)
 	// AppendTranscript records the entries for one turn. Idempotent on
 	// (sessionID, turn): re-appending the same turn upserts (replay-safe).
@@ -76,5 +81,8 @@ type Store interface {
 	// ListOnlineResultsByTenant returns results for a tenant, newest first,
 	// capped at limit.
 	ListOnlineResultsByTenant(ctx context.Context, tenant string, limit int) ([]OnlineResult, error)
+	// ReapEvaluationData removes captured transcripts and online-evaluation
+	// outcomes older than before. It does not delete sessions or event replay.
+	ReapEvaluationData(ctx context.Context, before time.Time) (int64, error)
 	Close() error
 }

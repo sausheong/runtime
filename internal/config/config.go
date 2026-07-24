@@ -2,13 +2,16 @@
 package config
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"path"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -243,6 +246,10 @@ type GatewayServer struct {
 	URL     string            `yaml:"url"`     // Streamable HTTP transport
 	Headers map[string]string `yaml:"headers"` // static headers (auth) for HTTP
 	Tenants []string          `yaml:"tenants"` // nil/empty ⇒ visible to ALL tenants
+	// RestrictOutbound is set for tenant-registered HTTP/OpenAPI upstreams.
+	// Their connections must resolve only to public addresses. File-configured
+	// upstreams are operator-trusted and may intentionally use private hosts.
+	RestrictOutbound bool `yaml:"-"`
 
 	// ForwardTenant makes the gateway inject the calling principal's tenant
 	// into forwarded tool-call arguments as the reserved "__rt_tenant" key
@@ -313,7 +320,16 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("read config %q: %w", path, err)
 	}
 	var c Config
-	if err := yaml.Unmarshal(b, &c); err != nil {
+	dec := yaml.NewDecoder(bytes.NewReader(b))
+	dec.KnownFields(true)
+	if err := dec.Decode(&c); err != nil {
+		return nil, fmt.Errorf("parse config %q: %w", path, err)
+	}
+	var extra any
+	if err := dec.Decode(&extra); err != io.EOF {
+		if err == nil {
+			return nil, fmt.Errorf("parse config %q: multiple YAML documents are not allowed", path)
+		}
 		return nil, fmt.Errorf("parse config %q: %w", path, err)
 	}
 	if err := c.Pricing.validate(); err != nil {
@@ -323,6 +339,17 @@ func Load(path string) (*Config, error) {
 		return nil, err
 	}
 	return &c, nil
+}
+
+var identifierPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
+
+// ValidateIdentifier applies the routing/storage-safe identifier grammar used
+// by both file configuration and self-service APIs.
+func ValidateIdentifier(kind, value string) error {
+	if !identifierPattern.MatchString(value) {
+		return fmt.Errorf("%s must be 1-64 characters matching %s", kind, identifierPattern.String())
+	}
+	return nil
 }
 
 // Validate checks required fields and uniqueness, and applies defaults for
@@ -340,6 +367,9 @@ func (c *Config) Validate() error {
 		a := &c.Agents[i]
 		if a.ID == "" || a.Name == "" || a.Model == "" {
 			return fmt.Errorf("config: agent[%d] requires id, name, model", i)
+		}
+		if err := ValidateIdentifier("agent id", a.ID); err != nil {
+			return fmt.Errorf("config: agent[%d]: %w", i, err)
 		}
 		// Exactly one of listen_addr / url.
 		if (a.ListenAddr == "") == (a.URL == "") {
@@ -378,6 +408,9 @@ func (c *Config) Validate() error {
 		}
 		if a.Tenant == "" {
 			a.Tenant = "default"
+		}
+		if err := ValidateIdentifier("tenant id", a.Tenant); err != nil {
+			return fmt.Errorf("config: agent %q: %w", a.ID, err)
 		}
 		// Resolve limits (yaml block merged over RUNTIME_LIMIT_* env defaults)
 		// so callers see a.Limits populated after Load. Valid on local AND
@@ -659,9 +692,9 @@ func (a AgentConfig) ReplicaAddr(i int) (string, error) {
 	return net.JoinHostPort(host, strconv.Itoa(port)), nil
 }
 
-// ReplicaAddrs returns the derived listen addresses for a local agent's STATIC
-// pool: replica i listens on base_host:base_port+i. Replicas <= 0 means 1. Not
-// meaningful for remote agents (Validate rejects replicas there).
+// ReplicaAddrs returns the derived listen addresses for a local agent's static
+// pool: replica i listens on base_host:base_port+i. Replicas <= 0 means 1.
+// Remote pools use RemoteReplicaURL instead.
 func (a AgentConfig) ReplicaAddrs() ([]string, error) {
 	n := a.Replicas
 	if n <= 0 {

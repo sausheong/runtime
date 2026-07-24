@@ -7,15 +7,46 @@ import (
 )
 
 type fakeInvoker struct {
-	out map[string]string // input -> output
-	err map[string]error  // input -> error
+	out   map[string]string // input -> output
+	err   map[string]error  // input -> error
+	calls map[string]int
 }
 
 func (f fakeInvoker) Invoke(_ context.Context, _, input string) (string, error) {
+	if f.calls != nil {
+		f.calls[input]++
+	}
 	if e := f.err[input]; e != nil {
 		return "", e
 	}
 	return f.out[input], nil
+}
+
+func TestExecuteResumesFromPersistedCaseIndexes(t *testing.T) {
+	ctx := context.Background()
+	m := NewMemStore()
+	_ = m.PutSet(ctx, Set{Tenant: "t1", Name: "s", Cases: []Case{
+		{Input: "already", Scorer: ScorerExact, Expected: "A"},
+		{Input: "remaining", Scorer: ScorerExact, Expected: "B"},
+	}})
+	_ = m.CreateRun(ctx, Run{RunID: "r", Tenant: "t1", SetName: "s", AgentID: "a1", Status: StatusRunning})
+	_ = m.PutResult(ctx, "r", Result{CaseIndex: 0, Input: "already", Output: "A", Scorer: string(ScorerExact), Passed: true})
+	calls := map[string]int{}
+	inv := fakeInvoker{out: map[string]string{"remaining": "B"}, calls: calls}
+
+	Execute(ctx, m, inv, nil, "r", nil)
+
+	if calls["already"] != 0 || calls["remaining"] != 1 {
+		t.Fatalf("invocation calls=%v, want only remaining case once", calls)
+	}
+	run, _, _ := m.GetRun(ctx, "r")
+	if run.Status != StatusCompleted || run.Total != 2 || run.Passed != 2 {
+		t.Fatalf("resumed run=%+v", run)
+	}
+	results, _ := m.ListResults(ctx, "r")
+	if len(results) != 2 {
+		t.Fatalf("results=%d want 2", len(results))
+	}
 }
 
 type nopMetric struct{ runs, cases int }
@@ -27,10 +58,10 @@ func TestRunScoresAllCasesAndCompletes(t *testing.T) {
 	ctx := context.Background()
 	m := NewMemStore()
 	set := Set{Tenant: "t1", Name: "s", Cases: []Case{
-		{Input: "a", Scorer: ScorerExact, Expected: "A"},         // pass
-		{Input: "b", Scorer: ScorerExact, Expected: "B"},         // fail (output "x")
-		{Input: "c", Scorer: ScorerJudge, Rubric: "ok"},          // judge error → fail-the-case
-		{Input: "d", Scorer: ScorerExact, Expected: "D"},         // invoke error → fail-the-case
+		{Input: "a", Scorer: ScorerExact, Expected: "A"}, // pass
+		{Input: "b", Scorer: ScorerExact, Expected: "B"}, // fail (output "x")
+		{Input: "c", Scorer: ScorerJudge, Rubric: "ok"},  // judge error → fail-the-case
+		{Input: "d", Scorer: ScorerExact, Expected: "D"}, // invoke error → fail-the-case
 	}}
 	_ = m.PutSet(ctx, set)
 	_ = m.CreateRun(ctx, Run{RunID: "r", Tenant: "t1", SetName: "s", AgentID: "a1", Status: StatusPending})

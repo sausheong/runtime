@@ -162,11 +162,11 @@ func TestEvalLifecycle(t *testing.T) {
 	// regex all match) and two FAIL (exact + contains that cannot match) — a
 	// definite 3/5 with score 0.6.
 	cases := []eval.Case{
-		{Input: "q-exact-hit", Scorer: eval.ScorerExact, Expected: "final answer"},   // PASS
-		{Input: "q-contains-hit", Scorer: eval.ScorerContains, Expected: "final"},     // PASS
-		{Input: "q-regex-hit", Scorer: eval.ScorerRegex, Expected: "answer$"},          // PASS
-		{Input: "q-exact-miss", Scorer: eval.ScorerExact, Expected: "wrong answer"},    // FAIL
-		{Input: "q-contains-miss", Scorer: eval.ScorerContains, Expected: "banana"},    // FAIL
+		{Input: "q-exact-hit", Scorer: eval.ScorerExact, Expected: "final answer"},  // PASS
+		{Input: "q-contains-hit", Scorer: eval.ScorerContains, Expected: "final"},   // PASS
+		{Input: "q-regex-hit", Scorer: eval.ScorerRegex, Expected: "answer$"},       // PASS
+		{Input: "q-exact-miss", Scorer: eval.ScorerExact, Expected: "wrong answer"}, // FAIL
+		{Input: "q-contains-miss", Scorer: eval.ScorerContains, Expected: "banana"}, // FAIL
 	}
 	wantPass := []bool{true, true, true, false, false}
 	const wantTotal, wantPassed, wantFailed = 5, 3, 2

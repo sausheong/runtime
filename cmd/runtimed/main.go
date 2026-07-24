@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"log/slog"
+	"math"
 	"net"
 	"net/http"
 	"os"
@@ -48,9 +49,22 @@ func tracedHandler(h http.Handler) http.Handler {
 
 func main() {
 	setupLogging()
+	exitCode := 0
+	// Registered before every other defer, so it executes last: all lifecycle
+	// cleanup completes before the process reports a non-zero server failure.
+	defer func() {
+		if exitCode != 0 {
+			os.Exit(exitCode)
+		}
+	}()
 
 	dsn := envOr("RUNTIME_PG_DSN", "postgres://runtime:runtime@localhost:5432/runtime?sslmode=disable")
+	agentDSN := os.Getenv("RUNTIME_AGENT_PG_DSN")
+	if agentDSN == "" {
+		agentDSN = dsn
+	}
 	ctlAddr := envOr("RUNTIME_CTL_ADDR", ":8080")
+	metricsAddr := envOr("RUNTIME_METRICS_ADDR", "127.0.0.1:9091")
 	agentBin := envOr("RUNTIME_AGENTD_BIN", "./agentd")
 	cfgPath := envOr("RUNTIME_CONFIG", "runtime.yaml")
 
@@ -64,7 +78,7 @@ func main() {
 	// middleware, supervisors, and proxy hooks below all share the one registry.
 	cm := obs.NewControlMetrics()
 
-	reg := controlplane.NewRegistry(cfg, agentBin, dsn)
+	reg := controlplane.NewRegistry(cfg, agentBin, agentDSN)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -99,6 +113,10 @@ func main() {
 	// quotaAdmin is the interface handed to buildRoot so /admin/quotas mounts.
 	// Assigned inside the gateway block; stays a true nil interface otherwise.
 	var quotaAdmin controlplane.QuotaStore
+	var evalStoreRuntime eval.EvalStore
+	var evalInvokerRuntime eval.Invoker
+	var evalJudgeRuntime eval.Judge
+	var evalRetention time.Duration
 
 	// Identity layer (M1). Operator config via env:
 	//   RUNTIME_OIDC_ISSUER / RUNTIME_OIDC_CLIENT_ID — enable OIDC human login.
@@ -341,6 +359,9 @@ func main() {
 		os.Exit(1)
 	}
 	identityOn := configured || oidcIssuer != "" || bootstrapKey != "" || len(legacyTokens) > 0
+	if identityOn && agentDSN == dsn {
+		slog.Warn("agents share the control-plane database credential; set RUNTIME_AGENT_PG_DSN to a role without access to identity and secrets tables")
+	}
 
 	// Dynamic managed agents: a MonitorSet owns runtime-mutable health monitors,
 	// and an AgentManager attaches/detaches stored rows to the live registry.
@@ -487,6 +508,14 @@ func main() {
 		// (observability page) shares the same invoker/judge as the /admin path.
 		evalInvoker := controlplane.NewEvalInvoker(reg)
 		evalJudge, _ := eval.NewJudgeFromEnv()
+		evalStoreRuntime = evalStore
+		evalInvokerRuntime = evalInvoker
+		evalJudgeRuntime = evalJudge
+		evalRetention, err = evalRetentionFromEnv(os.Getenv)
+		if err != nil {
+			slog.Error("eval retention config invalid", "err", err)
+			os.Exit(1)
+		}
 		if gwManager != nil {
 			gwMut = gwManager
 			onb = &console.Onboarding{
@@ -541,7 +570,7 @@ func main() {
 	// controlplane.RegTokenVerifier via ActiveRegTokenByID.
 	regMux := http.NewServeMux()
 	controlplane.RegisterHandshake(regMux, idStore, reg)
-	handler = mountMetrics(handler, cm, func() []obs.ScrapeTarget {
+	metricsTargets := func() []obs.ScrapeTarget {
 		var ts []obs.ScrapeTarget
 		for _, info := range reg.List() {
 			replicas, _ := reg.Replicas(info.ID)
@@ -553,7 +582,25 @@ func main() {
 			}
 		}
 		return ts
-	}, regMux)
+	}
+	// Registration has its own one-time token protocol and remains on the
+	// public control listener. Fleet metrics move to a separate management
+	// listener (loopback by default) so tenant/model/cost labels are never
+	// exposed merely because the application API is reachable.
+	handler = mountRegistration(handler, regMux)
+
+	ctlListener, err := net.Listen("tcp", ctlAddr)
+	if err != nil {
+		slog.Error("control listener bind failed", "addr", ctlAddr, "err", err)
+		os.Exit(1)
+	}
+	defer ctlListener.Close()
+	metricsListener, err := net.Listen("tcp", metricsAddr)
+	if err != nil {
+		slog.Error("metrics listener bind failed", "addr", metricsAddr, "err", err)
+		os.Exit(1)
+	}
+	defer metricsListener.Close()
 
 	// Start the gateway upstreams only now: every os.Exit(1) path above has
 	// passed, so the deferred Close is guaranteed to run and stdio upstream
@@ -565,10 +612,26 @@ func main() {
 
 	// Server starts before agents so gateway-enabled agents can connect to
 	// /gateway/mcp on first spawn.
-	srv := &http.Server{Addr: ctlAddr, Handler: handler}
+	srv := &http.Server{
+		Addr:              ctlAddr,
+		Handler:           handler,
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       120 * time.Second,
+		MaxHeaderBytes:    1 << 20,
+	}
+	metricsSrv := &http.Server{
+		Addr:              metricsAddr,
+		Handler:           obs.FanoutHandler(cm, metricsTargets),
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       120 * time.Second,
+		MaxHeaderBytes:    1 << 20,
+	}
 	serveErr := make(chan error, 1)
-	go func() { serveErr <- srv.ListenAndServe() }()
+	metricsErr := make(chan error, 1)
+	go func() { serveErr <- srv.Serve(ctlListener) }()
+	go func() { metricsErr <- metricsSrv.Serve(metricsListener) }()
 	slog.Info("control plane listening", "addr", ctlAddr, "agents", len(reg.List()), "identity", identityOn)
+	slog.Info("management metrics listening", "addr", metricsAddr)
 
 	// Autoscaled agents (Spine A2): each PoolManager owns its replicas + policy
 	// loop. Start them with the same readiness gate that serializes DBOS schema
@@ -624,15 +687,37 @@ func main() {
 		}
 	}
 
+	if evalStoreRuntime != nil {
+		if err := eval.RecoverIncomplete(ctx, evalStoreRuntime, evalInvokerRuntime, evalJudgeRuntime, cm); err != nil {
+			slog.Error("eval recovery scan failed", "err", err)
+		} else {
+			slog.Info("eval incomplete-run recovery started")
+		}
+		startEvalRetention(ctx, ctlStore, evalStoreRuntime, evalRetention)
+	}
+
 	select {
 	case <-ctx.Done():
 		shutCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		_ = srv.Shutdown(shutCtx)
+		_ = metricsSrv.Shutdown(shutCtx)
 	case err := <-serveErr:
 		if err != nil && err != http.ErrServerClosed {
 			slog.Error("server error", "err", err)
-			os.Exit(1)
+			exitCode = 1
+			stop() // cancel supervisors and background workers before defers close resources
+			return
+		}
+	case err := <-metricsErr:
+		if err != nil && err != http.ErrServerClosed {
+			slog.Error("metrics server error", "err", err)
+			exitCode = 1
+			stop()
+			shutCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			_ = srv.Shutdown(shutCtx)
+			return
 		}
 	}
 }
@@ -692,22 +777,8 @@ func accessLog(next http.Handler, cm *obs.ControlMetrics) http.Handler {
 	})
 }
 
-// mountMetrics overlays GET /metrics OUTSIDE the identity/access-log chain
-// (like /healthz — standard Prometheus practice; spec §5: label values are
-// operator-level identifiers, never tenant/user data). Everything else falls
-// through to the wrapped handler chain.
-//
-// r.Pattern note: this outer mux sets r.Pattern ("/") on fall-through, but the
-// inner root mux overwrites it on match, and accessLog reads r.Pattern only
-// AFTER next.ServeHTTP returns — so route normalization in the metrics/access
-// log is unaffected.
-func mountMetrics(inner http.Handler, cm *obs.ControlMetrics, targets func() []obs.ScrapeTarget, registerMux http.Handler) http.Handler {
+func mountRegistration(inner, registerMux http.Handler) http.Handler {
 	mux := http.NewServeMux()
-	mux.Handle("GET /metrics", obs.FanoutHandler(cm, targets))
-	// POST /register authenticates with the agent's own per-agent registration
-	// token (not the identity middleware), so — like /metrics — it lives on this
-	// outer mux, reachable WITHOUT an identity principal in both open and
-	// identity-on modes.
 	mux.Handle("POST /register", registerMux)
 	mux.Handle("/", inner)
 	return mux
@@ -818,7 +889,7 @@ func envFloatOr(key string, def float64) float64 {
 		return def
 	}
 	f, err := strconv.ParseFloat(v, 64)
-	if err != nil {
+	if err != nil || math.IsNaN(f) || math.IsInf(f, 0) || f < 0 {
 		slog.Warn("ignoring malformed env float", "key", key, "value", v, "default", def)
 		return def
 	}
@@ -832,11 +903,58 @@ func envIntOr(key string, def int) int {
 		return def
 	}
 	n, err := strconv.Atoi(v)
-	if err != nil {
+	if err != nil || n < 0 {
 		slog.Warn("ignoring malformed env int", "key", key, "value", v, "default", def)
 		return def
 	}
 	return n
+}
+
+func evalRetentionFromEnv(getenv func(string) string) (time.Duration, error) {
+	const defaultRetention = 30 * 24 * time.Hour
+	raw := strings.TrimSpace(getenv("RUNTIME_EVAL_RETENTION"))
+	if raw == "" {
+		return defaultRetention, nil
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil || d < 0 {
+		return 0, fmt.Errorf("RUNTIME_EVAL_RETENTION must be a non-negative Go duration (got %q)", raw)
+	}
+	return d, nil
+}
+
+func startEvalRetention(ctx context.Context, ctl store.Store, es eval.EvalStore, retention time.Duration) {
+	if retention == 0 {
+		slog.Warn("eval retention disabled; transcripts and results will accumulate")
+		return
+	}
+	reap := func() {
+		reapCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		defer cancel()
+		before := time.Now().Add(-retention)
+		captured, captureErr := ctl.ReapEvaluationData(reapCtx, before)
+		runs, runErr := es.ReapBefore(reapCtx, before)
+		if captureErr != nil || runErr != nil {
+			slog.Warn("eval retention sweep failed", "capture_err", captureErr, "run_err", runErr)
+			return
+		}
+		if captured+runs > 0 {
+			slog.Info("eval retention sweep", "captured_rows", captured, "runs", runs)
+		}
+	}
+	reap()
+	go func() {
+		ticker := time.NewTicker(6 * time.Hour)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				reap()
+			}
+		}
+	}()
 }
 
 // buildPolicyEngine constructs the Cedar policy engine from the environment.

@@ -4,10 +4,12 @@ package console
 import (
 	"context"
 	"embed"
+	"encoding/base64"
 	"encoding/json"
 	"html/template"
 	"io/fs"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -322,10 +324,13 @@ func Handler(reg *controlplane.Registry, st store.Store, oidc OIDCConfig, onb *O
 			// One-time flash from a prior POST-redirect-GET; clear it on display.
 			flash := ""
 			if c, err := r.Cookie("rt_flash"); err == nil {
-				flash = c.Value
+				if decoded, decErr := base64.RawURLEncoding.DecodeString(c.Value); decErr == nil {
+					flash = string(decoded)
+				}
 				http.SetCookie(w, &http.Cookie{
 					Name: "rt_flash", Value: "", Path: "/ui/onboarding",
-					MaxAge: -1, HttpOnly: true, SameSite: http.SameSiteLaxMode,
+					MaxAge: -1, HttpOnly: true, Secure: sessionCookieSecure(),
+					SameSite: http.SameSiteLaxMode,
 				})
 			}
 			ups, _ := onb.Upstreams.ListUpstreams(r.Context(), p.TenantID)
@@ -799,8 +804,22 @@ func Handler(reg *controlplane.Registry, st store.Store, oidc OIDCConfig, onb *O
 						http.Error(w, "agent is not dynamically managed", http.StatusBadRequest)
 						return
 					}
-					if err := onb.Agents.SetEnabled(r.Context(), p.TenantID, id, enabled); err != nil {
+					row, found, err := onb.Agents.Get(r.Context(), id)
+					if err != nil {
+						http.Error(w, "lookup failed", http.StatusInternalServerError)
+						return
+					}
+					if !found || row.TenantID != p.TenantID {
+						http.Error(w, "agent not found", http.StatusNotFound)
+						return
+					}
+					updated, err := onb.Agents.SetEnabled(r.Context(), p.TenantID, id, enabled)
+					if err != nil {
 						http.Error(w, "update failed", http.StatusInternalServerError)
+						return
+					}
+					if !updated {
+						http.Error(w, "agent not found", http.StatusNotFound)
 						return
 					}
 					onb.AgentMgr.SetEnabled(id, enabled)
@@ -814,6 +833,15 @@ func Handler(reg *controlplane.Registry, st store.Store, oidc OIDCConfig, onb *O
 				id := r.PathValue("id")
 				if !onb.AgentMgr.IsManaged(id) {
 					http.Error(w, "agent is not dynamically managed", http.StatusBadRequest)
+					return
+				}
+				row, found, err := onb.Agents.Get(r.Context(), id)
+				if err != nil {
+					http.Error(w, "lookup failed", http.StatusInternalServerError)
+					return
+				}
+				if !found || row.TenantID != p.TenantID {
+					http.Error(w, "agent not found", http.StatusNotFound)
 					return
 				}
 				onb.AgentMgr.Reattach(id)
@@ -840,7 +868,11 @@ func sessionValue(r *http.Request) string {
 // flashRedirect performs POST-redirect-GET to the onboarding page with a one-time
 // message in a short-lived cookie (not persisted server-side; cleared on display).
 func flashRedirect(w http.ResponseWriter, r *http.Request, msg string) {
-	http.SetCookie(w, &http.Cookie{Name: "rt_flash", Value: msg, Path: "/ui/onboarding", MaxAge: 30, HttpOnly: true, SameSite: http.SameSiteLaxMode})
+	http.SetCookie(w, &http.Cookie{
+		Name: "rt_flash", Value: base64.RawURLEncoding.EncodeToString([]byte(msg)),
+		Path: "/ui/onboarding", MaxAge: 30, HttpOnly: true,
+		Secure: sessionCookieSecure(), SameSite: http.SameSiteLaxMode,
+	})
 	http.Redirect(w, r, "/ui/onboarding", http.StatusSeeOther)
 }
 
@@ -866,14 +898,31 @@ func splitScopes(s string) []string {
 	return out
 }
 
+func sessionCookieSecure() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("RUNTIME_COOKIE_SECURE"))) {
+	case "1", "true", "yes", "on":
+		return true
+	case "0", "false", "no", "off":
+		return false
+	}
+	for _, raw := range []string{
+		os.Getenv("RUNTIME_PUBLIC_URL"),
+		os.Getenv("RUNTIME_OIDC_REDIRECT_URL"),
+	} {
+		if strings.HasPrefix(strings.ToLower(strings.TrimSpace(raw)), "https://") {
+			return true
+		}
+	}
+	return false
+}
+
 // setSessionCookie writes the runtime_token cookie the identity Authenticator
-// reads. HttpOnly + SameSite=Lax. Secure is intentionally NOT set so the console
-// works over plain HTTP for local/internal use; terminate TLS upstream in
-// production (and set Secure there if exposing the console).
+// reads. Secure is inferred from the public/OIDC URL and can be forced with
+// RUNTIME_COOKIE_SECURE.
 func setSessionCookie(w http.ResponseWriter, value string) {
 	http.SetCookie(w, &http.Cookie{
 		Name: "runtime_token", Value: value,
-		Path: "/", HttpOnly: true, SameSite: http.SameSiteLaxMode,
+		Path: "/", HttpOnly: true, Secure: sessionCookieSecure(), SameSite: http.SameSiteLaxMode,
 	})
 }
 
@@ -882,7 +931,7 @@ func setSessionCookie(w http.ResponseWriter, value string) {
 func clearSessionCookie(w http.ResponseWriter) {
 	http.SetCookie(w, &http.Cookie{
 		Name: "runtime_token", Value: "",
-		Path: "/", HttpOnly: true, SameSite: http.SameSiteLaxMode, MaxAge: -1,
+		Path: "/", HttpOnly: true, Secure: sessionCookieSecure(), SameSite: http.SameSiteLaxMode, MaxAge: -1,
 	})
 }
 

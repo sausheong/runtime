@@ -128,7 +128,9 @@ func TestKG_IngestGateSkipsShortThread(t *testing.T) {
 	saver := &recordingSaver{}
 	done := make(chan struct{}, 1)
 	emb := &kgFakeEmbedder{}
-	search := func(_ context.Context, _ []float32, _ int, _ float64, _ string) ([]hmem.Entry, error) { return nil, nil }
+	search := func(_ context.Context, _ []float32, _ int, _ float64, _ string) ([]hmem.Entry, error) {
+		return nil, nil
+	}
 	k := newKGWithIngest(emb, ext, search, saver.save, 0.85, 2, 4, func() { done <- struct{}{} })
 
 	k.Ingest(context.Background(), []hrt.Message{{Role: "user", Content: "hi"}}) // len 1 < minMsgs 2
@@ -148,7 +150,9 @@ func TestKG_IngestSavesNewFacts(t *testing.T) {
 	done := make(chan struct{}, 1)
 	emb := &kgFakeEmbedder{}
 	// search returns no hits → nothing is a duplicate.
-	search := func(_ context.Context, _ []float32, _ int, _ float64, _ string) ([]hmem.Entry, error) { return nil, nil }
+	search := func(_ context.Context, _ []float32, _ int, _ float64, _ string) ([]hmem.Entry, error) {
+		return nil, nil
+	}
 	k := newKGWithIngest(emb, ext, search, saver.save, 0.85, 2, 4, func() { done <- struct{}{} })
 
 	k.Ingest(context.Background(), twoMsgThread())
@@ -189,7 +193,9 @@ func TestKG_IngestExtractErrorDegrades(t *testing.T) {
 	ext := &fakeExtractor{err: fmt.Errorf("extract boom")}
 	saver := &recordingSaver{}
 	done := make(chan struct{}, 1)
-	search := func(_ context.Context, _ []float32, _ int, _ float64, _ string) ([]hmem.Entry, error) { return nil, nil }
+	search := func(_ context.Context, _ []float32, _ int, _ float64, _ string) ([]hmem.Entry, error) {
+		return nil, nil
+	}
 	k := newKGWithIngest(&kgFakeEmbedder{}, ext, search, saver.save, 0.85, 2, 4, func() { done <- struct{}{} })
 
 	k.Ingest(context.Background(), twoMsgThread())
@@ -203,7 +209,9 @@ func TestKG_IngestSaveErrorContinues(t *testing.T) {
 	ext := &fakeExtractor{facts: []string{"first", "second"}}
 	saver := &recordingSaver{failFirst: true}
 	done := make(chan struct{}, 1)
-	search := func(_ context.Context, _ []float32, _ int, _ float64, _ string) ([]hmem.Entry, error) { return nil, nil }
+	search := func(_ context.Context, _ []float32, _ int, _ float64, _ string) ([]hmem.Entry, error) {
+		return nil, nil
+	}
 	k := newKGWithIngest(&kgFakeEmbedder{}, ext, search, saver.save, 0.85, 2, 4, func() { done <- struct{}{} })
 
 	k.Ingest(context.Background(), twoMsgThread())
@@ -260,7 +268,9 @@ func TestKG_IngestDropsOverCapacity(t *testing.T) {
 	ext := &fakeExtractor{facts: []string{"x"}}
 	saver := &recordingSaver{}
 	done := make(chan struct{}, 1)
-	search := func(_ context.Context, _ []float32, _ int, _ float64, _ string) ([]hmem.Entry, error) { return nil, nil }
+	search := func(_ context.Context, _ []float32, _ int, _ float64, _ string) ([]hmem.Entry, error) {
+		return nil, nil
+	}
 	// maxInflight 1; pre-fill the slot so the next Ingest is dropped.
 	k := newKGWithIngest(&kgFakeEmbedder{}, ext, search, saver.save, 0.85, 2, 1, func() { done <- struct{}{} })
 	k.sem <- struct{}{} // occupy the only slot

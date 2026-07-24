@@ -31,6 +31,13 @@ type DockerConfig struct {
 	CPUs      float64
 	ProfileMB int
 	Runtime   string
+	// Network attaches browser containers to a private engine network and
+	// makes CDP reachable only inside that network. Empty retains the
+	// loopback-published host mode for direct host installations.
+	Network string
+	// ProxyHost is browserd's hostname as seen from Network (for example the
+	// Compose service name "runtimed").
+	ProxyHost string
 }
 
 type dockerBackend struct {
@@ -68,13 +75,20 @@ func NewDockerBackend(cfg DockerConfig) (Backend, error) {
 // "[::]:port"), so it MUST be covered — otherwise Chrome is handed
 // --proxy-server=http://[::]:port and fails with ERR_PROXY_CONNECTION_FAILED.
 func containerProxyAddr(addr string) string {
+	return containerProxyAddrForHost(addr, "")
+}
+
+func containerProxyAddrForHost(addr, advertisedHost string) string {
 	host, port, err := net.SplitHostPort(addr)
 	if err != nil {
 		return addr // not host:port — pass through
 	}
 	switch host {
 	case "127.0.0.1", "localhost", "0.0.0.0", "::1", "::", "":
-		host = "host.docker.internal"
+		host = advertisedHost
+		if host == "" {
+			host = "host.docker.internal"
+		}
 	}
 	return net.JoinHostPort(host, port)
 }
@@ -92,30 +106,47 @@ func cdpDialHost() string {
 	return "127.0.0.1"
 }
 
-// cdpPublishHost is the host interface the browser container's CDP port is
-// published on. Default 127.0.0.1 (loopback-only — safest; correct when
-// browserd and the engine share a host). When browserd runs INSIDE a container
-// and dials the published port via host.docker.internal (the bridge gateway),
-// the port must be published on a bridge-reachable interface — set
-// RUNTIME_BROWSER_CDP_PUBLISH_HOST=0.0.0.0 there. SECURITY: 0.0.0.0 exposes the
-// unauthenticated CDP port on the host's published (ephemeral) port; acceptable
-// only on a single-node trusted self-host (same trust posture as mounting the
-// docker socket). The browser's network egress is still proxy-gated (deny-all
-// by default), so this does not widen the browser's own reach.
+// cdpPublishHost is the loopback interface used only by direct-host installs
+// that do not configure a private browser network. CDP is unauthenticated, so
+// a non-loopback override is deliberately ignored.
 func cdpPublishHost() string {
 	if h := os.Getenv("RUNTIME_BROWSER_CDP_PUBLISH_HOST"); h != "" {
-		return h
+		if h == "localhost" {
+			return "127.0.0.1"
+		}
+		if ip := net.ParseIP(h); ip != nil && ip.IsLoopback() {
+			return h
+		}
 	}
 	return "127.0.0.1"
 }
 
 // Create starts one locked-down Chromium container: egress only via the proxy
 // at proxyAddr, read-only rootfs, tmpfs profile, all caps dropped, non-root,
-// bounded cpu/mem/pids. Chrome listens for CDP on cdpPort, published to the host.
+// bounded cpu/mem/pids. With cfg.Network set, CDP is reachable only within that
+// private network. Host installations without a network publish to loopback.
 func (d *dockerBackend) Create(ctx context.Context, tenant, proxyAddr string) (BrowserHandle, error) {
 	pids := int64(512)
 	port := nat.Port(cdpPort + "/tcp")
-	cp := containerProxyAddr(proxyAddr)
+	cp := containerProxyAddrForHost(proxyAddr, d.cfg.ProxyHost)
+	hostConfig := &container.HostConfig{
+		ReadonlyRootfs: true,
+		ExtraHosts:     []string{"host.docker.internal:host-gateway"},
+		Tmpfs:          map[string]string{"/profile": fmt.Sprintf("size=%dm,mode=1777", d.cfg.ProfileMB), "/tmp": "size=64m,mode=1777", "/home/browser": "size=64m,mode=1777"},
+		CapDrop:        []string{"ALL"},
+		SecurityOpt:    []string{"no-new-privileges"},
+		Runtime:        d.cfg.Runtime,
+		Resources: container.Resources{
+			NanoCPUs:  int64(d.cfg.CPUs * 1e9),
+			Memory:    d.cfg.MemMB << 20,
+			PidsLimit: &pids,
+		},
+	}
+	if d.cfg.Network != "" {
+		hostConfig.NetworkMode = container.NetworkMode(d.cfg.Network)
+	} else {
+		hostConfig.PortBindings = nat.PortMap{port: []nat.PortBinding{{HostIP: cdpPublishHost()}}}
+	}
 	created, err := d.cli.ContainerCreate(ctx,
 		&container.Config{
 			Image: d.cfg.Image,
@@ -129,20 +160,7 @@ func (d *dockerBackend) Create(ctx context.Context, tenant, proxyAddr string) (B
 			Labels:       map[string]string{browserLabel: "1", browserLabel + ".tenant": tenant},
 			ExposedPorts: nat.PortSet{port: struct{}{}},
 		},
-		&container.HostConfig{
-			ReadonlyRootfs: true,
-			ExtraHosts:     []string{"host.docker.internal:host-gateway"},
-			Tmpfs:          map[string]string{"/profile": fmt.Sprintf("size=%dm,mode=1777", d.cfg.ProfileMB), "/tmp": "size=64m,mode=1777", "/home/browser": "size=64m,mode=1777"},
-			CapDrop:        []string{"ALL"},
-			SecurityOpt:    []string{"no-new-privileges"},
-			Runtime:        d.cfg.Runtime,
-			PortBindings:   nat.PortMap{port: []nat.PortBinding{{HostIP: cdpPublishHost()}}},
-			Resources: container.Resources{
-				NanoCPUs:  int64(d.cfg.CPUs * 1e9),
-				Memory:    d.cfg.MemMB << 20,
-				PidsLimit: &pids,
-			},
-		},
+		hostConfig,
 		nil, nil, "")
 	if err != nil {
 		return BrowserHandle{}, err
@@ -165,7 +183,7 @@ func (d *dockerBackend) waitForCDP(ctx context.Context, containerID string) (str
 	deadline := time.Now().Add(20 * time.Second)
 	var lastErr error
 	for {
-		ep, err := cdpEndpointFromInspect(ctx, d.cli, containerID)
+		ep, err := cdpEndpointFromInspect(ctx, d.cli, containerID, d.cfg.Network)
 		if err == nil && ep != "" {
 			return ep, nil
 		}
@@ -186,7 +204,7 @@ func (d *dockerBackend) waitForCDP(ctx context.Context, containerID string) (str
 // rewrites its host to <cdpDialHost>:<hostport> (default 127.0.0.1;
 // host.docker.internal when browserd is containerized) (Chrome reports
 // 0.0.0.0/its own hostname there, which the host can't dial).
-func cdpEndpointFromInspect(ctx context.Context, cli *client.Client, containerID string) (string, error) {
+func cdpEndpointFromInspect(ctx context.Context, cli *client.Client, containerID, networkName string) (string, error) {
 	insp, err := cli.ContainerInspect(ctx, containerID)
 	if err != nil {
 		return "", err
@@ -194,16 +212,25 @@ func cdpEndpointFromInspect(ctx context.Context, cli *client.Client, containerID
 	if insp.NetworkSettings == nil {
 		return "", fmt.Errorf("no network settings yet")
 	}
-	bindings := insp.NetworkSettings.Ports[nat.Port(cdpPort+"/tcp")]
-	if len(bindings) == 0 || bindings[0].HostPort == "" {
-		return "", fmt.Errorf("no host port yet")
+	dialHost, dialPort := "", cdpPort
+	if networkName != "" {
+		network, ok := insp.NetworkSettings.Networks[networkName]
+		if !ok || network == nil || network.IPAddress == "" {
+			return "", fmt.Errorf("no address on private browser network yet")
+		}
+		dialHost = network.IPAddress
+	} else {
+		bindings := insp.NetworkSettings.Ports[nat.Port(cdpPort+"/tcp")]
+		if len(bindings) == 0 || bindings[0].HostPort == "" {
+			return "", fmt.Errorf("no host port yet")
+		}
+		dialHost, dialPort = cdpDialHost(), bindings[0].HostPort
 	}
-	hostPort := bindings[0].HostPort
 
 	reqCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet,
-		"http://"+cdpDialHost()+":"+hostPort+"/json/version", nil)
+		"http://"+net.JoinHostPort(dialHost, dialPort)+"/json/version", nil)
 	if err != nil {
 		return "", err
 	}
@@ -230,7 +257,7 @@ func cdpEndpointFromInspect(ctx context.Context, cli *client.Client, containerID
 	if err != nil {
 		return "", fmt.Errorf("parse ws url: %w", err)
 	}
-	u.Host = cdpDialHost() + ":" + hostPort
+	u.Host = net.JoinHostPort(dialHost, dialPort)
 	return u.String(), nil
 }
 

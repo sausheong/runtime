@@ -22,9 +22,10 @@ type authenticator interface {
 
 // IdentityMiddleware authenticates every request to a Principal and authorizes
 // it against the target agent's tenant + the derived action. Exemptions match
-// the open-mode middleware: /healthz, /ui/login, /ui/static/*. Errors map to
-// 401 (unauthenticated), 403 (forbidden / not provisioned), 404 (cross-tenant or
-// unknown agent). For /ui paths, an auth failure redirects to /ui/login.
+// the open-mode middleware: /healthz, /readyz, /ui/login, /ui/static/*. Errors
+// map to 401 (unauthenticated), 403 (forbidden / not provisioned), 404
+// (cross-tenant or unknown agent). For /ui paths, an auth failure redirects to
+// /ui/login.
 //
 // onReject (nil-safe) fires once with the status code at every rejection write
 // path — rejected requests never reach the inner handler chain, so this hook is
@@ -150,7 +151,7 @@ func isExempt(path string) bool {
 	// and no session cookie yet (the callback handler sets it after exchanging the
 	// code). Gating it would redirect to /ui/login, which re-initiates OIDC — an
 	// infinite loop. The handler validates the code itself, so this is safe.
-	return path == "/" || path == "/healthz" || path == "/ui/login" || path == "/ui/callback" ||
+	return path == "/" || path == "/healthz" || path == "/readyz" || path == "/ui/login" || path == "/ui/callback" ||
 		strings.HasPrefix(path, "/ui/static/")
 }
 

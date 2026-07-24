@@ -1,0 +1,7 @@
+apiVersion: 1
+providers:
+  - name: runtime
+    folder: Runtime
+    type: file
+    options:
+      path: /var/lib/grafana/dashboards

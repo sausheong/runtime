@@ -19,6 +19,8 @@ grep -q 'type: Recreate'              <<<"$out" || fail "strategy!=Recreate"
 grep -q 'runAsNonRoot: true'          <<<"$out" || fail "not nonroot"
 grep -q 'readOnlyRootFilesystem: true'<<<"$out" || fail "rootfs not ro"
 grep -q 'path: /healthz'              <<<"$out" || fail "no healthz probe"
+grep -q 'path: /readyz'               <<<"$out" || fail "no readyz probe"
+grep -q 'name: metrics'               <<<"$out" || fail "no separate metrics service/port"
 grep -q 'checksum/config'             <<<"$out" || fail "no config checksum"
 ok "defaults"
 

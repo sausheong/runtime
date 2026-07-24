@@ -1,0 +1,26 @@
+# Caddy reverse proxy for the runtime control plane on instance A.
+#
+# Public HTTPS entrypoint for runtime.sausheong.com. Caddy obtains and renews a
+# Let's Encrypt certificate automatically over HTTP-01/TLS-ALPN — this requires:
+#   - the domain's A record points at instance A's static public IP, and
+#   - ports 80 and 443 are reachable from the internet (firewall
+#     runtime-allow-https, scoped to the runtime-https network tag).
+#
+# Everything proxies to runtimed:8080 — both the console (/ui) and the
+# control-plane API (/) live on that single port. No Google load balancer and no
+# Google-managed certificate: TLS terminates in this Caddy container, so the
+# setup stays cloud-agnostic (same config runs on any Docker host).
+#
+# SECURITY: this exposes the control plane to the public internet. It is safe
+# ONLY because runtime identity is ON (RUNTIME_ADMIN_BOOTSTRAP set on runtimed):
+# every /ui and API request is authenticated. The dashboards (Grafana :3000,
+# Jaeger :16686, Prometheus :9090) and runtimed :8080 are NOT proxied here and
+# remain reachable only over the IAP tunnel.
+{
+	email {$ACME_EMAIL:admin@sausheong.com}
+}
+
+{$SITE_ADDRESS:runtime.sausheong.com} {
+	encode gzip
+	reverse_proxy runtimed:8080
+}

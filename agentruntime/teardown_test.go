@@ -18,8 +18,8 @@ type recordingTool struct {
 }
 
 func (t recordingTool) Name() string                { return t.name }
-func (t recordingTool) Description() string          { return "recording test tool" }
-func (t recordingTool) Parameters() json.RawMessage  { return json.RawMessage(`{"type":"object"}`) }
+func (t recordingTool) Description() string         { return "recording test tool" }
+func (t recordingTool) Parameters() json.RawMessage { return json.RawMessage(`{"type":"object"}`) }
 func (t recordingTool) Execute(ctx context.Context, input json.RawMessage) (tool.ToolResult, error) {
 	return t.exec(ctx, input)
 }

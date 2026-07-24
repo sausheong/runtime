@@ -1,0 +1,147 @@
+# Instance A — control plane + observability for the GCP distributed deployment.
+# Reduced from deploy/compose/docker-compose.yml: no embedder/sandbox/browser
+# (the remote nutrition agents use none of them). Identity is ON: the control
+# plane is exposed publicly (via the Caddy service below), so every /ui and API
+# request must be authenticated — RUNTIME_ADMIN_BOOTSTRAP seeds the first admin.
+# The registry (runtime.remote.yaml) lists B and C as remotes.
+#
+#   ./stage-obs.sh              # populate ./obs from deploy/{compose,otel,grafana}
+#   cp .env.example .env        # set the auth tokens + identity/TLS vars
+#   docker compose up -d
+#
+# Run from this directory (deploy/gcp/control-plane). Observability config is
+# mounted from ./obs (staged by stage-obs.sh) so this dir is self-contained and
+# scp's to instance A as a single tree.
+name: runtime-cp
+
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: runtime
+      POSTGRES_PASSWORD: runtime
+      POSTGRES_DB: runtime
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U runtime"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  runtimed:
+    image: ${RUNTIME_IMAGE:-asia-southeast1-docker.pkg.dev/mhi-exp-chang-sau-sheong/runtime/runtime:latest}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      RUNTIME_PG_DSN: postgres://runtime:runtime@postgres:5432/runtime?sslmode=disable
+      RUNTIME_CTL_ADDR: ":8080"
+      RUNTIME_METRICS_ADDR: ":9091"
+      RUNTIME_CONFIG: /app/runtime.remote.yaml
+      # identity ON: the control plane is publicly reachable through Caddy, so the
+      # edge requires a bearer on every /ui + API request. Remote-agent attach is
+      # unaffected (that uses the per-agent auth tokens below).
+      RUNTIME_ADMIN_BOOTSTRAP: ${RUNTIME_ADMIN_BOOTSTRAP}
+      RUNTIME_SECRETS_KEYS: ${RUNTIME_SECRETS_KEYS}
+      RUNTIME_SECRETS_PRIMARY: ${RUNTIME_SECRETS_PRIMARY}
+      # OIDC human login (optional; "Sign in with Google" on the console). Empty
+      # by default → OIDC off, service-key login only. Set in .env to enable.
+      RUNTIME_OIDC_ISSUER: ${RUNTIME_OIDC_ISSUER:-}
+      RUNTIME_OIDC_CLIENT_ID: ${RUNTIME_OIDC_CLIENT_ID:-}
+      RUNTIME_OIDC_CLIENT_SECRET: ${RUNTIME_OIDC_CLIENT_SECRET:-}
+      RUNTIME_OIDC_REDIRECT_URL: ${RUNTIME_OIDC_REDIRECT_URL:-}
+      NUTRITION_GO_TOKEN: ${NUTRITION_GO_TOKEN}
+      NUTRITION_OPENAI_TOKEN: ${NUTRITION_OPENAI_TOKEN:-}
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+    volumes:
+      - ./runtime.remote.yaml:/app/runtime.remote.yaml:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "8080:8080"
+    expose:
+      - "9091"
+
+  prometheus:
+    image: prom/prometheus:v3.12.0
+    command: ["--config.file=/etc/prometheus/prometheus.yml"]
+    volumes:
+      - ./obs/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./obs/rules:/etc/prometheus/rules:ro   # alert rules (prometheus.yml rule_files globs this)
+    ports:
+      - "9090:9090"
+    depends_on:
+      - alertmanager
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  # Alertmanager: receives alerts from prometheus (prometheus.yml points at
+  # alertmanager:9093). Default route drops to a null receiver — same turnkey
+  # config as the air-gap stack; uncomment a receiver in obs/alertmanager.yml to
+  # wire real notifications. IAP-only (not published to the internet).
+  alertmanager:
+    image: prom/alertmanager:v0.32.1
+    command: ["--config.file=/etc/alertmanager/alertmanager.yml"]
+    volumes:
+      - ./obs/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+    ports:
+      - "9093:9093"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  grafana:
+    image: grafana/grafana:13.1.0
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?set GRAFANA_ADMIN_PASSWORD in .env}
+    volumes:
+      - ./obs/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./obs/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    ports:
+      - "3000:3000"
+    depends_on:
+      - prometheus
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.153.0
+    command: ["--config=/etc/otel/collector-config.yaml"]
+    volumes:
+      - ./obs/collector-config.yaml:/etc/otel/collector-config.yaml:ro
+    ports:
+      - "4318:4318"
+    depends_on:
+      - jaeger
+
+  jaeger:
+    image: jaegertracing/all-in-one:2.18.0
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+    ports:
+      - "16686:16686"
+
+  # Public HTTPS entrypoint for runtime.sausheong.com. Terminates TLS (automatic
+  # Let's Encrypt) and reverse-proxies to runtimed:8080 over the compose network.
+  # Only Caddy is exposed to the internet (firewall runtime-allow-https, ports
+  # 80/443); runtimed:8080 + the dashboards stay IAP-only. Safe because runtime
+  # identity is ON (see runtimed above) — every proxied request is authenticated.
+  caddy:
+    image: caddy:2.11.3
+    restart: unless-stopped
+    depends_on:
+      - runtimed
+    environment:
+      SITE_ADDRESS: ${SITE_ADDRESS:-runtime.sausheong.com}
+      ACME_EMAIL: ${ACME_EMAIL:-admin@sausheong.com}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data      # persisted certs + ACME account (survive restarts)
+      - caddy_config:/config
+    ports:
+      - "80:80"               # ACME HTTP-01 challenge + HTTP->HTTPS redirect
+      - "443:443"
+
+volumes:
+  pgdata:
+  caddy_data:
+  caddy_config:

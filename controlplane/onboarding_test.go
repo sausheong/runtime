@@ -95,6 +95,16 @@ func TestUpstreamAPIRBACAndValidation(t *testing.T) {
 	if w := postUpstream(t, mux, admin, map[string]any{"name": "o"}); w.Code != http.StatusBadRequest {
 		t.Fatalf("no transport: want 400 got %d", w.Code)
 	}
+	for _, target := range []string{
+		"http://127.0.0.1:8080",
+		"http://10.0.0.1",
+		"http://169.254.169.254/latest/meta-data",
+		"http://metadata.google.internal",
+	} {
+		if w := postUpstream(t, mux, admin, map[string]any{"name": "private", "url": target}); w.Code != http.StatusBadRequest {
+			t.Errorf("private target %q: want 400 got %d", target, w.Code)
+		}
+	}
 	w := postUpstream(t, mux, admin, map[string]any{"name": "orders", "url": "http://x"})
 	if w.Code != http.StatusCreated {
 		t.Fatalf("create: want 201 got %d (%s)", w.Code, w.Body)

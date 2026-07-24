@@ -20,7 +20,9 @@ RUN printf '%s\n' \
   '#!/bin/sh' \
   'set -e' \
   'socat tcp-listen:9222,fork,reuseaddr,bind=0.0.0.0 tcp:127.0.0.1:9221 &' \
-  'exec chromium --headless=new --no-sandbox --disable-gpu \' \
+  'sandbox_flag=' \
+  'if [ "${RUNTIME_CHROME_NO_SANDBOX:-}" = "1" ]; then sandbox_flag=--no-sandbox; fi' \
+  'exec chromium --headless=new --disable-gpu $sandbox_flag \' \
   '  --remote-debugging-address=127.0.0.1 --remote-debugging-port=9221 \' \
   '  --proxy-server="$RUNTIME_CHROME_PROXY" \' \
   '  --disable-blink-features=AutomationControlled \' \

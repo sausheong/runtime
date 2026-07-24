@@ -39,19 +39,43 @@ func Execute(ctx context.Context, st EvalStore, inv Invoker, j Judge, runID stri
 	}
 	_ = st.SetRunStatus(ctx, runID, StatusRunning)
 
+	existing, err := st.ListResults(ctx, runID)
+	if err != nil {
+		_ = st.FinishRun(context.Background(), runID, StatusError, 0, 0, 0, 0, err.Error())
+		return
+	}
+	byIndex := make(map[int]Result, len(existing))
+	for _, result := range existing {
+		if result.CaseIndex >= 0 && result.CaseIndex < len(set.Cases) {
+			byIndex[result.CaseIndex] = result
+		}
+	}
 	total, passed, failed := 0, 0, 0
 	for i, c := range set.Cases {
 		if err := ctx.Err(); err != nil {
-			_ = st.FinishRun(ctx, runID, StatusError, total, passed, failed, score(passed, total), "cancelled")
-			if m != nil {
-				m.EvalRun(run.Tenant, StatusError)
-			}
+			// Leave the run in running state. Startup recovery resumes only the
+			// missing case indexes, so a normal shutdown never converts
+			// recoverable work into a permanent error.
 			return
+		}
+		if result, ok := byIndex[i]; ok {
+			total++
+			if result.Passed {
+				passed++
+			} else {
+				failed++
+			}
+			continue
 		}
 		var output string
 		var pass bool
 		var detail string
 		out, ierr := inv.Invoke(ctx, run.AgentID, c.Input)
+		if ctx.Err() != nil {
+			// Do not persist a shutdown/interruption as a failed evaluation
+			// case. Leaving this index absent lets startup recovery run it.
+			return
+		}
 		if ierr != nil {
 			pass, detail = false, "invoke error: "+ierr.Error()
 		} else {
@@ -85,6 +109,24 @@ func Execute(ctx context.Context, st EvalStore, inv Invoker, j Judge, runID stri
 	if m != nil {
 		m.EvalRun(run.Tenant, StatusCompleted)
 	}
+}
+
+// RecoverIncomplete restarts pending/running runs after a control-plane
+// restart. Execute resumes from persisted case indexes, so already-completed
+// agent invocations are not repeated.
+func RecoverIncomplete(ctx context.Context, st EvalStore, inv Invoker, j Judge, m Metricer) error {
+	runs, err := st.ListRuns(ctx, "")
+	if err != nil {
+		return err
+	}
+	for _, run := range runs {
+		if run.Status != StatusPending && run.Status != StatusRunning {
+			continue
+		}
+		runID := run.RunID
+		go Execute(ctx, st, inv, j, runID, m)
+	}
+	return nil
 }
 
 func score(passed, total int) float64 {

@@ -15,6 +15,7 @@ import (
 	"github.com/sausheong/harness/tool"
 
 	"github.com/sausheong/runtime/internal/config"
+	"github.com/sausheong/runtime/internal/netpolicy"
 )
 
 const (
@@ -27,8 +28,17 @@ const (
 // same-host-only redirect policy (a compromised upstream must not bounce the
 // gateway's credentials to another host).
 func newRestClient() *http.Client {
+	return newRestClientFor(false)
+}
+
+func newRestClientFor(restrictOutbound bool) *http.Client {
+	var transport http.RoundTripper
+	if restrictOutbound {
+		transport = netpolicy.PublicTransport()
+	}
 	return &http.Client{
-		Timeout: restRequestTimeout,
+		Timeout:   restRequestTimeout,
+		Transport: transport,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			if len(via) >= restMaxRedirects {
 				return fmt.Errorf("too many redirects")
@@ -83,14 +93,14 @@ func dialOpenAPI(ctx context.Context, s config.GatewayServer) (upstreamConn, err
 	var specBytes []byte
 	var err error
 	if strings.HasPrefix(s.OpenAPI, "http://") || strings.HasPrefix(s.OpenAPI, "https://") {
-		specBytes, err = fetchSpec(ctx, s.OpenAPI, s.Headers)
+		specBytes, err = fetchSpec(ctx, s.OpenAPI, s.Headers, s.RestrictOutbound)
 	} else {
 		specBytes, err = os.ReadFile(s.OpenAPI)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("openapi spec %s: %w", s.OpenAPI, err)
 	}
-	client := newRestClient()
+	client := newRestClientFor(s.RestrictOutbound)
 	tools, resolvedBase, err := generateTools(s.Name, specBytes, s.BaseURL, s.Operations, client)
 	if err != nil {
 		return nil, err
@@ -112,7 +122,7 @@ func dialOpenAPI(ctx context.Context, s config.GatewayServer) (upstreamConn, err
 // credentials, and the default client follows cross-host redirects (Go only
 // strips the six standard auth headers, and even Authorization still flows
 // to subdomains) — the same exact-same-host policy as API calls applies.
-func fetchSpec(ctx context.Context, url string, headers map[string]string) ([]byte, error) {
+func fetchSpec(ctx context.Context, url string, headers map[string]string, restrictOutbound bool) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
@@ -122,7 +132,7 @@ func fetchSpec(ctx context.Context, url string, headers map[string]string) ([]by
 	for k, v := range headers {
 		req.Header.Set(k, v)
 	}
-	resp, err := newRestClient().Do(req)
+	resp, err := newRestClientFor(restrictOutbound).Do(req)
 	if err != nil {
 		return nil, err
 	}

@@ -263,12 +263,17 @@ func runAdmin(base string, args []string) {
 		mustAdminDelete(base, "/admin/keys/"+id)
 		fmt.Printf("key %s revoked\n", id)
 	case "secret set":
-		// admin secret set <name> <value> [--tenant t]
-		if len(args) < 4 {
+		// admin secret set <name> (<value>|--value-stdin) [--tenant t]
+		if len(args) < 3 {
 			adminUsage()
 		}
-		name, value := args[2], args[3]
-		tenant := flagValue(args[4:], "--tenant", "")
+		name := args[2]
+		value, err := secretInput(args, 3, "", "--value-stdin", os.Stdin)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(2)
+		}
+		tenant := flagValue(args[3:], "--tenant", "")
 		mustAdminPost(base, "/admin/secrets", map[string]string{"name": name, "value": value, "tenant": tenant})
 		fmt.Printf("secret %s set\n", name)
 	case "secret set-oauth2":
@@ -278,12 +283,17 @@ func runAdmin(base string, args []string) {
 			fmt.Fprintln(os.Stderr, "secret set-oauth2 requires --name")
 			os.Exit(2)
 		}
+		clientSecret, err := secretInput(args, -1, "--client-secret", "--client-secret-stdin", os.Stdin)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(2)
+		}
 		body := map[string]any{
 			"name":          name,
 			"type":          "oauth2_client_credentials",
 			"token_url":     flagValue(args[2:], "--token-url", ""),
 			"client_id":     flagValue(args[2:], "--client-id", ""),
-			"client_secret": flagValue(args[2:], "--client-secret", ""),
+			"client_secret": clientSecret,
 			"scopes":        flagValues(args[2:], "--scope"),
 			"audience":      flagValue(args[2:], "--audience", ""),
 			"tenant":        flagValue(args[2:], "--tenant", ""),
@@ -297,12 +307,17 @@ func runAdmin(base string, args []string) {
 			fmt.Fprintln(os.Stderr, "secret set-obo requires --name")
 			os.Exit(2)
 		}
+		clientSecret, err := secretInput(args, -1, "--client-secret", "--client-secret-stdin", os.Stdin)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(2)
+		}
 		body := map[string]any{
 			"name":                 name,
 			"type":                 "oauth2_obo",
 			"token_url":            flagValue(args[2:], "--token-url", ""),
 			"client_id":            flagValue(args[2:], "--client-id", ""),
-			"client_secret":        flagValue(args[2:], "--client-secret", ""),
+			"client_secret":        clientSecret,
 			"scopes":               flagValues(args[2:], "--scope"),
 			"audience":             flagValue(args[2:], "--audience", ""),
 			"subject_token_type":   flagValue(args[2:], "--subject-token-type", ""),
@@ -788,7 +803,7 @@ func mustAtoi(s string) int {
 }
 
 func adminUsage() {
-	fmt.Fprintln(os.Stderr, "usage: runtimectl admin <tenant create <id> [--name n]|user add <subject> --role r [--tenant t]|user ls|key create --role r [--label l] [--tenant t]|key ls|key revoke <id>|secret set <name> <value> [--tenant t]|secret set-oauth2 --name n --token-url u --client-id c --client-secret s [--scope x] [--audience a] [--tenant t]|secret set-obo --name n --token-url u --client-id c --client-secret s [--scope x] [--audience a] [--subject-token-type t] [--requested-token-type t] [--tenant t]|secret ls|secret rm <name>|secret rotate [--tenant t]|upstream add --name n (--url u|--openapi spec) [--base-url b] [--cred-secret s] [--cred-header h] [--tenant t]|upstream ls|upstream rm <id>|agent add --id i --url u [--name n] [--model m] [--cred-secret s] [--tenant t]|agent ls|agent rm <id>|agent enable <id>|agent disable <id>|agent restart <id>|policy add --name n --file p.cedar [--tenant t]|policy ls [--tenant t]|policy rm <name> [--tenant t]|quota add --tenant t --upstream u --rate n|quota ls|quota rm --upstream u [--tenant t]|eval set add --name n --file f [--tenant t]|eval set ls [--tenant t]|eval set rm <name>|eval run <set> --agent id [--tenant t] [--wait]|eval runs [--tenant t]|eval results <run-id>|eval policy set --agent id --rate 0-100 --file f [--tenant t]|eval policy ls [--tenant t]|eval policy rm <agent>|eval online-results [--session sid] [--tenant t]|eval failures --agent id [--since dur]>")
+	fmt.Fprintln(os.Stderr, "usage: runtimectl admin <tenant create <id> [--name n]|user add <subject> --role r [--tenant t]|user ls|key create --role r [--label l] [--tenant t]|key ls|key revoke <id>|secret set <name> (<value>|--value-stdin) [--tenant t]|secret set-oauth2 --name n --token-url u --client-id c (--client-secret s|--client-secret-stdin) [--scope x] [--audience a] [--tenant t]|secret set-obo --name n --token-url u --client-id c (--client-secret s|--client-secret-stdin) [--scope x] [--audience a] [--subject-token-type t] [--requested-token-type t] [--tenant t]|secret ls|secret rm <name>|secret rotate [--tenant t]|upstream add --name n (--url u|--openapi spec) [--base-url b] [--cred-secret s] [--cred-header h] [--tenant t]|upstream ls|upstream rm <id>|agent add --id i --url u [--name n] [--model m] [--cred-secret s] [--tenant t]|agent ls|agent rm <id>|agent enable <id>|agent disable <id>|agent restart <id>|policy add --name n --file p.cedar [--tenant t]|policy ls [--tenant t]|policy rm <name> [--tenant t]|quota add --tenant t --upstream u --rate n|quota ls|quota rm --upstream u [--tenant t]|eval set add --name n --file f [--tenant t]|eval set ls [--tenant t]|eval set rm <name>|eval run <set> --agent id [--tenant t] [--wait]|eval runs [--tenant t]|eval results <run-id>|eval policy set --agent id --rate 0-100 --file f [--tenant t]|eval policy ls [--tenant t]|eval policy rm <agent>|eval online-results [--session sid] [--tenant t]|eval failures --agent id [--since dur]>")
 	os.Exit(2)
 }
 
@@ -839,6 +854,45 @@ func flagValue(args []string, name, def string) string {
 		}
 	}
 	return def
+}
+
+// secretInput reads a sensitive CLI value either from its legacy argument/flag
+// or from stdin. Stdin avoids exposing credentials in process listings and
+// shell history. One terminal newline is removed; all other bytes are kept.
+func secretInput(args []string, positional int, valueFlag, stdinFlag string, r io.Reader) (string, error) {
+	direct, hasDirect := "", false
+	if positional >= 0 && positional < len(args) && !strings.HasPrefix(args[positional], "--") {
+		direct, hasDirect = args[positional], true
+	}
+	if valueFlag != "" {
+		for i := 0; i < len(args)-1; i++ {
+			if args[i] == valueFlag {
+				direct, hasDirect = args[i+1], true
+				break
+			}
+		}
+	}
+	fromStdin := hasFlag(args, stdinFlag)
+	if fromStdin && hasDirect {
+		return "", fmt.Errorf("%s cannot be combined with a command-line secret value", stdinFlag)
+	}
+	if !fromStdin {
+		if !hasDirect {
+			return "", fmt.Errorf("secret value required (use %s to read it from stdin)", stdinFlag)
+		}
+		return direct, nil
+	}
+	const maxSecret = 1 << 20
+	data, err := io.ReadAll(io.LimitReader(r, maxSecret+1))
+	if err != nil {
+		return "", fmt.Errorf("read secret from stdin: %w", err)
+	}
+	if len(data) > maxSecret {
+		return "", fmt.Errorf("secret from stdin exceeds %d bytes", maxSecret)
+	}
+	value := strings.TrimSuffix(string(data), "\n")
+	value = strings.TrimSuffix(value, "\r")
+	return value, nil
 }
 
 // flagValues collects the value following every occurrence of name in args, so

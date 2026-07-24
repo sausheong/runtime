@@ -282,7 +282,7 @@ func TestEventsEndpointNonBlocking(t *testing.T) {
 	}
 }
 
-func TestEventsEndpointUnknownSessionEmptyArray(t *testing.T) {
+func TestEventsEndpointUnknownSessionNotFound(t *testing.T) {
 	m := newTestManager()
 	srv := httptest.NewServer(m.newMux())
 	defer srv.Close()
@@ -291,8 +291,29 @@ func TestEventsEndpointUnknownSessionEmptyArray(t *testing.T) {
 		t.Fatalf("GET: %v", err)
 	}
 	defer resp.Body.Close()
-	body, _ := io.ReadAll(resp.Body)
-	if strings.TrimSpace(string(body)) != "[]" {
-		t.Fatalf("unknown session should yield [], got %q", string(body))
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("unknown session status=%d, want 404", resp.StatusCode)
+	}
+}
+
+func TestSessionEndpointsRejectAnotherAgentsKnownSession(t *testing.T) {
+	m := newTestManager()
+	otherID, err := m.st.CreateSession(context.Background(), "other-agent", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = m.st.AppendEvent(context.Background(), otherID, "done", []byte(`{"type":"done"}`))
+	srv := httptest.NewServer(m.newMux())
+	defer srv.Close()
+
+	for _, suffix := range []string{"", "/events", "/stream"} {
+		resp, err := http.Get(srv.URL + "/sessions/" + otherID + suffix)
+		if err != nil {
+			t.Fatalf("GET %s: %v", suffix, err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusNotFound {
+			t.Errorf("GET %s: status=%d, want 404", suffix, resp.StatusCode)
+		}
 	}
 }

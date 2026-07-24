@@ -27,6 +27,9 @@ key_b64="${keys#*:}"
 n="$(printf '%s' "$key_b64" | base64 -d 2>/dev/null | wc -c | tr -d ' ')"
 [[ "$n" == "32" ]] || { echo "FAIL: AES key not 32 bytes (got $n)"; exit 1; }
 
+grafana="$(grep '^GRAFANA_ADMIN_PASSWORD=' "$ENV" | cut -d= -f2)"
+[[ "$grafana" =~ ^[0-9a-f]{48}$ ]] || { echo "FAIL: bad Grafana password"; exit 1; }
+
 # Second run without --force refuses and leaves .env byte-identical.
 before="$(cat "$ENV")"
 if "$TMP/init.sh" >/dev/null 2>&1; then echo "FAIL: second run should refuse"; exit 1; fi

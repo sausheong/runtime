@@ -22,6 +22,9 @@ func TestContainerProxyAddr(t *testing.T) {
 		{"proxy.internal:3128", "proxy.internal:3128"}, // explicit host — passthrough
 		{"not-host-port", "not-host-port"},             // unparseable — passthrough
 	}
+	if got := containerProxyAddrForHost("[::]:54673", "runtimed"); got != "runtimed:54673" {
+		t.Errorf("private-network proxy address = %q, want runtimed:54673", got)
+	}
 	for _, c := range cases {
 		if got := containerProxyAddr(c.in); got != c.want {
 			t.Errorf("containerProxyAddr(%q) = %q, want %q", c.in, got, c.want)
@@ -46,7 +49,7 @@ func TestCDPPublishHost(t *testing.T) {
 		t.Errorf("default cdpPublishHost = %q, want 127.0.0.1", got)
 	}
 	t.Setenv("RUNTIME_BROWSER_CDP_PUBLISH_HOST", "0.0.0.0")
-	if got := cdpPublishHost(); got != "0.0.0.0" {
-		t.Errorf("override cdpPublishHost = %q, want 0.0.0.0", got)
+	if got := cdpPublishHost(); got != "127.0.0.1" {
+		t.Errorf("unsafe override cdpPublishHost = %q, want loopback", got)
 	}
 }

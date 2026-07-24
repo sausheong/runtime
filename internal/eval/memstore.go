@@ -164,7 +164,16 @@ func (m *MemStore) FinishRun(_ context.Context, runID, status string, total, pas
 func (m *MemStore) PutResult(_ context.Context, runID string, res Result) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.results[runID] = append(m.results[runID], res)
+	results := m.results[runID]
+	for i := range results {
+		if results[i].CaseIndex == res.CaseIndex {
+			results[i] = res
+			m.results[runID] = results
+			m.gen++
+			return nil
+		}
+	}
+	m.results[runID] = append(results, res)
 	m.gen++
 	return nil
 }
@@ -179,6 +188,24 @@ func (m *MemStore) ListResults(_ context.Context, runID string) ([]Result, error
 		return out[i].CaseIndex < out[j].CaseIndex
 	})
 	return out, nil
+}
+
+func (m *MemStore) ReapBefore(_ context.Context, before time.Time) (int64, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var n int64
+	for id, run := range m.runs {
+		if !run.CreatedAt.Before(before) || (run.Status != StatusCompleted && run.Status != StatusError) {
+			continue
+		}
+		delete(m.runs, id)
+		delete(m.results, id)
+		n++
+	}
+	if n > 0 {
+		m.gen++
+	}
+	return n, nil
 }
 
 var _ EvalStore = (*MemStore)(nil)

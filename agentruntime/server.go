@@ -1,12 +1,14 @@
 package agentruntime
 
 import (
+	"context"
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"log/slog"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/sausheong/runtime/internal/obs"
 	"github.com/sausheong/runtime/internal/rheader"
@@ -86,7 +88,7 @@ func (m *Manager) handler() http.Handler {
 func requireBearer(token string, next http.Handler) http.Handler {
 	want := "Bearer " + token
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodGet && r.URL.Path == "/healthz" {
+		if r.Method == http.MethodGet && (r.URL.Path == "/healthz" || r.URL.Path == "/readyz") {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -105,6 +107,16 @@ func (m *Manager) newMux() *http.ServeMux {
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
+	})
+	mux.HandleFunc("GET /readyz", func(w http.ResponseWriter, r *http.Request) {
+		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+		defer cancel()
+		if err := m.st.Ping(ctx); err != nil {
+			http.Error(w, "not ready", http.StatusServiceUnavailable)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ready"))
 	})
 	mux.Handle("GET /metrics", m.metrics.Handler())
 	mux.HandleFunc("GET /meta", func(w http.ResponseWriter, _ *http.Request) {
@@ -159,6 +171,9 @@ func (m *Manager) newMux() *http.ServeMux {
 	})
 	mux.HandleFunc("GET /sessions/{id}/stream", func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
+		if !m.requireOwnedSession(w, r, id) {
+			return
+		}
 		flusher, ok := w.(http.Flusher)
 		if !ok {
 			http.Error(w, "streaming unsupported", http.StatusInternalServerError)
@@ -177,18 +192,22 @@ func (m *Manager) newMux() *http.ServeMux {
 		defer unsub()
 
 		buffered, err := m.st.EventsSince(r.Context(), id, since)
-		if err == nil {
-			for _, e := range buffered {
-				var ev WireEvent
-				if json.Unmarshal(e.Payload, &ev) == nil {
-					ev.Seq = e.Seq
-					_ = writeSSE(w, ev)
-				}
+		if err != nil {
+			http.Error(w, "event replay unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		lastSent := since
+		for _, e := range buffered {
+			var ev WireEvent
+			if json.Unmarshal(e.Payload, &ev) == nil {
+				ev.Seq = e.Seq
+				_ = writeSSE(w, ev)
+				lastSent = e.Seq
 			}
-			flusher.Flush()
-			if n := len(buffered); n > 0 && (buffered[n-1].Type == "done" || buffered[n-1].Type == "error") {
-				return // pure-replay terminal: stream already complete
-			}
+		}
+		flusher.Flush()
+		if n := len(buffered); n > 0 && (buffered[n-1].Type == "done" || buffered[n-1].Type == "error") {
+			return // pure-replay terminal: stream already complete
 		}
 
 		for {
@@ -196,7 +215,15 @@ func (m *Manager) newMux() *http.ServeMux {
 			case <-r.Context().Done():
 				return
 			case ev := <-live:
+				// We subscribe before replay so no event can be missed. An
+				// event committed during the replay query may therefore appear
+				// in both buffered and live; sequence filtering removes that
+				// deliberate overlap.
+				if ev.Seq <= lastSent {
+					continue
+				}
 				_ = writeSSE(w, ev)
+				lastSent = ev.Seq
 				flusher.Flush()
 				if ev.Type == "done" || ev.Type == "error" {
 					return
@@ -206,6 +233,9 @@ func (m *Manager) newMux() *http.ServeMux {
 	})
 	mux.HandleFunc("GET /sessions/{id}/events", func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
+		if !m.requireOwnedSession(w, r, id) {
+			return
+		}
 		var since int64
 		if s := r.URL.Query().Get("since"); s != "" {
 			since, _ = strconv.ParseInt(s, 10, 64)
@@ -215,6 +245,9 @@ func (m *Manager) newMux() *http.ServeMux {
 			if n, err := strconv.Atoi(s); err == nil && n > 0 {
 				limit = n
 			}
+		}
+		if limit > 1000 {
+			limit = 1000
 		}
 		// Non-blocking, unlike the SSE stream: a pure read of stored events. A
 		// non-terminal session returns whatever is buffered so far and returns
@@ -243,8 +276,8 @@ func (m *Manager) newMux() *http.ServeMux {
 	})
 	mux.HandleFunc("GET /sessions/{id}", func(w http.ResponseWriter, r *http.Request) {
 		row, err := m.st.GetSession(r.Context(), r.PathValue("id"))
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusNotFound)
+		if err != nil || row.AgentID != m.agentID {
+			http.Error(w, "session not found", http.StatusNotFound)
 			return
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{
@@ -253,4 +286,17 @@ func (m *Manager) newMux() *http.ServeMux {
 		})
 	})
 	return mux
+}
+
+// requireOwnedSession enforces the agent boundary again inside agentd. The
+// control plane performs the same check before proxying native sessions, but an
+// agent port may also be reachable directly on a trusted host. Session ids are
+// identifiers, not bearer capabilities.
+func (m *Manager) requireOwnedSession(w http.ResponseWriter, r *http.Request, id string) bool {
+	row, err := m.st.GetSession(r.Context(), id)
+	if err != nil || row.AgentID != m.agentID {
+		http.Error(w, "session not found", http.StatusNotFound)
+		return false
+	}
+	return true
 }

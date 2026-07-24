@@ -8,9 +8,13 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"sort"
 	"strconv"
+	"strings"
 
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
+
+	"github.com/sausheong/runtime/internal/netpolicy"
 )
 
 // SecretBroker resolves a tenant's secrets to name->plaintext at spawn time.
@@ -49,6 +53,10 @@ type AgentProcess struct {
 	// AuthToken is an optional shared bearer added to every request runtimed
 	// makes to this agent (proxy, health, metrics). "" ⇒ no auth header.
 	AuthToken string
+	// RestrictOutbound applies the public-network-only dial policy. It is set
+	// for tenant-registered remote agents; file-configured remotes remain an
+	// operator trust decision and may intentionally target private services.
+	RestrictOutbound bool
 
 	// ReplicaIndex is this replica's 0-based index within its agent's pool.
 	// 0 for single-replica and remote agents. Injected into the child as
@@ -80,12 +88,10 @@ type AgentProcess struct {
 	policyResolver PolicyResolver // optional; injected by the Registry. nil ⇒ no eval policy.
 }
 
-// envDelta returns ONLY the entries buildEnv adds on top of the inherited
-// process environment: the RUNTIME_* control vars, the opt-in feature vars, and
-// (if a broker is set) the tenant's decrypted secrets. It NEVER includes
-// os.Environ(), so it is safe to serialize across the network to a remote agent
-// (the registration handshake) — runtimed's own env (master keyring, OIDC
-// secrets) can never leak. A broker error fails closed.
+// envDelta returns the complete platform-owned environment delta for an agent:
+// the RUNTIME_* control vars, opt-in feature vars, and (if a broker is set) the
+// tenant's decrypted secrets. It NEVER includes os.Environ(), so it is safe to
+// serialize across the network to a remote agent. A broker error fails closed.
 func (a AgentProcess) envDelta(ctx context.Context) ([]string, error) {
 	env := []string{
 		"RUNTIME_PG_DSN=" + a.PGDSN,
@@ -176,17 +182,64 @@ func (a AgentProcess) envDelta(ctx context.Context) ([]string, error) {
 	return env, nil
 }
 
-// buildEnv assembles the full child environment for a LOCAL spawn: the inherited
-// operator env, then envDelta on top (so the delta shadows any inherited var of
-// the same name, including the tenant's decrypted secrets which come LAST). A
-// broker error fails closed — the caller must not start the process.
-// buildEnv = os.Environ() + envDelta.
+// childBaseEnv returns the deliberately small subset of runtimed's environment
+// that a local agent process may inherit. In particular, platform credentials
+// such as RUNTIME_SECRETS_KEYS, RUNTIME_ADMIN_BOOTSTRAP, OIDC client secrets,
+// and arbitrary operator provider keys are never copied implicitly.
+//
+// RUNTIME_AGENT_ENV_PASSTHROUGH is an operator escape hatch for a named,
+// comma-separated set of additional variables. Platform-reserved names remain
+// forbidden: an agent must receive those through envDelta, where their value is
+// scoped and controlled. Secret provider credentials should be stored in the
+// tenant secret broker rather than passed through here.
+func childBaseEnv() []string {
+	allowed := map[string]struct{}{
+		"HOME":                        {},
+		"LANG":                        {},
+		"LC_ALL":                      {},
+		"LC_CTYPE":                    {},
+		"NODE_EXTRA_CA_CERTS":         {},
+		"PATH":                        {},
+		"SSL_CERT_DIR":                {},
+		"SSL_CERT_FILE":               {},
+		"TMPDIR":                      {},
+		"TZ":                          {},
+		"OTEL_EXPORTER_OTLP_ENDPOINT": {},
+		"RUNTIME_LOG_FORMAT":          {},
+		"RUNTIME_TRACE_SAMPLE_RATIO":  {},
+		"RUNTIME_TRACING_ENABLED":     {},
+	}
+	for _, name := range strings.Split(os.Getenv("RUNTIME_AGENT_ENV_PASSTHROUGH"), ",") {
+		name = strings.TrimSpace(name)
+		if name == "" || HasReservedEnvPrefix(name) {
+			continue
+		}
+		allowed[name] = struct{}{}
+	}
+	names := make([]string, 0, len(allowed))
+	for name := range allowed {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	env := make([]string, 0, len(names))
+	for _, name := range names {
+		if value, ok := os.LookupEnv(name); ok {
+			env = append(env, name+"="+value)
+		}
+	}
+	return env
+}
+
+// buildEnv assembles the full child environment for a LOCAL spawn: a minimal
+// safe base followed by envDelta. The tenant's scoped secrets come last and
+// therefore win over an explicitly passed-through variable of the same name.
+// A broker error fails closed — the caller must not start the process.
 func (a AgentProcess) buildEnv(ctx context.Context) ([]string, error) {
 	delta, err := a.envDelta(ctx)
 	if err != nil {
 		return nil, err
 	}
-	return append(os.Environ(), delta...), nil
+	return append(childBaseEnv(), delta...), nil
 }
 
 // SpawnFunc returns a Supervisor-compatible spawn closure that launches agentd
@@ -259,12 +312,16 @@ func (t authTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 // header (remote agents). FlushInterval = -1 keeps SSE/streaming prompt.
 // onError (nil ⇒ no-op) fires before each 503 served by the ErrorHandler.
 func reverseProxy(base, token string, onError func()) *httputil.ReverseProxy {
+	return reverseProxyWithTransport(base, token, nil, onError)
+}
+
+func reverseProxyWithTransport(base, token string, baseTransport http.RoundTripper, onError func()) *httputil.ReverseProxy {
 	target, _ := url.Parse(base)
 	rp := httputil.NewSingleHostReverseProxy(target)
 	// otelhttp wraps the auth transport: injects traceparent from the active
 	// span and records a client span. With tracing off (no-op provider) this is
 	// a cheap pass-through.
-	rp.Transport = otelhttp.NewTransport(authTransport{token: token})
+	rp.Transport = otelhttp.NewTransport(authTransport{token: token, base: baseTransport})
 	rp.FlushInterval = -1
 	rp.ErrorHandler = func(w http.ResponseWriter, r *http.Request, _ error) {
 		// Client-initiated cancellation is not an agent failure; don't count it.
@@ -280,4 +337,11 @@ func reverseProxy(base, token string, onError func()) *httputil.ReverseProxy {
 		return nil
 	}
 	return rp
+}
+
+func agentOutboundTransport(ap AgentProcess) http.RoundTripper {
+	if ap.RestrictOutbound {
+		return netpolicy.PublicTransport()
+	}
+	return nil
 }

@@ -38,16 +38,22 @@ func (f *fakeAgentStore3) Get(_ context.Context, id string) (agentstore.AgentRow
 	r, ok := f.rows[id]
 	return r, ok, nil
 }
-func (f *fakeAgentStore3) Delete(_ context.Context, tenant, id string) error {
-	delete(f.rows, id)
-	return nil
-}
-func (f *fakeAgentStore3) SetEnabled(_ context.Context, tenant, id string, enabled bool) error {
-	if r, ok := f.rows[id]; ok {
-		r.Enabled = enabled
-		f.rows[id] = r
+func (f *fakeAgentStore3) Delete(_ context.Context, tenant, id string) (bool, error) {
+	r, ok := f.rows[id]
+	if !ok || r.TenantID != tenant {
+		return false, nil
 	}
-	return nil
+	delete(f.rows, id)
+	return true, nil
+}
+func (f *fakeAgentStore3) SetEnabled(_ context.Context, tenant, id string, enabled bool) (bool, error) {
+	r, ok := f.rows[id]
+	if !ok || r.TenantID != tenant {
+		return false, nil
+	}
+	r.Enabled = enabled
+	f.rows[id] = r
+	return true, nil
 }
 
 // consoleWithAgents wires a console whose onboarding deps include a real
@@ -100,7 +106,7 @@ func TestManagedAgents_RegisterAttaches(t *testing.T) {
 	token := issuedCSRF(t, h)
 	form := url.Values{
 		"csrf_token": {token}, "id": {"hello"},
-		"name": {"Hello"}, "url": {"http://127.0.0.1:8310"},
+		"name": {"Hello"}, "url": {"https://agent.example.com"},
 	}
 	r := adminReq("POST", "/ui/onboarding/agents", form)
 	w := httptest.NewRecorder()

@@ -6,10 +6,12 @@ For the person who runs the platform. Assumes you brought it up via the
 ## Log in to the console
 
 `make compose-init` generated `deploy/compose/.env` with a one-time superuser
-bootstrap key. From the repo root (`runtime/`):
+bootstrap key and a Grafana administrator password. From the repo root
+(`runtime/`):
 
 ```bash
 grep RUNTIME_ADMIN_BOOTSTRAP deploy/compose/.env
+grep GRAFANA_ADMIN_PASSWORD deploy/compose/.env
 ```
 
 Open http://localhost:8080/ui and log in with that key. Treat it as root — it is
@@ -24,10 +26,9 @@ tenant-admin (see the [Tenant guide](tenant-guide.md)).
 | Prometheus | 9090 |
 | Grafana | 3000 |
 | Jaeger UI | 16686 |
-| OTLP HTTP (collector) | 4318 |
-
-Postgres is **not** published to the host (reachable only inside the compose
-network).
+Prometheus, Grafana, and Jaeger bind to `127.0.0.1` only. Runtime fleet metrics
+use the internal `runtimed:9091` management listener, and OTLP HTTP is
+Compose-internal. Postgres is also not published to the host.
 
 ## Persistence & reset
 
@@ -44,6 +45,14 @@ network).
   single node, not on untrusted/shared infrastructure.
 - Secrets (bootstrap key, AES key, tenant credentials) are never written to logs.
 - The bundled stack runs with identity ON; the console and APIs require auth.
+- Local agents are trusted platform subprocesses, not hostile-code sandboxes.
+  They share the Runtime host user. Configure `RUNTIME_AGENT_PG_DSN` with a
+  restricted database role for agents; otherwise they receive the control-plane
+  DSN and Runtime logs a warning.
+- Child agents receive a minimal environment plus tenant secrets. The control
+  plane bootstrap, keyring, OIDC client secret, and unrelated provider
+  credentials are not inherited. Name any additional safe variables explicitly
+  in `RUNTIME_AGENT_ENV_PASSTHROUGH`.
 
 ## Sandbox & browser isolation
 
@@ -68,8 +77,8 @@ RUNTIME_SANDBOX_SCOPE=tenant
 RUNTIME_BROWSER_SCOPE=tenant
 ```
 
-The scope env vars are set on `runtimed` and **inherited** by the sandboxd /
-browserd stdio children it spawns — no per-server config is needed.
+The scope env vars are set on `runtimed` and passed through the gateway's
+explicit stdio-server environment — no per-server config is needed.
 
 ### 2. gVisor (`runsc`) for defense-in-depth
 
@@ -152,7 +161,7 @@ status `error` (fail-closed). On Kubernetes/remote scheduled agents, an
 operator-set `RUNTIME_AGENT_LIMITS` in the pod environment takes precedence
 when the control plane sends an empty value (the registration handshake skips
 empty entries).
-The Python contract shim does not yet enforce these native limits, so bound
+The Python contract shim does not enforce these native limits, so bound
 foreign SDK agents in their framework or process supervisor.
 
 ## Policy engine (Cedar)
@@ -199,6 +208,9 @@ Per-`(tenant, upstream)` request rate limiting for gateway tool calls — a
 requests-per-minute token bucket that protects an upstream from a runaway or
 noisy tenant. A quota is a triple `(tenant, upstream, rate_per_min)`; either key
 may be the wildcard `*`.
+
+Buckets are in-process. Persisted configuration is shared, but exact global
+limits currently require one active control plane.
 
 **Most-specific-wins resolution.** For a call `(T, U)` the platform looks up the
 effective limit in precedence order `(T,U) → (T,*) → (*,U) → (*,*)` and the
@@ -301,9 +313,9 @@ auto-refreshes — instead of a static API key. Create the credential once
 existing `cred_secret` / `cred_header`:
 
 ```bash
-runtimectl admin secret set-oauth2 \
+printf %s "$SECRET" | runtimectl admin secret set-oauth2 \
   --name orders_oauth --token-url https://idp.example.com/oauth/token \
-  --client-id svc-orders --client-secret "$SECRET" --scope orders.read
+  --client-id svc-orders --client-secret-stdin --scope orders.read
   # optional: --audience https://api.example.com --tenant acme
 ```
 
@@ -340,8 +352,8 @@ gateway:
 - **`client_secret` is write-only** — it never appears in `secret ls`, the
   `/admin/secrets` API, the console, or any log line.
 
-On-behalf-of (RFC 8693 user-token exchange) is **not** included in this
-release; only the `client_credentials` (service-to-service) grant is supported.
+On-behalf-of (RFC 8693 user-token exchange) is **not** supported; only the
+`client_credentials` (service-to-service) grant is available.
 
 ## Cost metering
 
@@ -386,7 +398,7 @@ Two caveats to keep in mind:
 
 - **Metering-grade, not billing-grade.** Cost is a `float64` sum for
   observability and rough budgeting — do not reconcile invoices against it.
-- **Cost includes cache tokens; the `max_tokens` budget does not.** The P1.2
+- **Cost includes cache tokens; the `max_tokens` budget does not.** The
   lifecycle `max_tokens` guardrail counts only input + output, so a session's
   metered cost can reflect cache traffic that never counted toward its token
   budget.
@@ -421,7 +433,8 @@ receiver's name. Restart Alertmanager to apply.
 
 ## Observability
 
-- **Grafana** http://localhost:3000 (anonymous viewer) — the runtime dashboard.
+- **Grafana** http://localhost:3000 — log in as `admin` with
+  `GRAFANA_ADMIN_PASSWORD` from `.env`; anonymous access is disabled.
 - **Prometheus** http://localhost:9090 — `runtimed` is a scrape target at
   `/metrics`.
 - **Jaeger** http://localhost:16686 — distributed traces for control-plane
@@ -438,4 +451,6 @@ receiver's name. Restart Alertmanager to apply.
   because an outbound OAuth2 credential could not be minted. See [OAuth2
   outbound credentials](#oauth2-outbound-credentials).
 
-For the complete configuration and metrics reference, see [README.md](README.md).
+For the architecture and capability boundaries, see
+[runtime.md](runtime.md). The concise entry point and environment reference are
+in [README.md](README.md).

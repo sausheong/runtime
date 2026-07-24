@@ -52,6 +52,7 @@ services:
     environment:
       RUNTIME_PG_DSN: postgres://runtime:runtime@postgres:5432/runtime?sslmode=disable
       RUNTIME_CTL_ADDR: ":8080"
+      RUNTIME_METRICS_ADDR: ":9091"
       RUNTIME_CONFIG: /app/runtime.compose.yaml
       RUNTIME_ADMIN_BOOTSTRAP: ${RUNTIME_ADMIN_BOOTSTRAP}
       RUNTIME_SECRETS_KEYS: ${RUNTIME_SECRETS_KEYS}
@@ -73,14 +74,20 @@ services:
       # host and registered with the Docker daemon; leave unset on stock hosts.
       # RUNTIME_SANDBOX_RUNTIME: runsc
       # RUNTIME_BROWSER_RUNTIME: runsc
-      RUNTIME_BROWSER_CDP_DIAL_HOST: host.docker.internal
-      RUNTIME_BROWSER_CDP_PUBLISH_HOST: "0.0.0.0"
+      # Browser containers join a private internal network shared only with
+      # runtimed. CDP is never published on a host interface, and direct
+      # non-proxy egress has no route to the internet or data services.
+      RUNTIME_BROWSER_NETWORK: runtime_browser-control
+      RUNTIME_BROWSER_PROXY_HOST: runtimed
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
     volumes:
       - ./runtime.compose.yaml:/app/runtime.compose.yaml:ro
       - /var/run/docker.sock:/var/run/docker.sock
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    networks:
+      - default
+      - browser-control
     # runtimed runs as a non-root uid but must read the mounted docker socket to
     # launch sandbox/browser sibling containers. The socket's group differs by
     # platform: on Docker Desktop the in-container socket is root:root (gid 0);
@@ -100,57 +107,57 @@ services:
       - "8080:8080"
 
   prometheus:
-    image: prom/prometheus:latest
+    image: prom/prometheus:v3.12.0
     command: ["--config.file=/etc/prometheus/prometheus.yml"]
     volumes:
       - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - ./rules:/etc/prometheus/rules:ro
     ports:
-      - "9090:9090"
+      - "127.0.0.1:9090:9090"
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:
       - alertmanager
 
   alertmanager:
-    image: prom/alertmanager:latest
+    image: prom/alertmanager:v0.32.1
     command: ["--config.file=/etc/alertmanager/alertmanager.yml"]
     volumes:
       - ./alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
     ports:
-      - "9093:9093"
+      - "127.0.0.1:9093:9093"
     extra_hosts:
       - "host.docker.internal:host-gateway"
 
   grafana:
-    image: grafana/grafana:latest
+    image: grafana/grafana:13.1.0
     environment:
-      GF_AUTH_ANONYMOUS_ENABLED: "true"
-      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?run make compose-init}
     volumes:
       - ../grafana/provisioning:/etc/grafana/provisioning:ro
       - ../grafana/dashboards:/var/lib/grafana/dashboards:ro
     ports:
-      - "3000:3000"
+      - "127.0.0.1:3000:3000"
     depends_on:
       - prometheus
 
   otel-collector:
-    image: otel/opentelemetry-collector-contrib:latest
+    image: otel/opentelemetry-collector-contrib:0.153.0
     command: ["--config=/etc/otel/collector-config.yaml"]
     volumes:
       - ../otel/collector-config.yaml:/etc/otel/collector-config.yaml:ro
-    ports:
-      - "4318:4318"
+    expose:
+      - "4318"
     depends_on:
       - jaeger
 
   jaeger:
-    image: jaegertracing/all-in-one:latest
+    image: jaegertracing/all-in-one:2.18.0
     environment:
       COLLECTOR_OTLP_ENABLED: "true"
     ports:
-      - "16686:16686"
+      - "127.0.0.1:16686:16686"
 
   sandbox:
     profiles: ["build-only"]
@@ -170,3 +177,8 @@ services:
 
 volumes:
   pgdata:
+
+networks:
+  browser-control:
+    name: runtime_browser-control
+    internal: true

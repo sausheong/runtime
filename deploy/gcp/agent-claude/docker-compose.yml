@@ -1,0 +1,36 @@
+# A Claude Agent SDK agent (hello-claude) via the contract shim.
+# Runs as a SECOND container on the agent VM (alongside the Python/OpenAI agent):
+# distinct compose project name + port (8080) so the two never collide.
+# Self-contained: SQLite at /data/shim.db, no external DB.
+#
+#   cp .env.example .env        # set ANTHROPIC_* LLM creds
+#   docker compose up -d
+#
+# The control plane (Instance A) dials this agent at http://<C-internal-ip>:8080.
+# NOTE: the shim enforces no bearer auth — port 8080 is protected by the VPC
+# firewall (internal-only).
+name: runtime-agent-claude
+
+services:
+  hello-claude:
+    image: ${HELLO_CLAUDE_IMAGE:-asia-southeast1-docker.pkg.dev/mhi-exp-chang-sau-sheong/runtime/hello-claude:latest}
+    # Shared LLM-proxy routing (ANTHROPIC_BASE_URL + ANTHROPIC_MODEL) comes from
+    # the untracked ../llm.env (one file for all agent VMs). The API key stays in
+    # this dir's own .env.
+    env_file:
+      - ../llm.env
+    environment:
+      RUNTIME_AGENT_ID: hello-claude
+      # Must bind 0.0.0.0, not the shim's loopback default: with ":8080" the
+      # shim's host.partition(":") yields an empty host and uvicorn falls back to
+      # 127.0.0.1, unreachable through Docker's port publish.
+      RUNTIME_LISTEN_ADDR: "0.0.0.0:8080"
+      RUNTIME_SHIM_DB: /data/shim.db
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+    volumes:
+      - claude-data:/data            # persists shim.db + SDK transcripts
+    ports:
+      - "8080:8080"                  # VPC-internal only (firewall); A dials this
+
+volumes:
+  claude-data:

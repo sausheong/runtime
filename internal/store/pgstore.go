@@ -16,6 +16,8 @@ var schemaSQL string
 
 type pgStore struct{ db *sql.DB }
 
+func (p *pgStore) Ping(ctx context.Context) error { return p.db.PingContext(ctx) }
+
 func NewPGStore(ctx context.Context, dsn string) (Store, error) {
 	db, err := sql.Open("pgx", dsn)
 	if err != nil {
@@ -186,25 +188,62 @@ func (p *pgStore) SetSessionStatus(ctx context.Context, id, status string) error
 }
 
 func (p *pgStore) AppendEvent(ctx context.Context, sessionID, typ string, payload []byte) (int64, error) {
+	return p.appendEvent(ctx, sessionID, "", typ, payload)
+}
+
+func (p *pgStore) AppendEventOnce(ctx context.Context, sessionID, eventKey, typ string, payload []byte) (int64, error) {
+	if eventKey == "" {
+		return 0, fmt.Errorf("event key is required")
+	}
+	return p.appendEvent(ctx, sessionID, eventKey, typ, payload)
+}
+
+func (p *pgStore) appendEvent(ctx context.Context, sessionID, eventKey, typ string, payload []byte) (int64, error) {
 	tx, err := p.db.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, err
 	}
 	defer tx.Rollback()
+	// Serialize sequence allocation per session. This also makes the
+	// deterministic-key check and append atomic if a recovered workflow races
+	// a still-finishing attempt.
+	if _, err := tx.ExecContext(ctx,
+		`SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, sessionID); err != nil {
+		return 0, err
+	}
+	if eventKey != "" {
+		var existing int64
+		err := tx.QueryRowContext(ctx,
+			`SELECT seq FROM session_events WHERE session_id=$1 AND event_key=$2`,
+			sessionID, eventKey).Scan(&existing)
+		if err == nil {
+			return existing, tx.Commit()
+		}
+		if err != sql.ErrNoRows {
+			return 0, err
+		}
+	}
 	var next int64
 	if err := tx.QueryRowContext(ctx,
 		`SELECT COALESCE(MAX(seq),0)+1 FROM session_events WHERE session_id=$1`, sessionID).Scan(&next); err != nil {
 		return 0, err
 	}
 	if _, err := tx.ExecContext(ctx,
-		`INSERT INTO session_events (session_id, seq, type, payload) VALUES ($1,$2,$3,$4)`,
-		sessionID, next, typ, payload); err != nil {
+		`INSERT INTO session_events (session_id, seq, event_key, type, payload) VALUES ($1,$2,$3,$4,$5)`,
+		sessionID, next, nullableEventKey(eventKey), typ, payload); err != nil {
 		return 0, err
 	}
 	if err := tx.Commit(); err != nil {
 		return 0, err
 	}
 	return next, nil
+}
+
+func nullableEventKey(key string) any {
+	if key == "" {
+		return nil
+	}
+	return key
 }
 
 func (p *pgStore) EventsSince(ctx context.Context, sessionID string, afterSeq int64) ([]Event, error) {
@@ -274,6 +313,33 @@ func (p *pgStore) ListOnlineResultsByTenant(ctx context.Context, tenant string, 
 	}
 	defer rows.Close()
 	return scanOnlineResults(rows)
+}
+
+func (p *pgStore) ReapEvaluationData(ctx context.Context, before time.Time) (int64, error) {
+	tx, err := p.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+	var total int64
+	for _, query := range []string{
+		`DELETE FROM online_eval_results WHERE created_at < $1`,
+		`DELETE FROM session_transcripts WHERE created_at < $1`,
+	} {
+		res, execErr := tx.ExecContext(ctx, query, before)
+		if execErr != nil {
+			return 0, execErr
+		}
+		n, rowsErr := res.RowsAffected()
+		if rowsErr != nil {
+			return 0, rowsErr
+		}
+		total += n
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return total, nil
 }
 
 func scanOnlineResults(rows *sql.Rows) ([]OnlineResult, error) {

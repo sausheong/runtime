@@ -13,8 +13,9 @@ agents:
   # Replica pool (Spine A1): run N agentd processes for one agent. Replica i
   # listens on base_port+i (so listen_addr is the base). New sessions round-robin
   # across replicas; each session then pins to its owner replica for life. Omit
-  # or 1 = single process (default, unchanged). Remote (url:) agents may not set
-  # replicas. Derived ports must not collide with other agents.
+  # or 1 = single process (default, unchanged). Remote pools also use replicas,
+  # with a `{i}` ordinal placeholder in their URL. Derived local ports must not
+  # collide with other agents.
   #   replicas: 3
 
   # Autoscaling (Spine A2): float the pool between min and max by active-session

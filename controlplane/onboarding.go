@@ -12,6 +12,7 @@ import (
 	"github.com/sausheong/runtime/internal/config"
 	"github.com/sausheong/runtime/internal/gateway"
 	"github.com/sausheong/runtime/internal/identity"
+	"github.com/sausheong/runtime/internal/netpolicy"
 )
 
 // UpstreamStore is the persistence the onboarding API needs (satisfied by
@@ -92,6 +93,21 @@ func RegisterUpstreamShared(ctx context.Context, store UpstreamStore, mut Gatewa
 	}
 	if err := checkOAuth2Openapi(ctx, credType, tenant, p); err != nil {
 		return gateway.UpstreamRow{}, err
+	}
+	for field, raw := range map[string]string{
+		"url": p.URL, "base_url": p.BaseURL,
+	} {
+		if raw == "" {
+			continue
+		}
+		if err := netpolicy.ValidatePublicHTTPURL(raw); err != nil {
+			return gateway.UpstreamRow{}, fmt.Errorf("%s: %w", field, err)
+		}
+	}
+	if strings.HasPrefix(p.OpenAPI, "http://") || strings.HasPrefix(p.OpenAPI, "https://") {
+		if err := netpolicy.ValidatePublicHTTPURL(p.OpenAPI); err != nil {
+			return gateway.UpstreamRow{}, fmt.Errorf("openapi: %w", err)
+		}
 	}
 	id, err := genID("gwu")
 	if err != nil {

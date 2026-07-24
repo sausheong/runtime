@@ -26,6 +26,10 @@ CREATE TABLE IF NOT EXISTS session_events (
     ts         TIMESTAMPTZ NOT NULL DEFAULT now(),
     PRIMARY KEY (session_id, seq)
 );
+ALTER TABLE session_events ADD COLUMN IF NOT EXISTS event_key TEXT;
+CREATE UNIQUE INDEX IF NOT EXISTS session_events_key_idx
+    ON session_events (session_id, event_key)
+    WHERE event_key IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS session_transcripts (
   session_id  TEXT NOT NULL REFERENCES sessions(id),

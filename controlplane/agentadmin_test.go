@@ -40,18 +40,20 @@ func (f *fakeAgentStore) Get(_ context.Context, id string) (agentstore.AgentRow,
 	r, ok := f.rows[id]
 	return r, ok, nil
 }
-func (f *fakeAgentStore) Delete(_ context.Context, tenant, id string) error {
+func (f *fakeAgentStore) Delete(_ context.Context, tenant, id string) (bool, error) {
 	if r, ok := f.rows[id]; ok && r.TenantID == tenant {
 		delete(f.rows, id)
+		return true, nil
 	}
-	return nil
+	return false, nil
 }
-func (f *fakeAgentStore) SetEnabled(_ context.Context, tenant, id string, enabled bool) error {
+func (f *fakeAgentStore) SetEnabled(_ context.Context, tenant, id string, enabled bool) (bool, error) {
 	if r, ok := f.rows[id]; ok && r.TenantID == tenant {
 		r.Enabled = enabled
 		f.rows[id] = r
+		return true, nil
 	}
-	return nil
+	return false, nil
 }
 
 type dupErr struct{}
@@ -81,7 +83,7 @@ func acmeAdmin(r *http.Request) *http.Request {
 
 func TestAgentAdmin_RegisterAttachesAndPersists(t *testing.T) {
 	mux, s, reg := agentAdminMux(t)
-	body := `{"id":"hello","name":"Hello","model":"m","url":"http://127.0.0.1:8310"}`
+	body := `{"id":"hello","name":"Hello","model":"m","url":"https://example.com"}`
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, acmeAdmin(httptest.NewRequest("POST", "/admin/agents", strings.NewReader(body))))
 	if rec.Code != 201 {
@@ -105,6 +107,23 @@ func TestAgentAdmin_RegisterRejectsBadURL(t *testing.T) {
 	mux.ServeHTTP(rec, acmeAdmin(httptest.NewRequest("POST", "/admin/agents", strings.NewReader(body))))
 	if rec.Code != 400 {
 		t.Fatalf("bad url: code=%d want 400", rec.Code)
+	}
+}
+
+func TestAgentAdmin_RegisterRejectsPrivateAndMetadataURLs(t *testing.T) {
+	mux, _, _ := agentAdminMux(t)
+	for _, target := range []string{
+		"http://127.0.0.1:8310",
+		"http://10.0.0.10",
+		"http://169.254.169.254/latest/meta-data",
+		"http://metadata.google.internal",
+	} {
+		body := `{"id":"hello","url":"` + target + `"}`
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, acmeAdmin(httptest.NewRequest("POST", "/admin/agents", strings.NewReader(body))))
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("target %q: code=%d want 400", target, rec.Code)
+		}
 	}
 }
 
@@ -190,5 +209,41 @@ func TestAgentAdmin_RestartRejectsUnmanaged(t *testing.T) {
 	mux.ServeHTTP(rec, acmeAdmin(httptest.NewRequest("POST", "/admin/agents/ghost/restart", nil)))
 	if rec.Code != 400 {
 		t.Fatalf("restart unmanaged: code=%d want 400", rec.Code)
+	}
+}
+
+func TestAgentAdmin_CrossTenantMutationsDoNotTouchLiveAgent(t *testing.T) {
+	for _, tc := range []struct {
+		name, method, path string
+	}{
+		{"disable", "POST", "/admin/agents/victim/disable"},
+		{"enable", "POST", "/admin/agents/victim/enable"},
+		{"restart", "POST", "/admin/agents/victim/restart"},
+		{"delete", "DELETE", "/admin/agents/victim"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mux, s, reg := agentAdminMux(t)
+			rec := httptest.NewRecorder()
+			mux.ServeHTTP(rec, acmeAdmin(httptest.NewRequest("POST", "/admin/agents",
+				strings.NewReader(`{"id":"victim","url":"https://example.com"}`))))
+			if rec.Code != http.StatusCreated {
+				t.Fatalf("register: code=%d body=%s", rec.Code, rec.Body.String())
+			}
+			row := s.rows["victim"]
+			row.TenantID = "beta" // model a globally-known id owned by another tenant
+			s.rows["victim"] = row
+
+			rec = httptest.NewRecorder()
+			mux.ServeHTTP(rec, acmeAdmin(httptest.NewRequest(tc.method, tc.path, nil)))
+			if rec.Code != http.StatusNotFound && rec.Code != http.StatusBadRequest {
+				t.Fatalf("%s cross-tenant: code=%d body=%s", tc.name, rec.Code, rec.Body.String())
+			}
+			if _, ok := reg.Get("victim"); !ok {
+				t.Fatalf("%s cross-tenant detached live agent", tc.name)
+			}
+			if _, ok := s.rows["victim"]; !ok {
+				t.Fatalf("%s cross-tenant deleted persistence row", tc.name)
+			}
+		})
 	}
 }
