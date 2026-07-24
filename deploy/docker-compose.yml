@@ -5,6 +5,8 @@ services:
       POSTGRES_USER: runtime
       POSTGRES_PASSWORD: runtime
       POSTGRES_DB: runtime
+    volumes:
+      - ./compose/initdb:/docker-entrypoint-initdb.d:ro
     ports:
       - "5432:5432"
     healthcheck:

@@ -42,9 +42,11 @@ import (
 
 // lmBoot wipes durable state, builds both binaries, writes cfgYAML to a temp
 // runtime.yaml, and starts runtimed with the given extra env (TESTAGENT_* mode
-// selectors — agentd inherits them through buildEnv = os.Environ() + delta).
+// selectors explicitly allowed through the child-environment boundary).
 // It registers a t.Cleanup that reaps the whole process group and returns the
-// control-plane base URL.
+// control-plane base URL. Test-only agent variables are explicitly named in
+// RUNTIME_AGENT_ENV_PASSTHROUGH because production child processes no longer
+// inherit arbitrary control-plane environment variables.
 func lmBoot(t *testing.T, db *sql.DB, cfgYAML, ctlAddr string, extraEnv ...string) string {
 	t.Helper()
 
@@ -77,6 +79,16 @@ func lmBoot(t *testing.T, db *sql.DB, cfgYAML, ctlAddr string, extraEnv ...strin
 		"RUNTIME_AGENTD_BIN="+agentd,
 		"RUNTIME_CONFIG="+cfgPath,
 	)
+	passthrough := make([]string, 0, len(extraEnv))
+	for _, entry := range extraEnv {
+		if name, _, ok := strings.Cut(entry, "="); ok {
+			passthrough = append(passthrough, name)
+		}
+	}
+	if existing := os.Getenv("RUNTIME_AGENT_ENV_PASSTHROUGH"); existing != "" {
+		passthrough = append(passthrough, existing)
+	}
+	cmd.Env = append(cmd.Env, "RUNTIME_AGENT_ENV_PASSTHROUGH="+strings.Join(passthrough, ","))
 	cmd.Env = append(cmd.Env, extraEnv...)
 	// Fresh process group so teardown reaps runtimed + every agentd child; a
 	// surviving grandchild would hold the inherited stdout pipe and block
@@ -174,10 +186,10 @@ func lmEvents(t *testing.T, base, agent, sid string) []lmEvent {
 	return evs
 }
 
-// lmMetricsBody GETs the control plane's merged /metrics exposition.
-func lmMetricsBody(t *testing.T, base string) string {
+// lmMetricsBody GETs the control plane's merged management exposition.
+func lmMetricsBody(t *testing.T, _ string) string {
 	t.Helper()
-	resp, err := http.Get(base + "/metrics")
+	resp, err := http.Get(integrationMetricsURL())
 	if err != nil {
 		t.Fatalf("get metrics: %v", err)
 	}

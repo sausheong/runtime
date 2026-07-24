@@ -219,7 +219,7 @@ func TestPolicyLifecycle(t *testing.T) {
 	}
 
 	// (6) Decision metric present.
-	metrics := getBody(t, base+"/metrics", nil, 200)
+	metrics := getBody(t, integrationMetricsURL(), nil, 200)
 	if !strings.Contains(metrics, `runtime_gateway_policy_decisions_total{decision="deny",tenant="acme"}`) {
 		t.Fatalf("/metrics missing the deny decision series:\n%s", metrics)
 	}

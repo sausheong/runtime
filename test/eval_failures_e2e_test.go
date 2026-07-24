@@ -238,16 +238,16 @@ func TestFailureClassificationLifecycle(t *testing.T) {
 	t.Logf("(b) OK: fn2 (must-fail policy) classified quality_fail at scorer tail: %+v", b2)
 
 	// (c) METRIC: agent_eval_failures_total must carry the agent= label and survive
-	// the fan-out — category="none" for fn1, category="quality_fail" for fn2, both
-	// tenant=acme, strictly positive. /metrics is served OUTSIDE the identity chain.
+	// the fan-out — category="none" for fn1, category="quality_fail" for fn2,
+	// both tenant=acme and strictly positive on the management listener.
 	if !asEventually(t, 20*time.Second, func() bool {
-		body := getBody(t, base+"/metrics", nil, 200)
+		body := getBody(t, integrationMetricsURL(), nil, 200)
 		return evalHasPositiveSeries(body, "agent_eval_failures_total", "acme", `agent="fn1"`) &&
 			evalHasPositiveSeries(body, "agent_eval_failures_total", "acme", `category="none"`) &&
 			evalHasPositiveSeries(body, "agent_eval_failures_total", "acme", `agent="fn2"`) &&
 			evalHasPositiveSeries(body, "agent_eval_failures_total", "acme", `category="quality_fail"`)
 	}) {
-		body := getBody(t, base+"/metrics", nil, 200)
+		body := getBody(t, integrationMetricsURL(), nil, 200)
 		var got []string
 		for _, line := range strings.Split(body, "\n") {
 			if strings.HasPrefix(line, "agent_eval_failures_total") {

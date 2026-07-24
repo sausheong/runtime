@@ -24,11 +24,13 @@ tenant-admin (see the [Tenant guide](tenant-guide.md)).
 |---|---|
 | Control plane / console | 8080 |
 | Prometheus | 9090 |
+| Alertmanager | 9093 |
 | Grafana | 3000 |
 | Jaeger UI | 16686 |
-Prometheus, Grafana, and Jaeger bind to `127.0.0.1` only. Runtime fleet metrics
-use the internal `runtimed:9091` management listener, and OTLP HTTP is
-Compose-internal. Postgres is also not published to the host.
+
+Prometheus, Alertmanager, Grafana, and Jaeger bind to `127.0.0.1` only. Runtime
+fleet metrics use the internal `runtimed:9091` management listener, and OTLP
+HTTP is Compose-internal. Postgres is also not published to the host.
 
 ## Persistence & reset
 
@@ -44,6 +46,9 @@ Compose-internal. Postgres is also not published to the host.
   That is **root-equivalent on the host** — run this stack only on a trusted
   single node, not on untrusted/shared infrastructure.
 - Secrets (bootstrap key, AES key, tenant credentials) are never written to logs.
+- Never place the bootstrap credential, database credentials, keyring values,
+  OIDC client secret, or provider credentials in tenant-controlled
+  configuration.
 - The bundled stack runs with identity ON; the console and APIs require auth.
 - Local agents are trusted platform subprocesses, not hostile-code sandboxes.
   They share the Runtime host user. Configure `RUNTIME_AGENT_PG_DSN` with a
@@ -79,6 +84,13 @@ RUNTIME_BROWSER_SCOPE=tenant
 
 The scope env vars are set on `runtimed` and passed through the gateway's
 explicit stdio-server environment — no per-server config is needed.
+
+Code containers use a read-only root filesystem, resource limits, no network,
+and an isolated writable workspace. Browser containers use a
+policy-enforcing egress proxy and enable Chromium's process sandbox by default.
+The turnkey stack keeps the unauthenticated CDP endpoint on an internal Docker
+network shared only with `runtimed`; a direct host installation publishes it
+only on loopback.
 
 ### 2. gVisor (`runsc`) for defense-in-depth
 
@@ -352,8 +364,47 @@ gateway:
 - **`client_secret` is write-only** — it never appears in `secret ls`, the
   `/admin/secrets` API, the console, or any log line.
 
-On-behalf-of (RFC 8693 user-token exchange) is **not** supported; only the
-`client_credentials` (service-to-service) grant is available.
+Runtime also supports RFC 8693 on-behalf-of (OBO) token exchange for OpenAPI
+upstreams. It exchanges the current OIDC user's verified JWT for a downstream
+token rather than using one tenant-wide service identity:
+
+```bash
+printf %s "$SECRET" | runtimectl admin secret set-obo \
+  --name orders_obo --token-url https://idp.example.com/oauth/token \
+  --client-id runtime-orders --client-secret-stdin --scope orders.read
+  # optional: --audience https://api.example.com --tenant acme
+```
+
+Reference `orders_obo` through the upstream's `cred_secret`. OBO is
+OpenAPI-only because it must vary the credential on every request. The control
+plane forwards the verified caller assertion, and the gateway re-verifies and
+tenant-binds it before exchange. Tokens are cached per caller and credential
+generation.
+
+OBO fails closed when the caller has no OIDC assertion, tenant binding fails, or
+the exchange endpoint errors. Service-key callers do not carry an end-user
+assertion and therefore cannot use an OBO-protected upstream. The OBO client
+secret is write-only and can be rotated by rerunning `secret set-obo`.
+
+## Evaluation retention and recovery
+
+At startup, `runtimed` recovers incomplete evaluation runs. It records completed
+case indexes and does not rerun them, so a restart resumes only unfinished
+cases. This recovery guarantee currently assumes one active control plane.
+
+Credential-shaped transcript fields and common bearer-token patterns are
+redacted before persistence. Completed or failed runs, their results, and
+captured transcripts are retained for 30 days by default:
+
+```bash
+RUNTIME_EVAL_RETENTION=720h  # default
+RUNTIME_EVAL_RETENTION=0     # disable automatic deletion
+```
+
+The value must be a non-negative Go duration. Disabling retention logs a warning
+because evaluation data will accumulate. Multi-control-plane recovery requires
+a distributed claim mechanism before more than one replica can safely resume
+the same incomplete run.
 
 ## Cost metering
 
@@ -380,8 +431,8 @@ pricing:
   still emit tokens, plus `agent_cost_unpriced_total` and one boot log line
   naming the unpriced model.
 
-Three agent metrics carry the accounting (all `agent_*`, merged into runtimed's
-exposition — see [README.md](README.md) for the full inventory):
+Three agent metrics carry the accounting (all `agent_*`, merged into
+`runtimed`'s management metrics exposition):
 
 - `agent_tokens_total{agent,tenant,model,direction}` — tokens by direction
   (`input`/`output`/`cache_creation`/`cache_read`).

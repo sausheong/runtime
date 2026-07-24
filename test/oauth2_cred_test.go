@@ -446,7 +446,7 @@ func TestOAuth2CredentialFailClosed(t *testing.T) {
 	}
 
 	// Metric: the fail-closed path increments runtime_gateway_credential_errors_total.
-	metrics := getBody(t, base+"/metrics", nil, 200)
+	metrics := getBody(t, integrationMetricsURL(), nil, 200)
 	if !strings.Contains(metrics, `runtime_gateway_credential_errors_total{server="orders",tenant="acme"}`) {
 		t.Fatalf("case 4 fail-closed: /metrics missing the credential-error series:\n%s", metrics)
 	}

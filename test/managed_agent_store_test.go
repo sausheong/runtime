@@ -13,11 +13,9 @@ import (
 	"github.com/sausheong/runtime/internal/identity"
 )
 
-const agentStoreDSN = "postgres://runtime:runtime@localhost:5432/runtime?sslmode=disable"
-
 func TestManagedAgentStoreCRUD(t *testing.T) {
 	ctx := context.Background()
-	db, err := sql.Open("pgx", agentStoreDSN)
+	db, err := sql.Open("pgx", dsn)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -65,8 +63,12 @@ func TestManagedAgentStoreCRUD(t *testing.T) {
 	}
 
 	// disable, confirm it persists
-	if err := st.SetEnabled(ctx, "mat", "ma-1", false); err != nil {
+	updated, err := st.SetEnabled(ctx, "mat", "ma-1", false)
+	if err != nil {
 		t.Fatal(err)
+	}
+	if !updated {
+		t.Fatal("SetEnabled(false) did not report the tenant-owned row")
 	}
 	one, _, _ = st.Get(ctx, "ma-1")
 	if one.Enabled {
@@ -74,15 +76,23 @@ func TestManagedAgentStoreCRUD(t *testing.T) {
 	}
 
 	// cross-tenant delete is a no-op (scoped)
-	if err := st.Delete(ctx, "other", "ma-1"); err != nil {
+	removed, err := st.Delete(ctx, "other", "ma-1")
+	if err != nil {
 		t.Fatal(err)
+	}
+	if removed {
+		t.Fatal("cross-tenant delete reported a removed row")
 	}
 	if _, ok, _ := st.Get(ctx, "ma-1"); !ok {
 		t.Fatal("cross-tenant delete must not remove the row")
 	}
 
-	if err := st.Delete(ctx, "mat", "ma-1"); err != nil {
+	removed, err = st.Delete(ctx, "mat", "ma-1")
+	if err != nil {
 		t.Fatal(err)
+	}
+	if !removed {
+		t.Fatal("tenant-owned delete did not report the removed row")
 	}
 	got, _ = st.List(ctx, "mat")
 	if len(got) != 0 {

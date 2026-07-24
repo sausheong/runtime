@@ -239,16 +239,15 @@ func TestEvalLifecycle(t *testing.T) {
 	}
 	t.Log("results OK: one row per case, per-case pass/fail as expected")
 
-	// (5) /metrics carries the incremented eval counters (fan-out sub-scrape may
-	// lag termination by a beat, so poll briefly). /metrics is served OUTSIDE the
-	// identity chain, so it needs no bearer.
+	// (5) The management metrics listener carries the incremented eval counters
+	// (fan-out sub-scrape may lag termination by a beat, so poll briefly).
 	if !asEventually(t, 15*time.Second, func() bool {
-		body := getBody(t, base+"/metrics", nil, 200)
+		body := getBody(t, integrationMetricsURL(), nil, 200)
 		return evalHasPositiveSeries(body, "runtime_eval_runs_total", "acme", `status="completed"`) &&
 			evalHasPositiveSeries(body, "runtime_eval_cases_total", "acme", `result="pass"`) &&
 			evalHasPositiveSeries(body, "runtime_eval_cases_total", "acme", `result="fail"`)
 	}) {
-		body := getBody(t, base+"/metrics", nil, 200)
+		body := getBody(t, integrationMetricsURL(), nil, 200)
 		var got []string
 		for _, line := range strings.Split(body, "\n") {
 			if strings.HasPrefix(line, "runtime_eval_runs_total") ||

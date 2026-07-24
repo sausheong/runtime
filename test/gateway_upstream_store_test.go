@@ -13,11 +13,9 @@ import (
 	"github.com/sausheong/runtime/internal/identity"
 )
 
-const gwStoreDSN = "postgres://runtime:runtime@localhost:5432/runtime?sslmode=disable"
-
 func TestGatewayUpstreamStoreCRUD(t *testing.T) {
 	ctx := context.Background()
-	db, err := sql.Open("pgx", gwStoreDSN)
+	db, err := sql.Open("pgx", dsn)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -79,7 +77,7 @@ func TestGatewayUpstreamStoreCRUD(t *testing.T) {
 
 func TestGatewayUpstreamStoreNilOperations(t *testing.T) {
 	ctx := context.Background()
-	db, err := sql.Open("pgx", gwStoreDSN)
+	db, err := sql.Open("pgx", dsn)
 	if err != nil {
 		t.Fatal(err)
 	}

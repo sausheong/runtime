@@ -2,8 +2,9 @@
 
 Runtime natively hosts **Go** agents (link the `agentruntime` SDK and it binds
 the agent contract for you). But the platform only cares about *one* interface —
-the **agent contract** (six HTTP/SSE endpoints). Any process that speaks it is
-supervised, routed, health-gated, and restarted like a native agent.
+the **agent contract**, a small set of HTTP/SSE endpoints. Any process that
+speaks it is supervised, routed, health-gated, and restarted like a native
+agent.
 
 This guide shows how to host an agent written with a **Python** framework — the
 [OpenAI Agents SDK](https://openai.github.io/openai-agents-python/) or the

@@ -52,7 +52,9 @@ test: ## Run hermetic unit tests (no network, no DB)
 
 .PHONY: test-integration
 test-integration: ## Run integration tests (requires Postgres at PG_DSN; see pg-up)
-	go test $(GOFLAGS) -tags integration ./test/ -count=1 -timeout 300s
+	RUNTIME_PG_DSN="$${RUNTIME_PG_DSN:-$(PG_DSN)}" \
+	RUNTIME_METRICS_ADDR="$${RUNTIME_METRICS_ADDR:-127.0.0.1:19091}" \
+		go test $(GOFLAGS) -tags integration ./test/ -count=1 -timeout 300s
 
 .PHONY: test-live
 test-live: ## Run live tests against a real LLM (requires OPENAI_API_KEY)
@@ -101,6 +103,8 @@ run: build ## Build, then run the control plane locally (RUNTIME_CONFIG=$(CONFIG
 .PHONY: pg-up
 pg-up: ## Start a local Postgres (pgvector) for tests/dev
 	$(COMPOSE) up -d postgres
+	$(COMPOSE) exec -T postgres psql -U runtime -d runtime \
+		-c 'CREATE EXTENSION IF NOT EXISTS vector'
 
 .PHONY: pg-down
 pg-down: ## Stop the local Postgres

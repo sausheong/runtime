@@ -99,6 +99,20 @@ to `Authorization`; override with `cred_header`).
   call **fails closed** (`credential unavailable: <name>`) — it is never sent
   unauthenticated.
 
+For a backend that must act as the logged-in user, create an RFC 8693 OBO
+credential instead:
+
+```bash
+printf %s "$SECRET" | runtimectl admin secret set-obo \
+  --name orders_obo --token-url https://idp.example.com/oauth/token \
+  --client-id runtime-orders --client-secret-stdin --scope orders.read
+```
+
+Attach it with `cred_secret: orders_obo`. OBO credentials are OpenAPI-only and
+fail closed unless the request came from an OIDC user whose verified assertion
+can be tenant-bound and exchanged. Service-key requests do not carry an
+end-user assertion.
+
 ## Roles and keys
 
 Every request to the control plane carries a bearer — a human's OIDC cookie or a

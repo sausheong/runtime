@@ -212,7 +212,7 @@ func TestQuotaLifecycle(t *testing.T) {
 	}
 
 	// (8) Rejection metric present with acme + sbx labels.
-	metrics := getBody(t, base+"/metrics", nil, 200)
+	metrics := getBody(t, integrationMetricsURL(), nil, 200)
 	if !strings.Contains(metrics, `runtime_gateway_quota_rejections_total{server="sbx",tenant="acme"}`) {
 		t.Fatalf("/metrics missing the quota rejection series:\n%s", metrics)
 	}

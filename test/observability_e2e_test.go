@@ -162,7 +162,8 @@ func TestObservabilityE2E(t *testing.T) {
 	// agent ids, the up gauge reflects the clean scrape, the HTTP edge counter
 	// carries the matched mux pattern (the /agents/{id}/ subtree route), and
 	// the raw path never leaks into a label value.
-	body := getBody(t, baseA+"/metrics", nil, 200)
+	_ = getBody(t, baseA+"/metrics", nil, 404)
+	body := getBody(t, integrationMetricsURL(), nil, 200)
 	for _, want := range []string{
 		`agent_turns_total{agent="support"`,
 		`agent_turns_total{agent="research"`,
@@ -215,9 +216,10 @@ func TestObservabilityE2E(t *testing.T) {
 	// enforced mode.
 	waitURL(t, baseB+"/healthz", 15*time.Second)
 
-	// (d) /metrics is auth-free (mounted OUTSIDE the identity chain), while the
-	// API proper 401s without a credential.
-	_ = getBody(t, baseB+"/metrics", nil, 200)
+	// (d) Fleet metrics stay on the unauthenticated management listener. The
+	// public listener runs through identity and does not mount /metrics.
+	_ = getBody(t, integrationMetricsURL(), nil, 200)
+	_ = getBody(t, baseB+"/metrics", nil, 401)
 	_ = getBody(t, baseB+"/agents", nil, 401)
 
 	// (e) The rejected request lands in the auth_rejected bucket: the identity
@@ -225,7 +227,7 @@ func TestObservabilityE2E(t *testing.T) {
 	// counter under route="auth_rejected" with an empty method (no
 	// per-route/per-method detail for rejected traffic) and records NO
 	// duration sample. Labels render alphabetically in the exposition.
-	bodyB := getBody(t, baseB+"/metrics", nil, 200)
+	bodyB := getBody(t, integrationMetricsURL(), nil, 200)
 	if !strings.Contains(bodyB, `runtime_http_requests_total{method="",route="auth_rejected",status="401"}`) {
 		t.Fatalf("auth_rejected counter missing from /metrics:\n%s", bodyB)
 	}

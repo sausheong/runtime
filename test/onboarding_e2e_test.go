@@ -38,7 +38,7 @@ import (
 
 func TestOnboardingEndToEnd(t *testing.T) {
 	ctx := context.Background()
-	db, err := sql.Open("pgx", gwStoreDSN) // gwStoreDSN: test/gateway_upstream_store_test.go
+	db, err := sql.Open("pgx", dsn)
 	if err != nil {
 		t.Fatal(err)
 	}

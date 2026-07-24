@@ -36,7 +36,7 @@ import (
 //	(a) the Postgres sessions row has tokens_total > 0 AND cost_usd > 0;
 //	(b) the agent session API (GET /agents/met1/sessions/{sid}) returns the same
 //	    non-zero tokens_total/cost_usd in its JSON;
-//	(c) the control-plane /metrics exposition carries
+//	(c) the control-plane management metrics exposition carries
 //	    agent_cost_usd_total{...tenant="acme"...model="test/scripted"...} and
 //	    agent_tokens_total{...model="test/scripted"...}.
 //
@@ -102,16 +102,16 @@ func TestMeteringLifecycle(t *testing.T) {
 	t.Logf("API OK: GET /agents/met1/sessions/%s → tokens_total=%d cost_usd=%v",
 		sid, apiTokens, apiCost)
 
-	// (c) The control-plane /metrics exposition (agent metrics federate up
+	// (c) The control-plane management exposition (agent metrics federate up
 	// through the fan-out) carries cost with tenant+model labels and tokens with
 	// a model label. The fan-out sub-scrape is live but may lag termination by a
 	// beat, so poll briefly.
 	if !asEventually(t, 15*time.Second, func() bool {
-		body := getBody(t, base+"/metrics", nil, 200)
+		body := getBody(t, integrationMetricsURL(), nil, 200)
 		return meterHasCost(body, "acme", "test/scripted") &&
 			meterHasTokensModel(body, "test/scripted")
 	}) {
-		body := getBody(t, base+"/metrics", nil, 200)
+		body := getBody(t, integrationMetricsURL(), nil, 200)
 		var got []string
 		for _, line := range strings.Split(body, "\n") {
 			if strings.HasPrefix(line, "agent_cost_usd_total{") ||

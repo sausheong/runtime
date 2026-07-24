@@ -282,14 +282,14 @@ func TestOnlineSamplingLifecycle(t *testing.T) {
 
 	// (4) Metrics: the agentd-owned eval counters must survive the fan-out with an
 	// agent=ev1 label. The sub-scrape may lag the background scoring by a beat, so
-	// poll briefly. /metrics is served OUTSIDE the identity chain (no bearer).
+	// poll the management listener briefly.
 	if !asEventually(t, 20*time.Second, func() bool {
-		body := getBody(t, base+"/metrics", nil, 200)
+		body := getBody(t, integrationMetricsURL(), nil, 200)
 		return evalHasPositiveSeries(body, "agent_eval_sessions_scored_total", "acme", `agent="ev1"`) &&
 			evalHasPositiveSeries(body, "agent_eval_criteria_total", "acme", `result="pass"`) &&
 			evalHasPositiveSeries(body, "agent_eval_criteria_total", "acme", `result="fail"`)
 	}) {
-		body := getBody(t, base+"/metrics", nil, 200)
+		body := getBody(t, integrationMetricsURL(), nil, 200)
 		var got []string
 		for _, line := range strings.Split(body, "\n") {
 			if strings.HasPrefix(line, "agent_eval_sessions_scored_total") ||

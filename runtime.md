@@ -86,6 +86,10 @@ This provides several practical guarantees:
 - Each replica has a stable executor identity, so only the replica that owns a session recovers it.
 - Operator limits are evaluated from checkpointed state, so token and turn budgets survive ordinary recovery.
 
+Session events are persisted before live delivery and use deterministic
+idempotency keys. Recovery can therefore replay the stored sequence without
+creating duplicate client events.
+
 Native agents support four lifecycle guardrails: `turn_timeout`,
 `session_timeout`, `max_turns`, and `max_tokens`. A breach ends the session with
 the terminal `limit_exceeded` status, publishes a final `error` event naming the
@@ -131,6 +135,11 @@ Runtime supports:
 
 Cross-tenant resources are hidden with `404`, rather than revealing their existence with `403`. Within a tenant, role violations return `403`; missing or invalid credentials return `401`.
 
+Session routes validate both the requested agent and the stored session owner at
+the control-plane boundary and again at the native agent boundary. Dynamic
+agent mutations resolve the existing resource and verify its tenant before
+changing or removing it.
+
 Provider and upstream credentials can be stored per tenant. Runtime encrypts them with AES-256-GCM, stores only ciphertext, never returns secret values through the API, and injects resolved values into an agent's environment when it starts. A multi-key keyring supports online rotation and explicit re-encryption of existing records. Child processes start with a minimal platform environment rather than inheriting all control-plane secrets. Operators can explicitly pass additional non-reserved variables and should give agents a restricted database role through `RUNTIME_AGENT_PG_DSN`.
 
 This lets each tenant bring its own model or API credentials without changing the agent's normal `os.Getenv`-style configuration.
@@ -147,7 +156,10 @@ The memory stack has three layers:
 
 Recall and ingestion are best-effort. An embedding or extraction failure does not fail the user's turn. Operators can tune result counts, similarity floors, ingestion concurrency, and duplicate thresholds. The embedding model and vector dimension must agree, and pgvector must be installed in the target database.
 
-Runtime scopes memory per tenant. Per-user and per-agent memory boundaries, TTL/compaction, and session-level synthesis are not provided.
+Runtime scopes memory per tenant. Garbage collection removes superseded and
+tombstoned internal records, but there is no time-based retention policy.
+Per-user and per-agent boundaries, compaction, and session-level synthesis are
+not provided.
 
 ### 2.5 MCP and REST Tool Gateway
 
@@ -163,20 +175,48 @@ For large tool catalogs, an agent can use **search mode**. Instead of placing ev
 
 Tenant administrators can register HTTP and OpenAPI upstreams at runtime through the console, admin API, or CLI. An upstream may refer to a secret by name; Runtime resolves that secret and injects it into the configured header only when dialing the upstream.
 
+Tenant-registered agents and HTTP/OpenAPI upstreams must use public HTTP(S)
+targets. Validation rejects userinfo URLs and local, private, link-local,
+metadata, and reserved destinations. Runtime resolves DNS and checks the
+selected addresses again immediately before each connection to resist DNS
+rebinding. File-configured upstreams are operator-trusted and may intentionally
+use private infrastructure.
+
 ### 2.6 Isolated Code and Browser Sandboxes
 
 The gateway can expose two stateful, per-session execution environments:
 
 - **Code interpreter:** Python and shell execution inside a locked-down Docker container with a read-only root filesystem, resource limits, no network access, and an isolated workspace.
-- **Browser:** Chromium controlled through a sandbox service, with outbound traffic constrained by hostname allow/deny policy. The turnkey deployment keeps CDP on an internal Docker network instead of publishing its unauthenticated port.
+- **Browser:** Chromium controlled through a sandbox service, with outbound traffic constrained by hostname allow/deny policy. Chromium's process sandbox is enabled by default. The turnkey deployment keeps CDP on an internal Docker network instead of publishing its unauthenticated port; a direct host install publishes CDP only on loopback.
 
 Both environments are tenant-scoped and session-owned. State can survive across calls within a session without exposing the agent host filesystem or placing execution libraries inside the agent process.
 
 The single-host implementation uses the Docker socket to create these containers. Access to the Docker socket is root-equivalent on the host, so the turnkey stack is intended for a trusted node. Stronger isolation can be added with gVisor where available; untrusted multi-user deployments should assess the host boundary carefully.
 
-### 2.7 Observability and Operations
+### 2.7 Evaluations
+
+Runtime stores golden datasets, runs rule or judge scorers, captures online
+transcripts, classifies failures, and exposes aggregate results. At
+control-plane startup it recovers incomplete evaluation runs and skips case
+indexes that already completed, so recovery does not rerun successful cases.
+
+Credential-shaped transcript fields and common bearer-token patterns are
+redacted before persistence. Completed or failed evaluation runs, results, and
+captured transcripts are retained for 30 days by default. Set
+`RUNTIME_EVAL_RETENTION` to another non-negative Go duration, or `0` to disable
+automatic deletion.
+
+Evaluation recovery currently assumes one active control plane. A
+multi-control-plane deployment needs a distributed claim mechanism before it
+can guarantee that only one replica resumes an incomplete run.
+
+### 2.8 Observability and Operations
 
 Runtime exposes one Prometheus endpoint for the entire fleet on a separate management listener (`RUNTIME_METRICS_ADDR`, loopback by default). The public control-plane listener does not mount `/metrics`. The control plane merges its own metrics with metrics scraped from agents and enforces the registered agent label so an agent cannot impersonate another series.
+
+`/healthz` reports process liveness. `/readyz` checks Postgres with a bounded
+timeout. Public HTTP servers cap request-header reads and idle connections while
+leaving SSE responses streaming-friendly.
 
 The observability stack includes:
 
@@ -189,7 +229,7 @@ The observability stack includes:
 
 Metric labels deliberately exclude session, user, and tenant identifiers to avoid unbounded cardinality and accidental disclosure. Message text and tool arguments are not attached to traces.
 
-### 2.8 Contract-First, Polyglot Agent Hosting
+### 2.9 Contract-First, Polyglot Agent Hosting
 
 Runtime integrates agents through a small HTTP and SSE contract:
 
@@ -203,6 +243,30 @@ Runtime integrates agents through a small HTTP and SSE contract:
 | `GET /sessions/{id}` | Read session status |
 | `GET /sessions/{id}/stream?since=N` | Replay and stream sequenced events |
 | `GET /metrics` | Optional agent metrics |
+
+The native Go service also exposes the non-blocking
+`GET /sessions/{id}/events?since=N&limit=M` event-history endpoint. The Python
+contract shim exposes `POST /sessions/{id}/messages` for follow-up turns. These
+are implementation extensions rather than requirements of the common
+conformance suite.
+
+The control plane prefixes agent routes with `/agents/{agent}`. Its stable
+public surface is:
+
+```text
+GET  /healthz
+GET  /readyz
+GET  /agents
+POST /agents/{agent}/sessions
+GET  /agents/{agent}/sessions
+GET  /agents/{agent}/sessions/{session}
+GET  /agents/{agent}/sessions/{session}/stream
+```
+
+Native Go agents also support
+`GET /agents/{agent}/sessions/{session}/events`. Fleet metrics are deliberately
+absent from the public listener and are scraped from
+`http://<RUNTIME_METRICS_ADDR>/metrics` on the private management path.
 
 The reusable conformance suite executes the contract against a live agent. It is available both as a CLI command and as a Go test helper, making compatibility an executable CI gate rather than a documentation claim.
 
@@ -223,7 +287,8 @@ For a native Go agent, the author-facing configuration is intentionally small:
 ```go
 err := agentruntime.Serve(ctx, agentruntime.Config{
     Spec: harnessruntime.AgentSpec{
-        Name:         "support",
+        ID:           "support",
+        Name:         "Support Agent",
         Model:        "anthropic/claude-sonnet-4-6",
         SystemPrompt: "Help customers solve product issues.",
         MaxTurns:     20,
@@ -459,8 +524,7 @@ It may not be the right fit when you need a fully managed service with no infras
 | Install the complete platform | [`quickstart.md`](quickstart.md) |
 | Operate the single-host stack | [`operator-guide.md`](operator-guide.md) |
 | Onboard tenants | [`tenant-guide.md`](tenant-guide.md) |
-| Build and configure agents | [`README.md`](README.md) |
-| Host OpenAI or Claude SDK agents | [`deploying-sdk-agents.md`](deploying-sdk-agents.md) |
+| Build or attach Go, Python, or generic agents | [`deploying-sdk-agents.md`](deploying-sdk-agents.md) |
 | Deploy with Helm | [`deploy/charts/runtime/README.md`](deploy/charts/runtime/README.md) |
 | Explore working agents | [`examples/`](examples/) |
 | Validate an implementation | `runtimectl conformance --agent <id>` |

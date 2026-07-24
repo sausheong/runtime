@@ -37,19 +37,22 @@ docker compose up                            # starts all six pillars
 
 ## What you should see
 
-Seven services healthy (postgres, embedder, runtimed, prometheus, grafana,
-otel-collector, jaeger). Then:
+Eight services running (postgres, embedder, runtimed, prometheus, alertmanager,
+grafana, otel-collector, and jaeger). Then:
 
 | Surface | URL |
 |---|---|
 | Console (web UI) | http://localhost:8080/ui |
 | Grafana (metrics) | http://localhost:3000 |
+| Prometheus (metrics and rules) | http://localhost:9090 |
+| Alertmanager (alert routing) | http://localhost:9093 |
 | Jaeger (traces) | http://localhost:16686 |
 
-Prometheus, Grafana, and Jaeger are bound to host loopback. Log into Grafana as
-`admin` using `GRAFANA_ADMIN_PASSWORD` from `deploy/compose/.env`; anonymous
-access is disabled. The OTLP collector and Runtime's `:9091` management metrics
-listener are Compose-internal and are not published to the host.
+Prometheus, Alertmanager, Grafana, and Jaeger are bound to host loopback. Log
+into Grafana as `admin` using `GRAFANA_ADMIN_PASSWORD` from
+`deploy/compose/.env`; anonymous access is disabled. The OTLP collector and
+Runtime's `:9091` management metrics listener are Compose-internal and are not
+published to the host.
 
 Next: read the **[Operator guide](operator-guide.md)** to log in and set safe
 defaults, then the **[Tenant guide](tenant-guide.md)** to onboard a tenant and

@@ -121,9 +121,9 @@ func TestSecretsE2E_PerTenantInjection(t *testing.T) {
 	reg := controlplane.NewRegistry(cfg, "./agentd", dsn)
 	reg.SetBroker(broker)
 
-	// Set the operator fallback BEFORE spawning: buildEnv snapshots os.Environ()
-	// at spawn time, so this must precede the spawnAndWaitEnv calls below. The
-	// no-secret tenant (gamma) inherits this value.
+	// Arbitrary operator credentials are excluded by default. A no-secret tenant
+	// must not inherit this value unless the operator explicitly names it in
+	// RUNTIME_AGENT_ENV_PASSTHROUGH.
 	t.Setenv("OPENAI_API_KEY", "sk-operator-fallback")
 
 	getAgent := func(id string) controlplane.AgentProcess {
@@ -150,8 +150,22 @@ func TestSecretsE2E_PerTenantInjection(t *testing.T) {
 	if strings.Contains(envAlpha, "sk-beta") || strings.Contains(envBeta, "sk-alpha") {
 		t.Fatal("cross-tenant secret leak")
 	}
+	if strings.Contains(envGamma, "OPENAI_API_KEY=") ||
+		strings.Contains(envGamma, "sk-operator-fallback") {
+		t.Fatalf("gamma inherited an operator credential without passthrough:\n%s", envGamma)
+	}
+
+	// The explicit passthrough is a supported escape hatch. Tenant secrets still
+	// win because the scoped env delta is appended after the safe base.
+	t.Setenv("RUNTIME_AGENT_ENV_PASSTHROUGH", "OPENAI_API_KEY")
+	envGamma = spawnAndWaitEnv(t, apGamma, outFile("gamma"))
 	if !strings.Contains(envGamma, "OPENAI_API_KEY=sk-operator-fallback") {
-		t.Fatalf("gamma did not fall back to operator env:\n%s", envGamma)
+		t.Fatalf("gamma did not receive the explicit operator passthrough:\n%s", envGamma)
+	}
+	envAlpha = spawnAndWaitEnv(t, apAlpha, outFile("alpha"))
+	if !strings.Contains(envAlpha, "OPENAI_API_KEY=sk-alpha") ||
+		strings.Contains(envAlpha, "sk-operator-fallback") {
+		t.Fatalf("alpha tenant secret did not override passthrough:\n%s", envAlpha)
 	}
 }
 

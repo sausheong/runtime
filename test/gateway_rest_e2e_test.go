@@ -281,7 +281,7 @@ func TestGatewayRESTE2E(t *testing.T) {
 	// (e) Merged /metrics (auth-free): the gateway counters carry the orders
 	// server with outcome ok, and the upstream gauge reports it up. Labels
 	// render alphabetically in the exposition.
-	metrics := getBody(t, base+"/metrics", nil, 200)
+	metrics := getBody(t, integrationMetricsURL(), nil, 200)
 	for _, want := range []string{
 		`runtime_gateway_tool_calls_total{outcome="ok",server="orders",tool="orders__listOrders"}`,
 		`runtime_gateway_tool_calls_total{outcome="ok",server="orders",tool="orders__getOrder"}`,

@@ -23,7 +23,14 @@ import (
 // dsn is the live Postgres used by this integration test. It must be a real,
 // reachable database — the whole point of this test is to exercise the durable
 // path against real Postgres + real DBOS + a real agentd subprocess.
-const dsn = "postgres://runtime:runtime@localhost:5432/runtime?sslmode=disable"
+var dsn = integrationDSN()
+
+func integrationDSN() string {
+	if value := os.Getenv("RUNTIME_PG_DSN"); value != "" {
+		return value
+	}
+	return "postgres://runtime:runtime@localhost:5432/runtime?sslmode=disable"
+}
 
 // listenAddr is the agentd HTTP bind address for both process generations.
 const listenAddr = "127.0.0.1:8091"
