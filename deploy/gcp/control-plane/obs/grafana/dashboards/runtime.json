@@ -139,6 +139,16 @@
       "targets": [
         { "expr": "sum by (agent, kind) (rate(runtime_agent_proxy_calls_total[5m]))", "refId": "A", "legendFormat": "{{agent}} {{kind}}" }
       ]
+    },
+    {
+      "id": 14,
+      "type": "timeseries",
+      "title": "Cost rate ($/s by tenant)",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 44 },
+      "fieldConfig": { "defaults": { "unit": "currencyUSD" }, "overrides": [] },
+      "targets": [
+        { "expr": "sum by (tenant) (rate(agent_cost_usd_total[5m]))", "refId": "A", "legendFormat": "{{tenant}}" }
+      ]
     }
   ]
 }

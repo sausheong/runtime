@@ -1,0 +1,27 @@
+# Turnkey Alertmanager config. The default route drops alerts into a null
+# receiver so the stack is self-contained and provable without a real notifier.
+# Uncomment and fill ONE of the receivers below (and point the route at it) to
+# wire real notifications.
+route:
+  receiver: 'null'
+  group_by: ['alertname']
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 3h
+
+receivers:
+  - name: 'null'
+
+  # --- Slack (uncomment + set api_url, then set route.receiver: 'slack') ---
+  # - name: 'slack'
+  #   slack_configs:
+  #     - api_url: 'https://hooks.slack.com/services/XXX/YYY/ZZZ'
+  #       channel: '#alerts'
+  #       title: '{{ .CommonAnnotations.summary }}'
+  #       text: '{{ range .Alerts }}{{ .Annotations.description }}\n{{ end }}'
+
+  # --- PagerDuty (uncomment + set routing_key, then set route.receiver: 'pagerduty') ---
+  # - name: 'pagerduty'
+  #   pagerduty_configs:
+  #     - routing_key: '<integration-key>'
+  #       description: '{{ .CommonAnnotations.summary }}'
