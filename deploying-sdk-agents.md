@@ -98,6 +98,22 @@ SDK-native session store on the runtime `session_id` so a follow-up turn sees
 prior turns. `history` (the contract event log) is available but the examples
 don't replay from it.
 
+**Token metering.** Yield a `usage` telemetry event with your SDK's token counts
+and the shim records them — `agent_tokens_total` in Prometheus **and**
+`tokens_total` on the session (surfaced by the control plane like a native
+agent's metering). It never reaches the client stream:
+
+```python
+usage = result.context_wrapper.usage  # however your SDK exposes it
+yield ContractEvent(type="usage", usage={
+    "input": usage.input_tokens,
+    "output": usage.output_tokens,
+})
+```
+
+Both example adapters do this best-effort (any shape mismatch is swallowed —
+telemetry must never break a turn). Omit it and `tokens_total` simply stays `0`.
+
 ### Entrypoint — `serve.py`
 
 ```python

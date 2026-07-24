@@ -69,7 +69,7 @@ unfinished turn can still run again, so those tools should be idempotent.
 | **Structured logging** | `slog` everywhere (text or JSON via `RUNTIME_LOG_FORMAT`), with agent/session fields. |
 | **BYO agent** | Link the `agentruntime` SDK, hand it a harness `AgentSpec` + provider + tools, and get the durable contract for free — zero durability or HTTP code. |
 | **MCP gateway** | A central `/gateway/mcp` endpoint: MCP federation + semantic tool search + REST/OpenAPI adapters. Stdio, Streamable HTTP, and plain REST upstreams (one tool per OpenAPI operation), namespaced, tenant-filtered, discoverable by embedding-ranked search. |
-| **Code-interpreter & browser sandboxes** | Two isolated, stateful, per-session execution environments delivered through the gateway: a locked-down Python + shell **code interpreter** (no network, read-only rootfs, resource limits) and a locked-down **Chromium browser** (egress-policed via a hostname allow/deny proxy). Both tenant-scoped, both zero agent-side changes. |
+| **Code-interpreter & browser sandboxes** | Two isolated, stateful, per-session execution environments delivered through the gateway: a locked-down Python + shell **code interpreter** (no network, read-only rootfs, resource limits) and a locked-down **Chromium browser** (egress-policed via a hostname allow/deny proxy). Tenant-scoped by default, optionally **session-scoped** (`RUNTIME_SANDBOX_SCOPE=session` / `RUNTIME_BROWSER_SCOPE=session`) so a container is invisible to other sessions of the same tenant and torn down at session end; both zero agent-side changes. |
 | **Observability** | One Prometheus `/metrics` endpoint for the whole fleet (control plane + every agent, merged), `X-Request-ID` correlation end-to-end, **OpenTelemetry distributed tracing** (OTLP push, correlated runtimed↔agentd traces), and a bundled Prometheus + Grafana + Jaeger compose overlay with a provisioned dashboard. |
 | **Turnkey self-host** | One `docker compose up` brings up all six AgentCore pillars on a single host — bundled air-gap embedder, auto pgvector, identity on. Go binaries + Postgres; no cloud, no Kubernetes required, air-gap friendly. Helm chart for K8s when you want it. |
 
@@ -1169,7 +1169,8 @@ make sandbox-image     # builds runtime-sandbox:latest (override: RUNTIME_SANDBO
 | `execute_code` | Run Python (`python3 -c`) in `/workspace` → stdout/stderr/exit code |
 | `run_command` | Run a shell command (`sh -c`) — same limits |
 | `write_file` / `read_file` | Move text in and out of `/workspace` (reads capped at 256 KiB) |
-| `list_sandboxes` / `close_sandbox` | Lifecycle — list is tenant-scoped; close is idempotent |
+| `list_sandboxes` / `close_sandbox` | Lifecycle — list is scoped (tenant, or session when session-scoped); close is idempotent |
+| `close_session` | Close all sandboxes created in the current agent session — called automatically at session end; idempotent |
 
 Sessions are **stateful**: files in `/workspace` persist across calls within a
 sandbox (write a CSV, then run pandas over it, then read the result), but
@@ -1213,6 +1214,23 @@ an error telling the operator to set `forward_tenant: true` — so forgetting
 the flag cannot silently collapse all tenants into one namespace. For
 single-tenant direct use (no gateway), set `RUNTIME_SANDBOX_ALLOW_DIRECT=1`.
 
+### Session scoping (`RUNTIME_SANDBOX_SCOPE`)
+
+By default sandboxes are keyed by **tenant**: every session of a tenant's agents
+shares the same pool, and a `sandbox_id` minted in one session is reachable from
+another session of the same tenant. Set `RUNTIME_SANDBOX_SCOPE=session` to key
+by **(tenant, session)** instead: a handle is invisible to other sessions of the
+same tenant (a foreign session's `sandbox_id` returns the same "no such sandbox"
+as a nonexistent one), and the agent runtime calls `close_session` at session
+end so a finished session's containers are torn down promptly — the idle/lifetime
+reaper remains the backstop. The session id is forwarded exactly like the tenant
+(an `X-Runtime-Session` header → injected `__rt_session` argument, stripped and
+re-set by the gateway so an agent can never choose its own bucket, injected
+*after* the policy/quota gates so policies see the raw arguments). The default
+stays `tenant` for backward compatibility; the turnkey compose/Helm ship
+`session`. See the [operator guide](operator-guide.md#sandbox--browser-isolation)
+for the full isolation posture (session scoping → gVisor → one-session-per-process).
+
 ### Failure model
 
 Mirrors the gateway's degrade-don't-fail: if the Docker daemon is unreachable,
@@ -1234,6 +1252,7 @@ reaping clears orphans.
 | `RUNTIME_SANDBOX_MEM_MB` | `512` | memory limit |
 | `RUNTIME_SANDBOX_CPUS` | `1.0` | CPU limit |
 | `RUNTIME_SANDBOX_RUNTIME` | (engine default) | e.g. `runsc` for gVisor |
+| `RUNTIME_SANDBOX_SCOPE` | `tenant` | `session` ⇒ key by (tenant, session): per-session isolation + teardown at session end |
 | `RUNTIME_SANDBOX_ALLOW_DIRECT` | unset | `1` ⇒ serve without gateway tenant (single-tenant) |
 
 ### Limitations
@@ -1312,7 +1331,11 @@ non-root user, CPU/memory/pid limits, optional gVisor via
 `RUNTIME_BROWSER_RUNTIME=runsc`. Tenancy and lifecycle mirror sandboxd:
 `forward_tenant` spoof-proofing, existence-hiding cross-tenant lookup, idle-TTL
 + max-lifetime reaper, per-tenant cap, and reap-on-start by label
-`runtime.browser=1` (one browserd per host).
+`runtime.browser=1` (one browserd per host). Session scoping mirrors it too:
+`RUNTIME_BROWSER_SCOPE=session` keys browsers by (tenant, session) and adds a
+`close_session` tool the runtime calls at session end (default `tenant`; see
+[Session scoping](#session-scoping-runtime_sandbox_scope) under the code
+interpreter).
 
 ### Testing
 
@@ -2404,8 +2427,9 @@ shutdown, per-agent health, full-stack Docker build), plus the six pillars:
   credentials brokered into the upstream's headers at dial (see [MCP Gateway](#mcp-gateway)).
 - **Sandboxes** — the isolated, stateful, Docker-backed code interpreter **and**
   the egress-policed Chromium browser, both federated behind the gateway with
-  tenant-scoped ownership (see [Code-interpreter sandbox](#code-interpreter-sandbox)
-  and [Browser sandbox](#browser-sandbox)).
+  tenant-scoped ownership (optionally session-scoped — see
+  [Code-interpreter sandbox](#code-interpreter-sandbox) and
+  [Browser sandbox](#browser-sandbox)).
 - **Observability** — fleet-wide Prometheus metrics (control-plane + per-agent
   series merged behind one auth-free `/metrics`), `X-Request-ID` correlation
   end-to-end, a provisioned Grafana dashboard, and OpenTelemetry distributed
