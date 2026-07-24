@@ -1,0 +1,15 @@
+.git
+.agents
+.codex
+
+**/.env
+**/*.env
+**/.venv
+
+bin
+coverage.out
+food_label_images
+
+IMPLEMENTATION-HISTORY.md
+IMPLEMENTATION-REPORT.md
+P2.2-REPORT.md
