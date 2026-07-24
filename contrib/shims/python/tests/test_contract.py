@@ -110,6 +110,30 @@ def test_telemetry_events_not_in_client_stream(tmp_path):
     assert "id: 3" not in body
 
 
+def test_usage_event_surfaces_as_session_tokens(tmp_path):
+    # A 'usage' telemetry event is persisted onto the session so the control
+    # plane's GET /sessions/{id} reports tokens_total, like a native agent.
+    store = Store(str(tmp_path / "db.sqlite"))
+    c = TestClient(create_app(TelemetryAdapter(), store, "tele", metrics=Metrics("tele")))
+    sid = c.post("/sessions", json={"message": "q"}).json()["session_id"]
+    c.get(f"/sessions/{sid}/stream?since=0").text  # drive the turn to completion
+    row = c.get(f"/sessions/{sid}").json()
+    assert row["status"] == "completed"
+    assert row["tokens_total"] == 60  # input 50 + output 10
+    # still not leaked into the client stream (persisted to the store, not published)
+    assert '"type":"usage"' not in c.get(f"/sessions/{sid}/stream?since=0").text
+
+
+def test_no_usage_event_leaves_tokens_zero(tmp_path):
+    # An adapter that emits no usage event leaves tokens_total at 0 (not null) —
+    # the field is always present, so the CP never sees a missing value.
+    store = Store(str(tmp_path / "db.sqlite"))
+    c = TestClient(create_app(FakeAdapter(), store, "fake"))
+    sid = c.post("/sessions", json={"message": "x"}).json()["session_id"]
+    c.get(f"/sessions/{sid}/stream?since=0").text
+    assert c.get(f"/sessions/{sid}").json()["tokens_total"] == 0
+
+
 def test_telemetry_events_recorded_in_metrics(tmp_path):
     store = Store(str(tmp_path / "db.sqlite"))
     metrics = Metrics("tele")

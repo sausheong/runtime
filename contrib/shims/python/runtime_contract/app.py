@@ -83,6 +83,14 @@ def create_app(
                 # Telemetry events (usage/tool_call) feed metrics ONLY — they are
                 # not published to the client stream nor persisted.
                 if ev.type in _TELEMETRY_TYPES:
+                    if ev.type == "usage":
+                        # Persist tokens onto the session so GET /sessions/{id}
+                        # reports tokens_total (the control plane surfaces it like
+                        # a native agent's metering). Independent of metrics: the
+                        # store carries the durable per-session total, Prometheus
+                        # the per-turn sample.
+                        u = ev.usage or {}
+                        store.add_tokens(sid, int(u.get("input", 0) or 0) + int(u.get("output", 0) or 0))
                     if metrics is not None:
                         if ev.type == "tool_call":
                             metrics.observe_tool(ev.tool)

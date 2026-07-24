@@ -26,10 +26,12 @@ class Store:
             "CREATE TABLE IF NOT EXISTS sessions ("
             "id TEXT PRIMARY KEY, status TEXT NOT NULL DEFAULT 'running', "
             "turn_count INTEGER NOT NULL DEFAULT 0, "
-            "completed_at TEXT, duration_ms INTEGER)"
+            "completed_at TEXT, duration_ms INTEGER, "
+            "tokens_total INTEGER NOT NULL DEFAULT 0)"
         )
-        # Migrate existing DBs that predate the completed_at/duration_ms columns.
-        for col, defn in [("completed_at", "TEXT"), ("duration_ms", "INTEGER")]:
+        # Migrate existing DBs that predate the completed_at/duration_ms/tokens columns.
+        for col, defn in [("completed_at", "TEXT"), ("duration_ms", "INTEGER"),
+                          ("tokens_total", "INTEGER NOT NULL DEFAULT 0")]:
             try:
                 self._db.execute(f"ALTER TABLE sessions ADD COLUMN {col} {defn}")
                 self._db.commit()
@@ -77,20 +79,22 @@ class Store:
     def get_session(self, sid: str) -> Optional[dict]:
         with self._lock:
             row = self._db.execute(
-                "SELECT id, status, turn_count, completed_at, duration_ms FROM sessions WHERE id=?", (sid,)
+                "SELECT id, status, turn_count, completed_at, duration_ms, tokens_total "
+                "FROM sessions WHERE id=?", (sid,)
             ).fetchone()
         if not row:
             return None
         return {"id": row[0], "status": row[1], "turn_count": row[2],
-                "completed_at": row[3], "duration_ms": row[4]}
+                "completed_at": row[3], "duration_ms": row[4], "tokens_total": row[5]}
 
     def list_sessions(self) -> list[dict]:
         with self._lock:
             rows = self._db.execute(
-                "SELECT id, status, turn_count, completed_at, duration_ms FROM sessions ORDER BY rowid"
+                "SELECT id, status, turn_count, completed_at, duration_ms, tokens_total "
+                "FROM sessions ORDER BY rowid"
             ).fetchall()
         return [{"id": r[0], "status": r[1], "turn_count": r[2],
-                 "completed_at": r[3], "duration_ms": r[4]} for r in rows]
+                 "completed_at": r[3], "duration_ms": r[4], "tokens_total": r[5]} for r in rows]
 
     def set_status(self, sid: str, status: str) -> None:
         with self._lock:
@@ -108,4 +112,17 @@ class Store:
     def set_turn_count(self, sid: str, n: int) -> None:
         with self._lock:
             self._db.execute("UPDATE sessions SET turn_count=? WHERE id=?", (n, sid))
+            self._db.commit()
+
+    def add_tokens(self, sid: str, tokens: int) -> None:
+        """Accumulate this turn's token usage onto the session total. Called with
+        the input+output tokens from a 'usage' telemetry event; a no-op for
+        tokens<=0 so a turn that reports nothing never perturbs the total."""
+        if tokens <= 0:
+            return
+        with self._lock:
+            self._db.execute(
+                "UPDATE sessions SET tokens_total = tokens_total + ? WHERE id=?",
+                (tokens, sid),
+            )
             self._db.commit()
