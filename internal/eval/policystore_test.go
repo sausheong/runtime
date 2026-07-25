@@ -22,6 +22,7 @@ func freshPolicyStore(t *testing.T) (*PolicyStore, *sql.DB) {
 	if err := db.PingContext(context.Background()); err != nil {
 		t.Skipf("postgres not reachable: %v", err)
 	}
+	_, _ = db.Exec(`DELETE FROM runtime_schema_migrations WHERE component='evaluation-policy'`)
 	drop := func() { _, _ = db.Exec(`DROP TABLE IF EXISTS eval_policies CASCADE`) }
 	drop()
 	t.Cleanup(drop)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -169,8 +170,16 @@ func RegisterEvalAdmin(ctx context.Context, mux *http.ServeMux, adminStore Admin
 			serverError(w, "create eval run", err)
 			return
 		}
-		// The run must outlive the request: launch on the server ctx, not r.Context().
-		go eval.Execute(ctx, es, inv, judge, runID, m)
+		// The run must outlive the request and enter the bounded evaluator pool.
+		if !eval.Submit(ctx, es, inv, judge, runID, m) {
+			finished, finishErr := es.FailPendingRun(r.Context(), runID, "evaluation queue full")
+			if finishErr != nil || !finished {
+				serverError(w, "persist evaluation queue saturation", errors.Join(finishErr, errors.New("pending run transition rejected")))
+				return
+			}
+			http.Error(w, "evaluation queue full", http.StatusServiceUnavailable)
+			return
+		}
 		slog.Info("eval run started", "tenant", target, "set", body.Set, "agent", body.Agent, "run", runID)
 		writeJSON(w, http.StatusAccepted, map[string]string{"run_id": runID})
 	})
@@ -398,6 +407,11 @@ func RegisterEvalAdmin(ctx context.Context, mux *http.ServeMux, adminStore Admin
 			http.Error(w, "unknown or invisible agent", http.StatusBadRequest)
 			return
 		}
+		info, ok := reg.Get(agent)
+		if !ok {
+			http.Error(w, "unknown or invisible agent", http.StatusBadRequest)
+			return
+		}
 		var since time.Time
 		if s := strings.TrimSpace(r.URL.Query().Get("since")); s != "" {
 			d, err := time.ParseDuration(s)
@@ -407,7 +421,7 @@ func RegisterEvalAdmin(ctx context.Context, mux *http.ServeMux, adminStore Admin
 			}
 			since = time.Now().Add(-d)
 		}
-		breakdown, err := ctlStore.FailureBreakdownByAgent(r.Context(), agent, since)
+		breakdown, err := ctlStore.FailureBreakdownByAgent(r.Context(), info.Tenant, agent, since)
 		if err != nil {
 			serverError(w, "failure breakdown", err)
 			return

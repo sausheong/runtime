@@ -55,6 +55,10 @@ func TestAutoscaleGrowDrain(t *testing.T) {
 	}
 	mustExec(t, db, `DROP TABLE IF EXISTS session_events, sessions, agents CASCADE`)
 	mustExec(t, db, `DROP SCHEMA IF EXISTS dbos CASCADE`)
+	// This test runs open-mode. Remove identity rows left by an interrupted or
+	// previously failed identity integration test so unauthenticated load is
+	// not silently rejected with 401.
+	mustExec(t, db, `DROP TABLE IF EXISTS registration_tokens, secrets, service_keys, identity_users, tenants CASCADE`)
 
 	tmp := t.TempDir()
 	agentd := filepath.Join(tmp, "agentd")

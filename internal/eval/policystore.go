@@ -33,7 +33,7 @@ type PolicyStore struct {
 
 // NewPolicyStore applies the policy DDL under the shared DDL lock.
 func NewPolicyStore(ctx context.Context, db *sql.DB) (*PolicyStore, error) {
-	if err := store.ApplyDDLLocked(ctx, db, policySchemaSQL); err != nil {
+	if err := store.ApplySchemaMigrations(ctx, db, "evaluation-policy", 1, policySchemaSQL); err != nil {
 		return nil, err
 	}
 	return &PolicyStore{db: db}, nil

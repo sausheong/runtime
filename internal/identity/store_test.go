@@ -21,6 +21,7 @@ func freshStore(t *testing.T) (*Store, *sql.DB) {
 	if err := db.Ping(); err != nil {
 		t.Skipf("postgres not reachable at %s: %v", dsn, err)
 	}
+	_, _ = db.Exec(`DELETE FROM runtime_schema_migrations WHERE component='identity'`)
 	for _, q := range []string{
 		`DROP TABLE IF EXISTS secrets CASCADE`,
 		`DROP TABLE IF EXISTS service_keys CASCADE`,

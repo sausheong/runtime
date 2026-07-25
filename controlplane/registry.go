@@ -43,7 +43,9 @@ type Registry struct {
 	broker SecretBroker              // optional; injected into each AgentProcess on read.
 	pools  map[string]*PoolManager   // id -> manager (autoscaled agents only)
 
-	policyResolver PolicyResolver // optional; injected into each AgentProcess on read.
+	policyResolver            PolicyResolver // optional; injected into each AgentProcess on read.
+	identitySigningPrivateKey string
+	identitySigningPublicKey  string
 
 	// mu guards the agent set (order/sets/infos/rr/managed/disabled) for runtime
 	// mutation. The file-config set is built once in NewRegistry and was
@@ -172,6 +174,24 @@ func (r *Registry) SetPolicyResolver(pr PolicyResolver) {
 	}
 }
 
+// SetIdentitySigningKeys installs the control-plane-only signing key and the
+// public verification key that local and registered agents receive.
+func (r *Registry) SetIdentitySigningKeys(privateKey, publicKey string) {
+	r.identitySigningPrivateKey = privateKey
+	r.identitySigningPublicKey = publicKey
+	for id, set := range r.sets {
+		for i := range set {
+			set[i].IdentitySigningPrivateKey = privateKey
+			set[i].IdentitySigningPublicKey = publicKey
+		}
+		r.sets[id] = set
+	}
+	for _, pm := range r.pools {
+		pm.base.IdentitySigningPrivateKey = privateKey
+		pm.base.IdentitySigningPublicKey = publicKey
+	}
+}
+
 // SetGateway records the gateway endpoint URL and per-tenant agent keys, stamped
 // onto every gateway-enabled replica. Like SetBroker, must complete before the
 // server and supervisor goroutines start.
@@ -212,6 +232,8 @@ func (r *Registry) AgentTenants() map[string]string {
 func (r *Registry) withBroker(ap AgentProcess) AgentProcess {
 	ap.broker = r.broker
 	ap.policyResolver = r.policyResolver
+	ap.IdentitySigningPrivateKey = r.identitySigningPrivateKey
+	ap.IdentitySigningPublicKey = r.identitySigningPublicKey
 	return ap
 }
 
@@ -285,6 +307,19 @@ func (r *Registry) ResetReachable(id string) {
 	delete(r.reach, id)
 }
 
+// ResetReplicaReachable clears one ordinal's observation, returning only that
+// replica to unknown until its restarted monitor probes again.
+func (r *Registry) ResetReplicaReachable(id string, replica int) {
+	r.reachMu.Lock()
+	defer r.reachMu.Unlock()
+	if m := r.reach[id]; m != nil {
+		delete(m, replica)
+		if len(m) == 0 {
+			delete(r.reach, id)
+		}
+	}
+}
+
 // SetReachable records a replica's reachability (called by main's per-ordinal
 // HealthMonitor on each transition). Used by NextReplica to skip down ordinals
 // of a remote pool. Safe for concurrent use.
@@ -317,7 +352,7 @@ func (r *Registry) reachableOrUnknown(id string, i int) bool {
 
 // NextReplica returns the next replica index for a NEW session, round-robin via
 // an atomic per-agent counter, SKIPPING ordinals a health probe has marked
-// unreachable. Falls back to 0 if every ordinal is unreachable. Autoscaled
+// unreachable. Returns -1 if every ordinal is known unreachable. Autoscaled
 // agents delegate to their PoolManager (which skips draining replicas).
 func (r *Registry) NextReplica(id string) int {
 	r.mu.RLock()
@@ -336,7 +371,7 @@ func (r *Registry) NextReplica(id string) int {
 			return idx
 		}
 	}
-	return 0
+	return -1
 }
 
 // Pools returns the autoscaled agents' managers, keyed by id. main.go starts each.

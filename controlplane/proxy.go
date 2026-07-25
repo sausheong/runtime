@@ -17,6 +17,7 @@ import (
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 
 	"github.com/sausheong/runtime/internal/netpolicy"
+	"github.com/sausheong/runtime/internal/rheader"
 )
 
 // SecretBroker resolves a tenant's secrets to name->plaintext at spawn time.
@@ -55,6 +56,10 @@ type AgentProcess struct {
 	// AuthToken is an optional shared bearer added to every request runtimed
 	// makes to this agent (proxy, health, metrics). "" ⇒ no auth header.
 	AuthToken string
+	// IdentitySigningPrivateKey remains control-plane-only. The matching public
+	// key is injected into local/registered agents for verification.
+	IdentitySigningPrivateKey string
+	IdentitySigningPublicKey  string
 	// RestrictOutbound applies the public-network-only dial policy. It is set
 	// for tenant-registered remote agents; file-configured remotes remain an
 	// operator trust decision and may intentionally target private services.
@@ -97,6 +102,7 @@ type AgentProcess struct {
 func (a AgentProcess) envDelta(ctx context.Context) ([]string, error) {
 	env := []string{
 		"RUNTIME_PG_DSN=" + a.PGDSN,
+		"RUNTIME_CONTROL_SCHEMA_READY=1",
 		"RUNTIME_LISTEN_ADDR=" + a.Addr,
 		"RUNTIME_AGENT_ID=" + a.AgentID,
 		"RUNTIME_AGENT_KIND=" + a.Kind,
@@ -140,9 +146,15 @@ func (a AgentProcess) envDelta(ctx context.Context) ([]string, error) {
 	// when off, so an inherited operator var can't flip it on. Lives in envDelta
 	// so both local spawn and the remote /register handshake carry it.
 	if a.SubjectForwarding {
-		env = append(env, "RUNTIME_SUBJECT_FORWARDING=1")
+		env = append(env,
+			"RUNTIME_SUBJECT_FORWARDING=1",
+			"RUNTIME_IDENTITY_SIGNING_PUBLIC_KEY="+a.IdentitySigningPublicKey,
+		)
 	} else {
-		env = append(env, "RUNTIME_SUBJECT_FORWARDING=")
+		env = append(env,
+			"RUNTIME_SUBJECT_FORWARDING=",
+			"RUNTIME_IDENTITY_SIGNING_PUBLIC_KEY=",
+		)
 	}
 	if a.GatewayOn {
 		u := a.GatewayURL
@@ -196,20 +208,28 @@ func (a AgentProcess) envDelta(ctx context.Context) ([]string, error) {
 // tenant secret broker rather than passed through here.
 func childBaseEnv() []string {
 	allowed := map[string]struct{}{
-		"HOME":                        {},
-		"LANG":                        {},
-		"LC_ALL":                      {},
-		"LC_CTYPE":                    {},
-		"NODE_EXTRA_CA_CERTS":         {},
-		"PATH":                        {},
-		"SSL_CERT_DIR":                {},
-		"SSL_CERT_FILE":               {},
-		"TMPDIR":                      {},
-		"TZ":                          {},
-		"OTEL_EXPORTER_OTLP_ENDPOINT": {},
-		"RUNTIME_LOG_FORMAT":          {},
-		"RUNTIME_TRACE_SAMPLE_RATIO":  {},
-		"RUNTIME_TRACING_ENABLED":     {},
+		"HOME":                             {},
+		"LANG":                             {},
+		"LC_ALL":                           {},
+		"LC_CTYPE":                         {},
+		"NODE_EXTRA_CA_CERTS":              {},
+		"PATH":                             {},
+		"SSL_CERT_DIR":                     {},
+		"SSL_CERT_FILE":                    {},
+		"TMPDIR":                           {},
+		"TZ":                               {},
+		"OTEL_EXPORTER_OTLP_ENDPOINT":      {},
+		"RUNTIME_LOG_FORMAT":               {},
+		"RUNTIME_MEMORY_GC_BATCH":          {},
+		"RUNTIME_MEMORY_GC_ENABLED":        {},
+		"RUNTIME_MEMORY_GC_GRACE":          {},
+		"RUNTIME_MEMORY_GC_INTERVAL":       {},
+		"RUNTIME_MEMORY_RETENTION_DRY_RUN": {},
+		"RUNTIME_MEMORY_RETENTION_EPISODE": {},
+		"RUNTIME_MEMORY_RETENTION_FACT":    {},
+		"RUNTIME_MEMORY_RETENTION_SUMMARY": {},
+		"RUNTIME_TRACE_SAMPLE_RATIO":       {},
+		"RUNTIME_TRACING_ENABLED":          {},
 	}
 	for _, name := range strings.Split(os.Getenv("RUNTIME_AGENT_ENV_PASSTHROUGH"), ",") {
 		name = strings.TrimSpace(name)
@@ -293,8 +313,9 @@ func (a AgentProcess) baseURL() string {
 // unchanged. The request is cloned so the caller's *http.Request is never
 // mutated (the ReverseProxy reuses its outgoing request object).
 type authTransport struct {
-	token string
-	base  http.RoundTripper // nil ⇒ http.DefaultTransport
+	token      string
+	base       http.RoundTripper // nil ⇒ http.DefaultTransport
+	signingKey string
 }
 
 func (t authTransport) RoundTrip(r *http.Request) (*http.Response, error) {
@@ -305,6 +326,12 @@ func (t authTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 	if t.token != "" {
 		r = r.Clone(r.Context())
 		r.Header.Set("Authorization", "Bearer "+t.token)
+	}
+	if t.signingKey != "" {
+		r = r.Clone(r.Context())
+		if err := rheader.Sign(r, t.signingKey, time.Now()); err != nil {
+			return nil, err
+		}
 	}
 	return base.RoundTrip(r)
 }
@@ -319,7 +346,7 @@ func (t authTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 func NewAgentHTTPClient(ap AgentProcess, timeout time.Duration) *http.Client {
 	return &http.Client{
 		Timeout:       timeout,
-		Transport:     authTransport{token: ap.AuthToken, base: AgentOutboundTransport(ap)},
+		Transport:     authTransport{token: ap.AuthToken, base: AgentOutboundTransport(ap), signingKey: ap.IdentitySigningPrivateKey},
 		CheckRedirect: rejectCrossOriginRedirect(ap.baseURL()),
 	}
 }

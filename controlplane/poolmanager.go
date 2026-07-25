@@ -320,7 +320,7 @@ func decideStep(acfg config.AutoscaleConfig, active, k int, topDraining, upReady
 // always reap drained-to-zero top replicas, update gauges. Never scales on a
 // failed load read (holds current size).
 func (p *PoolManager) tick(ctx context.Context) {
-	active, err := p.st.ActiveSessionsByReplica(ctx, p.agentID)
+	active, err := p.st.ActiveSessionsByReplica(ctx, p.base.Tenant, p.agentID)
 	if err != nil {
 		return
 	}

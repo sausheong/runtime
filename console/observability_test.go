@@ -23,7 +23,7 @@ func TestObservability_EvalReadViews(t *testing.T) {
 	ctx := context.Background()
 
 	// A visible agent (t1) with a classified failure, plus a foreign agent (t2).
-	sid, _ := st.CreateSession(ctx, "support", 0)
+	sid, _ := st.CreateSessionForTenant(ctx, "t1", "support", 0)
 	_ = st.SetSessionStatus(ctx, sid, "error")
 	if err := st.SetFailureCategory(ctx, sid, "tool_error"); err != nil {
 		t.Fatalf("set failure category: %v", err)
@@ -33,7 +33,8 @@ func TestObservability_EvalReadViews(t *testing.T) {
 	if err := st.PutOnlineResult(ctx, sid, "helpful", "t1", "user@t1", "contains", true, ""); err != nil {
 		t.Fatalf("put online result (t1): %v", err)
 	}
-	if err := st.PutOnlineResult(ctx, "foreign-sess", "secret_criterion", "t2", "user@t2", "contains", false, ""); err != nil {
+	foreignSID, _ := st.CreateSessionForTenant(ctx, "t2", "foreign", 0)
+	if err := st.PutOnlineResult(ctx, foreignSID, "secret_criterion", "t2", "user@t2", "contains", false, ""); err != nil {
 		t.Fatalf("put online result (t2): %v", err)
 	}
 

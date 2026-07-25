@@ -51,7 +51,7 @@ type Store struct {
 
 // NewStore applies the gateway_quotas DDL under the shared DDL lock.
 func NewStore(ctx context.Context, db *sql.DB) (*Store, error) {
-	if err := store.ApplyDDLLocked(ctx, db, schemaSQL); err != nil {
+	if err := store.ApplySchemaMigrations(ctx, db, "quota", 1, schemaSQL); err != nil {
 		return nil, err
 	}
 	return &Store{db: db}, nil

@@ -230,12 +230,16 @@ func TestEvalRuns_LaunchInvisibleAgent(t *testing.T) {
 
 func TestEvalRuns_ResultsView(t *testing.T) {
 	h, es, _ := consoleWithEvalRuns(t)
-	_ = es.CreateRun(context.Background(), eval.Run{
-		RunID: "run-res", Tenant: "t1", SetName: "greetings", AgentID: "support", Status: eval.StatusCompleted,
+	ctx := context.Background()
+	_ = es.CreateRun(ctx, eval.Run{
+		RunID: "run-res", Tenant: "t1", SetName: "greetings", AgentID: "support", Status: eval.StatusPending,
 	})
-	_ = es.PutResult(context.Background(), "run-res", eval.Result{
+	now := time.Now().UTC()
+	_, _ = es.ClaimRun(ctx, "run-res", "seed", now, now.Add(time.Minute))
+	_, _ = es.PutResultClaimed(ctx, "run-res", "seed", eval.Result{
 		CaseIndex: 0, Input: "hi", Output: "hello there", Scorer: "contains", Passed: true, Detail: "",
 	})
+	_ = es.FinishRun(ctx, "run-res", eval.StatusCompleted, 1, 1, 0, 1, "")
 	r := adminReq("GET", "/ui/observability/eval-runs/run-res", nil)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, r)

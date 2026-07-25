@@ -29,6 +29,9 @@ import (
 // Manager owns per-session durable workflows and event fan-out.
 type Manager struct {
 	agentID string
+	// tenant is the immutable owner stamped onto every session created by this
+	// agent process. It comes from RUNTIME_AGENT_TENANT, not caller headers.
+	tenant  string
 	cfg     Config
 	dbosCtx dbos.DBOSContext
 	st      store.Store
@@ -50,6 +53,7 @@ type Manager struct {
 	// RUNTIME_SUBJECT_FORWARDING). Off ⇒ the headers are ignored and turnInput
 	// carries an empty subject (today's behavior).
 	subjectForwarding bool
+	identityVerifyKey string
 	// limits is the operator-resolved lifecycle limit set (from
 	// RUNTIME_AGENT_LIMITS). Zero value ⇒ no limits. Immutable after Serve
 	// constructs the Manager, so workflow-body reads are deterministic.
@@ -71,6 +75,18 @@ type Manager struct {
 	// evalJudge grades judge-scorer criteria, or nil when no judge model is
 	// configured (nil ⇒ judge criteria fail closed).
 	evalJudge eval.Judge
+	// scoreQueue bounds asynchronous online evaluation. Jobs are drained during
+	// normal shutdown and cancelled after the configured drain deadline.
+	scoreMu           sync.RWMutex
+	scoreQueue        chan scoreJob
+	scoreCancel       context.CancelFunc
+	scoreWG           sync.WaitGroup
+	scoreClosed       bool
+	scoreTimeout      time.Duration
+	requestSem        chan struct{}
+	streamSem         chan struct{}
+	transcriptCapture *bool
+	transcriptFilter  func([]byte) ([]byte, error)
 
 	// assertions bridges the caller's raw verified OIDC JWT from POST /sessions
 	// (which has the HTTP request) to sessionWorkflow (which does not — the DBOS
@@ -520,13 +536,7 @@ func (m *Manager) sessionWorkflow(ctx dbos.DBOSContext, in turnInput) (string, e
 		// 0-based loop var `turn` (NOT turn+1, which SetTurnCount stores as a
 		// count). AppendTranscript is idempotent on (session, turn), so a DBOS
 		// replay re-writes the identical row.
-		if entriesJSON, mErr := marshalTranscript(out.Entries); mErr == nil {
-			if tErr := m.st.AppendTranscript(context.Background(), wfID, turn, in.Tenant, in.Subject, entriesJSON, out.Reason, statusForReason(out)); tErr != nil {
-				slog.Warn("append transcript failed", "session", wfID, "turn", turn, "err", tErr)
-			}
-		} else {
-			slog.Warn("marshal transcript entries failed", "session", wfID, "turn", turn, "err", mErr)
-		}
+		m.captureTranscript(wfID, turn, in.Tenant, in.Subject, out.Entries, out.Reason, statusForReason(out))
 		_ = m.st.SetTurnCount(context.Background(), wfID, turn+1)
 		if err := m.st.SetSessionUsage(context.Background(), wfID, tokensAll, costUSD); err != nil {
 			slog.Warn("set session usage failed", "session", wfID, "err", err)
@@ -580,7 +590,10 @@ func (m *Manager) sessionWorkflow(ctx dbos.DBOSContext, in turnInput) (string, e
 			if m.evalPolicy != nil && sampled(wfID, m.evalPolicy.SampleRate) {
 				entries := out.Entries
 				tenant, actor := in.Tenant, in.Subject
-				go m.scoreSession(wfID, tenant, actor, status, out.Reason, toolErrored, entries)
+				m.enqueueScore(scoreJob{
+					sessionID: wfID, tenant: tenant, actor: actor, status: status,
+					terminalReason: out.Reason, toolErrored: toolErrored, entries: entries,
+				})
 			} else {
 				m.classifyAndPersist(wfID, status, out.Reason, toolErrored, false)
 			}
@@ -595,7 +608,7 @@ func (m *Manager) sessionWorkflow(ctx dbos.DBOSContext, in turnInput) (string, e
 // originating POST's X-Request-ID, carried into the checkpointed workflow
 // input for log correlation.
 func (m *Manager) startSession(ctx context.Context, userMsg, imageB64, imageMime, requestID, subject, tenant, role, assertion string) (string, error) {
-	sessionID, err := m.st.CreateSession(ctx, m.agentID, m.replica)
+	sessionID, err := m.st.CreateSessionForTenant(ctx, m.tenantID(), m.agentID, m.replica)
 	if err != nil {
 		return "", err
 	}
@@ -624,6 +637,35 @@ func envBool(key string) bool {
 	default:
 		return false
 	}
+}
+
+func envDefaultEnabled(key string) bool {
+	raw := strings.ToLower(strings.TrimSpace(os.Getenv(key)))
+	return raw == "" || raw == "1" || raw == "true" || raw == "yes" || raw == "on"
+}
+
+func envPositiveInt(key string, fallback, max int) (int, error) {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return fallback, nil
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil || value < 1 || value > max {
+		return 0, fmt.Errorf("agentruntime: %s must be between 1 and %d", key, max)
+	}
+	return value, nil
+}
+
+func envDuration(key string, fallback time.Duration) (time.Duration, error) {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return fallback, nil
+	}
+	value, err := time.ParseDuration(raw)
+	if err != nil || value <= 0 {
+		return 0, fmt.Errorf("agentruntime: %s must be a positive duration", key)
+	}
+	return value, nil
 }
 
 // Serve validates config, opens the store, launches DBOS (running recovery for
@@ -656,7 +698,13 @@ func Serve(ctx context.Context, cfg Config) error {
 		_ = traceShutdown(fctx)
 	}()
 
-	st, err := store.NewPGStore(ctx, pgDSN)
+	var st store.Store
+	var err error
+	if envBool("RUNTIME_CONTROL_SCHEMA_READY") {
+		st, err = store.NewPGStoreExisting(ctx, pgDSN)
+	} else {
+		st, err = store.NewPGStore(ctx, pgDSN)
+	}
 	if err != nil {
 		return err
 	}
@@ -675,8 +723,18 @@ func Serve(ctx context.Context, cfg Config) error {
 	if err != nil {
 		return err // fail fast: a malformed operator value must not silently mean "unlimited"
 	}
+	agentTenant := os.Getenv("RUNTIME_AGENT_TENANT")
+	if agentTenant == "" {
+		agentTenant = "default"
+	}
+	subjectForwarding := envBool("RUNTIME_SUBJECT_FORWARDING")
+	identityVerifyKey := os.Getenv("RUNTIME_IDENTITY_SIGNING_PUBLIC_KEY")
+	if subjectForwarding && identityVerifyKey == "" {
+		return errors.New("agentruntime: RUNTIME_IDENTITY_SIGNING_PUBLIC_KEY is required when subject forwarding is enabled")
+	}
 	m := &Manager{
 		agentID:           cfg.Spec.ID,
+		tenant:            agentTenant,
 		cfg:               cfg,
 		dbosCtx:           dctx,
 		st:                st,
@@ -685,11 +743,39 @@ func Serve(ctx context.Context, cfg Config) error {
 		authToken:         os.Getenv("RUNTIME_AGENT_AUTH_TOKEN"),
 		replica:           replica,
 		limits:            limits,
-		subjectForwarding: envBool("RUNTIME_SUBJECT_FORWARDING"),
+		subjectForwarding: subjectForwarding,
+		identityVerifyKey: identityVerifyKey,
 		evalPolicy:        cfg.EvalPolicy,
 		evalJudge:         cfg.EvalJudge,
+		transcriptFilter:  cfg.TranscriptFilter,
 		subscribers:       map[string][]chan WireEvent{},
 	}
+	captureTranscripts := envDefaultEnabled("RUNTIME_TRANSCRIPT_CAPTURE")
+	m.transcriptCapture = &captureTranscripts
+	scoreWorkers, err := envPositiveInt("RUNTIME_EVAL_SCORE_WORKERS", 2, 32)
+	if err != nil {
+		return err
+	}
+	scoreQueue, err := envPositiveInt("RUNTIME_EVAL_SCORE_QUEUE", 64, 4096)
+	if err != nil {
+		return err
+	}
+	scoreTimeout, err := envDuration("RUNTIME_EVAL_SCORE_TIMEOUT", 2*time.Minute)
+	if err != nil {
+		return err
+	}
+	m.startScoring(scoreWorkers, scoreQueue, scoreTimeout)
+	defer m.stopScoring(10 * time.Second)
+	maxRequests, err := envPositiveInt("RUNTIME_AGENT_MAX_REQUESTS", 256, 8192)
+	if err != nil {
+		return err
+	}
+	maxStreams, err := envPositiveInt("RUNTIME_AGENT_MAX_STREAMS", 64, 4096)
+	if err != nil {
+		return err
+	}
+	m.requestSem = make(chan struct{}, maxRequests)
+	m.streamSem = make(chan struct{}, maxStreams)
 	if m.price == nil {
 		slog.Warn("agent model has no price entry; cost will not be metered (tokens still recorded)",
 			"agent", cfg.Spec.ID, "model", cfg.Spec.Model)
@@ -700,7 +786,7 @@ func Serve(ctx context.Context, cfg Config) error {
 	// the agent metrics registry (this is where metrics exist — the seam that
 	// also fixes M1's post-wireMemory metric-ordering gap).
 	if cfg.StartMemoryGC != nil {
-		cfg.StartMemoryGC(ctx, m.metrics.MemoryGCReaped)
+		cfg.StartMemoryGC(ctx, m.metrics.MemoryGCReaped, m.metrics.MemoryRetentionReaped)
 	}
 
 	// Wire the memory write metrics (summary + episode) now that AgentMetrics
@@ -719,6 +805,7 @@ func Serve(ctx context.Context, cfg Config) error {
 	srv := &http.Server{
 		Addr:              listenAddr,
 		Handler:           m.handler(),
+		ReadTimeout:       30 * time.Second,
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       120 * time.Second,
 		MaxHeaderBytes:    1 << 20,

@@ -279,6 +279,36 @@ func TestMemoryGCReapedNilSafe(t *testing.T) {
 	a.MemoryGCReaped(1) // must not panic
 }
 
+func TestMemoryRetentionReapedByKind(t *testing.T) {
+	a := NewAgentMetrics("agent-x", "tenant-y", "model-z")
+	a.MemoryRetentionReaped("fact", 2)
+	a.MemoryRetentionReaped("summary", 3)
+	const want = `
+# HELP agent_memory_retention_reaped_total Live memory rows deleted by configured retention, by kind.
+# TYPE agent_memory_retention_reaped_total counter
+agent_memory_retention_reaped_total{agent="agent-x",kind="fact",tenant="tenant-y"} 2
+agent_memory_retention_reaped_total{agent="agent-x",kind="summary",tenant="tenant-y"} 3
+`
+	if err := testutil.CollectAndCompare(a.retentionReaped, strings.NewReader(want)); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRetentionReapedByControlKind(t *testing.T) {
+	c := NewControlMetrics()
+	c.RetentionReaped("evaluation_capture", 4)
+	c.RetentionReaped("evaluation_run", 2)
+	const want = `
+# HELP runtime_retention_reaped_total Rows or parent records removed by retention workers, by data kind.
+# TYPE runtime_retention_reaped_total counter
+runtime_retention_reaped_total{kind="evaluation_capture"} 4
+runtime_retention_reaped_total{kind="evaluation_run"} 2
+`
+	if err := testutil.CollectAndCompare(c.retentionReaped, strings.NewReader(want)); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestEpisodeWrite(t *testing.T) {
 	a := NewAgentMetrics("agent-x", "tenant-y", "model-z")
 	a.EpisodeWrite()

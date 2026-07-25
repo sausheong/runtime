@@ -75,6 +75,11 @@ func RegisterHandshake(mux *http.ServeMux, tokens RegTokenVerifier, reg *Registr
 				env[kv[:i]] = kv[i+1:]
 			}
 		}
+		// A valid one-time registration handshake is authoritative evidence
+		// that this ordinal is restarting. Clear a stale "down" observation to
+		// unknown so it may become routable as soon as its HTTP listener is
+		// healthy, without waiting a full monitor interval.
+		reg.ResetReplicaReachable(agentID, body.Ordinal)
 		// Access log: identifiers only — NEVER an env value or secret name.
 		slog.Info("register", "agent", agentID, "tenant", ap.Tenant, "ordinal", body.Ordinal, "token_id", id, "vars", len(env))
 		w.Header().Set("Content-Type", "application/json")

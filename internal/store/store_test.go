@@ -2,8 +2,111 @@ package store
 
 import (
 	"context"
+	"errors"
 	"testing"
+	"time"
 )
+
+func TestStore_TenantOwnershipAndExternalBinding(t *testing.T) {
+	ctx := context.Background()
+	s := NewMemStore()
+	alpha, err := s.CreateSessionForTenant(ctx, "alpha", "shared", 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	row, err := s.GetSession(ctx, alpha)
+	if err != nil || row.TenantID != "alpha" || row.AgentID != "shared" || row.Replica != 2 {
+		t.Fatalf("tenant session round-trip: row=%+v err=%v", row, err)
+	}
+	if rows, _ := s.ListSessionsForTenant(ctx, "beta", "shared"); len(rows) != 0 {
+		t.Fatalf("cross-tenant list returned %+v", rows)
+	}
+	if err := s.BindSession(ctx, "external-1", "alpha", "shared", 1); err != nil {
+		t.Fatal(err)
+	}
+	bound, err := s.GetSession(ctx, "external-1")
+	if err != nil || bound.TenantID != "alpha" || bound.Replica != 1 || bound.Status != "external" {
+		t.Fatalf("external binding: row=%+v err=%v", bound, err)
+	}
+	if err := s.BindSession(ctx, "external-1", "alpha", "shared", 1); err != nil {
+		t.Fatalf("idempotent bind: %v", err)
+	}
+	if err := s.BindSession(ctx, "external-1", "beta", "shared", 1); err == nil {
+		t.Fatal("conflicting binding accepted")
+	}
+}
+
+func TestStore_MissingSessionUsesSentinel(t *testing.T) {
+	_, err := NewMemStore().GetSession(context.Background(), "missing")
+	if !errors.Is(err, ErrSessionNotFound) {
+		t.Fatalf("GetSession error = %v, want ErrSessionNotFound", err)
+	}
+}
+
+func TestStore_ReapSessionsRetainsActiveAndCascades(t *testing.T) {
+	ctx := context.Background()
+	st := NewMemStore()
+	terminal, _ := st.CreateSessionForTenant(ctx, "t", "a", 0)
+	active, _ := st.CreateSessionForTenant(ctx, "t", "a", 0)
+	if err := st.SetSessionStatus(ctx, terminal, "completed"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.AppendEvent(ctx, terminal, "done", []byte(`{}`)); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.AppendTranscript(ctx, terminal, 0, "t", "u", []byte(`[]`), "completed", "completed"); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.PutOnlineResult(ctx, terminal, "quality", "t", "u", "contains", true, ""); err != nil {
+		t.Fatal(err)
+	}
+	before := time.Now().UTC().Add(time.Minute)
+	if n, err := st.ReapSessions(ctx, before, 10, true); err != nil || n != 1 {
+		t.Fatalf("dry run n=%d err=%v", n, err)
+	}
+	if _, err := st.GetSession(ctx, terminal); err != nil {
+		t.Fatalf("dry run deleted terminal session: %v", err)
+	}
+	if n, err := st.ReapSessions(ctx, before, 10, false); err != nil || n != 1 {
+		t.Fatalf("reap n=%d err=%v", n, err)
+	}
+	if _, err := st.GetSession(ctx, terminal); !errors.Is(err, ErrSessionNotFound) {
+		t.Fatalf("terminal session still present: %v", err)
+	}
+	if _, err := st.GetSession(ctx, active); err != nil {
+		t.Fatalf("active session deleted: %v", err)
+	}
+	if events, _ := st.EventsSince(ctx, terminal, 0); len(events) != 0 {
+		t.Fatalf("events not cascaded: %+v", events)
+	}
+	if results, _ := st.ListOnlineResults(ctx, terminal); len(results) != 0 {
+		t.Fatalf("online results not cascaded: %+v", results)
+	}
+}
+
+func TestExternalBindingsAreTouchedExcludedFromLoadAndExpired(t *testing.T) {
+	ctx := context.Background()
+	st := NewMemStore()
+	if err := st.BindSession(ctx, "external", "t", "a", 2); err != nil {
+		t.Fatal(err)
+	}
+	if active, err := st.ActiveSessionsByReplica(ctx, "t", "a"); err != nil {
+		t.Fatal(err)
+	} else if active[2] != 0 {
+		t.Fatalf("external affinity counted as active load: %v", active)
+	}
+	cutoff := time.Now().UTC()
+	time.Sleep(time.Millisecond)
+	if err := st.TouchSession(ctx, "external"); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := st.ReapSessions(ctx, cutoff, 10, false); err != nil || n != 0 {
+		t.Fatalf("recently touched external binding reaped: n=%d err=%v", n, err)
+	}
+	if n, err := st.ReapSessions(ctx, time.Now().UTC().Add(time.Minute), 10, false); err != nil || n != 1 {
+		t.Fatalf("inactive external binding not reaped: n=%d err=%v", n, err)
+	}
+}
 
 func TestStore_SessionLifecycle(t *testing.T) {
 	s := NewMemStore()
@@ -181,10 +284,11 @@ func TestActiveSessionsByReplica(t *testing.T) {
 	id1done, _ := s.CreateSession(ctx, "ag", 1)
 	_ = s.SetSessionStatus(ctx, id1done, "completed")
 	_, _ = s.CreateSession(ctx, "other", 0)
+	_, _ = s.CreateSessionForTenant(ctx, "other-tenant", "ag", 0)
 	_ = id0a
 	_ = id1a
 
-	m, err := s.ActiveSessionsByReplica(ctx, "ag")
+	m, err := s.ActiveSessionsByReplica(ctx, "default", "ag")
 	if err != nil {
 		t.Fatalf("ActiveSessionsByReplica: %v", err)
 	}
@@ -208,7 +312,7 @@ func TestLimitExceededIsTerminalForActiveCount(t *testing.T) {
 	if err := st.SetSessionStatus(ctx, id, "limit_exceeded"); err != nil {
 		t.Fatal(err)
 	}
-	m, err := st.ActiveSessionsByReplica(ctx, "a1")
+	m, err := st.ActiveSessionsByReplica(ctx, "default", "a1")
 	if err != nil {
 		t.Fatal(err)
 	}

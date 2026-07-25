@@ -41,16 +41,13 @@ config:
 secrets:
   existingSecret: ""
   pgDsn: ""               # RUNTIME_PG_DSN (required unless postgresql.enabled)
+  agentPgDsn: ""          # RUNTIME_AGENT_PG_DSN; required for identity/perAgentPods
   secretsKeys: ""         # RUNTIME_SECRETS_KEYS
   secretsPrimary: ""      # RUNTIME_SECRETS_PRIMARY
   adminBootstrap: ""      # RUNTIME_ADMIN_BOOTSTRAP
-  agentAuthToken: ""      # RUNTIME_AGENT_AUTH_TOKEN — shared bearer runtimed
-                          # uses to reach agent pods (perAgentPods mode). Optional
-                          # but recommended. Authenticates runtimed TO each agent.
-                          # NOTE: in perAgentPods mode with an existingSecret, that
-                          # secret MUST carry a RUNTIME_AGENT_AUTH_TOKEN key — the
-                          # generated runtime.yaml references ${RUNTIME_AGENT_AUTH_TOKEN}
-                          # and runtimed fails closed if it is unset.
+  identitySigningPrivateKey: "" # Ed25519 private key; control plane only
+  identitySigningPublicKey: ""  # matching Ed25519 public key; agents verify
+  agentAuthTokens: {}     # per-agent map, e.g. {support: "...", research: "..."}
   registrationToken: ""   # RUNTIME_REGISTRATION_TOKEN — per-agent handshake bearer
                           # (perAgentPods). When set, agent pods pull DSN + brokered
                           # secrets from the control plane at boot instead of from
@@ -62,6 +59,7 @@ secrets:
 
 identity:
   enabled: false
+  subjectForwarding: false  # authenticated caller projection to agents
   breakGlass: false         # temporarily re-enable bootstrap after identity exists
   oidcIssuer: ""          # RUNTIME_OIDC_ISSUER
   oidcClientID: ""        # RUNTIME_OIDC_CLIENT_ID
@@ -92,7 +90,7 @@ ingress:
   tls: []
 
 networkPolicy:
-  enabled: false
+  enabled: true
 
 obs:
   enabled: false          # ServiceMonitor + Grafana dashboard ConfigMap

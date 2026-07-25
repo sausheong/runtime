@@ -21,8 +21,10 @@ services:
       POSTGRES_USER: runtime
       POSTGRES_PASSWORD: runtime
       POSTGRES_DB: runtime
+      POSTGRES_AGENT_PASSWORD: ${RUNTIME_AGENT_DB_PASSWORD:?set RUNTIME_AGENT_DB_PASSWORD}
     volumes:
       - pgdata:/var/lib/postgresql/data
+      - ../../compose/initdb/02-create-agent-role.sh:/docker-entrypoint-initdb.d/02-create-agent-role.sh:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U runtime"]
       interval: 2s
@@ -36,6 +38,7 @@ services:
         condition: service_healthy
     environment:
       RUNTIME_PG_DSN: postgres://runtime:runtime@postgres:5432/runtime?sslmode=disable
+      RUNTIME_AGENT_PG_DSN: postgres://runtime_agent:${RUNTIME_AGENT_DB_PASSWORD:?set RUNTIME_AGENT_DB_PASSWORD}@postgres:5432/runtime?sslmode=disable
       RUNTIME_CTL_ADDR: ":8080"
       RUNTIME_METRICS_ADDR: ":9091"
       RUNTIME_CONFIG: /app/runtime.remote.yaml

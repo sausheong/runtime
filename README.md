@@ -37,6 +37,8 @@ licence.
 | Build or attach Go, Python, Claude SDK, or generic agents | [Deploying SDK agents](deploying-sdk-agents.md) |
 | Add TLS and identity to a cloud or on-prem host | [Secured deployment](deploy/secured/README.md) |
 | Deploy on Kubernetes | [Helm chart guide](deploy/charts/runtime/README.md) |
+| Report security issues or contribute | [Security policy](SECURITY.md) and [contribution guide](CONTRIBUTING.md) |
+| Upgrade, roll back, or publish a release | [Release guide](RELEASING.md) and [changelog](CHANGELOG.md) |
 | See remaining work and release blockers | [Roadmap](ROADMAP.md) |
 | Find material moved out of the former long README | [Documentation map](documentation-map.md) |
 
@@ -88,9 +90,9 @@ The main components are:
 | Agent hosting | Local processes, replica pools, active-session autoscaling, and remote agents | Sessions remain pinned to their owner replica |
 | Identity | OIDC, service keys, tenant roles, and encrypted tenant secrets | Open mode is only for local development |
 | Gateway | Tenant-aware MCP and REST/OpenAPI federation, policy, quotas, and search | Dynamically registered targets must use public HTTP(S) endpoints |
-| Memory | Tenant-scoped durable memory, semantic recall, and best-effort extraction | No per-user or per-agent memory boundary yet |
+| Memory | Tenant/actor-scoped durable memory, semantic recall, best-effort extraction, dead-row GC, and opt-in per-kind retention | Memory is shared across an agent tenant unless actor scoping is used |
 | Sandboxes | Per-session code and browser containers with resource and network controls | The Docker socket makes the host a trusted boundary |
-| Evaluations | Golden sets, rule/judge scoring, online sampling, recovery, retention, and transcript redaction | Exact recovery currently assumes one active control plane |
+| Evaluations | Golden sets, rule/judge scoring, leased recovery, bounded online sampling, retention, and transcript filtering | Transcript redaction is best effort and evaluation is not a deployment gate |
 | Operations | Health/readiness, private fleet metrics, tracing, dashboards, alerts, CLI, and console | Multi-control-plane quota state is not distributed |
 
 See the [Runtime overview](runtime.md) for the detailed model and the
@@ -168,7 +170,7 @@ Important process-level settings are:
 | Variable | Purpose |
 |---|---|
 | `RUNTIME_PG_DSN` | Control-plane Postgres credential |
-| `RUNTIME_AGENT_PG_DSN` | Restricted credential injected into local agents |
+| `RUNTIME_AGENT_PG_DSN` | Restricted, single-tenant credential injected into local agents |
 | `RUNTIME_CTL_ADDR` | Public API listener, default `:8080` |
 | `RUNTIME_METRICS_ADDR` | Management metrics listener, default `127.0.0.1:9091` |
 | `RUNTIME_AGENTD_BIN` | Local agent host binary |
@@ -180,6 +182,13 @@ Important process-level settings are:
 | `RUNTIME_PUBLIC_URL` | HTTPS public URL used for secure-cookie inference |
 | `RUNTIME_COOKIE_SECURE` | Explicit secure-cookie override |
 | `RUNTIME_EVAL_RETENTION` | Evaluation/transcript retention, default `720h` |
+| `RUNTIME_SESSION_RETENTION` | Terminal session/event retention, default `720h` |
+| `RUNTIME_SESSION_RETENTION_DRY_RUN` | Count eligible sessions without deleting |
+| `RUNTIME_MEMORY_RETENTION_FACT` | Fact-memory retention duration; disabled when unset |
+| `RUNTIME_MEMORY_RETENTION_SUMMARY` | Summary-memory retention duration; disabled when unset |
+| `RUNTIME_MEMORY_RETENTION_EPISODE` | Episodic-memory retention duration; disabled when unset |
+| `RUNTIME_MEMORY_RETENTION_DRY_RUN` | Count eligible live-memory rows without deleting or incrementing deletion counters |
+| `RUNTIME_MAX_REQUESTS` / `RUNTIME_MAX_STREAMS` | Control-plane concurrency limits |
 
 ## API and agent integration
 
@@ -211,8 +220,8 @@ conformance command above before registering a custom implementation.
 
 - The authenticated control-plane API is the tenant security boundary.
 - A local `agentd` is a trusted platform process, not a hostile-code sandbox.
-  Use `RUNTIME_AGENT_PG_DSN` or a remote container/VM boundary to reduce its
-  authority.
+  Identity-enabled deployments require a distinct `RUNTIME_AGENT_PG_DSN`; use
+  a remote container/VM boundary for less-trusted code.
 - Tenant-provided HTTP targets are SSRF-filtered. Operator file configuration
   is trusted and may intentionally use private infrastructure.
 - Code and browser containers reduce application-level risk, but a service
@@ -240,3 +249,6 @@ CI also runs race detection on concurrency-heavy packages, `govulncheck`,
 Python-shim tests, Helm rendering, shell checks, GCP image builds, and
 turnkey/distributed Compose validation. GitHub Actions are pinned to commit SHAs and Dependabot tracks Go,
 Actions, Python, and container dependencies.
+
+Tagged releases publish immutable images and charts with SBOM/signature
+artefacts through the [release workflow](.github/workflows/release.yml).

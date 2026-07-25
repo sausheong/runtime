@@ -127,17 +127,25 @@ func TestEvalOnlineResultsTenantScoped(t *testing.T) {
 	mux, _, ctl := evalPolicyMux(t)
 	ctx := context.Background()
 	// Seed results for two sessions across two tenants.
-	if err := ctl.PutOnlineResult(ctx, "sess-t1", "polite", "t1", "alice", "judge", true, "ok"); err != nil {
+	sessionT1, err := ctl.CreateSessionForTenant(ctx, "t1", "a1", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessionT2, err := ctl.CreateSessionForTenant(ctx, "t2", "a1", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ctl.PutOnlineResult(ctx, sessionT1, "polite", "t1", "alice", "judge", true, "ok"); err != nil {
 		t.Fatalf("seed t1: %v", err)
 	}
-	if err := ctl.PutOnlineResult(ctx, "sess-t2", "polite", "t2", "bob", "judge", false, "no"); err != nil {
+	if err := ctl.PutOnlineResult(ctx, sessionT2, "polite", "t2", "bob", "judge", false, "no"); err != nil {
 		t.Fatalf("seed t2: %v", err)
 	}
 
 	t1 := identity.Principal{Role: identity.RoleAdmin, TenantID: "t1"}
 
 	// ?session= for the caller's own tenant returns the row.
-	w := doJSON(t, mux, "GET", "/admin/evals/online-results?session=sess-t1", t1, nil)
+	w := doJSON(t, mux, "GET", "/admin/evals/online-results?session="+sessionT1, t1, nil)
 	if w.Code != http.StatusOK {
 		t.Fatalf("session read: %d", w.Code)
 	}
@@ -148,7 +156,7 @@ func TestEvalOnlineResultsTenantScoped(t *testing.T) {
 	}
 
 	// A cross-tenant caller reading another tenant's session gets empty.
-	cw := doJSON(t, mux, "GET", "/admin/evals/online-results?session=sess-t2", t1, nil)
+	cw := doJSON(t, mux, "GET", "/admin/evals/online-results?session="+sessionT2, t1, nil)
 	if cw.Code != http.StatusOK {
 		t.Fatalf("cross-tenant session read: %d", cw.Code)
 	}

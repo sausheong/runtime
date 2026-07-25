@@ -26,6 +26,7 @@ func TestRegistrationTokenCRUD(t *testing.T) {
 	}
 	defer db.Close()
 	// Self-clean.
+	_, _ = db.ExecContext(ctx, `DELETE FROM runtime_schema_migrations WHERE component='identity'`)
 	_, _ = db.ExecContext(ctx, `DROP TABLE IF EXISTS registration_tokens`)
 
 	st, err := NewStore(ctx, db)

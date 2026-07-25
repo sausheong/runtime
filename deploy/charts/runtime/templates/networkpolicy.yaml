@@ -10,9 +10,8 @@ spec:
     matchLabels:
       {{- include "runtime.selectorLabels" . | nindent 6 }}
       {{- if eq .Values.scheduling.mode "perAgentPods" }}
-      # Governs the control-plane pod only; agent StatefulSet pods share the base
-      # labels and would otherwise be swept in. A dedicated per-agent NetworkPolicy
-      # is future work (see chart README).
+      # Governs only the control-plane pod. Agent pods have dedicated policies
+      # below so arbitrary namespace workloads cannot call them directly.
       app.kubernetes.io/component: control-plane
       {{- end }}
   policyTypes: [Ingress, Egress]
@@ -24,4 +23,33 @@ spec:
           protocol: TCP
   egress:
     - {}
+{{- if eq .Values.scheduling.mode "perAgentPods" }}
+{{- $root := . }}
+{{- range $a := .Values.config.agents }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "runtime.agentFullname" (dict "root" $root "id" $a.id) }}
+  labels:
+    {{- include "runtime.labels" $root | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "runtime.selectorLabels" $root | nindent 6 }}
+      runtime.agent/id: {{ $a.id | quote }}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "runtime.selectorLabels" $root | nindent 14 }}
+              app.kubernetes.io/component: control-plane
+      ports:
+        - port: 8080
+          protocol: TCP
+  egress:
+    - {}
+{{- end }}
+{{- end }}
 {{- end }}

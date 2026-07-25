@@ -52,12 +52,15 @@ func main() {
 	}
 	defer db.Close()
 
-	// Marker table for the test agent (under the shared DDL lock). Harmless for
-	// other kinds; kept so the testagent kind needs no special-casing here.
-	if err := store.ApplyDDLLocked(context.Background(), db,
-		`CREATE TABLE IF NOT EXISTS markers (id BIGSERIAL PRIMARY KEY, ran_at TIMESTAMPTZ)`,
-	); err != nil {
-		log.Fatalf("agentd: create markers table: %v", err)
+	// Standalone development may create the test-agent marker table. A
+	// control-plane-managed restricted agent is deliberately DDL-free; the
+	// integration harness prepares this test-only table before launch.
+	if os.Getenv("RUNTIME_CONTROL_SCHEMA_READY") != "1" {
+		if err := store.ApplySchemaMigrations(context.Background(), db, "agent-markers", 1,
+			`CREATE TABLE IF NOT EXISTS markers (id BIGSERIAL PRIMARY KEY, ran_at TIMESTAMPTZ)`,
+		); err != nil {
+			log.Fatalf("agentd: create markers table: %v", err)
+		}
 	}
 
 	build, ok := agentkind.Get(kind)

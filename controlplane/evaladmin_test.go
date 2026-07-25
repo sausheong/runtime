@@ -166,7 +166,7 @@ func TestEvalFailuresRoute(t *testing.T) {
 
 	// Seed terminal sessions for a1: 3 "none", 1 "tool_error".
 	for i := 0; i < 3; i++ {
-		id, err := ctl.CreateSession(ctx, "a1", 0)
+		id, err := ctl.CreateSessionForTenant(ctx, "t1", "a1", 0)
 		if err != nil {
 			t.Fatalf("create session: %v", err)
 		}
@@ -174,12 +174,19 @@ func TestEvalFailuresRoute(t *testing.T) {
 			t.Fatalf("set category: %v", err)
 		}
 	}
-	id, err := ctl.CreateSession(ctx, "a1", 0)
+	id, err := ctl.CreateSessionForTenant(ctx, "t1", "a1", 0)
 	if err != nil {
 		t.Fatalf("create session: %v", err)
 	}
 	if err := ctl.SetFailureCategory(ctx, id, "tool_error"); err != nil {
 		t.Fatalf("set category: %v", err)
+	}
+	oldTenantID, err := ctl.CreateSessionForTenant(ctx, "old-tenant", "a1", 0)
+	if err != nil {
+		t.Fatalf("create old-tenant session: %v", err)
+	}
+	if err := ctl.SetFailureCategory(ctx, oldTenantID, "tool_error"); err != nil {
+		t.Fatalf("set old-tenant category: %v", err)
 	}
 
 	t1 := identity.Principal{Role: identity.RoleAdmin, TenantID: "t1"}

@@ -1,8 +1,13 @@
 package agentruntime
 
 import (
+	"crypto/ed25519"
+	"crypto/rand"
+	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/sausheong/runtime/internal/rheader"
 )
@@ -24,6 +29,56 @@ func TestReadForwardedIdentity(t *testing.T) {
 	s, tn, rl = readForwardedIdentity(r, false)
 	if s != "" || tn != "" || rl != "" {
 		t.Fatalf("off: got %q/%q/%q, want empty", s, tn, rl)
+	}
+}
+
+func TestRequireSignedIdentityRejectsForgery(t *testing.T) {
+	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	publicEncoded := rheader.EncodePublicKey(publicKey)
+	privateEncoded := rheader.EncodePrivateKey(privateKey)
+	next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+	h := requireSignedIdentity(publicEncoded, next)
+	req := httptest.NewRequest(http.MethodPost, "/sessions", strings.NewReader(`{}`))
+	req.Header.Set(rheader.Tenant, "acme")
+	if err := rheader.Sign(req, privateEncoded, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("signed request status=%d", rec.Code)
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/sessions", strings.NewReader(`{}`))
+	req.Header.Set(rheader.Tenant, "other")
+	_, wrongPrivate, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := rheader.Sign(req, rheader.EncodePrivateKey(wrongPrivate), time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("forged request status=%d, want 401", rec.Code)
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/sessions", strings.NewReader(`{}`))
+	if err := rheader.Sign(req, privateEncoded, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	first := httptest.NewRecorder()
+	h.ServeHTTP(first, req)
+	second := httptest.NewRecorder()
+	h.ServeHTTP(second, req)
+	if first.Code != http.StatusNoContent || second.Code != http.StatusUnauthorized {
+		t.Fatalf("replay statuses=(%d,%d), want (204,401)", first.Code, second.Code)
 	}
 }
 

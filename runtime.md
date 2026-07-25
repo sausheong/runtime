@@ -140,7 +140,7 @@ the control-plane boundary and again at the native agent boundary. Dynamic
 agent mutations resolve the existing resource and verify its tenant before
 changing or removing it.
 
-Provider and upstream credentials can be stored per tenant. Runtime encrypts them with AES-256-GCM, stores only ciphertext, never returns secret values through the API, and injects resolved values into an agent's environment when it starts. A multi-key keyring supports online rotation and explicit re-encryption of existing records. Child processes start with a minimal platform environment rather than inheriting all control-plane secrets. Operators can explicitly pass additional non-reserved variables and should give agents a restricted database role through `RUNTIME_AGENT_PG_DSN`.
+Provider and upstream credentials can be stored per tenant. Runtime encrypts them with AES-256-GCM, stores only ciphertext, never returns secret values through the API, and injects resolved values into an agent's environment when it starts. A multi-key keyring supports online rotation and explicit re-encryption of existing records. Child processes start with a minimal platform environment rather than inheriting all control-plane secrets. Operators can explicitly pass additional non-reserved variables and should give agents a restricted database role through `RUNTIME_AGENT_PG_DSN`. Runtime binds a restricted role to one agent trust domain and applies PostgreSQL row-level security to sessions, events, transcripts, and online results. Run separate Runtime deployments, databases, and roles for concurrently hosted agents.
 
 This lets each tenant bring its own model or API credentials without changing the agent's normal `os.Getenv`-style configuration.
 
@@ -156,10 +156,11 @@ The memory stack has three layers:
 
 Recall and ingestion are best-effort. An embedding or extraction failure does not fail the user's turn. Operators can tune result counts, similarity floors, ingestion concurrency, and duplicate thresholds. The embedding model and vector dimension must agree, and pgvector must be installed in the target database.
 
-Runtime scopes memory per tenant. Garbage collection removes superseded and
-tombstoned internal records, but there is no time-based retention policy.
-Per-user and per-agent boundaries, compaction, and session-level synthesis are
-not provided.
+Runtime scopes memory per tenant and can additionally scope recall/write paths
+to an actor. Garbage collection removes superseded and tombstoned internal
+records. Operators may opt into separate fact, summary, and episode retention
+periods; live-memory expiry is disabled by default. Per-agent memory pools,
+compaction, and broader session synthesis remain outside the current contract.
 
 ### 2.5 MCP and REST Tool Gateway
 
@@ -197,18 +198,25 @@ The single-host implementation uses the Docker socket to create these containers
 
 Runtime stores golden datasets, runs rule or judge scorers, captures online
 transcripts, classifies failures, and exposes aggregate results. At
-control-plane startup it recovers incomplete evaluation runs and skips case
-indexes that already completed, so recovery does not rerun successful cases.
+control-plane startup and periodically thereafter it scans incomplete
+evaluation runs and skips case indexes that already completed, so recovery does
+not rerun successful cases.
 
-Credential-shaped transcript fields and common bearer-token patterns are
-redacted before persistence. Completed or failed evaluation runs, results, and
-captured transcripts are retained for 30 days by default. Set
+Failure aggregates are selected by the session's stored tenant as well as agent
+ID. Reassigning a file-configured agent ID never exposes the former tenant's
+failure history or feeds those sessions into the replacement tenant's
+autoscaling load.
+
+Credential-shaped fields and common JWT/provider token formats are filtered
+before persistence, but this is explicitly best effort. Capture can be disabled
+or extended with a deployment-specific filter. Completed or failed evaluation
+runs, results, and captured transcripts are retained for 30 days by default. Set
 `RUNTIME_EVAL_RETENTION` to another non-negative Go duration, or `0` to disable
 automatic deletion.
 
-Evaluation recovery currently assumes one active control plane. A
-multi-control-plane deployment needs a distributed claim mechanism before it
-can guarantee that only one replica resumes an incomplete run.
+Evaluation workers atomically lease runs in PostgreSQL, renew their lease while
+working, and allow another worker to resume after expiry. Recovery and online
+scoring use bounded worker pools.
 
 See the [evaluations guide](evals.md) for golden-set and policy JSON formats,
 CLI workflows, online sampling, failure classification, metrics, and console
@@ -500,7 +508,7 @@ The platform provides a durable execution spine and six surrounding pillars — 
 | Lifecycle safety | Native turn/session timeouts, turn cap, token budget, terminal breach status and metric | Shim-native enforcement and aggregate tenant budgets |
 | Scale | Replica pools, affinity, load-based local autoscaling, drain | Richer scaling signals and force-drain deadlines |
 | Identity | OIDC, service keys, fixed tenant roles, encrypted secrets, rotation | Custom RBAC, local password accounts, cross-tenant users |
-| Memory | Durable store, pgvector recall, automatic ingestion | TTL/GC, per-user scopes, compaction and synthesis |
+| Memory | Durable store, pgvector recall, automatic ingestion, dead-row GC, opt-in per-kind retention | Per-agent pools, compaction and richer synthesis |
 | Gateway | MCP federation, semantic search, REST/OpenAPI adapters, dynamic HTTP upstreams, OAuth/OBO, quotas, and Cedar policy | Resources/prompts passthrough and distributed quota state |
 | Sandboxes | Stateful code and browser containers, network controls | Kernel persistence, runtime package installation, per-user scope |
 | Observability | Prometheus, Grafana, request IDs, OTel, Jaeger, token/cost accounting, and alerts | Log shipping and sandbox internals |

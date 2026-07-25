@@ -199,7 +199,7 @@ func TestEnvDelta_SubjectForwardingExplicit(t *testing.T) {
 	// so an inherited operator var can't silently flip it on — same discipline
 	// as RUNTIME_AGENT_MEMORY / RUNTIME_AGENT_LIMITS.
 	on := AgentProcess{AgentID: "a", PGDSN: "dsn", Addr: ":1", Kind: "k", Tenant: "t",
-		SubjectForwarding: true}
+		SubjectForwarding: true, IdentitySigningPublicKey: "public-key"}
 	off := AgentProcess{AgentID: "a", PGDSN: "dsn", Addr: ":1", Kind: "k", Tenant: "t"}
 
 	onEnv, err := on.envDelta(context.Background())
@@ -209,6 +209,14 @@ func TestEnvDelta_SubjectForwardingExplicit(t *testing.T) {
 	if !slices.Contains(onEnv, "RUNTIME_SUBJECT_FORWARDING=1") {
 		t.Errorf("on: envDelta missing RUNTIME_SUBJECT_FORWARDING=1:\n%s", strings.Join(onEnv, "\n"))
 	}
+	if !slices.Contains(onEnv, "RUNTIME_IDENTITY_SIGNING_PUBLIC_KEY=public-key") {
+		t.Errorf("on: envDelta missing public verification key:\n%s", strings.Join(onEnv, "\n"))
+	}
+	for _, item := range onEnv {
+		if strings.Contains(item, "PRIVATE_KEY") {
+			t.Fatalf("on: envDelta exposed control-plane private key: %s", item)
+		}
+	}
 
 	offEnv, err := off.envDelta(context.Background())
 	if err != nil {
@@ -216,6 +224,9 @@ func TestEnvDelta_SubjectForwardingExplicit(t *testing.T) {
 	}
 	if !slices.Contains(offEnv, "RUNTIME_SUBJECT_FORWARDING=") {
 		t.Errorf("off: envDelta missing explicit empty RUNTIME_SUBJECT_FORWARDING=:\n%s", strings.Join(offEnv, "\n"))
+	}
+	if !slices.Contains(offEnv, "RUNTIME_IDENTITY_SIGNING_PUBLIC_KEY=") {
+		t.Errorf("off: envDelta missing explicit empty public key:\n%s", strings.Join(offEnv, "\n"))
 	}
 }
 
@@ -260,6 +271,20 @@ func TestBuildEnvExplicitPassthrough(t *testing.T) {
 	if _, ok := envValue(t, full, "RUNTIME_SECRETS_KEYS"); ok {
 		t.Fatal("reserved platform variable passed through")
 	}
+}
+
+func TestBuildEnvPassesSafeMemoryMaintenanceControls(t *testing.T) {
+	t.Setenv("RUNTIME_MEMORY_RETENTION_FACT", "720h")
+	t.Setenv("RUNTIME_MEMORY_RETENTION_DRY_RUN", "1")
+	t.Setenv("RUNTIME_MEMORY_GC_INTERVAL", "30m")
+	ap := AgentProcess{AgentID: "a1", Addr: "127.0.0.1:8081", PGDSN: "dsn://x", Tenant: "t1"}
+	full, err := ap.buildEnv(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertHasEnv(t, full, "RUNTIME_MEMORY_RETENTION_FACT=720h")
+	assertHasEnv(t, full, "RUNTIME_MEMORY_RETENTION_DRY_RUN=1")
+	assertHasEnv(t, full, "RUNTIME_MEMORY_GC_INTERVAL=30m")
 }
 
 func TestSpawnFuncCommand(t *testing.T) {

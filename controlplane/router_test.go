@@ -3,6 +3,7 @@ package controlplane
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -14,6 +15,12 @@ import (
 	"github.com/sausheong/runtime/internal/config"
 	"github.com/sausheong/runtime/internal/store"
 )
+
+type failingGetStore struct{ store.Store }
+
+func (f failingGetStore) GetSession(context.Context, string) (store.SessionRow, error) {
+	return store.SessionRow{}, errors.New("database unavailable")
+}
 
 func TestRouter_DispatchAndList(t *testing.T) {
 	backendA := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -114,6 +121,134 @@ func TestAPI_NewSessionRoundRobinsAndPins(t *testing.T) {
 	code := httpGetCode(t, srv.URL+"/agents/a/sessions/ses-nope")
 	if code != http.StatusNotFound {
 		t.Fatalf("unknown session: got %d want 404", code)
+	}
+}
+
+func TestAPI_RemotePoolPersistsExternalSessionAffinity(t *testing.T) {
+	var followupHits [2]atomic.Int32
+	mk := func(i int) *httptest.Server {
+		return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method == http.MethodPost && r.URL.Path == "/sessions" {
+				_ = json.NewEncoder(w).Encode(map[string]string{"session_id": "remote-" + strconv.Itoa(i)})
+				return
+			}
+			if strings.HasPrefix(r.URL.Path, "/sessions/") {
+				followupHits[i].Add(1)
+			}
+			w.WriteHeader(http.StatusOK)
+		}))
+	}
+	b0, b1 := mk(0), mk(1)
+	defer b0.Close()
+	defer b1.Close()
+
+	cfg := &config.Config{Agents: []config.AgentConfig{{
+		ID: "remote", Name: "Remote", Model: "m", Tenant: "alpha",
+		URL: "http://remote-{i}.example:8080", Replicas: 2,
+	}}}
+	reg := NewRegistry(cfg, "", "")
+	reg.sets["remote"] = []AgentProcess{
+		{AgentID: "remote", Tenant: "alpha", Remote: true, BaseURL: b0.URL, ReplicaIndex: 0},
+		{AgentID: "remote", Tenant: "alpha", Remote: true, BaseURL: b1.URL, ReplicaIndex: 1},
+	}
+	st := store.NewMemStore()
+	srv := httptest.NewServer(NewAPI(reg, nil, st, false))
+	defer srv.Close()
+
+	httpPost(t, srv.URL+"/agents/remote/sessions")
+	httpPost(t, srv.URL+"/agents/remote/sessions")
+	row, err := st.GetSession(context.Background(), "remote-1")
+	if err != nil || row.TenantID != "alpha" || row.AgentID != "remote" || row.Replica != 1 {
+		t.Fatalf("external affinity binding: row=%+v err=%v", row, err)
+	}
+	if code := httpGetCode(t, srv.URL+"/agents/remote/sessions/remote-1"); code != http.StatusOK {
+		t.Fatalf("follow-up status=%d", code)
+	}
+	if followupHits[1].Load() != 1 || followupHits[0].Load() != 0 {
+		t.Fatalf("follow-up hits=[%d %d], want ordinal 1 only", followupHits[0].Load(), followupHits[1].Load())
+	}
+}
+
+func TestAPI_CommandPoolAffinitySurvivesControlPlaneRestart(t *testing.T) {
+	var followupHits [2]atomic.Int32
+	mk := func(i int) *httptest.Server {
+		return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method == http.MethodPost && r.URL.Path == "/sessions" {
+				_ = json.NewEncoder(w).Encode(map[string]string{"session_id": "command-" + strconv.Itoa(i)})
+				return
+			}
+			if strings.HasPrefix(r.URL.Path, "/sessions/") {
+				followupHits[i].Add(1)
+			}
+			w.WriteHeader(http.StatusOK)
+		}))
+	}
+	b0, b1 := mk(0), mk(1)
+	defer b0.Close()
+	defer b1.Close()
+
+	newRegistry := func() *Registry {
+		reg := twoReplicaRegistry(t, "command", b0.URL, b1.URL)
+		for i := range reg.sets["command"] {
+			reg.sets["command"][i].Command = []string{"python", "serve.py"}
+		}
+		return reg
+	}
+	st := store.NewMemStore()
+	first := httptest.NewServer(NewAPI(newRegistry(), nil, st, false))
+	httpPost(t, first.URL+"/agents/command/sessions")
+	httpPost(t, first.URL+"/agents/command/sessions")
+	first.Close()
+
+	// A new API and registry model a control-plane restart. Only the durable
+	// store object is retained, as PostgreSQL would be in production.
+	restarted := httptest.NewServer(NewAPI(newRegistry(), nil, st, false))
+	defer restarted.Close()
+	if code := httpGetCode(t, restarted.URL+"/agents/command/sessions/command-1"); code != http.StatusOK {
+		t.Fatalf("follow-up after restart status=%d", code)
+	}
+	if followupHits[1].Load() != 1 || followupHits[0].Load() != 0 {
+		t.Fatalf("follow-up after restart hits=[%d %d], want ordinal 1 only",
+			followupHits[0].Load(), followupHits[1].Load())
+	}
+	if code := httpGetCode(t, restarted.URL+"/agents/command/sessions/unbound"); code != http.StatusNotFound {
+		t.Fatalf("unbound pooled session status=%d, want safe 404", code)
+	}
+}
+
+func TestAPI_SessionStoreFailureReturnsUnavailable(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		t.Fatal("store failure must not proxy")
+	}))
+	defer backend.Close()
+	reg := remoteRegistry(t, "a", backend.URL)
+	st := failingGetStore{Store: store.NewMemStore()}
+	srv := httptest.NewServer(NewAPI(reg, nil, st, false))
+	defer srv.Close()
+	if code := httpGetCode(t, srv.URL+"/agents/a/sessions/ses-any"); code != http.StatusServiceUnavailable {
+		t.Fatalf("status=%d, want 503", code)
+	}
+}
+
+func TestAPI_AgentTenantChangeDoesNotTransferSession(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		t.Fatal("old-tenant session must not proxy")
+	}))
+	defer backend.Close()
+	cfg := &config.Config{Agents: []config.AgentConfig{{
+		ID: "shared", Name: "Shared", Model: "m", Tenant: "beta",
+		ListenAddr: strings.TrimPrefix(backend.URL, "http://"),
+	}}}
+	reg := NewRegistry(cfg, "", "")
+	st := store.NewMemStore()
+	old, err := st.CreateSessionForTenant(context.Background(), "alpha", "shared", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(NewAPI(reg, nil, st, false))
+	defer srv.Close()
+	if code := httpGetCode(t, srv.URL+"/agents/shared/sessions/"+old); code != http.StatusNotFound {
+		t.Fatalf("status=%d, want 404", code)
 	}
 }
 

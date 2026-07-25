@@ -1,21 +1,47 @@
 package agentruntime
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
+	"log/slog"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/sausheong/harness/session"
 )
 
-var embeddedSecretPattern = regexp.MustCompile(`(?i)(Bearer\s+)[A-Za-z0-9._~+/=-]{12,}|\b(?:sk|svk)-[A-Za-z0-9._~+/=-]{12,}`)
+var embeddedSecretPattern = regexp.MustCompile(`(?i)(Bearer\s+)[A-Za-z0-9._~+/=-]{12,}|\b(?:` +
+	`eyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}|` +
+	`(?:sk|svk)-[A-Za-z0-9._~+/=-]{12,}|sk-ant-[A-Za-z0-9_-]{12,}|` +
+	`gh[pousr]_[A-Za-z0-9]{12,}|github_pat_[A-Za-z0-9_]{12,}|` +
+	`xox[baprs]-[A-Za-z0-9-]{10,}|AKIA[A-Z0-9]{16}` +
+	`)\b`)
 
-// marshalTranscript serializes a turn after recursively redacting values under
-// credential-shaped keys and common bearer/service-key patterns in free text.
-// The live session retains the original values; only the evaluation/audit copy
-// is transformed.
+// marshalTranscript serializes a turn after recursively redacting both the
+// SessionEntry envelope and structured/plain tool Data payloads. This remains
+// best-effort pattern matching, not a guarantee that all personal or secret
+// data has been removed.
 func marshalTranscript(entries []session.SessionEntry) ([]byte, error) {
-	raw, err := json.Marshal(entries)
+	sanitized := append([]session.SessionEntry(nil), entries...)
+	for i := range sanitized {
+		if len(sanitized[i].Data) == 0 {
+			continue
+		}
+		var payload any
+		if json.Unmarshal(sanitized[i].Data, &payload) == nil {
+			redactValue(payload)
+			data, err := json.Marshal(payload)
+			if err != nil {
+				return nil, err
+			}
+			sanitized[i].Data = data
+		} else {
+			sanitized[i].Data = []byte(redactEmbeddedSecrets(string(sanitized[i].Data)))
+		}
+	}
+	raw, err := json.Marshal(sanitized)
 	if err != nil {
 		return nil, err
 	}
@@ -55,8 +81,9 @@ func redactValue(value any) {
 func sensitiveTranscriptKey(key string) bool {
 	normalized := strings.ToLower(strings.ReplaceAll(strings.ReplaceAll(key, "-", "_"), " ", "_"))
 	for _, marker := range []string{
-		"authorization", "cookie", "credential", "password", "secret",
-		"api_key", "access_token", "refresh_token", "id_token",
+		"authorization", "cookie", "set_cookie", "credential", "password", "passwd",
+		"secret", "api_key", "apikey", "access_key", "private_key",
+		"access_token", "refresh_token", "id_token", "session_token",
 	} {
 		if normalized == marker || strings.HasSuffix(normalized, "_"+marker) {
 			return true
@@ -72,4 +99,30 @@ func redactEmbeddedSecrets(text string) string {
 		}
 		return "[REDACTED]"
 	})
+}
+
+func (m *Manager) transcriptsEnabled() bool {
+	return m.transcriptCapture == nil || *m.transcriptCapture
+}
+
+func (m *Manager) captureTranscript(sessionID string, turn int, tenant, actor string, entries []session.SessionEntry, stopReason, status string) {
+	if !m.transcriptsEnabled() {
+		return
+	}
+	data, err := marshalTranscript(entries)
+	if err == nil && m.transcriptFilter != nil {
+		data, err = m.transcriptFilter(data)
+		if err == nil && !json.Valid(data) {
+			err = fmt.Errorf("custom transcript filter returned invalid JSON")
+		}
+	}
+	if err != nil {
+		slog.Warn("filter transcript entries failed", "session", sessionID, "turn", turn, "err", err)
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := m.st.AppendTranscript(ctx, sessionID, turn, tenant, actor, data, stopReason, status); err != nil {
+		slog.Warn("append transcript failed", "session", sessionID, "turn", turn, "err", err)
+	}
 }

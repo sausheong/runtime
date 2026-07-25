@@ -97,18 +97,30 @@ func wireMemory(cfg *agentruntime.Config, d Deps) error {
 	}
 	cfg.Tools.Register(&hmemory.MemoryTool{Store: st})
 
-	// Memory GC: reap dead (superseded/tombstoned) rows past a grace window.
-	// On by default (opt-out) whenever memory is on — unbounded growth is a
-	// defect, not a feature. Independent of embedder/ingest/summary.
-	if gcEnabled := os.Getenv("RUNTIME_MEMORY_GC_ENABLED"); gcEnabled == "" || envBool("RUNTIME_MEMORY_GC_ENABLED") {
-		interval := envDuration("RUNTIME_MEMORY_GC_INTERVAL", time.Hour)
-		grace := envDuration("RUNTIME_MEMORY_GC_GRACE", 24*time.Hour)
-		batch := envInt("RUNTIME_MEMORY_GC_BATCH", 1000)
-		if batch < 1 {
-			batch = 1000
-		}
-		cfg.StartMemoryGC = func(ctx context.Context, onReap func(int)) {
-			st.StartGC(ctx, interval, grace, batch, onReap)
+	// Memory GC reaps dead history by default. Live retention is independently
+	// opt-in per kind so product semantics cannot silently delete durable memory.
+	gcEnabled := os.Getenv("RUNTIME_MEMORY_GC_ENABLED") == "" || envBool("RUNTIME_MEMORY_GC_ENABLED")
+	gcInterval := envDuration("RUNTIME_MEMORY_GC_INTERVAL", time.Hour)
+	gcGrace := envDuration("RUNTIME_MEMORY_GC_GRACE", 24*time.Hour)
+	batch := envInt("RUNTIME_MEMORY_GC_BATCH", 1000)
+	if batch < 1 {
+		batch = 1000
+	}
+	retention := map[string]time.Duration{
+		memory.KindFact:    envOptionalDuration("RUNTIME_MEMORY_RETENTION_FACT"),
+		memory.KindSummary: envOptionalDuration("RUNTIME_MEMORY_RETENTION_SUMMARY"),
+		memory.KindEpisode: envOptionalDuration("RUNTIME_MEMORY_RETENTION_EPISODE"),
+	}
+	retentionDryRun := envBool("RUNTIME_MEMORY_RETENTION_DRY_RUN")
+	retentionEnabled := retention[memory.KindFact] > 0 || retention[memory.KindSummary] > 0 || retention[memory.KindEpisode] > 0
+	if gcEnabled || retentionEnabled {
+		cfg.StartMemoryGC = func(ctx context.Context, onGC func(int), onRetention func(string, int)) {
+			if gcEnabled {
+				st.StartGC(ctx, gcInterval, gcGrace, batch, onGC)
+			}
+			if retentionEnabled {
+				st.StartRetention(ctx, gcInterval, retention, batch, retentionDryRun, onRetention)
+			}
 		}
 	}
 
@@ -250,6 +262,19 @@ func envDuration(key string, def time.Duration) time.Duration {
 	if err != nil || d <= 0 {
 		slog.Warn("agentkind: ignoring malformed/non-positive env duration; using default", "key", key, "value", v, "default", def)
 		return def
+	}
+	return d
+}
+
+func envOptionalDuration(key string) time.Duration {
+	v := strings.TrimSpace(os.Getenv(key))
+	if v == "" || v == "0" {
+		return 0
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil || d <= 0 {
+		slog.Warn("agentkind: disabling malformed memory retention", "key", key, "value", v)
+		return 0
 	}
 	return d
 }

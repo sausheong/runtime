@@ -34,6 +34,9 @@ spec:
     spec:
       {{- $unusedPg := include "runtime.requirePg" . }}
       {{- $unusedAgents := include "runtime.requireAgents" . }}
+      {{- $unusedAgentPg := include "runtime.requireAgentPg" . }}
+      {{- $unusedAgentAuth := include "runtime.requireAgentAuth" . }}
+      {{- $unusedIdentitySigning := include "runtime.requireIdentitySigning" . }}
       serviceAccountName: {{ include "runtime.serviceAccountName" . }}
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
@@ -55,19 +58,27 @@ spec:
               value: "/etc/runtime/runtime.yaml"
             - name: RUNTIME_AGENTD_BIN
               value: "/app/agentd"
-            {{- if and (eq .Values.scheduling.mode "perAgentPods") (or .Values.secrets.agentAuthToken .Values.secrets.existingSecret) }}
-            - name: RUNTIME_AGENT_AUTH_TOKEN
+            {{- if eq .Values.scheduling.mode "perAgentPods" }}
+            {{- range $a := .Values.config.agents }}
+            - name: {{ include "runtime.agentAuthKey" (dict "id" $a.id) }}
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "runtime.secretName" . }}
-                  key: RUNTIME_AGENT_AUTH_TOKEN
-                  optional: true
+                  name: {{ include "runtime.secretName" $ }}
+                  key: {{ include "runtime.agentAuthKey" (dict "id" $a.id) }}
+            {{- end }}
             {{- end }}
             - name: RUNTIME_PG_DSN
               valueFrom:
                 secretKeyRef:
                   name: {{ include "runtime.secretName" . }}
                   key: RUNTIME_PG_DSN
+            {{- if or .Values.secrets.agentPgDsn .Values.secrets.existingSecret }}
+            - name: RUNTIME_AGENT_PG_DSN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "runtime.secretName" . }}
+                  key: RUNTIME_AGENT_PG_DSN
+            {{- end }}
             {{- if or .Values.secrets.secretsKeys .Values.secrets.existingSecret }}
             - name: RUNTIME_SECRETS_KEYS
               valueFrom:
@@ -94,6 +105,20 @@ spec:
             {{- end }}
             - name: RUNTIME_ADMIN_BREAK_GLASS
               value: {{ ternary "1" "0" .Values.identity.breakGlass | quote }}
+            - name: RUNTIME_SUBJECT_FORWARDING
+              value: {{ ternary "1" "" .Values.identity.subjectForwarding | quote }}
+            {{- if .Values.identity.subjectForwarding }}
+            - name: RUNTIME_IDENTITY_SIGNING_PRIVATE_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "runtime.secretName" . }}
+                  key: RUNTIME_IDENTITY_SIGNING_PRIVATE_KEY
+            - name: RUNTIME_IDENTITY_SIGNING_PUBLIC_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "runtime.secretName" . }}
+                  key: RUNTIME_IDENTITY_SIGNING_PUBLIC_KEY
+            {{- end }}
             {{- if .Values.identity.enabled }}
             - name: RUNTIME_OIDC_ISSUER
               value: {{ .Values.identity.oidcIssuer | quote }}

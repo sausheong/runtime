@@ -38,7 +38,7 @@ type Store struct{ db *sql.DB }
 // New applies the managed_agents DDL (under the shared lock) and returns a
 // store. The tenants table (identity schema) must already exist (FK).
 func New(ctx context.Context, db *sql.DB) (*Store, error) {
-	if err := store.ApplyDDLLocked(ctx, db, schemaSQL); err != nil {
+	if err := store.ApplySchemaMigrations(ctx, db, "managed-agents", 1, schemaSQL); err != nil {
 		return nil, err
 	}
 	return &Store{db: db}, nil

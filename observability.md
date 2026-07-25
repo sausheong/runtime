@@ -55,6 +55,7 @@ Control-plane HTTP and fleet health:
 | `runtime_agent_reachable` | `agent,replica` | Last remote health poll |
 | `runtime_agent_restarts_total` | `agent,replica` | Supervisor respawns |
 | `runtime_proxy_errors_total` | `agent` | Reverse-proxy failures |
+| `runtime_session_routing_store_errors_total` | `agent` | Affinity lookups failed because persistence was unavailable |
 | `runtime_agent_proxy_calls_total` | `agent,kind` | Proxied new-session, message, stream, and other calls |
 | `runtime_metrics_scrape_skips_total` | `agent,replica,reason` | Replica omitted from fan-out |
 
@@ -66,6 +67,10 @@ Pools and autoscaling:
 | `runtime_agent_replicas_current` | `agent` | Live replicas, including draining |
 | `runtime_agent_active_sessions` | `agent` | Last active-session count |
 | `runtime_autoscale_events_total` | `agent,action` | Scale, drain, undrain, reap, or blocked actions |
+
+Active-session load is selected by both the agent ID and its immutable session
+tenant. Retained sessions from an earlier tenant assignment cannot influence a
+replacement tenant's pool.
 
 Gateway and enforcement:
 
@@ -84,6 +89,7 @@ Golden-set evaluations:
 |---|---|---|
 | `runtime_eval_runs_total` | `tenant,status` | Finalised runs |
 | `runtime_eval_cases_total` | `tenant,result` | Passed and failed cases |
+| `runtime_retention_reaped_total` | `kind` | Records removed by retention workers. Current kinds are `session`, `evaluation_capture`, and `evaluation_run` |
 
 Agent execution:
 
@@ -103,10 +109,13 @@ Memory and online evaluation:
 |---|---|---|
 | `agent_memory_summary_writes_total` | `agent,tenant,model` | Rolling summary writes |
 | `agent_memory_gc_deleted_total` | `agent,tenant` | Dead memory rows reaped |
+| `agent_memory_retention_reaped_total` | `agent,tenant,kind` | Live memory rows deleted by fact, summary, or episodic retention |
 | `agent_memory_episode_writes_total` | `agent,tenant` | Episodic records written |
 | `agent_eval_sessions_scored_total` | `agent,tenant` | Sampled online sessions |
 | `agent_eval_criteria_total` | `agent,tenant,result` | Online criteria results |
 | `agent_eval_failures_total` | `agent,tenant,category` | Terminal failure taxonomy |
+| `agent_eval_queue_dropped_total` | `agent,tenant,reason` | Sampled scoring jobs dropped on full/shutdown queue, or workers abandoned after the bounded cancellation grace |
+| `agent_http_rejected_total` | `agent,reason` | Requests rejected by request/stream concurrency caps |
 
 Counters reset when the process that owns them restarts. Prometheus provides
 the long-term time series; the database remains authoritative for durable

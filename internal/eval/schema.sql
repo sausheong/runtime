@@ -17,9 +17,14 @@ CREATE TABLE IF NOT EXISTS eval_runs (
   failed      INT NOT NULL DEFAULT 0,
   score       DOUBLE PRECISION NOT NULL DEFAULT 0,
   error       TEXT NOT NULL DEFAULT '',
+  lease_owner TEXT NOT NULL DEFAULT '',
+  lease_until TIMESTAMPTZ,
   created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
   finished_at TIMESTAMPTZ
 );
+
+ALTER TABLE eval_runs ADD COLUMN IF NOT EXISTS lease_owner TEXT NOT NULL DEFAULT '';
+ALTER TABLE eval_runs ADD COLUMN IF NOT EXISTS lease_until TIMESTAMPTZ;
 
 CREATE TABLE IF NOT EXISTS eval_results (
   run_id     TEXT NOT NULL REFERENCES eval_runs(run_id) ON DELETE CASCADE,

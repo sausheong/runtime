@@ -1,6 +1,12 @@
 .superpowers/
 # Internal planning, design, deployment, and implementation notes
 /docs/
+!/docs/
+/docs/*
+!/docs/planning/
+/docs/planning/*
+!/docs/planning/runtime-remediation-issues.md
+!/docs/planning/runtime-remediation-plan.md
 CLAUDE.md
 **/CLAUDE.md
 *.log

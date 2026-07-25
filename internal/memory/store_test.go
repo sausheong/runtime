@@ -27,6 +27,7 @@ func freshStore(t *testing.T, tenant string) (*Store, *sql.DB) {
 	if err := db.Ping(); err != nil {
 		t.Skipf("postgres not reachable: %v", err)
 	}
+	_, _ = db.Exec(`DELETE FROM runtime_schema_migrations WHERE component='memory' OR component LIKE 'memory-embedding-%'`)
 	if _, err := db.Exec(`DROP TABLE IF EXISTS memory_events CASCADE`); err != nil {
 		t.Fatal(err)
 	}
@@ -202,6 +203,7 @@ func freshStoreEmbedded(t *testing.T, tenant string, emb Embedder) (*Store, *sql
 	if err := db.Ping(); err != nil {
 		t.Skipf("postgres not reachable: %v", err)
 	}
+	_, _ = db.Exec(`DELETE FROM runtime_schema_migrations WHERE component='memory' OR component LIKE 'memory-embedding-%'`)
 	if _, err := db.Exec(`DROP TABLE IF EXISTS memory_events CASCADE`); err != nil {
 		t.Fatal(err)
 	}
@@ -530,6 +532,41 @@ func TestGCOnce_ReapsSupersededFacts(t *testing.T) {
 	live, ok, err := st.Get(ctx, findLiveID(t, db, "alpha"))
 	if err != nil || !ok || live.Content != "v3" {
 		t.Fatalf("live entry lost: ok=%v content=%q err=%v", ok, live.Content, err)
+	}
+}
+
+func TestReapBeforeIsTenantAndKindScopedAndSupportsDryRun(t *testing.T) {
+	st, db := freshStore(t, "alpha")
+	defer db.Close()
+	ctx := context.Background()
+	if _, err := st.Save(ctx, hmem.Entry{Content: "old fact"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.SaveKind(ctx, hmem.Entry{Content: "old episode"}, KindEpisode); err != nil {
+		t.Fatal(err)
+	}
+	beta, err := NewStore(ctx, db, "beta")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := beta.Save(ctx, hmem.Entry{Content: "other tenant"}); err != nil {
+		t.Fatal(err)
+	}
+	backdate(t, db, "2 hours")
+	if n, err := st.ReapBefore(ctx, KindFact, time.Now().UTC().Add(-time.Hour), 10, true); err != nil || n != 1 {
+		t.Fatalf("dry run n=%d err=%v", n, err)
+	}
+	if got := countRows(t, db, "alpha"); got != 2 {
+		t.Fatalf("dry run changed rows: %d", got)
+	}
+	if n, err := st.ReapBefore(ctx, KindFact, time.Now().UTC().Add(-time.Hour), 1, false); err != nil || n != 1 {
+		t.Fatalf("reap n=%d err=%v", n, err)
+	}
+	if got := countRows(t, db, "alpha"); got != 1 {
+		t.Fatalf("alpha rows=%d, want episode retained", got)
+	}
+	if got := countRows(t, db, "beta"); got != 1 {
+		t.Fatalf("beta tenant rows=%d, want retained", got)
 	}
 }
 

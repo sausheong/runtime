@@ -1,13 +1,18 @@
 package agentruntime
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/sausheong/runtime/internal/store"
 	"go.opentelemetry.io/otel"
@@ -104,6 +109,147 @@ func TestCreateSessionRejectsOversizedBody(t *testing.T) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusRequestEntityTooLarge {
 		t.Fatalf("status=%d want %d", resp.StatusCode, http.StatusRequestEntityTooLarge)
+	}
+}
+
+func TestCreateSessionRejectsUnknownFieldsAndTrailingJSON(t *testing.T) {
+	m := newTestManager()
+	for _, body := range []string{
+		`{"message":"hi","unexpected":true}`,
+		`{"message":"hi"} {"message":"again"}`,
+	} {
+		req := httptest.NewRequest("POST", "/sessions", strings.NewReader(body))
+		rec := httptest.NewRecorder()
+		m.newMux().ServeHTTP(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("body=%q status=%d want 400", body, rec.Code)
+		}
+		if strings.Contains(rec.Body.String(), "unexpected") {
+			t.Fatalf("decoder detail leaked: %q", rec.Body.String())
+		}
+	}
+}
+
+type failingListStore struct {
+	store.Store
+}
+
+func (f failingListStore) ListSessionsForTenant(context.Context, string, string) ([]store.SessionRow, error) {
+	return nil, errors.New("database host secret.internal.example unavailable")
+}
+
+func TestInternalStoreErrorsAreNotReturnedToClients(t *testing.T) {
+	m := newTestManager()
+	m.st = failingListStore{Store: m.st}
+	rec := httptest.NewRecorder()
+	m.newMux().ServeHTTP(rec, httptest.NewRequest("GET", "/sessions", nil))
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status=%d", rec.Code)
+	}
+	if strings.Contains(rec.Body.String(), "secret.internal") {
+		t.Fatalf("internal error leaked: %q", rec.Body.String())
+	}
+}
+
+func TestRequestConcurrencyLimitRejectsExcess(t *testing.T) {
+	m := newTestManager()
+	m.requestSem = make(chan struct{}, 1)
+	started := make(chan struct{})
+	release := make(chan struct{})
+	h := m.limitRequests(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		close(started)
+		<-release
+	}))
+	done := make(chan struct{})
+	go func() {
+		h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("GET", "/", nil))
+		close(done)
+	}()
+	<-started
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest("GET", "/", nil))
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status=%d want 503", rec.Code)
+	}
+	close(release)
+	<-done
+}
+
+func TestStreamConcurrencyLimitRejectsExcess(t *testing.T) {
+	m := newTestManager()
+	m.streamSem = make(chan struct{}, 1)
+	release, ok := m.acquireStream()
+	if !ok {
+		t.Fatal("first stream rejected")
+	}
+	if _, ok := m.acquireStream(); ok {
+		t.Fatal("second stream accepted")
+	}
+	release()
+	if release2, ok := m.acquireStream(); !ok {
+		t.Fatal("stream slot not released")
+	} else {
+		release2()
+	}
+}
+
+func TestSlowSessionBodyTimesOut(t *testing.T) {
+	m := newTestManager()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := &http.Server{Handler: m.handler(), ReadTimeout: 40 * time.Millisecond}
+	go srv.Serve(ln)
+	t.Cleanup(func() {
+		_ = srv.Close()
+		_ = ln.Close()
+	})
+	conn, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	_, _ = fmt.Fprintf(conn, "POST /sessions HTTP/1.1\r\nHost: test\r\nContent-Length: 20\r\n\r\n{")
+	_ = conn.SetReadDeadline(time.Now().Add(time.Second))
+	resp, err := http.ReadResponse(bufio.NewReader(conn), &http.Request{Method: "POST"})
+	if err != nil {
+		t.Fatalf("read timeout response: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status=%d want 400", resp.StatusCode)
+	}
+}
+
+func TestSSEOutlivesRequestReadTimeout(t *testing.T) {
+	m := newTestManager()
+	id, _ := m.st.CreateSession(context.Background(), "a", 0)
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := &http.Server{Handler: m.handler(), ReadTimeout: 40 * time.Millisecond}
+	go srv.Serve(ln)
+	t.Cleanup(func() {
+		_ = srv.Close()
+		_ = ln.Close()
+	})
+	resp, err := http.Get("http://" + ln.Addr().String() + "/sessions/" + id + "/stream")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	time.Sleep(80 * time.Millisecond)
+	if err := m.publish(id, "late", WireEvent{Type: "done"}); err != nil {
+		t.Fatal(err)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(body), `"type":"done"`) {
+		t.Fatalf("late SSE event missing: %q", body)
 	}
 }
 

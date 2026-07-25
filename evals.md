@@ -121,9 +121,11 @@ Runs and individual case results are durable. At control-plane startup,
 `runtimed` resumes pending or running evaluation runs. It reads the case indexes
 already persisted for a run and does not invoke those successful cases again.
 
-This recovery model currently assumes one active control plane. Multiple
-control-plane replicas need a database-backed claim or lease before they can
-safely recover the same run.
+Before executing, a worker atomically claims the run with an owner and expiry.
+Live leases cannot be stolen, and a heartbeat renews the claim during long
+provider or judge calls. Expired leases are recoverable. Recovery scans at
+startup and periodically thereafter using a bounded worker pool, so a run held
+by a dead worker is reclaimed after expiry without another restart.
 
 ## Online evaluation
 
@@ -192,8 +194,15 @@ the agent process that performs the scoring.
 
 ## Transcript storage and retention
 
-Runtime captures the transcript needed for online evaluation. Credential-shaped
-fields and common bearer-token patterns are redacted before persistence.
+Runtime captures the transcript needed for online evaluation by default.
+Credential-shaped fields, bare JWTs, and common provider/service token formats
+are filtered recursively before persistence. This deterministic filter is best
+effort, not a PII-removal or secrecy guarantee.
+
+Set `RUNTIME_TRANSCRIPT_CAPTURE=0` on agent processes to disable capture
+independently of evaluation retention. Native agent builders can also supply
+`Config.TranscriptFilter`; it runs after the built-in filter and before the
+database write. A filter error or invalid JSON suppresses that turn's capture.
 
 Completed or failed evaluation runs, their case results, online results, and
 captured transcripts are retained for 30 days by default:
@@ -215,7 +224,12 @@ RUNTIME_EVAL_RETENTION=0
 ```
 
 Disabling retention logs a warning because transcripts and results will
-accumulate. A sweep runs at startup and then every six hours.
+accumulate. A sweep runs at startup and then every six hours. Each sweep uses
+bounded deletion statements and stops after 20 batches or 30 seconds.
+
+Captured data remains sensitive. Restrict database/admin access, encrypt
+database storage and backups, export required audit data before deletion, and
+apply the organisation's residency and classification rules.
 
 ## Failure classification
 
@@ -260,6 +274,7 @@ Golden-set control-plane metrics:
 |---|---|---|
 | `runtime_eval_runs_total` | `tenant,status` | Finalized runs by `completed` or `error` status |
 | `runtime_eval_cases_total` | `tenant,result` | Cases scored as `pass` or `fail` |
+| `runtime_retention_reaped_total` | `kind` | Evaluation capture rows (`evaluation_capture`) and completed run records (`evaluation_run`) removed by retention |
 
 Native-agent online metrics:
 
@@ -278,8 +293,9 @@ case, and online-result records are available through the CLI, API, and console.
   surrounding release workflow.
 - Judge scoring is non-deterministic and consumes model tokens.
 - Online transcript capture has storage and privacy implications even with
-  credential-pattern redaction.
-- Exact recovery of incomplete runs assumes one control-plane process.
+  best-effort credential filtering.
+- Run leases prevent duplicate recovery workers; control-plane HA still
+  requires leader ownership for non-evaluation singleton duties.
 - Native-agent metric increments can be replay-tolerant rather than suitable
   for financial accounting.
 

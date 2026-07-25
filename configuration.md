@@ -202,7 +202,9 @@ sandboxes](gateway-and-sandboxes.md) for trust and credential behaviour.
 |---|---|
 | `RUNTIME_CONFIG` | `runtime.yaml` |
 | `RUNTIME_PG_DSN` | Control-plane Postgres DSN |
-| `RUNTIME_AGENT_PG_DSN` | Restricted DSN injected into managed local agents; defaults to the control-plane DSN |
+| `RUNTIME_AGENT_PG_DSN` | Restricted DSN injected into managed agents; required with identity and bound to one agent trust domain. Use a distinct Runtime deployment and database role per agent |
+| `RUNTIME_IDENTITY_SIGNING_PRIVATE_KEY` | URL-safe base64 Ed25519 seed/private key used only by the control plane when subject forwarding is enabled |
+| `RUNTIME_IDENTITY_SIGNING_PUBLIC_KEY` | Matching URL-safe base64 Ed25519 public key injected into agents for verification |
 | `RUNTIME_CTL_ADDR` | Public API listener, default `:8080` |
 | `RUNTIME_METRICS_ADDR` | Private management listener, default `127.0.0.1:9091` |
 | `RUNTIME_AGENTD_BIN` | Managed Go agent host, default `./agentd` |
@@ -223,12 +225,29 @@ sandboxes](gateway-and-sandboxes.md) for trust and credential behaviour.
 | `RUNTIME_POLICY_FILE` | Platform Cedar policy file |
 | `RUNTIME_GATEWAY_QUOTA_DEFAULT` | Default calls per minute when no narrower quota exists |
 | `RUNTIME_EVAL_RETENTION` | Evaluation retention, default `720h` |
+| `RUNTIME_SESSION_RETENTION` | Terminal session/event retention, default `720h`; `0` disables |
+| `RUNTIME_SESSION_RETENTION_BATCH` | Maximum sessions removed per statement, default `500`; each sweep runs at most 20 batches within 30 seconds |
+| `RUNTIME_SESSION_RETENTION_DRY_RUN` | Count and log eligible sessions without deletion |
+| `RUNTIME_MEMORY_GC_ENABLED` | Enable dead-memory GC for memory-enabled local agents; default on |
+| `RUNTIME_MEMORY_GC_INTERVAL` | Memory GC and live-retention sweep interval, default `1h` |
+| `RUNTIME_MEMORY_GC_GRACE` | Age required before dead memory is deleted, default `24h` |
+| `RUNTIME_MEMORY_GC_BATCH` | Maximum memory rows removed per statement, default `1000` |
+| `RUNTIME_MEMORY_RETENTION_FACT` | Optional live fact-memory retention duration; unset disables |
+| `RUNTIME_MEMORY_RETENTION_SUMMARY` | Optional live summary-memory retention duration; unset disables |
+| `RUNTIME_MEMORY_RETENTION_EPISODE` | Optional live episodic-memory retention duration; unset disables |
+| `RUNTIME_MEMORY_RETENTION_DRY_RUN` | Count and log eligible live-memory rows without deletion |
+| `RUNTIME_MAX_REQUESTS` | Control-plane concurrent request cap, default `512` |
+| `RUNTIME_MAX_STREAMS` | Control-plane concurrent SSE cap, default `128` |
 
 Identity, memory, gateway, sandbox, evaluation, and telemetry variables are
 documented in their corresponding topic guides. Variables beginning
 `RUNTIME_AGENT_`, `RUNTIME_GATEWAY_`, `RUNTIME_LISTEN_ADDR`, and registration
 variables may be injected into child agents; operators should not put them in
 `RUNTIME_AGENT_ENV_PASSTHROUGH`.
+
+The memory maintenance variables above are explicitly included in the safe
+environment inherited by locally managed agents. Remote agents must receive
+them through their own deployment environment.
 
 ## Runtime-injected agent environment
 
@@ -248,6 +267,12 @@ Managed agents receive a minimal environment plus explicit safe passthrough:
 | `RUNTIME_AGENT_AUTH_TOKEN` | Bearer required on protected agent routes |
 | `RUNTIME_GATEWAY_URL`/`RUNTIME_GATEWAY_KEY` | Platform gateway connection |
 | `RUNTIME_EVAL_POLICY` | Validated native online-evaluation policy |
+| `RUNTIME_EVAL_SCORE_WORKERS` | Online-scoring worker count, default `2` |
+| `RUNTIME_EVAL_SCORE_QUEUE` | Online-scoring queue capacity, default `64` |
+| `RUNTIME_EVAL_SCORE_TIMEOUT` | Per-session scoring deadline, default `2m` |
+| `RUNTIME_AGENT_MAX_REQUESTS` | Agent HTTP concurrency cap, default `256` |
+| `RUNTIME_AGENT_MAX_STREAMS` | Agent SSE concurrency cap, default `64` |
+| `RUNTIME_TRANSCRIPT_CAPTURE` | Transcript capture; default on, set `0` to disable |
 
 Tenant secrets are added by name. Store provider keys in the secrets broker or
 pass only explicitly approved non-reserved variables. Do not give child agents
@@ -255,12 +280,15 @@ the full control-plane environment.
 
 ## Postgres schema
 
-Runtime creates and migrates its tables at startup under a database advisory
-lock. The schema covers identity, service and registration keys, encrypted
+Runtime applies ordered, transactional component migrations under a database
+advisory lock and records them in `runtime_schema_migrations`. Restricted
+agents check the supported core schema version without applying control-plane
+DDL. The schema covers identity, service and registration keys, encrypted
 secrets, dynamic agents and upstreams, policies and quotas, control-plane
 session ownership, durable events, memory, DBOS workflow state, transcripts,
 golden sets, and evaluation results.
 
 Back up the complete database, not selected tables. Schema changes and binary
 rollbacks should be treated as an operator-controlled deployment event. See the
-[operator guide](operator-guide.md) for backup, restore, and migration checks.
+[operator guide](operator-guide.md) and [release guide](RELEASING.md) for
+backup, restore, upgrade, and rollback checks.

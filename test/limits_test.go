@@ -51,8 +51,10 @@ func lmBoot(t *testing.T, db *sql.DB, cfgYAML, ctlAddr string, extraEnv ...strin
 	t.Helper()
 
 	// ONE-TIME durable-state cleanup so this runtimed starts from a blank
-	// slate (same idiom as autoscale/multiagent). agentd recreates markers.
+	// slate (same idiom as autoscale/multiagent). The control plane owns
+	// bootstrap DDL, so the restricted agent role only receives DML grants.
 	mustExec(t, db, `DROP TABLE IF EXISTS markers`)
+	mustExec(t, db, `CREATE TABLE markers (id BIGSERIAL PRIMARY KEY, ran_at TIMESTAMPTZ)`)
 	mustExec(t, db, `DROP TABLE IF EXISTS session_events, sessions, agents CASCADE`)
 	mustExec(t, db, `DROP SCHEMA IF EXISTS dbos CASCADE`)
 	resetIdentityTables(t, db)

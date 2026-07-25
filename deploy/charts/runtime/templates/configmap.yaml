@@ -16,7 +16,6 @@ data:
   # chart README. A remote agent entry must not carry memory/gateway anyway, since
   # config.Validate rejects spawn-time fields on a remote agent.)
   {{- $root := . }}
-  {{- $hasToken := or .Values.secrets.agentAuthToken .Values.secrets.existingSecret }}
   runtime.yaml: |
     agents:
     {{- range $a := .Values.config.agents }}
@@ -32,9 +31,7 @@ data:
         {{- else }}
         url: "{{ $tmpl | replace "{i}" "0" }}"
         {{- end }}
-        {{- if $hasToken }}
-        auth_token: "${RUNTIME_AGENT_AUTH_TOKEN}"
-        {{- end }}
+        auth_token: {{ printf "${%s}" (include "runtime.agentAuthKey" (dict "id" $a.id)) | quote }}
     {{- end }}
     {{- with .Values.config.gateway }}
     gateway:

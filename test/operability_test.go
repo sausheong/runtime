@@ -59,6 +59,7 @@ func startRuntimed(t *testing.T, cfgBody string) (string, func()) {
 	// One-time durable-state cleanup so each test starts from a blank slate.
 	// DBOS recreates its schema on Launch.
 	mustExec(t, db, `DROP TABLE IF EXISTS session_events, sessions, agents, markers CASCADE`)
+	mustExec(t, db, `CREATE TABLE markers (id BIGSERIAL PRIMARY KEY, ran_at TIMESTAMPTZ)`)
 	mustExec(t, db, `DROP SCHEMA IF EXISTS dbos CASCADE`)
 	resetIdentityTables(t, db)
 

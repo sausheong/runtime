@@ -84,14 +84,18 @@ func TestOnlineResultRoundTripUpsertAndByTenant(t *testing.T) {
 	ctx := context.Background()
 	const tenant = "online-result-test-tenant"
 	const otherTenant = "online-result-test-other"
-	// Use distinct synthetic session ids (no FK on online_eval_results).
-	const s1 = "online-res-s1"
-	const s2 = "online-res-s2"
+	s1, err := st.CreateSessionForTenant(ctx, tenant, "online-results-agent", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s2, err := st.CreateSessionForTenant(ctx, otherTenant, "online-results-agent", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	p := st.(*pgStore)
 	t.Cleanup(func() {
-		_, _ = p.db.ExecContext(context.Background(),
-			`DELETE FROM online_eval_results WHERE session_id IN ($1,$2)`, s1, s2)
+		_, _ = p.db.ExecContext(context.Background(), `DELETE FROM sessions WHERE id IN ($1,$2)`, s1, s2)
 	})
 
 	// Round-trip + upsert on (session, criterion).

@@ -78,12 +78,12 @@ func NewStore(ctx context.Context, db *sql.DB, tenant string, opts ...Option) (*
 	for _, o := range opts {
 		o(s)
 	}
-	if err := store.ApplyDDLLocked(ctx, db, schemaSQL); err != nil {
+	if err := store.ApplySchemaMigrations(ctx, db, "memory", 1, schemaSQL); err != nil {
 		return nil, err
 	}
 	if s.embedder != nil {
 		ddl := fmt.Sprintf(embedSchemaSQL, s.embedder.Dim())
-		if err := store.ApplyDDLLocked(ctx, db, ddl); err != nil {
+		if err := store.ApplySchemaMigrations(ctx, db, fmt.Sprintf("memory-embedding-%d", s.embedder.Dim()), 1, ddl); err != nil {
 			return nil, fmt.Errorf("memory: embeddings schema: %w", err)
 		}
 	}
@@ -481,6 +481,94 @@ func (s *Store) GCOnce(ctx context.Context, grace time.Duration, batch int) (int
 		total += int(n)
 		if int(n) < batch {
 			return total, nil
+		}
+	}
+}
+
+// ReapBefore deletes append-only rows of one memory kind older than before.
+// Deleting the complete age slice (including historical chain nodes and
+// tombstones) avoids resurrecting an older version. The operation is tenant
+// scoped and drains in bounded statements; dryRun counts at most batch rows.
+func (s *Store) ReapBefore(ctx context.Context, kind string, before time.Time, batch int, dryRun bool) (int, error) {
+	if kind != KindFact && kind != KindSummary && kind != KindEpisode {
+		return 0, fmt.Errorf("memory: unsupported retention kind %q", kind)
+	}
+	if batch < 1 {
+		batch = 1
+	}
+	const candidates = `
+		SELECT seq FROM memory_events
+		 WHERE tenant_id=$1 AND kind=$2 AND created_at < $3
+		 ORDER BY seq
+		 LIMIT $4`
+	if dryRun {
+		var n int
+		err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM (`+candidates+`) AS candidates`,
+			s.tenant, kind, before, batch).Scan(&n)
+		return n, err
+	}
+	res, err := s.db.ExecContext(ctx,
+		`DELETE FROM memory_events WHERE seq IN (`+candidates+`)`,
+		s.tenant, kind, before, batch)
+	if err != nil {
+		return 0, fmt.Errorf("memory: retention tenant %q kind %q: %w", s.tenant, kind, err)
+	}
+	n, err := res.RowsAffected()
+	return int(n), err
+}
+
+// StartRetention periodically applies opt-in, per-kind live-memory retention.
+func (s *Store) StartRetention(ctx context.Context, interval time.Duration, retention map[string]time.Duration, batch int, dryRun bool, onReap func(string, int)) {
+	go func() {
+		sweep := func() {
+			sweepCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+			defer cancel()
+			runRetentionSweep(sweepCtx, retention, batch, dryRun, s.ReapBefore, onReap)
+		}
+		sweep()
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				sweep()
+			}
+		}
+	}()
+}
+
+func runRetentionSweep(
+	ctx context.Context,
+	retention map[string]time.Duration,
+	batch int,
+	dryRun bool,
+	reap func(context.Context, string, time.Time, int, bool) (int, error),
+	onReap func(string, int),
+) {
+	for _, kind := range []string{KindFact, KindSummary, KindEpisode} {
+		keep := retention[kind]
+		if keep <= 0 {
+			continue
+		}
+		total := 0
+		for pass := 0; pass < 20; pass++ {
+			n, err := reap(ctx, kind, time.Now().UTC().Add(-keep), batch, dryRun)
+			if err != nil {
+				slog.Warn("memory: retention sweep failed", "kind", kind, "err", err)
+				break
+			}
+			total += n
+			if dryRun || n < batch {
+				break
+			}
+		}
+		if total > 0 {
+			slog.Info("memory: retention sweep", "kind", kind, "rows", total, "dry_run", dryRun)
+			if !dryRun && onReap != nil {
+				onReap(kind, total)
+			}
 		}
 	}
 }

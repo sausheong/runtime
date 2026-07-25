@@ -73,6 +73,7 @@ func evalOnlineResetDB(t *testing.T, db *sql.DB) {
 	} {
 		mustExec(t, db, q)
 	}
+	mustExec(t, db, `CREATE TABLE markers (id BIGSERIAL PRIMARY KEY, ran_at TIMESTAMPTZ)`)
 }
 
 // TestOnlineSamplingLifecycle drives one online-sampled session end-to-end and

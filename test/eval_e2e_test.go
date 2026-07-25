@@ -58,6 +58,7 @@ func evalResetDB(t *testing.T, db *sql.DB) {
 	} {
 		mustExec(t, db, q)
 	}
+	mustExec(t, db, `CREATE TABLE markers (id BIGSERIAL PRIMARY KEY, ran_at TIMESTAMPTZ)`)
 }
 
 // TestEvalLifecycle drives one golden-set run end-to-end against a live agent

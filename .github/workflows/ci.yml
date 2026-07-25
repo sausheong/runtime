@@ -23,7 +23,7 @@ jobs:
       - run: go mod verify
       - run: make check
       - name: Race detector on concurrency-heavy packages
-        run: go test -race ./controlplane ./agentruntime ./internal/gateway ./internal/identity ./internal/store
+        run: go test -race ./controlplane ./agentruntime ./internal/gateway ./internal/identity ./internal/store ./internal/eval
 
   security:
     runs-on: ubuntu-latest
@@ -62,9 +62,12 @@ jobs:
           container_id=$(docker ps --filter ancestor=pgvector/pgvector:pg16 --format '{{.ID}}' | head -1)
           test -n "$container_id"
           docker exec "$container_id" psql -U runtime -d runtime -c 'CREATE EXTENSION IF NOT EXISTS vector'
+          docker exec "$container_id" psql -U runtime -d runtime -c \
+            "CREATE ROLE runtime_agent_test LOGIN PASSWORD 'runtime-agent-test'"
       - run: make test-integration
         env:
           RUNTIME_PG_DSN: postgres://runtime:runtime@localhost:5432/runtime?sslmode=disable
+          RUNTIME_AGENT_PG_DSN: postgres://runtime_agent_test:runtime-agent-test@localhost:5432/runtime?sslmode=disable
 
   python-shim:
     runs-on: ubuntu-latest
@@ -87,7 +90,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-      - run: shellcheck deploy/compose/*.sh deploy/gcp/*.sh deploy/gcp/control-plane/*.sh
+      - run: shellcheck deploy/compose/*.sh deploy/compose/initdb/*.sh deploy/gcp/*.sh deploy/gcp/control-plane/*.sh deploy/charts/runtime/*.sh
       - run: docker build -f deploy/Dockerfile -t runtime:ci .
       - name: Build GCP agent images from the documented repository-root context
         run: |
@@ -100,6 +103,7 @@ jobs:
           RUNTIME_ADMIN_BOOTSTRAP: svk-ci.bootstrap
           RUNTIME_SECRETS_KEYS: ci:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
           RUNTIME_SECRETS_PRIMARY: ci
+          RUNTIME_AGENT_DB_PASSWORD: ci-agent-db-password
           GRAFANA_ADMIN_PASSWORD: ci-only-password
       - name: Validate distributed GCP Compose bundles
         run: |
@@ -118,6 +122,7 @@ jobs:
           RUNTIME_ADMIN_BOOTSTRAP: svk-ci.bootstrap
           RUNTIME_SECRETS_KEYS: ci:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
           RUNTIME_SECRETS_PRIMARY: ci
+          RUNTIME_AGENT_DB_PASSWORD: ci-agent-db-password
           GRAFANA_ADMIN_PASSWORD: ci-only-password
           NUTRITION_GO_TOKEN: ci-go-token
           NUTRITION_OPENAI_TOKEN: ci-python-token

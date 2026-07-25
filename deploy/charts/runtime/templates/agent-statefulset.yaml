@@ -59,15 +59,26 @@ spec:
               value: ":8080"
             - name: RUNTIME_AGENT_ID
               value: {{ $a.id | quote }}
+            - name: RUNTIME_CONTROL_SCHEMA_READY
+              value: "1"
             - name: RUNTIME_AGENT_TENANT
               value: {{ $a.tenant | default "default" | quote }}
             - name: RUNTIME_AGENT_MEMORY
               value: {{ if $a.memory }}"1"{{ else }}""{{ end }}
+            - name: RUNTIME_SUBJECT_FORWARDING
+              value: {{ ternary "1" "" $root.Values.identity.subjectForwarding | quote }}
+            {{- if $root.Values.identity.subjectForwarding }}
+            - name: RUNTIME_IDENTITY_SIGNING_PUBLIC_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "runtime.secretName" $root }}
+                  key: RUNTIME_IDENTITY_SIGNING_PUBLIC_KEY
+            {{- end }}
             - name: RUNTIME_PG_DSN
               valueFrom:
                 secretKeyRef:
                   name: {{ include "runtime.secretName" $root }}
-                  key: RUNTIME_PG_DSN
+                  key: RUNTIME_AGENT_PG_DSN
                   # Optional ONLY in handshake mode, where the DSN arrives via
                   # /register rather than this Secret. Without handshake the DSN
                   # must be present — keep it required so a missing key fails at
@@ -75,14 +86,11 @@ spec:
                   {{- if $handshake }}
                   optional: true
                   {{- end }}
-            {{- if or $root.Values.secrets.agentAuthToken $root.Values.secrets.existingSecret }}
             - name: RUNTIME_AGENT_AUTH_TOKEN
               valueFrom:
                 secretKeyRef:
                   name: {{ include "runtime.secretName" $root }}
-                  key: RUNTIME_AGENT_AUTH_TOKEN
-                  optional: true
-            {{- end }}
+                  key: {{ include "runtime.agentAuthKey" (dict "id" $a.id) }}
             {{- if $handshake }}
             - name: RUNTIME_REGISTRATION_URL
               value: "http://{{ include "runtime.fullname" $root }}:{{ $root.Values.service.port }}/register"

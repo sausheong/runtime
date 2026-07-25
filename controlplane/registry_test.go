@@ -32,6 +32,21 @@ func TestRegistry_ReplicaSetExpansion(t *testing.T) {
 	}
 }
 
+func TestRegistryIdentitySigningKeysReachReturnedAgents(t *testing.T) {
+	cfg := &config.Config{Agents: []config.AgentConfig{
+		{ID: "a", Name: "A", Model: "m", ListenAddr: "127.0.0.1:8101", Tenant: "default"},
+	}}
+	r := NewRegistry(cfg, "/bin/agentd", "dsn")
+	r.SetIdentitySigningKeys("private", "public")
+	ap, ok := r.Get("a")
+	if !ok {
+		t.Fatal("agent missing")
+	}
+	if ap.IdentitySigningPrivateKey != "private" || ap.IdentitySigningPublicKey != "public" {
+		t.Fatalf("signing keys not attached to returned agent: %+v", ap)
+	}
+}
+
 func TestRegistry_NextReplicaRoundRobin(t *testing.T) {
 	cfg := &config.Config{Agents: []config.AgentConfig{
 		{ID: "a", Name: "A", Model: "m", ListenAddr: "127.0.0.1:8201", Replicas: 2, Tenant: "default"},
@@ -70,8 +85,8 @@ func TestRegistry_NextReplicaSkipsUnreachable(t *testing.T) {
 	// All unreachable ⇒ fall back to 0.
 	r.SetReachable("a", 0, false)
 	r.SetReachable("a", 2, false)
-	if idx := r.NextReplica("a"); idx != 0 {
-		t.Fatalf("all-unreachable fallback: got %d want 0", idx)
+	if idx := r.NextReplica("a"); idx != -1 {
+		t.Fatalf("all-unreachable result: got %d want -1", idx)
 	}
 
 	// Recovery: ordinal 2 back ⇒ it is selectable again.

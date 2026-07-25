@@ -5,9 +5,11 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
+	"io"
 	"log/slog"
 	"net/http"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/sausheong/runtime/internal/obs"
@@ -36,6 +38,13 @@ func readAssertion(r *http.Request, on bool) string {
 		return ""
 	}
 	return r.Header.Get(rheader.Assertion)
+}
+
+func (m *Manager) tenantID() string {
+	if m.tenant == "" {
+		return "default"
+	}
+	return m.tenant
 }
 
 // maxSessionBodyBytes bounds the only agent-contract request that can carry
@@ -73,9 +82,76 @@ func (m *Manager) handler() http.Handler {
 		}),
 	)
 	if m.authToken != "" {
+		if m.subjectForwarding {
+			h = requireSignedIdentity(m.identityVerifyKey, h)
+		}
 		h = requireBearer(m.authToken, h)
 	}
+	h = m.limitRequests(h)
 	return obs.RequestID(h)
+}
+
+func (m *Manager) limitRequests(next http.Handler) http.Handler {
+	if m.requestSem == nil {
+		return next
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case m.requestSem <- struct{}{}:
+			defer func() { <-m.requestSem }()
+			next.ServeHTTP(w, r)
+		default:
+			m.metrics.HTTPRejected("requests")
+			http.Error(w, "server busy", http.StatusServiceUnavailable)
+		}
+	})
+}
+
+func (m *Manager) acquireStream() (func(), bool) {
+	if m.streamSem == nil {
+		return func() {}, true
+	}
+	select {
+	case m.streamSem <- struct{}{}:
+		return func() { <-m.streamSem }, true
+	default:
+		m.metrics.HTTPRejected("streams")
+		return nil, false
+	}
+}
+
+func requireSignedIdentity(publicKey string, next http.Handler) http.Handler {
+	var (
+		mu   sync.Mutex
+		seen = map[string]time.Time{}
+		skew = 30 * time.Second
+	)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && (r.URL.Path == "/healthz" || r.URL.Path == "/readyz") {
+			next.ServeHTTP(w, r)
+			return
+		}
+		now := time.Now()
+		nonce, err := rheader.Verify(r, publicKey, now, skew)
+		if err != nil {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		mu.Lock()
+		for value, expiry := range seen {
+			if !expiry.After(now) {
+				delete(seen, value)
+			}
+		}
+		if _, replay := seen[nonce]; replay {
+			mu.Unlock()
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		seen[nonce] = now.Add(skew)
+		mu.Unlock()
+		next.ServeHTTP(w, r)
+	})
 }
 
 // requireBearer rejects any request whose Authorization header is not exactly
@@ -131,28 +207,36 @@ func (m *Manager) newMux() *http.ServeMux {
 			ImageB64  string `json:"image_b64"`
 			ImageMime string `json:"image_mime"`
 		}
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		decoder := json.NewDecoder(r.Body)
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(&body); err != nil {
 			var tooLarge *http.MaxBytesError
 			if errors.As(err, &tooLarge) {
 				http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
 				return
 			}
-			http.Error(w, err.Error(), http.StatusBadRequest)
+			http.Error(w, "invalid request body", http.StatusBadRequest)
+			return
+		}
+		if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+			http.Error(w, "invalid request body", http.StatusBadRequest)
 			return
 		}
 		subject, tenant, role := readForwardedIdentity(r, m.subjectForwarding)
 		assertion := readAssertion(r, m.subjectForwarding)
 		id, err := m.startSession(r.Context(), body.Message, body.ImageB64, body.ImageMime, obs.RequestIDFromContext(r.Context()), subject, tenant, role, assertion)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			slog.Error("start session failed", "agent", m.agentID, "err", err)
+			http.Error(w, "internal server error", http.StatusInternalServerError)
 			return
 		}
 		_ = json.NewEncoder(w).Encode(map[string]string{"session_id": id})
 	})
 	mux.HandleFunc("GET /sessions", func(w http.ResponseWriter, r *http.Request) {
-		rows, err := m.st.ListSessions(r.Context(), m.agentID)
+		rows, err := m.st.ListSessionsForTenant(r.Context(), m.tenantID(), m.agentID)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			slog.Error("list sessions failed", "agent", m.agentID, "err", err)
+			http.Error(w, "internal server error", http.StatusInternalServerError)
 			return
 		}
 		type sessOut struct {
@@ -174,6 +258,12 @@ func (m *Manager) newMux() *http.ServeMux {
 		if !m.requireOwnedSession(w, r, id) {
 			return
 		}
+		release, ok := m.acquireStream()
+		if !ok {
+			http.Error(w, "too many streams", http.StatusServiceUnavailable)
+			return
+		}
+		defer release()
 		flusher, ok := w.(http.Flusher)
 		if !ok {
 			http.Error(w, "streaming unsupported", http.StatusInternalServerError)
@@ -254,7 +344,8 @@ func (m *Manager) newMux() *http.ServeMux {
 		// immediately (no subscribe).
 		evs, err := m.st.EventsSince(r.Context(), id, since)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			slog.Error("list session events failed", "agent", m.agentID, "session", id, "err", err)
+			http.Error(w, "internal server error", http.StatusInternalServerError)
 			return
 		}
 		if len(evs) > limit {
@@ -276,7 +367,7 @@ func (m *Manager) newMux() *http.ServeMux {
 	})
 	mux.HandleFunc("GET /sessions/{id}", func(w http.ResponseWriter, r *http.Request) {
 		row, err := m.st.GetSession(r.Context(), r.PathValue("id"))
-		if err != nil || row.AgentID != m.agentID {
+		if err != nil || row.AgentID != m.agentID || row.TenantID != m.tenantID() {
 			http.Error(w, "session not found", http.StatusNotFound)
 			return
 		}
@@ -294,7 +385,7 @@ func (m *Manager) newMux() *http.ServeMux {
 // identifiers, not bearer capabilities.
 func (m *Manager) requireOwnedSession(w http.ResponseWriter, r *http.Request, id string) bool {
 	row, err := m.st.GetSession(r.Context(), id)
-	if err != nil || row.AgentID != m.agentID {
+	if err != nil || row.AgentID != m.agentID || row.TenantID != m.tenantID() {
 		http.Error(w, "session not found", http.StatusNotFound)
 		return false
 	}

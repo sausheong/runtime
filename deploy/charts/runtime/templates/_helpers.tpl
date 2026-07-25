@@ -78,6 +78,49 @@ name (using runtime.fullname only coincides when the release contains "runtime")
 {{- end -}}
 {{- end -}}
 
+{{/* Stable env/Secret key for one agent's control-plane-to-agent bearer. */}}
+{{- define "runtime.agentAuthKey" -}}
+{{- printf "RUNTIME_AGENT_AUTH_TOKEN_%s" (.id | upper | replace "-" "_") -}}
+{{- end -}}
+
+{{/*
+Identity-enabled and perAgentPods deployments must not give agents the
+control-plane DSN. existingSecret is accepted because Helm cannot inspect its
+keys; operators must provide RUNTIME_AGENT_PG_DSN there.
+*/}}
+{{- define "runtime.requireAgentPg" -}}
+{{- if or .Values.identity.enabled (eq .Values.scheduling.mode "perAgentPods") -}}
+{{- if and (not .Values.secrets.agentPgDsn) (not .Values.secrets.existingSecret) -}}
+{{- fail "runtime: identity/perAgentPods requires secrets.agentPgDsn or an existingSecret with RUNTIME_AGENT_PG_DSN" -}}
+{{- end -}}
+{{- if gt (len .Values.config.agents) 1 -}}
+{{- fail "runtime: one restricted agent database role cannot isolate multiple agents; deploy one chart release and role per agent" -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{/* perAgentPods requires one bearer per configured agent. */}}
+{{- define "runtime.requireAgentAuth" -}}
+{{- if eq .Values.scheduling.mode "perAgentPods" -}}
+{{- if not .Values.secrets.existingSecret -}}
+{{- range $a := .Values.config.agents -}}
+{{- if not (index $.Values.secrets.agentAuthTokens $a.id) -}}
+{{- fail (printf "runtime: perAgentPods requires secrets.agentAuthTokens.%s (distinct bearer per agent) or an existingSecret with per-agent token keys" $a.id) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{/* Subject forwarding requires a stable asymmetric key pair in Kubernetes. */}}
+{{- define "runtime.requireIdentitySigning" -}}
+{{- if .Values.identity.subjectForwarding -}}
+{{- if and (not .Values.secrets.existingSecret) (or (not .Values.secrets.identitySigningPrivateKey) (not .Values.secrets.identitySigningPublicKey)) -}}
+{{- fail "runtime: identity.subjectForwarding requires secrets.identitySigningPrivateKey and secrets.identitySigningPublicKey, or an existingSecret carrying both signing keys" -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
 {{/*
 Fail-closed validation: at least one agent must be configured. runtimed's config
 loader rejects an empty registry ("config: at least one agent is required") and
@@ -120,6 +163,7 @@ Fail-closed validation for perAgentPods mode: each agent must NOT set
 listen_addr or url (the chart generates the url) and must have id/name/model.
 */}}
 {{- define "runtime.requirePerAgentPods" -}}
+{{- $tenants := dict -}}
 {{- range $i, $a := .Values.config.agents -}}
 {{- if or (not $a.id) (not $a.name) (not $a.model) -}}
 {{- fail (printf "runtime: perAgentPods agent[%d] needs id, name, model" $i) -}}
@@ -127,5 +171,9 @@ listen_addr or url (the chart generates the url) and must have id/name/model.
 {{- if or $a.listen_addr $a.url -}}
 {{- fail (printf "runtime: perAgentPods agent %q must NOT set listen_addr or url (the chart generates the per-ordinal url)" $a.id) -}}
 {{- end -}}
+{{- $_ := set $tenants ($a.tenant | default "default") true -}}
+{{- end -}}
+{{- if gt (len $tenants) 1 -}}
+{{- fail "runtime: perAgentPods uses one restricted database role and therefore requires all agents to belong to one tenant; use separate releases/databases for other tenants" -}}
 {{- end -}}
 {{- end -}}

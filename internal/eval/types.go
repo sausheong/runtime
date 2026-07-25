@@ -49,6 +49,8 @@ type Run struct {
 	Failed     int        `json:"failed"`
 	Score      float64    `json:"score"`
 	Error      string     `json:"error,omitempty"`
+	LeaseOwner string     `json:"-"`
+	LeaseUntil *time.Time `json:"-"`
 	CreatedAt  time.Time  `json:"created_at"`
 	FinishedAt *time.Time `json:"finished_at,omitempty"`
 }

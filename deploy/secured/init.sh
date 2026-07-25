@@ -30,6 +30,7 @@ fi
 BOOTSTRAP="$(openssl rand -hex 32)"
 KEY_ID="primary"
 AES_B64="$(openssl rand -base64 32)"
+AGENT_DB_PASSWORD="$(openssl rand -hex 24)"
 
 if [[ -n "$DOMAIN" ]]; then
   # Real domain: Caddy uses automatic public ACME (empty tls block).
@@ -51,6 +52,7 @@ cat > "$ENV_FILE" <<EOF
 RUNTIME_ADMIN_BOOTSTRAP=${BOOTSTRAP}
 RUNTIME_SECRETS_KEYS=${KEY_ID}:${AES_B64}
 RUNTIME_SECRETS_PRIMARY=${KEY_ID}
+RUNTIME_AGENT_DB_PASSWORD=${AGENT_DB_PASSWORD}
 #
 # --- Caddy TLS ---
 SITE_ADDRESS=${SITE_ADDRESS}

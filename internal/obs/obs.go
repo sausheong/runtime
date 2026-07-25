@@ -36,6 +36,7 @@ type ControlMetrics struct {
 	agentReachable   *prometheus.GaugeVec
 	agentRestarts    *prometheus.CounterVec
 	proxyErrors      *prometheus.CounterVec
+	routingErrors    *prometheus.CounterVec
 	agentProxyCalls  *prometheus.CounterVec
 	gwCalls          *prometheus.CounterVec
 	gwDuration       *prometheus.HistogramVec
@@ -50,6 +51,7 @@ type ControlMetrics struct {
 	credentialErrors *prometheus.CounterVec
 	evalRuns         *prometheus.CounterVec
 	evalCases        *prometheus.CounterVec
+	retentionReaped  *prometheus.CounterVec
 }
 
 func NewControlMetrics() *ControlMetrics {
@@ -81,6 +83,10 @@ func NewControlMetrics() *ControlMetrics {
 	c.proxyErrors = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "runtime_proxy_errors_total",
 		Help: "Reverse-proxy failures (503s served) per agent.",
+	}, []string{"agent"})
+	c.routingErrors = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "runtime_session_routing_store_errors_total",
+		Help: "Session-affinity lookups that failed because persistence was unavailable.",
 	}, []string{"agent"})
 	c.agentProxyCalls = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "runtime_agent_proxy_calls_total",
@@ -139,10 +145,14 @@ func NewControlMetrics() *ControlMetrics {
 		Name: "runtime_eval_cases_total",
 		Help: "Golden-set eval cases scored, by tenant and result (pass/fail).",
 	}, []string{"tenant", "result"})
+	c.retentionReaped = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "runtime_retention_reaped_total",
+		Help: "Rows or parent records removed by retention workers, by data kind.",
+	}, []string{"kind"})
 	c.reg.MustRegister(c.httpRequests, c.httpDuration, c.agentUp, c.agentReachable, c.agentRestarts,
-		c.proxyErrors, c.agentProxyCalls, c.gwCalls, c.gwDuration, c.gwUp, c.scrapeSkips,
+		c.proxyErrors, c.routingErrors, c.agentProxyCalls, c.gwCalls, c.gwDuration, c.gwUp, c.scrapeSkips,
 		c.asDesired, c.asCurrent, c.asActive, c.asEvents, c.policyDecisions, c.quotaRejections,
-		c.credentialErrors, c.evalRuns, c.evalCases)
+		c.credentialErrors, c.evalRuns, c.evalCases, c.retentionReaped)
 	return c
 }
 
@@ -204,6 +214,13 @@ func (c *ControlMetrics) ProxyError(agent string) {
 		return
 	}
 	c.proxyErrors.WithLabelValues(agent).Inc()
+}
+
+func (c *ControlMetrics) RoutingStoreError(agent string) {
+	if c == nil {
+		return
+	}
+	c.routingErrors.WithLabelValues(agent).Inc()
 }
 
 // Proxy-call kind label values for ProxyCall. Classified from the (already
@@ -332,26 +349,36 @@ func (c *ControlMetrics) EvalCase(tenant, result string) {
 	c.evalCases.WithLabelValues(tenant, result).Inc()
 }
 
+func (c *ControlMetrics) RetentionReaped(kind string, n int64) {
+	if c == nil || n <= 0 {
+		return
+	}
+	c.retentionReaped.WithLabelValues(kind).Add(float64(n))
+}
+
 // AgentMetrics is agentd's registry. Every series carries agent=<id> so the
 // fan-out merge produces disjoint series across agents.
 type AgentMetrics struct {
-	agentID       string
-	tenant        string
-	model         string
-	reg           *prometheus.Registry
-	turns         *prometheus.CounterVec
-	turnDur       *prometheus.HistogramVec
-	tokens        *prometheus.CounterVec
-	cost          *prometheus.CounterVec
-	unpriced      *prometheus.CounterVec
-	toolCalls     *prometheus.CounterVec
-	limitHits     *prometheus.CounterVec
-	summaryWrites *prometheus.CounterVec
-	gcDeleted     *prometheus.CounterVec
-	episodeWrites *prometheus.CounterVec
-	evalSessions  *prometheus.CounterVec
-	evalCriteria  *prometheus.CounterVec
-	evalFailures  *prometheus.CounterVec
+	agentID         string
+	tenant          string
+	model           string
+	reg             *prometheus.Registry
+	turns           *prometheus.CounterVec
+	turnDur         *prometheus.HistogramVec
+	tokens          *prometheus.CounterVec
+	cost            *prometheus.CounterVec
+	unpriced        *prometheus.CounterVec
+	toolCalls       *prometheus.CounterVec
+	limitHits       *prometheus.CounterVec
+	summaryWrites   *prometheus.CounterVec
+	gcDeleted       *prometheus.CounterVec
+	retentionReaped *prometheus.CounterVec
+	episodeWrites   *prometheus.CounterVec
+	evalSessions    *prometheus.CounterVec
+	evalCriteria    *prometheus.CounterVec
+	evalFailures    *prometheus.CounterVec
+	evalQueueDrops  *prometheus.CounterVec
+	httpRejected    *prometheus.CounterVec
 }
 
 func NewAgentMetrics(agentID, tenant, model string) *AgentMetrics {
@@ -396,6 +423,10 @@ func NewAgentMetrics(agentID, tenant, model string) *AgentMetrics {
 		Name: "agent_memory_gc_deleted_total",
 		Help: "Dead memory rows reaped by GC.",
 	}, []string{"agent", "tenant"})
+	a.retentionReaped = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "agent_memory_retention_reaped_total",
+		Help: "Live memory rows deleted by configured retention, by kind.",
+	}, []string{"agent", "tenant", "kind"})
 	a.episodeWrites = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "agent_memory_episode_writes_total",
 		Help: "Episodic memory records written.",
@@ -412,7 +443,15 @@ func NewAgentMetrics(agentID, tenant, model string) *AgentMetrics {
 		Name: "agent_eval_failures_total",
 		Help: "Terminal sessions classified by failure category, by agent, tenant, and category (fixed taxonomy: none/quality_fail/tool_error/agent_error/timeout/limit_exceeded).",
 	}, []string{"agent", "tenant", "category"})
-	a.reg.MustRegister(a.turns, a.turnDur, a.tokens, a.cost, a.unpriced, a.toolCalls, a.limitHits, a.summaryWrites, a.gcDeleted, a.episodeWrites, a.evalSessions, a.evalCriteria, a.evalFailures)
+	a.evalQueueDrops = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "agent_eval_queue_dropped_total",
+		Help: "Online eval jobs dropped because the bounded queue was full or shutting down.",
+	}, []string{"agent", "tenant", "reason"})
+	a.httpRejected = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "agent_http_rejected_total",
+		Help: "Agent HTTP requests rejected by a concurrency limit.",
+	}, []string{"agent", "reason"})
+	a.reg.MustRegister(a.turns, a.turnDur, a.tokens, a.cost, a.unpriced, a.toolCalls, a.limitHits, a.summaryWrites, a.gcDeleted, a.retentionReaped, a.episodeWrites, a.evalSessions, a.evalCriteria, a.evalFailures, a.evalQueueDrops, a.httpRejected)
 	return a
 }
 
@@ -495,6 +534,23 @@ func (a *AgentMetrics) EvalCriterion(result string) {
 	a.evalCriteria.WithLabelValues(a.agentID, a.tenant, result).Inc()
 }
 
+// EvalQueueDropped records a sampled session that could not enter the bounded
+// scoring queue. reason is bounded to full, shutdown, or shutdown_timeout by
+// the caller.
+func (a *AgentMetrics) EvalQueueDropped(reason string) {
+	if a == nil {
+		return
+	}
+	a.evalQueueDrops.WithLabelValues(a.agentID, a.tenant, reason).Inc()
+}
+
+func (a *AgentMetrics) HTTPRejected(reason string) {
+	if a == nil {
+		return
+	}
+	a.httpRejected.WithLabelValues(a.agentID, reason).Inc()
+}
+
 // FailureClassified counts one terminal session classified into a failure
 // category. Nil-safe. Bounded: category is the fixed M3 taxonomy enum.
 func (a *AgentMetrics) FailureClassified(category string) {
@@ -510,6 +566,14 @@ func (a *AgentMetrics) MemoryGCReaped(n int) {
 		return
 	}
 	a.gcDeleted.WithLabelValues(a.agentID, a.tenant).Add(float64(n))
+}
+
+// MemoryRetentionReaped adds deleted live-memory rows by kind. Nil-safe.
+func (a *AgentMetrics) MemoryRetentionReaped(kind string, n int) {
+	if a == nil || n <= 0 {
+		return
+	}
+	a.retentionReaped.WithLabelValues(a.agentID, a.tenant, kind).Add(float64(n))
 }
 
 // Handler serves this registry's exposition (agentd mounts it at /metrics).

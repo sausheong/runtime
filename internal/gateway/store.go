@@ -81,7 +81,7 @@ type UpstreamStore struct{ db *sql.DB }
 // NewUpstreamStore applies the gateway_upstreams DDL (under the shared lock) and
 // returns a store. The tenants table (identity schema) must already exist (FK).
 func NewUpstreamStore(ctx context.Context, db *sql.DB) (*UpstreamStore, error) {
-	if err := store.ApplyDDLLocked(ctx, db, upstreamSchemaSQL); err != nil {
+	if err := store.ApplySchemaMigrations(ctx, db, "gateway", 1, upstreamSchemaSQL); err != nil {
 		return nil, err
 	}
 	return &UpstreamStore{db: db}, nil

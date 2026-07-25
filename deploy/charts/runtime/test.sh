@@ -52,13 +52,14 @@ if grep -qE '^kind: Secret' <<<"$out"; then fail "Secret should not be emitted";
 grep -q 'name: mysecret' <<<"$out" || fail "env ref not targeting existingSecret"
 ok "existingSecret"
 
-# 5. Toggles add exactly their resources.
+# 5. NetworkPolicy is secure-by-default; other toggles add their resources.
 [ "$(helm template r "$CHART" $DSN $AGENTS | grep -c 'kind: Ingress')" = "0" ] || fail "ingress present by default"
+helm template r "$CHART" $DSN $AGENTS | grep -q 'kind: NetworkPolicy' || fail "netpol absent by default"
+if helm template r "$CHART" $DSN $AGENTS --set networkPolicy.enabled=false | grep -q 'kind: NetworkPolicy'; then fail "netpol disable toggle"; fi
 helm template r "$CHART" $DSN $AGENTS --set ingress.enabled=true \
   --set 'ingress.hosts[0].host=x.example.com' \
   --set 'ingress.hosts[0].paths[0].path=/' \
   --set 'ingress.hosts[0].paths[0].pathType=Prefix' | grep -q 'kind: Ingress' || fail "ingress toggle"
-helm template r "$CHART" $DSN $AGENTS --set networkPolicy.enabled=true | grep -q 'kind: NetworkPolicy' || fail "netpol toggle"
 helm template r "$CHART" $DSN $AGENTS --set obs.enabled=true | grep -q 'kind: ServiceMonitor' || fail "servicemonitor toggle"
 helm template r "$CHART" $DSN $AGENTS --set obs.enabled=true | grep -q 'grafana_dashboard' || fail "dashboard toggle"
 ok "toggles"
@@ -73,8 +74,10 @@ ok "config checksum"
 
 # 7. perAgentPods: one StatefulSet + headless Service per agent; runtimed config
 #    generated as remote pools; monolith Deployment still present (control plane).
-PAP='--set scheduling.mode=perAgentPods'
-out=$(helm template r "$CHART" $DSN $PAP \
+PAP='--set scheduling.mode=perAgentPods --set secrets.existingSecret=pap-secret'
+out=$(helm template r "$CHART" $DSN --set scheduling.mode=perAgentPods \
+  --set secrets.agentPgDsn=postgres://agent:agent@h:5432/d \
+  --set secrets.agentAuthTokens.support=agent-support-secret \
   --set config.agents[0].id=support --set config.agents[0].name=S \
   --set config.agents[0].model=test/scripted --set config.agents[0].replicas=2)
 grep -q 'kind: StatefulSet'        <<<"$out" || fail "perAgentPods: no StatefulSet"
@@ -86,6 +89,9 @@ grep -q 'support-{i}.r-agent-support-hl' <<<"$out" || fail "perAgentPods: genera
 # The dial template must be IDENTICAL on both sides (drift guard): the host base
 # appears in both the headless Service name and the generated url.
 grep -q 'r-agent-support-hl.default.svc.cluster.local' <<<"$out" || fail "perAgentPods: DNS base drift"
+grep -q 'RUNTIME_AGENT_AUTH_TOKEN_SUPPORT' <<<"$out" || fail "perAgentPods: no per-agent bearer"
+grep -q 'key: RUNTIME_AGENT_PG_DSN' <<<"$out" || fail "perAgentPods: agent does not use restricted DSN"
+[ "$(grep -c 'kind: NetworkPolicy' <<<"$out")" -ge 2 ] || fail "perAgentPods: no dedicated agent NetworkPolicy"
 ok "perAgentPods renders StatefulSet+headless+generated remote config"
 
 # 7b. perAgentPods single-replica agent → concrete ordinal-0 url, no {i}, no replicas key.
@@ -104,6 +110,37 @@ if helm template r "$CHART" $DSN $PAP \
 fi
 ok "perAgentPods fail-closed (listen_addr set)"
 
+# 7d. perAgentPods fails closed without a distinct bearer and agent DSN.
+if helm template r "$CHART" $DSN --set scheduling.mode=perAgentPods \
+  --set secrets.agentPgDsn=postgres://agent:agent@h:5432/d \
+  --set config.agents[0].id=s --set config.agents[0].name=S \
+  --set config.agents[0].model=m >/dev/null 2>&1; then
+  fail "expected perAgentPods auth fail-closed"
+fi
+ok "perAgentPods fail-closed (per-agent auth absent)"
+
+# 7e. One perAgentPods release has one restricted DB role and therefore one
+# tenant. Sharing it across tenants would defeat the database row boundary.
+if helm template r "$CHART" $DSN $PAP \
+  --set config.agents[0].id=a --set config.agents[0].name=A \
+  --set config.agents[0].model=m --set config.agents[0].tenant=alpha \
+  --set config.agents[1].id=b --set config.agents[1].name=B \
+  --set config.agents[1].model=m --set config.agents[1].tenant=beta >/dev/null 2>&1; then
+  fail "expected perAgentPods multi-tenant DB-role fail-closed"
+fi
+ok "perAgentPods fail-closed (one restricted role cannot span tenants)"
+
+# 7f. Tenant RLS is not an agent boundary. One shared restricted role may not
+# be reused by two agents even when both belong to the same tenant.
+if helm template r "$CHART" $DSN $PAP \
+  --set config.agents[0].id=a --set config.agents[0].name=A \
+  --set config.agents[0].model=m --set config.agents[0].tenant=alpha \
+  --set config.agents[1].id=b --set config.agents[1].name=B \
+  --set config.agents[1].model=m --set config.agents[1].tenant=alpha >/dev/null 2>&1; then
+  fail "expected perAgentPods shared-agent-role fail-closed"
+fi
+ok "perAgentPods fail-closed (one restricted role cannot span agents)"
+
 # 8. monolith regression: default mode still renders the M1 shape, no StatefulSet.
 out=$(helm template r "$CHART" $DSN $AGENTS)
 if grep -q 'kind: StatefulSet' <<<"$out"; then fail "monolith mode leaked a StatefulSet"; fi
@@ -113,7 +150,9 @@ ok "monolith regression (no StatefulSet)"
 # 9. C3 M2 registration handshake: perAgentPods + secrets.registrationToken set →
 #    agent StatefulSet carries RUNTIME_REGISTRATION_URL + a RUNTIME_REGISTRATION_TOKEN
 #    secretKeyRef, and the chart Secret carries the RUNTIME_REGISTRATION_TOKEN key.
-out=$(helm template r "$CHART" $DSN $PAP \
+out=$(helm template r "$CHART" $DSN --set scheduling.mode=perAgentPods \
+  --set secrets.agentPgDsn=postgres://agent:agent@h:5432/d \
+  --set secrets.agentAuthTokens.support=agent-support-secret \
   --set config.agents[0].id=support --set config.agents[0].name=S \
   --set config.agents[0].model=test/scripted \
   --set secrets.registrationToken=svk-a.b)
@@ -121,13 +160,16 @@ grep -q 'RUNTIME_REGISTRATION_URL'   <<<"$out" || fail "handshake: no RUNTIME_RE
 grep -q '/register'                  <<<"$out" || fail "handshake: registration URL not /register"
 # The token must arrive via a secretKeyRef (key: RUNTIME_REGISTRATION_TOKEN), not inline.
 grep -q 'key: RUNTIME_REGISTRATION_TOKEN' <<<"$out" || fail "handshake: no RUNTIME_REGISTRATION_TOKEN secretKeyRef"
-# The chart-managed Secret must carry the token key.
+# The chart-managed Secret must carry the registration and per-agent token keys.
 grep -qE '^\s+RUNTIME_REGISTRATION_TOKEN:' <<<"$out" || fail "handshake: Secret missing RUNTIME_REGISTRATION_TOKEN key"
+grep -qE '^\s+RUNTIME_AGENT_AUTH_TOKEN_SUPPORT:' <<<"$out" || fail "handshake: Secret missing per-agent bearer"
 ok "handshake on (perAgentPods + registrationToken)"
 
 # 9b. perAgentPods WITHOUT a registration token (and no existingSecret) → handshake OFF;
 #     no RUNTIME_REGISTRATION_URL (C2 M2 static-Secret behavior preserved).
-out=$(helm template r "$CHART" $DSN $PAP \
+out=$(helm template r "$CHART" $DSN --set scheduling.mode=perAgentPods \
+  --set secrets.agentPgDsn=postgres://agent:agent@h:5432/d \
+  --set secrets.agentAuthTokens.support=agent-support-secret \
   --set config.agents[0].id=support --set config.agents[0].name=S \
   --set config.agents[0].model=test/scripted)
 if grep -q 'RUNTIME_REGISTRATION_URL' <<<"$out"; then fail "handshake leaked without a registration token"; fi
@@ -137,5 +179,21 @@ ok "handshake off (perAgentPods, no token)"
 out=$(helm template r "$CHART" $DSN $AGENTS --set secrets.registrationToken=svk-a.b)
 if grep -q 'RUNTIME_REGISTRATION_URL' <<<"$out"; then fail "monolith leaked RUNTIME_REGISTRATION_URL"; fi
 ok "monolith regression (no registration env)"
+
+# 10. Forwarded identity fails closed without a stable asymmetric key pair and
+# exposes the private key only to the control plane.
+if helm template r "$CHART" $DSN $AGENTS \
+  --set identity.subjectForwarding=true >/dev/null 2>&1; then
+  fail "expected subject-forwarding signing-key fail-closed"
+fi
+out=$(helm template r "$CHART" $DSN $AGENTS \
+  --set identity.subjectForwarding=true \
+  --set secrets.identitySigningPrivateKey=private-test-key \
+  --set secrets.identitySigningPublicKey=public-test-key)
+grep -q 'RUNTIME_IDENTITY_SIGNING_PRIVATE_KEY' <<<"$out" || fail "subject forwarding: private key absent"
+grep -q 'RUNTIME_IDENTITY_SIGNING_PUBLIC_KEY' <<<"$out" || fail "subject forwarding: public key absent"
+[ "$(grep -c 'key: RUNTIME_IDENTITY_SIGNING_PRIVATE_KEY' <<<"$out")" = "1" ] ||
+  fail "subject forwarding: private key exposed outside control plane"
+ok "subject forwarding requires asymmetric signing keys"
 
 echo "ALL CHART TESTS PASSED"

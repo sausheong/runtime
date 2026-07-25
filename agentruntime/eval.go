@@ -5,14 +5,23 @@ import (
 	"encoding/json"
 	"hash/fnv"
 	"log/slog"
+	"time"
 
 	"github.com/sausheong/harness/session"
 	"github.com/sausheong/runtime/internal/eval"
 )
 
+type scoreJob struct {
+	sessionID      string
+	tenant         string
+	actor          string
+	status         string
+	terminalReason string
+	toolErrored    bool
+	entries        []session.SessionEntry
+}
+
 // sampled is the deterministic sample decision: fnv32a(sessionID) % 100 < rate.
-// Deterministic (never rand) so a DBOS replay of the terminal block makes the
-// identical decision. rate<=0 ⇒ never; rate>=100 ⇒ always.
 func sampled(sessionID string, rate int) bool {
 	if rate <= 0 {
 		return false
@@ -25,8 +34,6 @@ func sampled(sessionID string, rate int) bool {
 	return int(h.Sum32()%100) < rate
 }
 
-// finalAssistantText returns the last assistant message's text in entries, "" if
-// none. Mirrors publishableEvents' assistant-text extraction.
 func finalAssistantText(entries []session.SessionEntry) string {
 	out := ""
 	for _, e := range entries {
@@ -34,34 +41,92 @@ func finalAssistantText(entries []session.SessionEntry) string {
 			continue
 		}
 		var md session.MessageData
-		if err := json.Unmarshal(e.Data, &md); err != nil {
-			continue
-		}
-		if md.Text != "" {
+		if err := json.Unmarshal(e.Data, &md); err == nil && md.Text != "" {
 			out = md.Text
 		}
 	}
 	return out
 }
 
-// resultPutter is the minimal store surface scoreOnto needs (test seam).
 type resultPutter interface {
 	PutOnlineResult(ctx context.Context, sessionID, criterion, tenant, actor, scorer string, passed bool, detail string) error
 }
 
-// scoreSession scores a finished session's output against the configured policy,
-// persists one result per criterion, THEN classifies the session (M3) at the
-// tail — after every criterion is written — so classify's qualityFailed reads
-// the online_eval_results this same goroutine just wrote (no race with the
-// terminal block). Best-effort: a judge/criterion error fails THAT criterion,
-// never the session. Always classifies, even with no criteria.
-func (m *Manager) scoreSession(sessionID, tenant, actor, status, terminalReason string, toolErrored bool, entries []session.SessionEntry) {
-	m.scoreOnto(m.st, sessionID, tenant, actor, status, terminalReason, toolErrored, entries)
+func (m *Manager) startScoring(workers, queue int, timeout time.Duration) {
+	ctx, cancel := context.WithCancel(context.Background())
+	m.scoreMu.Lock()
+	m.scoreQueue = make(chan scoreJob, queue)
+	m.scoreCancel = cancel
+	m.scoreTimeout = timeout
+	m.scoreClosed = false
+	m.scoreMu.Unlock()
+	for range workers {
+		m.scoreWG.Add(1)
+		go func() {
+			defer m.scoreWG.Done()
+			for job := range m.scoreQueue {
+				jobCtx, stop := context.WithTimeout(ctx, timeout)
+				m.scoreSession(jobCtx, job)
+				stop()
+			}
+		}()
+	}
 }
 
-// criterionCase maps a policy Criterion onto the eval.Case scoring vocabulary so
-// eval.Score can evaluate it: judge carries Rubric, contains/regex carry Pattern
-// as Expected. Mirrors eval.Criterion.toCase (unexported in that package).
+// enqueueScore is intentionally non-blocking. Saturated queues drop the
+// sampled job and expose that decision through a bounded metric.
+func (m *Manager) enqueueScore(job scoreJob) bool {
+	m.scoreMu.RLock()
+	defer m.scoreMu.RUnlock()
+	if m.scoreClosed || m.scoreQueue == nil {
+		m.metrics.EvalQueueDropped("shutdown")
+		return false
+	}
+	select {
+	case m.scoreQueue <- job:
+		return true
+	default:
+		m.metrics.EvalQueueDropped("full")
+		return false
+	}
+}
+
+// stopScoring first closes the queue so workers drain it. If drain exceeds the
+// deadline, lifecycle cancellation stops provider and database calls.
+func (m *Manager) stopScoring(timeout time.Duration) {
+	m.scoreMu.Lock()
+	if m.scoreClosed || m.scoreQueue == nil {
+		m.scoreMu.Unlock()
+		return
+	}
+	m.scoreClosed = true
+	close(m.scoreQueue)
+	cancel := m.scoreCancel
+	m.scoreMu.Unlock()
+
+	done := make(chan struct{})
+	go func() {
+		m.scoreWG.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(timeout):
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(100 * time.Millisecond):
+			m.metrics.EvalQueueDropped("shutdown_timeout")
+			slog.Error("online scoring workers ignored cancellation; continuing bounded shutdown")
+		}
+	}
+	cancel()
+}
+
+func (m *Manager) scoreSession(ctx context.Context, job scoreJob) {
+	m.scoreOnto(ctx, m.st, job.sessionID, job.tenant, job.actor, job.status, job.terminalReason, job.toolErrored, job.entries)
+}
+
 func criterionCase(c eval.Criterion) eval.Case {
 	if c.Scorer == eval.ScorerJudge {
 		return eval.Case{Scorer: eval.ScorerJudge, Rubric: c.Rubric}
@@ -69,30 +134,34 @@ func criterionCase(c eval.Criterion) eval.Case {
 	return eval.Case{Scorer: c.Scorer, Expected: c.Pattern}
 }
 
-func (m *Manager) scoreOnto(rs resultPutter, sessionID, tenant, actor, status, terminalReason string, toolErrored bool, entries []session.SessionEntry) {
-	ctx := context.Background()
+func (m *Manager) scoreOnto(ctx context.Context, rs resultPutter, sessionID, tenant, actor, status, terminalReason string, toolErrored bool, entries []session.SessionEntry) {
 	output := finalAssistantText(entries)
 	qualityFailed := false
+	allPersisted := true
 	if m.evalPolicy != nil {
 		for _, c := range m.evalPolicy.Criteria {
+			if ctx.Err() != nil {
+				allPersisted = false
+				break
+			}
 			passed, detail := eval.Score(ctx, m.evalJudge, criterionCase(c), output)
+			if err := rs.PutOnlineResult(ctx, sessionID, c.Name, tenant, actor, string(c.Scorer), passed, detail); err != nil {
+				allPersisted = false
+				slog.Warn("eval: put online result failed", "session", sessionID, "criterion", c.Name, "err", err)
+				continue
+			}
 			if !passed {
 				qualityFailed = true
 			}
-			if err := rs.PutOnlineResult(ctx, sessionID, c.Name, tenant, actor, string(c.Scorer), passed, detail); err != nil {
-				slog.Warn("eval: put online result failed", "session", sessionID, "criterion", c.Name, "err", err)
-			}
-			res := "fail"
+			result := "fail"
 			if passed {
-				res = "pass"
+				result = "pass"
 			}
-			m.metrics.EvalCriterion(res)
+			m.metrics.EvalCriterion(result)
 		}
-		m.metrics.EvalSessionScored()
+		if allPersisted {
+			m.metrics.EvalSessionScored()
+		}
 	}
-	// M3: classify at the tail with the qualityFailed just computed from the
-	// criteria we scored. When called from the sampled path this is the real
-	// quality signal; the no-policy inline path never reaches here (serve.go
-	// calls classifyAndPersist directly with qualityFailed=false).
-	m.classifyAndPersist(sessionID, status, terminalReason, toolErrored, qualityFailed)
+	m.classifyAndPersistContext(ctx, sessionID, status, terminalReason, toolErrored, qualityFailed)
 }

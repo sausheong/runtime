@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -32,12 +33,37 @@ func NewMemStore() Store {
 func (m *memStore) Ping(context.Context) error { return nil }
 
 func (m *memStore) CreateSession(_ context.Context, agentID string, replica int) (string, error) {
+	return m.createSession("default", agentID, replica)
+}
+
+func (m *memStore) CreateSessionForTenant(_ context.Context, tenantID, agentID string, replica int) (string, error) {
+	return m.createSession(tenantID, agentID, replica)
+}
+
+func (m *memStore) createSession(tenantID, agentID string, replica int) (string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.seq++
 	id := fmt.Sprintf("ses-%d", m.seq)
-	m.sessions[id] = &SessionRow{ID: id, AgentID: agentID, WorkflowID: id, Status: "created", Replica: replica}
+	now := time.Now().UTC()
+	m.sessions[id] = &SessionRow{ID: id, TenantID: tenantID, AgentID: agentID, WorkflowID: id, Status: "created", Replica: replica, CreatedAt: now, LastActiveAt: now}
 	return id, nil
+}
+
+func (m *memStore) BindSession(_ context.Context, id, tenantID, agentID string, replica int) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if existing, exists := m.sessions[id]; exists {
+		if existing.TenantID == tenantID && existing.AgentID == agentID && existing.Replica == replica {
+			return nil
+		}
+		return fmt.Errorf("bind session %q: conflicts with existing owner", id)
+	}
+	m.sessions[id] = &SessionRow{
+		ID: id, TenantID: tenantID, AgentID: agentID, WorkflowID: id,
+		Status: "external", Replica: replica, CreatedAt: time.Now().UTC(), LastActiveAt: time.Now().UTC(),
+	}
+	return nil
 }
 
 func (m *memStore) SessionReplica(_ context.Context, id string) (int, error) {
@@ -45,20 +71,20 @@ func (m *memStore) SessionReplica(_ context.Context, id string) (int, error) {
 	defer m.mu.Unlock()
 	s, ok := m.sessions[id]
 	if !ok {
-		return 0, fmt.Errorf("session %q not found", id)
+		return 0, fmt.Errorf("%w: %q", ErrSessionNotFound, id)
 	}
 	return s.Replica, nil
 }
 
-func (m *memStore) ActiveSessionsByReplica(_ context.Context, agentID string) (map[int]int, error) {
+func (m *memStore) ActiveSessionsByReplica(_ context.Context, tenantID, agentID string) (map[int]int, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	out := map[int]int{}
 	for _, s := range m.sessions {
-		if s.AgentID != agentID {
+		if s.TenantID != tenantID || s.AgentID != agentID {
 			continue
 		}
-		if s.Status == "completed" || s.Status == "error" || s.Status == "limit_exceeded" {
+		if s.Status == "external" || s.Status == "completed" || s.Status == "error" || s.Status == "limit_exceeded" {
 			continue
 		}
 		out[s.Replica]++
@@ -67,11 +93,19 @@ func (m *memStore) ActiveSessionsByReplica(_ context.Context, agentID string) (m
 }
 
 func (m *memStore) ListSessions(_ context.Context, agentID string) ([]SessionRow, error) {
+	return m.listSessions("default", agentID)
+}
+
+func (m *memStore) ListSessionsForTenant(_ context.Context, tenantID, agentID string) ([]SessionRow, error) {
+	return m.listSessions(tenantID, agentID)
+}
+
+func (m *memStore) listSessions(tenantID, agentID string) ([]SessionRow, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	var out []SessionRow
 	for _, s := range m.sessions {
-		if s.AgentID == agentID {
+		if s.TenantID == tenantID && s.AgentID == agentID {
 			out = append(out, *s)
 		}
 	}
@@ -83,9 +117,10 @@ func (m *memStore) SetTurnCount(_ context.Context, id string, n int) error {
 	defer m.mu.Unlock()
 	s, ok := m.sessions[id]
 	if !ok {
-		return fmt.Errorf("session %q not found", id)
+		return fmt.Errorf("%w: %q", ErrSessionNotFound, id)
 	}
 	s.TurnCount = n
+	s.LastActiveAt = time.Now().UTC()
 	return nil
 }
 
@@ -94,10 +129,11 @@ func (m *memStore) SetSessionUsage(_ context.Context, id string, tokens int64, c
 	defer m.mu.Unlock()
 	s, ok := m.sessions[id]
 	if !ok {
-		return fmt.Errorf("session %q not found", id)
+		return fmt.Errorf("%w: %q", ErrSessionNotFound, id)
 	}
 	s.TokensTotal = tokens
 	s.CostUSD = cost
+	s.LastActiveAt = time.Now().UTC()
 	return nil
 }
 
@@ -106,18 +142,19 @@ func (m *memStore) SetFailureCategory(_ context.Context, id, category string) er
 	defer m.mu.Unlock()
 	s, ok := m.sessions[id]
 	if !ok {
-		return fmt.Errorf("session %q not found", id)
+		return fmt.Errorf("%w: %q", ErrSessionNotFound, id)
 	}
 	s.FailureCategory = category
+	s.LastActiveAt = time.Now().UTC()
 	return nil
 }
 
-func (m *memStore) FailureBreakdownByAgent(_ context.Context, agentID string, since time.Time) (map[string]int, error) {
+func (m *memStore) FailureBreakdownByAgent(_ context.Context, tenantID, agentID string, since time.Time) (map[string]int, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	out := map[string]int{}
 	for _, s := range m.sessions {
-		if s.AgentID != agentID || s.FailureCategory == "" {
+		if s.TenantID != tenantID || s.AgentID != agentID || s.FailureCategory == "" {
 			continue
 		}
 		// memStore has no created_at; the since filter is a no-op here (the PG
@@ -132,7 +169,7 @@ func (m *memStore) GetSession(_ context.Context, id string) (SessionRow, error) 
 	defer m.mu.Unlock()
 	s, ok := m.sessions[id]
 	if !ok {
-		return SessionRow{}, fmt.Errorf("session %q not found", id)
+		return SessionRow{}, fmt.Errorf("%w: %q", ErrSessionNotFound, id)
 	}
 	return *s, nil
 }
@@ -142,9 +179,10 @@ func (m *memStore) SetSessionStatus(_ context.Context, id, status string) error 
 	defer m.mu.Unlock()
 	s, ok := m.sessions[id]
 	if !ok {
-		return fmt.Errorf("session %q not found", id)
+		return fmt.Errorf("%w: %q", ErrSessionNotFound, id)
 	}
 	s.Status = status
+	s.LastActiveAt = time.Now().UTC()
 	return nil
 }
 
@@ -163,7 +201,7 @@ func (m *memStore) appendEvent(sessionID, eventKey, typ string, payload []byte) 
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if _, ok := m.sessions[sessionID]; !ok {
-		return 0, fmt.Errorf("session %q not found", sessionID)
+		return 0, fmt.Errorf("%w: %q", ErrSessionNotFound, sessionID)
 	}
 	if eventKey != "" {
 		if seq, ok := m.eventKeys[sessionID][eventKey]; ok {
@@ -199,6 +237,10 @@ func (m *memStore) EventsSince(_ context.Context, sessionID string, afterSeq int
 func (m *memStore) AppendTranscript(_ context.Context, sessionID string, turn int, tenant, actor string, entries []byte, stopReason, status string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	_, ok := m.sessions[sessionID]
+	if !ok {
+		return fmt.Errorf("%w: %q", ErrSessionNotFound, sessionID)
+	}
 	cp := make([]byte, len(entries))
 	copy(cp, entries)
 	m.transcripts[sessionID+"\x00"+strconv.Itoa(turn)] = cp
@@ -208,6 +250,10 @@ func (m *memStore) AppendTranscript(_ context.Context, sessionID string, turn in
 func (m *memStore) PutOnlineResult(_ context.Context, sessionID, criterion, tenant, actor, scorer string, passed bool, detail string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	parent, ok := m.sessions[sessionID]
+	if !ok {
+		return fmt.Errorf("%w: %q", ErrSessionNotFound, sessionID)
+	}
 	key := sessionID + "\x00" + criterion
 	existing, ok := m.results[key]
 	created := time.Now()
@@ -217,7 +263,7 @@ func (m *memStore) PutOnlineResult(_ context.Context, sessionID, criterion, tena
 	m.results[key] = OnlineResult{
 		SessionID: sessionID,
 		Criterion: criterion,
-		Tenant:    tenant,
+		Tenant:    parent.TenantID,
 		Actor:     actor,
 		Scorer:    scorer,
 		Passed:    passed,
@@ -258,8 +304,57 @@ func (m *memStore) ListOnlineResultsByTenant(_ context.Context, tenant string, l
 
 // The hermetic store does not retain timestamps for transcripts; production
 // retention behaviour is covered by the PostgreSQL integration path.
-func (m *memStore) ReapEvaluationData(context.Context, time.Time) (int64, error) {
+func (m *memStore) ReapEvaluationData(context.Context, time.Time, int) (int64, error) {
 	return 0, nil
+}
+
+func (m *memStore) ReapSessions(_ context.Context, before time.Time, batch int, dryRun bool) (int64, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if batch < 1 {
+		batch = 1
+	}
+	var ids []string
+	for id, row := range m.sessions {
+		if len(ids) >= batch {
+			break
+		}
+		if !row.LastActiveAt.Before(before) ||
+			(row.Status != "external" && row.Status != "completed" && row.Status != "error" && row.Status != "limit_exceeded") {
+			continue
+		}
+		ids = append(ids, id)
+	}
+	if dryRun {
+		return int64(len(ids)), nil
+	}
+	for _, id := range ids {
+		delete(m.sessions, id)
+		delete(m.events, id)
+		delete(m.eventKeys, id)
+		for key := range m.transcripts {
+			if strings.HasPrefix(key, id+"\x00") {
+				delete(m.transcripts, key)
+			}
+		}
+		for key := range m.results {
+			if strings.HasPrefix(key, id+"\x00") {
+				delete(m.results, key)
+			}
+		}
+	}
+	return int64(len(ids)), nil
+}
+
+func (m *memStore) TouchSession(_ context.Context, id string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	row, ok := m.sessions[id]
+	if !ok {
+		return fmt.Errorf("%w: %q", ErrSessionNotFound, id)
+	}
+	row.LastActiveAt = time.Now().UTC()
+	return nil
 }
 
 func (m *memStore) Close() error { return nil }

@@ -13,6 +13,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/prometheus/common/expfmt"
 	"github.com/prometheus/common/model"
+	"github.com/sausheong/runtime/internal/rheader"
 )
 
 type rejectingTransport struct {
@@ -396,5 +397,54 @@ func TestFanout_RemoteTargetUsesBaseURLAndToken(t *testing.T) {
 	}
 	if sawAuth != "Bearer "+token {
 		t.Fatalf("scrape Authorization = %q", sawAuth)
+	}
+}
+
+func TestFanout_SignsAuthenticatedMetricsRequest(t *testing.T) {
+	const token = "scrape-tok"
+	privateKey, publicKey, err := rheader.GenerateKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var verified bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer "+token {
+			http.Error(w, "missing bearer", http.StatusUnauthorized)
+			return
+		}
+		if _, err := rheader.Verify(r, publicKey, time.Now(), time.Minute); err != nil {
+			http.Error(w, "bad signature: "+err.Error(), http.StatusUnauthorized)
+			return
+		}
+		verified = true
+		fmt.Fprint(w, exposition("signed"))
+	}))
+	defer srv.Close()
+
+	c := NewControlMetrics()
+	h := FanoutHandler(c, func() []ScrapeTarget {
+		return []ScrapeTarget{{
+			Agent: "signed", BaseURL: srv.URL, Token: token,
+			Sign: func(req *http.Request) error {
+				return rheader.Sign(req, privateKey, time.Now())
+			},
+		}}
+	})
+	body := scrapeHandler(t, h)
+	if !verified {
+		t.Fatal("agent did not verify the signed metrics request")
+	}
+	if !strings.Contains(body, `agent_turns_total{agent="signed"`) {
+		t.Fatalf("signed agent metrics missing:\n%s", body)
+	}
+}
+
+func TestScrapeOneReportsSigningError(t *testing.T) {
+	_, up, reason := scrapeOne(context.Background(), ScrapeTarget{
+		BaseURL: "http://example.test",
+		Sign:    func(*http.Request) error { return errors.New("no key") },
+	})
+	if up || reason != "signing_error" {
+		t.Fatalf("up=%v reason=%q, want false/signing_error", up, reason)
 	}
 }

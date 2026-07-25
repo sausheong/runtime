@@ -10,6 +10,8 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 )
 
 var markdownLink = regexp.MustCompile(`\[[^]]*]\(([^)\s]+)(?:\s+"[^"]*")?\)`)
@@ -30,7 +32,22 @@ func trackedMarkdown(t *testing.T, root string) []string {
 	if err != nil {
 		t.Skipf("tracked Markdown inventory requires a Git checkout: %v", err)
 	}
-	return strings.Fields(string(out))
+	files := strings.Fields(string(out))
+	seen := make(map[string]bool, len(files))
+	for _, name := range files {
+		seen[name] = true
+	}
+	// Planning documents are required acceptance artefacts and must be checked
+	// even in a local worktree before they have been staged.
+	for _, name := range []string{
+		"docs/planning/runtime-remediation-issues.md",
+		"docs/planning/runtime-remediation-plan.md",
+	} {
+		if !seen[name] {
+			files = append(files, name)
+		}
+	}
+	return files
 }
 
 func TestTrackedMarkdownStructure(t *testing.T) {
@@ -52,6 +69,123 @@ func TestTrackedMarkdownStructure(t *testing.T) {
 			checkFences(t, data)
 			checkLocalLinks(t, root, path, data)
 		})
+	}
+}
+
+func TestRequiredDocumentationAndPlanningRegister(t *testing.T) {
+	root := repositoryRoot(t)
+	required := []string{
+		"README.md",
+		"SECURITY.md",
+		"CONTRIBUTING.md",
+		"CHANGELOG.md",
+		"RELEASING.md",
+		"documentation-map.md",
+		"docs/planning/runtime-remediation-issues.md",
+		"docs/planning/runtime-remediation-plan.md",
+	}
+	for _, name := range required {
+		if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(name))); err != nil {
+			t.Errorf("required documentation %s: %v", name, err)
+		}
+	}
+}
+
+func TestChartREADMEVersionMatchesMetadata(t *testing.T) {
+	root := repositoryRoot(t)
+	chartData, err := os.ReadFile(filepath.Join(root, "deploy/charts/runtime/Chart.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var chart struct {
+		Version    string `yaml:"version"`
+		AppVersion string `yaml:"appVersion"`
+	}
+	if err := yaml.Unmarshal(chartData, &chart); err != nil {
+		t.Fatal(err)
+	}
+	readme, err := os.ReadFile(filepath.Join(root, "deploy/charts/runtime/README.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(readme)
+	if !strings.Contains(text, "**Chart version:** "+chart.Version) {
+		t.Errorf("Helm README does not report chart version %s", chart.Version)
+	}
+	if !strings.Contains(text, "**App version:** "+chart.AppVersion) {
+		t.Errorf("Helm README does not report app version %s", chart.AppVersion)
+	}
+}
+
+func TestReleaseWorkflowIsValidAndPinned(t *testing.T) {
+	root := repositoryRoot(t)
+	data, err := os.ReadFile(filepath.Join(root, ".github/workflows/release.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document yaml.Node
+	if err := yaml.Unmarshal(data, &document); err != nil {
+		t.Fatalf("release workflow YAML: %v", err)
+	}
+	action := regexp.MustCompile(`(?m)^\s*-\s+uses:\s+\S+@([0-9a-f]{40})\s*(?:#.*)?$`)
+	usesLines := regexp.MustCompile(`(?m)^\s*-\s+uses:\s+.*$`).FindAll(data, -1)
+	if len(usesLines) == 0 {
+		t.Fatal("release workflow has no actions")
+	}
+	if got := len(action.FindAll(data, -1)); got != len(usesLines) {
+		t.Errorf("release workflow has unpinned action references: %d actions, %d commit-pinned", len(usesLines), got)
+	}
+	for _, required := range []string{
+		"${{ github.ref_name }}",
+		"docker push",
+		"syft ",
+		"cosign sign ",
+		"cosign attest ",
+		"helm push",
+		"make test-integration",
+		"go test -race",
+		"./internal/eval",
+		"pytest contrib/shims/python/tests",
+		"bash deploy/charts/runtime/test.sh",
+		"docker compose -f deploy/compose/docker-compose.yml config --quiet",
+		"shellcheck ",
+	} {
+		if !strings.Contains(string(data), required) {
+			t.Errorf("release workflow missing %q", required)
+		}
+	}
+}
+
+func TestDeploymentAgentDatabaseCredentialsFailClosed(t *testing.T) {
+	root := repositoryRoot(t)
+	gcpCompose, err := os.ReadFile(filepath.Join(root, "deploy/gcp/control-plane/docker-compose.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	composeText := string(gcpCompose)
+	if strings.Contains(composeText, "runtime-agent-change-me") {
+		t.Fatal("GCP Compose must not provide a predictable agent database password")
+	}
+	if got := strings.Count(composeText, "${RUNTIME_AGENT_DB_PASSWORD:?set RUNTIME_AGENT_DB_PASSWORD}"); got != 2 {
+		t.Fatalf("GCP Compose has %d fail-closed agent password references, want 2", got)
+	}
+
+	envExample, err := os.ReadFile(filepath.Join(root, "deploy/gcp/control-plane/.env.example"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(envExample), "RUNTIME_AGENT_DB_PASSWORD=") {
+		t.Fatal("GCP environment example omits RUNTIME_AGENT_DB_PASSWORD")
+	}
+
+	for _, workflow := range []string{".github/workflows/ci.yml", ".github/workflows/release.yml"} {
+		data, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(workflow)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Count(string(data), "RUNTIME_AGENT_DB_PASSWORD:") < 2 {
+			t.Errorf("%s does not configure the agent database password for both Compose gates", workflow)
+		}
 	}
 }
 

@@ -50,7 +50,7 @@ type Store struct{ db *sql.DB }
 // NewStore creates the identity tables (under the shared DDL lock) and returns a
 // Store. db must already be open and reachable.
 func NewStore(ctx context.Context, db *sql.DB) (*Store, error) {
-	if err := store.ApplyDDLLocked(ctx, db, schemaSQL); err != nil {
+	if err := store.ApplySchemaMigrations(ctx, db, "identity", 1, schemaSQL); err != nil {
 		return nil, err
 	}
 	return &Store{db: db}, nil

@@ -26,10 +26,11 @@ type Config struct {
 	// unpriced (tokens still metered, cost skipped). Set by agentd from
 	// RUNTIME_AGENT_PRICING.
 	Price *config.ModelPrice
-	// StartMemoryGC, when non-nil, launches the memory GC reaper bound to ctx.
-	// onReap receives each sweep's delete count (for metrics). Nil ⇒ GC disabled.
-	// Set by agentkind.wireMemory; invoked by Serve after metrics are built.
-	StartMemoryGC func(ctx context.Context, onReap func(int))
+	// StartMemoryGC, when non-nil, launches memory maintenance bound to ctx.
+	// onGC receives dead-history deletes; onRetention receives live-memory
+	// deletes by kind. Nil ⇒ maintenance disabled. Set by agentkind.wireMemory;
+	// invoked by Serve after metrics are built.
+	StartMemoryGC func(ctx context.Context, onGC func(int), onRetention func(string, int))
 	// SetMemoryMetrics, when non-nil, wires the memory write metrics (summary,
 	// episode) after AgentMetrics is built. Nil ⇒ metrics inert. Set by
 	// agentkind.wireMemory; invoked by Serve.
@@ -41,6 +42,9 @@ type Config struct {
 	// EvalJudge grades judge-scorer criteria (LLM-as-judge), or nil when no judge
 	// model is configured. A nil judge fails judge criteria closed (never aborts).
 	EvalJudge eval.Judge
+	// TranscriptFilter is an optional deployment-specific final filter applied
+	// after built-in best-effort credential redaction and before persistence.
+	TranscriptFilter func([]byte) ([]byte, error)
 }
 
 // Validate checks required fields.

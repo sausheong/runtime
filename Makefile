@@ -12,6 +12,7 @@
 # ---- Configuration (override on the command line, e.g. `make run CTL_ADDR=:9090`) ----
 BIN_DIR     ?= bin
 PG_DSN      ?= postgres://runtime:runtime@localhost:5432/runtime?sslmode=disable
+INTEGRATION_TIMEOUT ?= 600s
 CTL_ADDR    ?= :8080
 CONFIG      ?= runtime.yaml
 COMPOSE     ?= docker compose -f deploy/docker-compose.yml
@@ -53,8 +54,20 @@ test: ## Run hermetic unit tests (no network, no DB)
 .PHONY: test-integration
 test-integration: ## Run integration tests (requires Postgres at PG_DSN; see pg-up)
 	RUNTIME_PG_DSN="$${RUNTIME_PG_DSN:-$(PG_DSN)}" \
+	RUNTIME_AGENT_PG_DSN="$${RUNTIME_AGENT_PG_DSN:-postgres://runtime_agent_test:runtime-agent-test@localhost:5432/runtime?sslmode=disable}" \
+	RUNTIME_TEST_ALLOW_AGENT_ROLE_REBIND=1 \
+	RUNTIME_TEST_ALLOW_SHARED_AGENT_DB_ROLE=1 \
 	RUNTIME_METRICS_ADDR="$${RUNTIME_METRICS_ADDR:-127.0.0.1:19091}" \
-		go test $(GOFLAGS) -tags integration ./test/ -count=1 -timeout 300s
+		GOFLAGS="$${GOFLAGS:-} -tags=runtime_integration" \
+		go test $(GOFLAGS) -tags integration ./test/ -count=1 -timeout $(INTEGRATION_TIMEOUT)
+	RUNTIME_PG_DSN="$${RUNTIME_PG_DSN:-$(PG_DSN)}" \
+	RUNTIME_AGENT_PG_DSN="$${RUNTIME_AGENT_PG_DSN:-postgres://runtime_agent_test:runtime-agent-test@localhost:5432/runtime?sslmode=disable}" \
+	RUNTIME_TEST_ALLOW_AGENT_ROLE_REBIND=1 \
+	RUNTIME_TEST_ALLOW_SHARED_AGENT_DB_ROLE=1 \
+		GOFLAGS="$${GOFLAGS:-} -tags=runtime_integration" \
+		go test $(GOFLAGS) -tags integration -p 1 \
+			./internal/store ./internal/eval ./internal/memory ./internal/identity \
+			-count=1 -timeout $(INTEGRATION_TIMEOUT)
 
 .PHONY: test-live
 test-live: ## Run live tests against a real LLM (requires OPENAI_API_KEY)

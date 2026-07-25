@@ -76,8 +76,12 @@ func entriesHaveToolError(entries []session.SessionEntry) bool {
 // returned — classification must never affect a turn. Deterministic + idempotent
 // ⇒ a DBOS replay re-derives and re-writes the identical category.
 func (m *Manager) classifyAndPersist(sessionID, status, terminalReason string, toolErrored, qualityFailed bool) {
+	m.classifyAndPersistContext(context.Background(), sessionID, status, terminalReason, toolErrored, qualityFailed)
+}
+
+func (m *Manager) classifyAndPersistContext(ctx context.Context, sessionID, status, terminalReason string, toolErrored, qualityFailed bool) {
 	cat := classify(status, terminalReason, toolErrored, qualityFailed)
-	if err := m.st.SetFailureCategory(context.Background(), sessionID, cat); err != nil {
+	if err := m.st.SetFailureCategory(ctx, sessionID, cat); err != nil {
 		slog.Warn("eval: set failure category failed", "session", sessionID, "category", cat, "err", err)
 		return
 	}

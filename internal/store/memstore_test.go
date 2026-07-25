@@ -76,8 +76,10 @@ func TestMemFailureBreakdownByAgent(t *testing.T) {
 	// agent-b: one none (must not leak into agent-a's breakdown).
 	idB, _ := s.CreateSession(ctx, "agent-b", 0)
 	_ = s.SetFailureCategory(ctx, idB, "none")
+	idOtherTenant, _ := s.CreateSessionForTenant(ctx, "other", "agent-a", 0)
+	_ = s.SetFailureCategory(ctx, idOtherTenant, "tool_error")
 
-	got, err := s.FailureBreakdownByAgent(ctx, "agent-a", time.Time{})
+	got, err := s.FailureBreakdownByAgent(ctx, "default", "agent-a", time.Time{})
 	if err != nil {
 		t.Fatal(err)
 	}

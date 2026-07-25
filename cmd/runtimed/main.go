@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"log/slog"
 	"math"
@@ -16,6 +17,7 @@ import (
 	"time"
 
 	"github.com/coreos/go-oidc/v3/oidc"
+	"github.com/jackc/pgx/v5"
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/sausheong/runtime/console"
 	"github.com/sausheong/runtime/controlplane"
@@ -28,10 +30,54 @@ import (
 	"github.com/sausheong/runtime/internal/obs"
 	"github.com/sausheong/runtime/internal/policy"
 	"github.com/sausheong/runtime/internal/quota"
+	"github.com/sausheong/runtime/internal/rheader"
 	"github.com/sausheong/runtime/internal/store"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"golang.org/x/oauth2"
 )
+
+func databaseRole(dsn string) (string, error) {
+	cfg, err := pgx.ParseConfig(dsn)
+	if err != nil || cfg.User == "" {
+		return "", errors.New("database DSN must contain a database role")
+	}
+	return cfg.User, nil
+}
+
+func grantAgentStoreAccess(ctx context.Context, db *sql.DB, agentDSN, tenant string, allowRebind bool) error {
+	role, err := databaseRole(agentDSN)
+	if err != nil {
+		return fmt.Errorf("RUNTIME_AGENT_PG_DSN must contain a database role")
+	}
+	return store.ProvisionAgentRole(ctx, db, role, tenant, allowRebind)
+}
+
+func localAgentTenant(cfg *config.Config, allowSharedRole bool) (string, error) {
+	if allowSharedRole {
+		// Integration tests intentionally run several Runtime processes against
+		// one disposable restricted role. A wildcard mapping is test-only and
+		// avoids cross-test tenant rebind races; production never sets this flag.
+		return "*", nil
+	}
+	tenants := map[string]struct{}{}
+	agents := len(cfg.Agents)
+	for _, agent := range cfg.Agents {
+		tenants[agent.Tenant] = struct{}{}
+	}
+	if len(tenants) == 0 {
+		return "default", nil
+	}
+	if len(tenants) > 1 {
+		return "", errors.New("agents from multiple tenants require separate Runtime deployments with distinct RUNTIME_AGENT_PG_DSN roles")
+	}
+	if agents > 1 {
+		return "", errors.New("multiple agents cannot share one restricted RUNTIME_AGENT_PG_DSN role; provision one Runtime deployment and database role per agent")
+	}
+	for tenant := range tenants {
+		return tenant, nil
+	}
+	panic("unreachable")
+}
 
 // tracedHandler wraps h with an otelhttp server span named by matched route
 // (never the raw path — cardinality-safe). Placed inside RequestID so the id is
@@ -63,6 +109,22 @@ func main() {
 	if agentDSN == "" {
 		agentDSN = dsn
 	}
+	controlDBRole, err := databaseRole(dsn)
+	if err != nil {
+		slog.Error("control database DSN invalid", "err", err)
+		os.Exit(1)
+	}
+	agentDBRole, err := databaseRole(agentDSN)
+	if err != nil {
+		slog.Error("agent database DSN invalid", "err", err)
+		os.Exit(1)
+	}
+	sharedDBRole := controlDBRole == agentDBRole
+	if agentDSN != dsn && sharedDBRole {
+		slog.Error("RUNTIME_AGENT_PG_DSN resolves to the control-plane database role; a distinct restricted role is required",
+			"role", agentDBRole)
+		os.Exit(1)
+	}
 	ctlAddr := envOr("RUNTIME_CTL_ADDR", ":8080")
 	metricsAddr := envOr("RUNTIME_METRICS_ADDR", "127.0.0.1:9091")
 	agentBin := envOr("RUNTIME_AGENTD_BIN", "./agentd")
@@ -77,8 +139,39 @@ func main() {
 	// Control-plane metrics registry: created early so the gateway, edge
 	// middleware, supervisors, and proxy hooks below all share the one registry.
 	cm := obs.NewControlMetrics()
+	sessionRetention, err := retentionDurationFromEnv(os.Getenv, "RUNTIME_SESSION_RETENTION", 30*24*time.Hour)
+	if err != nil {
+		slog.Error("session retention config invalid", "err", err)
+		os.Exit(1)
+	}
+	sessionRetentionBatch := envIntOr("RUNTIME_SESSION_RETENTION_BATCH", 500)
+	if sessionRetentionBatch < 1 {
+		sessionRetentionBatch = 500
+	}
+	sessionRetentionDryRun := envBool("RUNTIME_SESSION_RETENTION_DRY_RUN")
 
 	reg := controlplane.NewRegistry(cfg, agentBin, agentDSN)
+	if envBool("RUNTIME_SUBJECT_FORWARDING") {
+		signingPrivate := os.Getenv("RUNTIME_IDENTITY_SIGNING_PRIVATE_KEY")
+		signingPublic := os.Getenv("RUNTIME_IDENTITY_SIGNING_PUBLIC_KEY")
+		if signingPrivate == "" && signingPublic == "" {
+			var keyErr error
+			signingPrivate, signingPublic, keyErr = rheader.GenerateKeyPair()
+			if keyErr != nil {
+				slog.Error("generate ephemeral identity signing key", "err", keyErr)
+				os.Exit(1)
+			}
+			slog.Warn("using an ephemeral forwarded-identity signing key; configure a stable key pair for independently started remote agents")
+		} else if signingPrivate == "" || signingPublic == "" {
+			slog.Error("both RUNTIME_IDENTITY_SIGNING_PRIVATE_KEY and RUNTIME_IDENTITY_SIGNING_PUBLIC_KEY are required when either is configured")
+			os.Exit(1)
+		}
+		if err := rheader.ValidateKeyPair(signingPrivate, signingPublic); err != nil {
+			slog.Error("subject forwarding requires a valid Ed25519 signing key pair", "err", err)
+			os.Exit(1)
+		}
+		reg.SetIdentitySigningKeys(signingPrivate, signingPublic)
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -173,6 +266,18 @@ func main() {
 		os.Exit(1)
 	}
 	defer ctlStore.Close()
+	if !sharedDBRole {
+		agentTenant, terr := localAgentTenant(cfg, integrationSharedAgentRoleAllowed())
+		if terr != nil {
+			slog.Error("restricted agent database role configuration failed", "err", terr)
+			os.Exit(1)
+		}
+		if err := grantAgentStoreAccess(ctx, identityDB, agentDSN, agentTenant,
+			integrationAgentRoleRebindAllowed()); err != nil {
+			slog.Error("restricted agent database role provisioning failed", "err", err)
+			os.Exit(1)
+		}
+	}
 
 	// Secret broker (Identity M2/M3): built whenever a secrets keyring is
 	// configured (RUNTIME_SECRETS_KEYS or the legacy RUNTIME_SECRETS_KEY),
@@ -364,8 +469,9 @@ func main() {
 		os.Exit(1)
 	}
 	identityOn := configured || oidcIssuer != "" || bootstrapKey != "" || len(legacyTokens) > 0
-	if identityOn && agentDSN == dsn {
-		slog.Warn("agents share the control-plane database credential; set RUNTIME_AGENT_PG_DSN to a role without access to identity and secrets tables")
+	if identityOn && sharedDBRole {
+		slog.Error("identity-enabled runtime requires a distinct RUNTIME_AGENT_PG_DSN role without access to identity and secrets tables")
+		os.Exit(1)
 	}
 
 	// Dynamic managed agents: a MonitorSet owns runtime-mutable health monitors,
@@ -593,10 +699,17 @@ func main() {
 		for _, info := range reg.List() {
 			replicas, _ := reg.Replicas(info.ID)
 			for _, ap := range replicas {
+				signingKey := ap.IdentitySigningPrivateKey
 				ts = append(ts, obs.ScrapeTarget{
 					Agent: ap.AgentID, Replica: ap.ReplicaIndex,
 					BaseURL: ap.DialBase(), Token: ap.AuthToken,
 					Transport: controlplane.AgentOutboundTransport(ap),
+					Sign: func(req *http.Request) error {
+						if signingKey == "" {
+							return nil
+						}
+						return rheader.Sign(req, signingKey, time.Now())
+					},
 				})
 			}
 		}
@@ -607,6 +720,17 @@ func main() {
 	// listener (loopback by default) so tenant/model/cost labels are never
 	// exposed merely because the application API is reachable.
 	handler = mountRegistration(handler, regMux)
+	maxRequests := envIntOr("RUNTIME_MAX_REQUESTS", 512)
+	if maxRequests < 1 {
+		maxRequests = 512
+	}
+	maxStreams := envIntOr("RUNTIME_MAX_STREAMS", 128)
+	if maxStreams < 1 {
+		maxStreams = 128
+	}
+	handler = limitHTTPConcurrency(handler, maxRequests, maxStreams, func(reason string) {
+		cm.HTTPObserved("saturated_"+reason, "", http.StatusServiceUnavailable, 0)
+	})
 
 	ctlListener, err := net.Listen("tcp", ctlAddr)
 	if err != nil {
@@ -634,6 +758,7 @@ func main() {
 	srv := &http.Server{
 		Addr:              ctlAddr,
 		Handler:           handler,
+		ReadTimeout:       30 * time.Second,
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       120 * time.Second,
 		MaxHeaderBytes:    1 << 20,
@@ -641,6 +766,7 @@ func main() {
 	metricsSrv := &http.Server{
 		Addr:              metricsAddr,
 		Handler:           obs.FanoutHandler(cm, metricsTargets),
+		ReadTimeout:       30 * time.Second,
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       120 * time.Second,
 		MaxHeaderBytes:    1 << 20,
@@ -685,9 +811,8 @@ func main() {
 		replicas, _ := reg.Replicas(info.ID)
 		for _, ap := range replicas {
 			if ap.Remote {
-				// File-config remote: monitor it through the MonitorSet so the
-				// startup path and dynamic add/remove share one code path. (The
-				// MonitorSet reports replica 0; file remotes are single-replica.)
+				// File-config remote: monitor every ordinal through the
+				// MonitorSet so startup and dynamic add/remove share one path.
 				monitors.Start(ap)
 				slog.Info("monitoring remote agent", "agent", ap.AgentID, "replica", ap.ReplicaIndex, "url", ap.DialBase())
 				continue
@@ -712,8 +837,9 @@ func main() {
 		} else {
 			slog.Info("eval incomplete-run recovery started")
 		}
-		startEvalRetention(ctx, ctlStore, evalStoreRuntime, evalRetention)
+		startEvalRetention(ctx, ctlStore, evalStoreRuntime, cm, evalRetention)
 	}
+	startSessionRetention(ctx, ctlStore, cm, sessionRetention, sessionRetentionBatch, sessionRetentionDryRun)
 
 	select {
 	case <-ctx.Done():
@@ -739,6 +865,36 @@ func main() {
 			return
 		}
 	}
+}
+
+func limitHTTPConcurrency(next http.Handler, maxRequests, maxStreams int, onReject func(string)) http.Handler {
+	requests := make(chan struct{}, maxRequests)
+	streams := make(chan struct{}, maxStreams)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case requests <- struct{}{}:
+			defer func() { <-requests }()
+		default:
+			if onReject != nil {
+				onReject("requests")
+			}
+			http.Error(w, "server busy", http.StatusServiceUnavailable)
+			return
+		}
+		if strings.HasSuffix(r.URL.Path, "/stream") {
+			select {
+			case streams <- struct{}{}:
+				defer func() { <-streams }()
+			default:
+				if onReject != nil {
+					onReject("streams")
+				}
+				http.Error(w, "too many streams", http.StatusServiceUnavailable)
+				return
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // statusRecorder captures the response status code for access logging.
@@ -940,19 +1096,64 @@ func envIntOr(key string, def int) int {
 }
 
 func evalRetentionFromEnv(getenv func(string) string) (time.Duration, error) {
-	const defaultRetention = 30 * 24 * time.Hour
-	raw := strings.TrimSpace(getenv("RUNTIME_EVAL_RETENTION"))
+	return retentionDurationFromEnv(getenv, "RUNTIME_EVAL_RETENTION", 30*24*time.Hour)
+}
+
+func retentionDurationFromEnv(getenv func(string) string, key string, fallback time.Duration) (time.Duration, error) {
+	raw := strings.TrimSpace(getenv(key))
 	if raw == "" {
-		return defaultRetention, nil
+		return fallback, nil
 	}
 	d, err := time.ParseDuration(raw)
 	if err != nil || d < 0 {
-		return 0, fmt.Errorf("RUNTIME_EVAL_RETENTION must be a non-negative Go duration (got %q)", raw)
+		return 0, fmt.Errorf("%s must be a non-negative Go duration (got %q)", key, raw)
 	}
 	return d, nil
 }
 
-func startEvalRetention(ctx context.Context, ctl store.Store, es eval.EvalStore, retention time.Duration) {
+func startSessionRetention(ctx context.Context, ctl store.Store, metrics *obs.ControlMetrics, retention time.Duration, batch int, dryRun bool) {
+	if retention == 0 {
+		slog.Warn("session retention disabled; sessions and events will accumulate")
+		return
+	}
+	reap := func() {
+		reapCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		defer cancel()
+		var total int64
+		for pass := 0; pass < 20; pass++ {
+			n, err := ctl.ReapSessions(reapCtx, time.Now().UTC().Add(-retention), batch, dryRun)
+			if err != nil {
+				slog.Warn("session retention sweep failed", "err", err)
+				return
+			}
+			total += n
+			if dryRun || n < int64(batch) {
+				break
+			}
+		}
+		if total > 0 {
+			slog.Info("session retention sweep", "sessions", total, "dry_run", dryRun)
+			if !dryRun {
+				metrics.RetentionReaped("session", total)
+			}
+		}
+	}
+	reap()
+	go func() {
+		ticker := time.NewTicker(6 * time.Hour)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				reap()
+			}
+		}
+	}()
+}
+
+func startEvalRetention(ctx context.Context, ctl store.Store, es eval.EvalStore, metrics *obs.ControlMetrics, retention time.Duration) {
 	if retention == 0 {
 		slog.Warn("eval retention disabled; transcripts and results will accumulate")
 		return
@@ -961,14 +1162,38 @@ func startEvalRetention(ctx context.Context, ctl store.Store, es eval.EvalStore,
 		reapCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		defer cancel()
 		before := time.Now().Add(-retention)
-		captured, captureErr := ctl.ReapEvaluationData(reapCtx, before)
-		runs, runErr := es.ReapBefore(reapCtx, before)
-		if captureErr != nil || runErr != nil {
-			slog.Warn("eval retention sweep failed", "capture_err", captureErr, "run_err", runErr)
-			return
+		const batch = 1000
+		var captured, runs int64
+		for pass := 0; pass < 20; pass++ {
+			n, captureErr := ctl.ReapEvaluationData(reapCtx, before, batch)
+			if captureErr != nil {
+				slog.Warn("eval capture retention sweep failed", "err", captureErr)
+				return
+			}
+			captured += n
+			// The store batches each child table independently, so a total below
+			// 2*batch does not prove that the non-empty table is exhausted.
+			// Stop only on an empty pass; the 20-pass/30-second sweep budget is
+			// the hard bound for a persistent backlog.
+			if n == 0 {
+				break
+			}
+		}
+		for pass := 0; pass < 20; pass++ {
+			n, runErr := es.ReapBefore(reapCtx, before, batch)
+			if runErr != nil {
+				slog.Warn("eval run retention sweep failed", "err", runErr)
+				return
+			}
+			runs += n
+			if n < batch {
+				break
+			}
 		}
 		if captured+runs > 0 {
 			slog.Info("eval retention sweep", "captured_rows", captured, "runs", runs)
+			metrics.RetentionReaped("evaluation_capture", captured)
+			metrics.RetentionReaped("evaluation_run", runs)
 		}
 	}
 	reap()

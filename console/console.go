@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"html/template"
 	"io/fs"
+	"log/slog"
 	"net/http"
 	"os"
 	"strconv"
@@ -262,7 +263,7 @@ func Handler(reg *controlplane.Registry, st store.Store, oidc OIDCConfig, onb *O
 					data["OnlineResults"] = online
 					failures := map[string]map[string]int{} // agent -> category -> count
 					for _, a := range agents {              // agents == visible to this principal
-						if bd, err := st.FailureBreakdownByAgent(r.Context(), a.ID, time.Time{}); err == nil && len(bd) > 0 {
+						if bd, err := st.FailureBreakdownByAgent(r.Context(), a.Tenant, a.ID, time.Time{}); err == nil && len(bd) > 0 {
 							failures[a.ID] = bd
 						}
 					}
@@ -752,7 +753,16 @@ func Handler(reg *controlplane.Registry, st store.Store, oidc OIDCConfig, onb *O
 				if runCtx == nil {
 					runCtx = context.Background()
 				}
-				go eval.Execute(runCtx, onb.EvalStore, onb.EvalInvoker, onb.EvalJudge, id, onb.EvalMetrics)
+				if !eval.Submit(runCtx, onb.EvalStore, onb.EvalInvoker, onb.EvalJudge, id, onb.EvalMetrics) {
+					finished, finishErr := onb.EvalStore.FailPendingRun(r.Context(), id, "evaluation queue full")
+					if finishErr != nil || !finished {
+						slog.Error("persist evaluation queue saturation", "run", id, "err", finishErr, "transitioned", finished)
+						http.Error(w, "evaluation persistence failed", http.StatusInternalServerError)
+						return
+					}
+					http.Error(w, "evaluation queue full", http.StatusServiceUnavailable)
+					return
+				}
 				observabilityRedirect(w, r)
 			}))
 

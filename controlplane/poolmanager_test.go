@@ -207,14 +207,18 @@ func TestDecideStep(t *testing.T) {
 // fakeLoad is a store.Store stub returning a scripted active-by-replica map.
 type fakeLoad struct {
 	store.Store
-	mu  sync.Mutex
-	ret map[int]int
-	err error
+	mu        sync.Mutex
+	ret       map[int]int
+	err       error
+	gotTenant string
+	gotAgent  string
 }
 
-func (f *fakeLoad) ActiveSessionsByReplica(_ context.Context, _ string) (map[int]int, error) {
+func (f *fakeLoad) ActiveSessionsByReplica(_ context.Context, tenant, agent string) (map[int]int, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.gotTenant = tenant
+	f.gotAgent = agent
 	if f.err != nil {
 		return nil, f.err
 	}
@@ -223,6 +227,19 @@ func (f *fakeLoad) ActiveSessionsByReplica(_ context.Context, _ string) (map[int
 		m[k] = v
 	}
 	return m, nil
+}
+
+func TestPoolManagerScopesActiveLoadToAgentTenant(t *testing.T) {
+	load := &fakeLoad{ret: map[int]int{}}
+	pm := newPoolManager("support", AgentProcess{AgentID: "support", Tenant: "acme"},
+		config.AutoscaleConfig{Min: 0, Max: 1, TargetSessionsPerReplica: 1},
+		func(int) (string, error) { return "127.0.0.1:1", nil }, load, nil)
+	pm.tick(context.Background())
+	load.mu.Lock()
+	defer load.mu.Unlock()
+	if load.gotTenant != "acme" || load.gotAgent != "support" {
+		t.Fatalf("load scope=(%q,%q), want (acme,support)", load.gotTenant, load.gotAgent)
+	}
 }
 
 func TestTickGrowsOnLoad(t *testing.T) {

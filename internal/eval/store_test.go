@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"os"
 	"testing"
+	"time"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
 )
@@ -29,6 +30,7 @@ func freshStore(t *testing.T) (*Store, *sql.DB) {
 	if err := db.PingContext(context.Background()); err != nil {
 		t.Skipf("postgres not reachable: %v", err)
 	}
+	_, _ = db.Exec(`DELETE FROM runtime_schema_migrations WHERE component='evaluation'`)
 	drop := func() {
 		_, _ = db.Exec(`DROP TABLE IF EXISTS eval_results CASCADE`)
 		_, _ = db.Exec(`DROP TABLE IF EXISTS eval_runs CASCADE`)
@@ -180,6 +182,40 @@ func TestStoreRunsAndResults(t *testing.T) {
 		t.Fatalf("missing run: ok=%v err=%v", ok, err)
 	}
 
+	// A live lease is exclusive; an expired lease is reclaimable.
+	now := time.Now().UTC()
+	if ok, err := st.ClaimRun(ctx, "r1", "worker-1", now, now.Add(time.Minute)); err != nil || !ok {
+		t.Fatalf("claim run: ok=%v err=%v", ok, err)
+	}
+	if ok, err := st.ClaimRun(ctx, "r1", "worker-2", now, now.Add(time.Minute)); err != nil || ok {
+		t.Fatalf("steal live lease: ok=%v err=%v", ok, err)
+	}
+	if _, err := db.Exec(`UPDATE eval_runs SET lease_until=now() - interval '1 second' WHERE run_id='r1'`); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := st.ClaimRun(ctx, "r1", "worker-2", now, now.Add(time.Minute)); err != nil || !ok {
+		t.Fatalf("reclaim expired lease: ok=%v err=%v", ok, err)
+	}
+	if ok, err := st.FinishRunClaimed(ctx, "r1", "worker-1", StatusCompleted, 0, 0, 0, 0, ""); err != nil || ok {
+		t.Fatalf("stale owner finalized run: ok=%v err=%v", ok, err)
+	}
+	if ok, err := st.PutResultClaimed(ctx, "r1", "worker-1", Result{CaseIndex: 9}); err != nil || ok {
+		t.Fatalf("stale owner wrote a result: ok=%v err=%v", ok, err)
+	}
+	if _, err := db.Exec(`UPDATE eval_runs SET lease_until=now() - interval '1 second' WHERE run_id='r1'`); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := st.PutResultClaimed(ctx, "r1", "worker-2", Result{CaseIndex: 9}); err != nil || ok {
+		t.Fatalf("expired owner wrote a result: ok=%v err=%v", ok, err)
+	}
+	if ok, err := st.FinishRunClaimed(ctx, "r1", "worker-2", StatusCompleted, 0, 0, 0, 0, ""); err != nil || ok {
+		t.Fatalf("expired owner finalized run: ok=%v err=%v", ok, err)
+	}
+	renewNow := time.Now().UTC()
+	if ok, err := st.ClaimRun(ctx, "r1", "worker-2", renewNow, renewNow.Add(time.Minute)); err != nil || !ok {
+		t.Fatalf("renew expired owner: ok=%v err=%v", ok, err)
+	}
+
 	// SetRunStatus.
 	if err := st.SetRunStatus(ctx, "r1", StatusRunning); err != nil {
 		t.Fatal(err)
@@ -189,11 +225,11 @@ func TestStoreRunsAndResults(t *testing.T) {
 	}
 
 	// PutResult ×2 (out of order) → ListResults ascending by case_index.
-	if err := st.PutResult(ctx, "r1", Result{CaseIndex: 1, Input: "bye", Output: "later", Scorer: "contains", Passed: false, Detail: "miss"}); err != nil {
-		t.Fatal(err)
+	if ok, err := st.PutResultClaimed(ctx, "r1", "worker-2", Result{CaseIndex: 1, Input: "bye", Output: "later", Scorer: "contains", Passed: false, Detail: "miss"}); err != nil || !ok {
+		t.Fatalf("put claimed result: ok=%v err=%v", ok, err)
 	}
-	if err := st.PutResult(ctx, "r1", Result{CaseIndex: 0, Input: "hi", Output: "hello", Scorer: "exact", Passed: true}); err != nil {
-		t.Fatal(err)
+	if ok, err := st.PutResultClaimed(ctx, "r1", "worker-2", Result{CaseIndex: 0, Input: "hi", Output: "hello", Scorer: "exact", Passed: true}); err != nil || !ok {
+		t.Fatalf("put claimed result: ok=%v err=%v", ok, err)
 	}
 	results, err := st.ListResults(ctx, "r1")
 	if err != nil {
@@ -213,8 +249,8 @@ func TestStoreRunsAndResults(t *testing.T) {
 	}
 
 	// PutResult idempotent upsert on (run_id,case_index): re-put case 0 with new output.
-	if err := st.PutResult(ctx, "r1", Result{CaseIndex: 0, Input: "hi", Output: "HELLO", Scorer: "exact", Passed: true}); err != nil {
-		t.Fatalf("re-put same case must upsert, not error: %v", err)
+	if ok, err := st.PutResultClaimed(ctx, "r1", "worker-2", Result{CaseIndex: 0, Input: "hi", Output: "HELLO", Scorer: "exact", Passed: true}); err != nil || !ok {
+		t.Fatalf("re-put same case must upsert: ok=%v err=%v", ok, err)
 	}
 	results, _ = st.ListResults(ctx, "r1")
 	if len(results) != 2 {
@@ -287,8 +323,12 @@ func TestStoreResultsCascadeOnRunDelete(t *testing.T) {
 	if err := st.CreateRun(ctx, Run{RunID: "r1", Tenant: "t", SetName: "s", AgentID: "a", Status: StatusPending}); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.PutResult(ctx, "r1", Result{CaseIndex: 0, Input: "i", Output: "o", Scorer: "exact", Passed: true}); err != nil {
-		t.Fatal(err)
+	now := time.Now().UTC()
+	if ok, err := st.ClaimRun(ctx, "r1", "worker", now, now.Add(time.Minute)); err != nil || !ok {
+		t.Fatalf("claim: ok=%v err=%v", ok, err)
+	}
+	if ok, err := st.PutResultClaimed(ctx, "r1", "worker", Result{CaseIndex: 0, Input: "i", Output: "o", Scorer: "exact", Passed: true}); err != nil || !ok {
+		t.Fatalf("put claimed result: ok=%v err=%v", ok, err)
 	}
 	if res, _ := st.ListResults(ctx, "r1"); len(res) != 1 {
 		t.Fatalf("precondition: want 1 result, got %d", len(res))

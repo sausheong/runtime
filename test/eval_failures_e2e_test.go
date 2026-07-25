@@ -87,6 +87,7 @@ func evalFailuresResetDB(t *testing.T, db *sql.DB) {
 	} {
 		mustExec(t, db, q)
 	}
+	mustExec(t, db, `CREATE TABLE markers (id BIGSERIAL PRIMARY KEY, ran_at TIMESTAMPTZ)`)
 }
 
 // TestFailureClassificationLifecycle drives one policy-free session (fn1) and one

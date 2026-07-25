@@ -69,7 +69,9 @@ func TestRegister_Success(t *testing.T) {
 	store := fakeRegTokens{agentID: "support", hash: mk.Hash}
 	broker := regFakeBroker{secrets: map[string]string{"OPENAI_API_KEY": "sk-xyz"}}
 	mux := http.NewServeMux()
-	RegisterHandshake(mux, store, regTestRegistry(t, broker))
+	reg := regTestRegistry(t, broker)
+	reg.SetReachable("support", 1, false)
+	RegisterHandshake(mux, store, reg)
 
 	rec := post(t, mux, mk.Plaintext, RegisterRequest{Ordinal: 1})
 	if rec.Code != http.StatusOK {
@@ -85,6 +87,9 @@ func TestRegister_Success(t *testing.T) {
 		resp.Env["DBOS__VMID"] != "" || // remote pool: DBOSVMID empty (remote owns its id)
 		resp.Env["OPENAI_API_KEY"] != "sk-xyz" {
 		t.Fatalf("unexpected env: %+v", resp.Env)
+	}
+	if !reg.reachableOrUnknown("support", 1) {
+		t.Fatal("successful registration left stale unreachable state in place")
 	}
 }
 

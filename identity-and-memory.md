@@ -115,8 +115,14 @@ runtimectl admin secret rm OPENAI_API_KEY
 
 Managed child processes receive a deliberately small platform environment,
 then their tenant's brokered secrets. Use `RUNTIME_AGENT_PG_DSN` for a
-restricted database role. Additional operator variables must be explicitly
-named in `RUNTIME_AGENT_ENV_PASSTHROUGH`; reserved Runtime variables cannot be
+restricted database role; identity-enabled Runtime fails closed when it is the
+same DSN as the control-plane credential. Runtime maps that restricted login
+to the configured local-agent tenant and PostgreSQL row-level policies prevent
+it from reading another tenant's sessions, events, transcripts, or online
+results. One restricted login must not be shared by concurrently running local
+agents from different tenants; run a separate Runtime deployment, database,
+and role for each local-agent tenant. Additional operator variables must be explicitly named in
+`RUNTIME_AGENT_ENV_PASSTHROUGH`; reserved Runtime variables cannot be
 overridden through that mechanism.
 
 ### Key rotation
@@ -171,10 +177,34 @@ cannot be resolved. OBO requires an authenticated caller subject token; a
 machine key without a suitable subject token cannot impersonate a person.
 
 `RUNTIME_SUBJECT_FORWARDING=1` enables forwarding of authenticated caller
-identity to native agents. Use it only when the agent contract and downstream
-trust model require it. An operator-controlled `forward_tenant` setting may
-inject `__rt_tenant` into stdio gateway tool arguments; Runtime strips any
-caller-supplied value first.
+identity to native agents. Runtime signs each projection with an Ed25519 private
+key held only by the control plane. Agents receive the matching public key.
+Signatures cover the HTTP method, request target, timestamp, nonce, and
+forwarded claims; the agent rejects expired signatures and nonce replay. A
+per-agent authentication bearer therefore cannot mint caller identities.
+
+For local processes and registration-handshake agents, Runtime can generate an
+ephemeral key pair at control-plane boot. Independently started remote agents
+and Kubernetes deployments need a stable pair:
+
+```bash
+openssl genpkey -algorithm Ed25519 -out runtime-identity-signing.pem
+RUNTIME_IDENTITY_SIGNING_PRIVATE_KEY="$(
+  openssl pkey -in runtime-identity-signing.pem -outform DER |
+    tail -c 32 | openssl base64 -A | tr '+/' '-_' | tr -d '='
+)"
+RUNTIME_IDENTITY_SIGNING_PUBLIC_KEY="$(
+  openssl pkey -in runtime-identity-signing.pem -pubout -outform DER |
+    tail -c 32 | openssl base64 -A | tr '+/' '-_' | tr -d '='
+)"
+export RUNTIME_IDENTITY_SIGNING_PRIVATE_KEY
+export RUNTIME_IDENTITY_SIGNING_PUBLIC_KEY
+```
+
+Keep the private value out of agent environments. Use subject forwarding only
+when the agent contract and downstream trust model require it. An
+operator-controlled `forward_tenant` setting may inject `__rt_tenant` into
+stdio gateway tool arguments; Runtime strips any caller-supplied value first.
 
 ## Durable memory
 
@@ -256,13 +286,29 @@ The grace period protects concurrent readers and gives operators time to
 observe accidental supersession. Disabling GC permits unbounded dead-row
 growth.
 
+Live memory is retained indefinitely unless an operator opts into per-kind
+retention:
+
+| Variable | Default |
+|---|---|
+| `RUNTIME_MEMORY_RETENTION_FACT` | Disabled |
+| `RUNTIME_MEMORY_RETENTION_SUMMARY` | Disabled |
+| `RUNTIME_MEMORY_RETENTION_EPISODE` | Disabled |
+| `RUNTIME_MEMORY_RETENTION_DRY_RUN` | Disabled |
+
+Durations use Go duration syntax such as `720h`. Dry-run mode reports eligible
+rows without deleting them or incrementing deletion counters. Locally managed
+agents inherit these safe maintenance controls from `runtimed`; remote agents
+must set them in their own deployment environment.
+
 ## Memory observability and limitations
 
 Useful metrics include:
 
 - `agent_memory_summary_writes_total`;
 - `agent_memory_episode_writes_total`;
-- `agent_memory_gc_deleted_total`.
+- `agent_memory_gc_deleted_total`;
+- `agent_memory_retention_reaped_total{kind=...}`.
 
 Extraction, summarisation, and episodic generation send conversation-derived
 content to the configured model provider. Operators must apply their data

@@ -66,9 +66,18 @@ HTTP is Compose-internal. Postgres is also not published to the host.
   window.
 - The bundled stack runs with identity ON; the console and APIs require auth.
 - Local agents are trusted platform subprocesses, not hostile-code sandboxes.
-  They share the Runtime host user. Configure `RUNTIME_AGENT_PG_DSN` with a
-  restricted database role for agents; otherwise they receive the control-plane
-  DSN and Runtime logs a warning.
+  They share the Runtime host user. Identity-enabled Runtime refuses to start
+  unless `RUNTIME_AGENT_PG_DSN` is distinct from the control-plane DSN.
+  Supplied deployment profiles create/use a restricted role with access to
+  core session/event/evaluation tables and DBOS, but not identity, service-key,
+  tenant-secret, policy, quota, global agent metadata, or managed-agent tables.
+  It has no `CREATE` authority on `public`. Runtime binds the login to one agent
+  trust domain and PostgreSQL row-level policies protect core session data. Run
+  separate Runtime deployments and databases with distinct restricted roles
+  for each agent.
+- Upgrades quarantine pre-tenant-ownership sessions as
+  `__legacy_unowned__`; follow the reviewed attribution procedure in
+  [RELEASING.md](RELEASING.md) instead of assigning them to the default tenant.
 - Child agents receive a minimal environment plus tenant secrets. The control
   plane bootstrap, keyring, OIDC client secret, and unrelated provider
   credentials are not inherited. Name any additional safe variables explicitly
@@ -403,12 +412,16 @@ secret is write-only and can be rotated by rerunning `secret set-obo`.
 
 ## Evaluation retention and recovery
 
-At startup, `runtimed` recovers incomplete evaluation runs. It records completed
-case indexes and does not rerun them, so a restart resumes only unfinished
-cases. This recovery guarantee currently assumes one active control plane.
+At startup and periodically thereafter, `runtimed` scans incomplete evaluation
+runs. It records completed case indexes and does not rerun them, so a restart
+resumes only unfinished cases. A PostgreSQL owner/expiry lease prevents
+concurrent recoverers from executing the same run. A heartbeat renews the lease
+during provider and judge calls; expired work is reclaimable and recovery
+concurrency is bounded.
 
-Credential-shaped transcript fields and common bearer-token patterns are
-redacted before persistence. Completed or failed runs, their results, and
+Credential-shaped transcript fields, bare JWTs, and common provider-token
+formats are filtered before persistence. The filter is best effort. Set
+`RUNTIME_TRANSCRIPT_CAPTURE=0` on agents to disable capture. Completed or failed runs, their results, and
 captured transcripts are retained for 30 days by default:
 
 ```bash
@@ -417,13 +430,38 @@ RUNTIME_EVAL_RETENTION=0     # disable automatic deletion
 ```
 
 The value must be a non-negative Go duration. Disabling retention logs a warning
-because evaluation data will accumulate. Multi-control-plane recovery requires
-a distributed claim mechanism before more than one replica can safely resume
-the same incomplete run.
+because evaluation data will accumulate.
 
 See the [evaluations guide](evals.md) for creating golden sets, selecting
 scorers, running batch evaluations, configuring online sampling, and inspecting
 results.
+
+## Session and memory retention
+
+Terminal sessions and inactive external-affinity bindings, together with their
+events, transcripts, and online results, are removed after 30 days by default.
+Session-scoped requests refresh external binding activity. Active and
+recoverable native work is never selected.
+
+```bash
+RUNTIME_SESSION_RETENTION=720h
+RUNTIME_SESSION_RETENTION_BATCH=500
+RUNTIME_SESSION_RETENTION_DRY_RUN=1
+```
+
+Use dry-run before shortening a production cutoff. Each sweep runs at most 20
+batches within 30 seconds. `0` disables session retention and logs an
+accumulation warning. Memory live-row retention is separate and disabled by
+default:
+
+```bash
+RUNTIME_MEMORY_RETENTION_FACT=2160h
+RUNTIME_MEMORY_RETENTION_SUMMARY=720h
+RUNTIME_MEMORY_RETENTION_EPISODE=720h
+```
+
+Retention is not an archive. Export required records before the cutoff and
+maintain encrypted, tested database backups. See [RELEASING.md](RELEASING.md).
 
 ## Cost metering
 

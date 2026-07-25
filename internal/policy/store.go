@@ -62,7 +62,7 @@ type Store struct {
 // tenant string with no FK, so a tenant's policies can be authored before or
 // after the tenant row (parity with how the engine evaluates by tenant id).
 func NewStore(ctx context.Context, db *sql.DB) (*Store, error) {
-	if err := store.ApplyDDLLocked(ctx, db, schemaSQL); err != nil {
+	if err := store.ApplySchemaMigrations(ctx, db, "policy", 1, schemaSQL); err != nil {
 		return nil, err
 	}
 	return &Store{db: db}, nil

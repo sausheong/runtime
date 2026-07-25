@@ -4,7 +4,7 @@ Deploy the `runtime` on-prem durable LLM agent platform on Kubernetes. This char
 runs the control plane (`runtimed` + `agentd`) from a single all-binaries image,
 secure-by-default, with optional bundled or BYO Postgres.
 
-- **Chart version:** 0.1.0 &nbsp;·&nbsp; **App version:** 0.1.0 &nbsp;·&nbsp; **Helm:** v4
+- **Chart version:** 0.2.0 &nbsp;·&nbsp; **App version:** 0.2.0 &nbsp;·&nbsp; **Helm:** v4
 - **Image:** one image bundling `runtimed`, `agentd`, `sandboxd`, `browserd`, and
   `runtimectl`, running as non-root uid `10001`.
 
@@ -74,7 +74,8 @@ Inline DSN:
 
 ```bash
 helm install runtime deploy/charts/runtime \
-  --set secrets.pgDsn='postgres://user:pass@db.internal:5432/runtime?sslmode=require'
+  --set secrets.pgDsn='postgres://control:pass@db.internal:5432/runtime?sslmode=require' \
+  --set secrets.agentPgDsn='postgres://runtime_agent:other-pass@db.internal:5432/runtime?sslmode=require'
 ```
 
 Or reference an existing Secret (see [Secrets](#secrets)):
@@ -129,6 +130,7 @@ The chart ships locked down. Defaults:
 | `securityContext.allowPrivilegeEscalation` | `false` | No setuid escalation. |
 | `securityContext.capabilities.drop` | `[ALL]` | All Linux capabilities dropped. |
 | Writable storage | `/tmp` only (emptyDir) | `agentd` does no disk writes; DBOS persists to Postgres. |
+| `networkPolicy.enabled` | `true` | Control-plane and per-agent ingress is selected explicitly. |
 
 A `checksum/config` pod annotation rolls the pod automatically on `helm upgrade`
 whenever the rendered config changes.
@@ -149,13 +151,15 @@ helm install runtime deploy/charts/runtime \
 ```
 
 **Existing Secret.** Set `secrets.existingSecret` and the chart emits **no** Secret
-— it env-refs yours instead. The Secret must have a `RUNTIME_PG_DSN` key; the
-others (`RUNTIME_SECRETS_KEYS`, `RUNTIME_SECRETS_PRIMARY`, `RUNTIME_ADMIN_BOOTSTRAP`)
-are optional env refs (`optional: true`):
+— it env-refs yours instead. The Secret must have `RUNTIME_PG_DSN`.
+Identity/per-agent-pod deployments must also provide `RUNTIME_AGENT_PG_DSN`.
+Per-agent pods require one `RUNTIME_AGENT_AUTH_TOKEN_<AGENT_ID>` key per agent.
+The remaining keyring/bootstrap values are optional env refs:
 
 ```bash
 kubectl create secret generic runtime-secrets \
-  --from-literal=RUNTIME_PG_DSN='postgres://user:pass@db.internal:5432/runtime?sslmode=require' \
+  --from-literal=RUNTIME_PG_DSN='postgres://control:pass@db.internal:5432/runtime?sslmode=require' \
+  --from-literal=RUNTIME_AGENT_PG_DSN='postgres://runtime_agent:other-pass@db.internal:5432/runtime?sslmode=require' \
   --from-literal=RUNTIME_SECRETS_KEYS='...' \
   --from-literal=RUNTIME_SECRETS_PRIMARY='...' \
   --from-literal=RUNTIME_ADMIN_BOOTSTRAP='admin@example.com:...'
@@ -230,12 +234,17 @@ helm install runtime deploy/charts/runtime \
   --set 'ingress.hosts[0].paths[0].path=/' \
   --set 'ingress.hosts[0].paths[0].pathType=Prefix'
 
-# NetworkPolicy: allows ingress to 8080 and all egress
+# NetworkPolicy is enabled by default; this is explicit for illustration.
 helm install runtime deploy/charts/runtime --set networkPolicy.enabled=true
 ```
 
-`networkPolicy.enabled=true` allows ingress to port `8080` and **all** egress —
-`runtimed` needs to reach Postgres, the LLM proxy, and gateway upstreams.
+The control-plane policy allows its service/metrics ports and required egress.
+In `perAgentPods` mode, every agent StatefulSet also receives a policy allowing
+port `8080` only from the release's control-plane pod. Egress remains open
+because agents may need PostgreSQL, model providers, and approved upstreams.
+The opt-in `live-networkpolicy-test.sh <namespace> <release>` acceptance check
+also verifies that the management endpoint reports `runtime_agent_up=1` for an
+authenticated, signed agent metrics scrape.
 
 ## Docker-dependent features (sandbox / browser)
 
@@ -281,17 +290,22 @@ In addition:
 | Key | Default | Description |
 |---|---|---|
 | `image.repository` | `runtime` | Image repository. |
-| `image.tag` | `""` | Image tag; defaults to `.Chart.AppVersion` (`0.1.0`). |
+| `image.tag` | `""` | Image tag; defaults to `.Chart.AppVersion` (`0.2.0`). |
 | `image.pullPolicy` | `IfNotPresent` | Pull policy (use `Never` for kind). |
 | `imagePullSecrets` | `[]` | Image pull secrets. |
 | `replicaCount` | `1` | Fixed at 1 — single-writer supervisor. |
 | `config` | `{agents: []}` | Rendered verbatim into `runtime.yaml`. |
 | `secrets.existingSecret` | `""` | Name of an existing Secret (chart emits none). |
 | `secrets.pgDsn` | `""` | `RUNTIME_PG_DSN` (required unless `postgresql.enabled`). |
+| `secrets.agentPgDsn` | `""` | Restricted `RUNTIME_AGENT_PG_DSN`; required for identity/per-agent pods. |
+| `secrets.agentAuthTokens` | `{}` | Distinct per-agent bearer map for `perAgentPods`. |
 | `secrets.secretsKeys` | `""` | `RUNTIME_SECRETS_KEYS`. |
 | `secrets.secretsPrimary` | `""` | `RUNTIME_SECRETS_PRIMARY`. |
 | `secrets.adminBootstrap` | `""` | `RUNTIME_ADMIN_BOOTSTRAP`. |
+| `secrets.identitySigningPrivateKey` | `""` | Control-plane-only Ed25519 signing seed/private key. |
+| `secrets.identitySigningPublicKey` | `""` | Matching public verification key injected into agents. |
 | `identity.enabled` | `false` | Enable OIDC env vars. |
+| `identity.subjectForwarding` | `false` | Forward authenticated caller identity with asymmetric request signatures. |
 | `identity.breakGlass` | `false` | Temporarily accept bootstrap after identity exists. |
 | `identity.oidcIssuer` | `""` | `RUNTIME_OIDC_ISSUER`. |
 | `identity.oidcClientID` | `""` | `RUNTIME_OIDC_CLIENT_ID`. |
@@ -304,7 +318,7 @@ In addition:
 | `ingress.annotations` | `{}` | Ingress annotations. |
 | `ingress.hosts` | `[]` | Hosts/paths. |
 | `ingress.tls` | `[]` | TLS config. |
-| `networkPolicy.enabled` | `false` | Allow ingress to 8080, all egress. |
+| `networkPolicy.enabled` | `true` | Emit control-plane and per-agent ingress policies. |
 | `obs.enabled` | `false` | ServiceMonitor + Grafana dashboard ConfigMap. |
 | `postgresql.enabled` | `false` | Bundle the Bitnami Postgres subchart. |
 | `postgresql.auth.username` | `runtime` | Bundled DB user. |
@@ -329,15 +343,14 @@ In addition:
 make helm-lint        # lint the chart
 make helm-template    # render templates locally
 make helm-deps        # vendor + unpack the Postgres subchart
-make helm-package     # → dist/runtime-0.1.0.tgz
+make helm-package     # → dist/runtime-0.2.0.tgz
 ```
 
-There is **no CI for chart publishing** — it is manual:
-
-```bash
-docker push <registry>/runtime:0.1.0
-helm push dist/runtime-0.1.0.tgz oci://<registry>
-```
+Pushing a matching semantic-version tag runs
+`.github/workflows/release.yml`. It publishes the GHCR image and OCI chart,
+generates SPDX SBOMs, signs/attests the image with keyless Sigstore, signs the
+chart archive, and creates a GitHub release. See the repository
+[`RELEASING.md`](../../../RELEASING.md).
 
 ## Limitations / non-goals
 
@@ -360,18 +373,39 @@ runtimed **attaches to** as a remote replica pool.
 scheduling:
   mode: perAgentPods
 secrets:
-  pgDsn: "postgres://..."
-  agentAuthToken: "a-shared-bearer"   # recommended; runtimed → agent auth
+  pgDsn: "postgres://control:...@postgres/runtime"
+  agentPgDsn: "postgres://runtime_agent:...@postgres/runtime"
+  agentAuthTokens:
+    support: "support-only-bearer"
 config:
   agents:
     - { id: support, name: Support, model: claude-opus-4-8, tenant: acme, replicas: 2 }
-    - { id: research, name: Research, model: claude-opus-4-8 }   # replicas defaults to 1
 ```
 
 In this mode each agent entry takes `id`, `name`, `model`, and optionally
 `tenant`, `replicas` (pod count, default 1), `memory`, `gateway`. Do **not** set
 `listen_addr` or `url` — the chart generates the per-ordinal url and wires
-runtimed's `runtime.yaml` to attach.
+runtimed's `runtime.yaml` to attach. One release uses one restricted database
+role and therefore contains one agent (with any supported replica count). Use
+separate releases and roles for other agents.
+
+Rendering fails if an agent-specific bearer or restricted agent DSN is absent.
+When `identity.subjectForwarding=true`, rendering also requires a stable
+Ed25519 key pair. The private key is mounted only in the control plane; agent
+pods receive the public key. Signatures bind claims to the method, request
+target, timestamp, and nonce, and replayed nonces are rejected.
+
+After installing at least two agents on a cluster whose CNI enforces
+NetworkPolicy, run the live isolation acceptance test:
+
+```bash
+deploy/charts/runtime/live-networkpolicy-test.sh <namespace> <release>
+```
+
+It proves that one agent pod cannot reach another agent's health endpoint while
+the control-plane pod can. The test uses short-lived `curlimages/curl` ephemeral
+debug containers and therefore requires the Kubernetes ephemeral-containers
+permission.
 
 **Known limitation — lifecycle limits.** Per-agent `limits:` are supported in
 monolith mode, where `config` is rendered verbatim. The generated remote-agent

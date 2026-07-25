@@ -1,9 +1,15 @@
 package controlplane
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"log/slog"
 	"net/http"
+	"net/http/httputil"
 	"strings"
 	"sync"
 	"time"
@@ -146,14 +152,33 @@ func NewAPI(reg *Registry, m *obs.ControlMetrics, st store.Store, subjectForward
 		}
 		r.URL.RawPath = "" // avoid stale encoded-path mismatches after rewrite
 
-		ap, ok := pickReplica(r, reg, st, id)
-		if !ok {
-			http.Error(w, "unknown session", http.StatusNotFound)
+		ap, routeErr := pickReplica(r, reg, st, id)
+		if routeErr != nil {
+			if errors.Is(routeErr, store.ErrSessionNotFound) {
+				http.Error(w, "unknown session", http.StatusNotFound)
+			} else {
+				if errors.Is(routeErr, errSessionRoutingStore) {
+					m.RoutingStoreError(id)
+				}
+				slog.Warn("session routing unavailable", "agent", id, "err", routeErr)
+				http.Error(w, "session routing unavailable", http.StatusServiceUnavailable)
+			}
 			return
 		}
 		m.ProxyCall(id, proxyKind(r.Method, r.URL.Path))
 		forwardSubject(r, subjectForwarding)
-		reverseProxyWithTransport(ap.baseURL(), ap.AuthToken, agentOutboundTransport(ap), func() { m.ProxyError(id) }).ServeHTTP(w, r)
+		if subjectForwarding {
+			if err := rheader.Sign(r, ap.IdentitySigningPrivateKey, time.Now()); err != nil {
+				slog.Error("sign forwarded identity", "agent", id, "err", err)
+				http.Error(w, "agent identity forwarding unavailable", http.StatusServiceUnavailable)
+				return
+			}
+		}
+		rp := reverseProxyWithTransport(ap.baseURL(), ap.AuthToken, agentOutboundTransport(ap), func() { m.ProxyError(id) })
+		if r.Method == http.MethodPost && r.URL.Path == "/sessions" && (ap.Remote || len(ap.Command) > 0) {
+			addSessionBinding(rp, st, ap)
+		}
+		rp.ServeHTTP(w, r)
 	})
 
 	return mux
@@ -181,46 +206,117 @@ func proxyKind(method, path string) string {
 //   - POST /sessions (exactly)         → round-robin a new session
 //   - /sessions/{sid}[/...]            → pin to the owner replica (from st)
 //   - everything else (list, healthz)  → replica 0 (agent-level, replica-agnostic)
-//
-// Returns ok=false only when a session-scoped path names an unknown session.
-func pickReplica(r *http.Request, reg *Registry, st store.Store, id string) (AgentProcess, bool) {
+var errSessionOwnerUnavailable = errors.New("session owner replica unavailable")
+var errSessionRoutingStore = errors.New("session routing store unavailable")
+
+// A missing session is returned as store.ErrSessionNotFound. Persistence
+// failures and unavailable owner replicas are returned distinctly so callers
+// can serve 503 rather than turning an outage into a misleading 404.
+func pickReplica(r *http.Request, reg *Registry, st store.Store, id string) (AgentProcess, error) {
 	path := r.URL.Path
 	if r.Method == "POST" && path == "/sessions" {
-		return reg.Replica(id, reg.NextReplica(id))
+		ap, ok := reg.Replica(id, reg.NextReplica(id))
+		if !ok {
+			return AgentProcess{}, errSessionOwnerUnavailable
+		}
+		return ap, nil
 	}
 	if sid, ok := sessionID(path); ok {
 		session, err := st.GetSession(r.Context(), sid)
 		if err != nil {
+			if !errors.Is(err, store.ErrSessionNotFound) {
+				return AgentProcess{}, fmt.Errorf("%w: get session affinity: %w", errSessionRoutingStore, err)
+			}
 			// Some agents own their OWN session store, so the control plane's
-			// store never recorded this session — a miss here is expected, not
-			// "unknown". Route to the agent's single target (replica 0) and let
-			// it resolve the session itself (it 404s if it truly doesn't exist):
+			// store may not contain historical, pre-binding sessions. A
+			// single-replica target is safe to ask directly; a pool is not.
 			//   - REMOTE agents (url:) own a store on their instance.
 			//   - COMMAND-spawned agents (the foreign-process shim, e.g. the
 			//     Python contract library) are local but keep sessions in their
 			//     own SQLite, not the control plane's Postgres.
-			// Native agentd agents DO share the control plane's store, so for
-			// them a miss is a genuinely unknown session and we keep the 404.
-			if ap, ok := reg.Replica(id, 0); ok && (ap.Remote || len(ap.Command) > 0) {
-				return ap, true
+			replicas, _ := reg.Replicas(id)
+			if len(replicas) == 1 && (replicas[0].Remote || len(replicas[0].Command) > 0) {
+				return replicas[0], nil
 			}
-			return AgentProcess{}, false // native agent: session truly unknown
+			return AgentProcess{}, fmt.Errorf("%w: %q", store.ErrSessionNotFound, sid)
 		}
 		// Authentication authorizes the agent named in the URL. A session id is
 		// not an authority token: it must also belong to that exact agent before
 		// its replica affinity may influence routing. Without this check, a known
 		// session id from agent B could be read through an authorized path for A.
-		if session.AgentID != id {
-			return AgentProcess{}, false
+		tenant, _ := reg.TenantOf(id)
+		if tenant == "" {
+			tenant = "default"
+		}
+		if session.AgentID != id || session.TenantID != tenant {
+			return AgentProcess{}, fmt.Errorf("%w: %q", store.ErrSessionNotFound, sid)
+		}
+		if session.Status == "external" {
+			if err := st.TouchSession(r.Context(), sid); err != nil {
+				return AgentProcess{}, fmt.Errorf("%w: touch external session affinity: %w", errSessionRoutingStore, err)
+			}
 		}
 		// A known session whose stored owner index is now out of range (e.g. the
 		// agent was reconfigured to fewer replicas than when this session was
 		// created) is unroutable: only that original executor can resume its
 		// workflow. reg.Replica returns false here and the caller 404s. Honest:
 		// the session exists but its owner replica no longer does.
-		return reg.Replica(id, session.Replica)
+		ap, ok := reg.Replica(id, session.Replica)
+		if !ok {
+			return AgentProcess{}, errSessionOwnerUnavailable
+		}
+		return ap, nil
 	}
-	return reg.Replica(id, 0)
+	ap, ok := reg.Replica(id, 0)
+	if !ok {
+		return AgentProcess{}, errSessionOwnerUnavailable
+	}
+	return ap, nil
+}
+
+// addSessionBinding records the chosen ordinal for an externally-owned session
+// after a successful create response. It buffers only the small JSON create
+// envelope, restores it byte-for-byte for the client, and fails the proxy
+// response if durable affinity cannot be recorded.
+func addSessionBinding(rp *httputil.ReverseProxy, st store.Store, ap AgentProcess) {
+	previous := rp.ModifyResponse
+	rp.ModifyResponse = func(resp *http.Response) error {
+		if previous != nil {
+			if err := previous(resp); err != nil {
+				return err
+			}
+		}
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			return nil
+		}
+		const maxCreateResponse = 1 << 20
+		body, err := io.ReadAll(io.LimitReader(resp.Body, maxCreateResponse+1))
+		if err != nil {
+			return fmt.Errorf("read session create response: %w", err)
+		}
+		_ = resp.Body.Close()
+		resp.Body = io.NopCloser(bytes.NewReader(body))
+		resp.ContentLength = int64(len(body))
+		if len(body) > maxCreateResponse {
+			return fmt.Errorf("session create response exceeds %d bytes", maxCreateResponse)
+		}
+		var envelope struct {
+			SessionID string `json:"session_id"`
+		}
+		if err := json.Unmarshal(body, &envelope); err != nil || envelope.SessionID == "" {
+			return fmt.Errorf("session create response has no valid session_id")
+		}
+		tenant := ap.Tenant
+		if tenant == "" {
+			tenant = "default"
+		}
+		bindCtx, cancel := context.WithTimeout(context.WithoutCancel(resp.Request.Context()), 5*time.Second)
+		defer cancel()
+		if err := st.BindSession(bindCtx, envelope.SessionID, tenant, ap.AgentID, ap.ReplicaIndex); err != nil {
+			return fmt.Errorf("persist external session affinity: %w", err)
+		}
+		return nil
+	}
 }
 
 // sessionID extracts the {sid} from "/sessions/{sid}" or "/sessions/{sid}/...".

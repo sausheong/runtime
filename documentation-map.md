@@ -22,6 +22,8 @@ lost during future edits.
 | Foreign-SDK and remote-agent deployment | [Deploying SDK agents](deploying-sdk-agents.md) |
 | TLS-secured host deployment | [Secured deployment](deploy/secured/README.md) |
 | Kubernetes deployment | [Helm chart](deploy/charts/runtime/README.md) |
+| Security reporting and contribution | [Security policy](SECURITY.md) and [contribution guide](CONTRIBUTING.md) |
+| Releases, upgrades, rollback, and change history | [Release guide](RELEASING.md) and [changelog](CHANGELOG.md) |
 | Known gaps and release blockers | [Roadmap](ROADMAP.md) |
 
 ## Former README section recovery

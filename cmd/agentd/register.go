@@ -100,8 +100,9 @@ func fetchRegistration() {
 // ⇒ Unsetenv (not skip). All other keys keep skip-empty so genuinely
 // infra-provided vars (RUNTIME_LISTEN_ADDR, DBOS__VMID) are not clobbered.
 var platformToggleKeys = map[string]bool{
-	"RUNTIME_SUBJECT_FORWARDING": true,
-	"RUNTIME_AGENT_MEMORY":       true,
-	"RUNTIME_GATEWAY_URL":        true,
-	"RUNTIME_GATEWAY_KEY":        true,
+	"RUNTIME_SUBJECT_FORWARDING":          true,
+	"RUNTIME_IDENTITY_SIGNING_PUBLIC_KEY": true,
+	"RUNTIME_AGENT_MEMORY":                true,
+	"RUNTIME_GATEWAY_URL":                 true,
+	"RUNTIME_GATEWAY_KEY":                 true,
 }

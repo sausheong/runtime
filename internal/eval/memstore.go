@@ -128,6 +128,32 @@ func (m *MemStore) ListRuns(_ context.Context, tenant string) ([]Run, error) {
 	return out, nil
 }
 
+func (m *MemStore) ListIncompleteRuns(_ context.Context, limit int) ([]Run, error) {
+	if limit < 1 {
+		limit = 1
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	out := make([]Run, 0, limit)
+	now := time.Now().UTC()
+	for _, r := range m.runs {
+		claimable := r.LeaseOwner == "" || r.LeaseUntil == nil || !r.LeaseUntil.After(now)
+		if (r.Status == StatusPending || r.Status == StatusRunning) && claimable {
+			out = append(out, r)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if !out[i].CreatedAt.Equal(out[j].CreatedAt) {
+			return out[i].CreatedAt.Before(out[j].CreatedAt)
+		}
+		return out[i].RunID < out[j].RunID
+	})
+	if len(out) > limit {
+		out = out[:limit]
+	}
+	return out, nil
+}
+
 func (m *MemStore) SetRunStatus(_ context.Context, runID, status string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -155,27 +181,91 @@ func (m *MemStore) FinishRun(_ context.Context, runID, status string, total, pas
 	r.Failed = failed
 	r.Score = score
 	r.Error = errMsg
+	r.LeaseOwner = ""
+	r.LeaseUntil = nil
 	r.FinishedAt = &now
 	m.runs[runID] = r
 	m.gen++
 	return nil
 }
 
-func (m *MemStore) PutResult(_ context.Context, runID string, res Result) error {
+func (m *MemStore) ClaimRun(_ context.Context, runID, owner string, now, until time.Time) (bool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	r, ok := m.runs[runID]
+	if !ok || (r.Status != StatusPending && r.Status != StatusRunning) {
+		return false, nil
+	}
+	if r.LeaseOwner != "" && r.LeaseOwner != owner && r.LeaseUntil != nil && r.LeaseUntil.After(now) {
+		return false, nil
+	}
+	r.Status = StatusRunning
+	r.LeaseOwner = owner
+	r.LeaseUntil = &until
+	m.runs[runID] = r
+	m.gen++
+	return true, nil
+}
+
+func (m *MemStore) FailPendingRun(_ context.Context, runID, errMsg string) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	r, ok := m.runs[runID]
+	if !ok || r.Status != StatusPending || r.LeaseOwner != "" {
+		return false, nil
+	}
+	now := time.Now().UTC()
+	r.Status = StatusError
+	r.Error = errMsg
+	r.FinishedAt = &now
+	m.runs[runID] = r
+	m.gen++
+	return true, nil
+}
+
+func (m *MemStore) FinishRunClaimed(_ context.Context, runID, owner, status string, total, passed, failed int, score float64, errMsg string) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	r, ok := m.runs[runID]
+	if !ok || r.LeaseOwner != owner || r.Status != StatusRunning ||
+		r.LeaseUntil == nil || !r.LeaseUntil.After(time.Now().UTC()) {
+		return false, nil
+	}
+	now := time.Now().UTC()
+	r.Status = status
+	r.Total = total
+	r.Passed = passed
+	r.Failed = failed
+	r.Score = score
+	r.Error = errMsg
+	r.LeaseOwner = ""
+	r.LeaseUntil = nil
+	r.FinishedAt = &now
+	m.runs[runID] = r
+	m.gen++
+	return true, nil
+}
+
+func (m *MemStore) PutResultClaimed(_ context.Context, runID, owner string, res Result) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	r, ok := m.runs[runID]
+	if !ok || r.LeaseOwner != owner || r.Status != StatusRunning ||
+		r.LeaseUntil == nil || !r.LeaseUntil.After(time.Now().UTC()) {
+		return false, nil
+	}
 	results := m.results[runID]
 	for i := range results {
 		if results[i].CaseIndex == res.CaseIndex {
 			results[i] = res
 			m.results[runID] = results
 			m.gen++
-			return nil
+			return true, nil
 		}
 	}
 	m.results[runID] = append(results, res)
 	m.gen++
-	return nil
+	return true, nil
 }
 
 func (m *MemStore) ListResults(_ context.Context, runID string) ([]Result, error) {
@@ -190,11 +280,17 @@ func (m *MemStore) ListResults(_ context.Context, runID string) ([]Result, error
 	return out, nil
 }
 
-func (m *MemStore) ReapBefore(_ context.Context, before time.Time) (int64, error) {
+func (m *MemStore) ReapBefore(_ context.Context, before time.Time, batch int) (int64, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if batch < 1 {
+		batch = 1
+	}
 	var n int64
 	for id, run := range m.runs {
+		if n >= int64(batch) {
+			break
+		}
 		if !run.CreatedAt.Before(before) || (run.Status != StatusCompleted && run.Status != StatusError) {
 			continue
 		}

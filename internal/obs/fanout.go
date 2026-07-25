@@ -19,13 +19,15 @@ import (
 )
 
 // ScrapeTarget is one agent's metrics endpoint. BaseURL is the full dial base
-// "scheme://host:port"; Token (optional) is the shared bearer for remote agents.
+// "scheme://host:port"; Token is the optional shared bearer and Sign applies
+// the control-plane identity signature required by hardened local agents.
 type ScrapeTarget struct {
 	Agent     string            // agent id (used for up/skip series labels)
 	Replica   int               // 0-based replica index, surfaced as the "replica" label
 	BaseURL   string            // full base, e.g. "http://127.0.0.1:8101" or "https://h:8443"
 	Token     string            // optional bearer ("" ⇒ no auth header)
 	Transport http.RoundTripper // optional connect-time network policy
+	Sign      func(*http.Request) error
 }
 
 // perAgentTimeout bounds each sub-scrape so one sick agent can never stall
@@ -190,6 +192,11 @@ func scrapeOne(ctx context.Context, tgt ScrapeTarget) (map[string]*dto.MetricFam
 	}
 	if tgt.Token != "" {
 		req.Header.Set("Authorization", "Bearer "+tgt.Token)
+	}
+	if tgt.Sign != nil {
+		if err := tgt.Sign(req); err != nil {
+			return nil, false, "signing_error"
+		}
 	}
 	resp, err := client.Do(req)
 	if err != nil {
