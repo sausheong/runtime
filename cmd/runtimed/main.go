@@ -358,6 +358,11 @@ func main() {
 		slog.Error("identity configured-check failed", "err", err)
 		os.Exit(1)
 	}
+	credentialConfigured, err := idStore.AnyCredentialConfigured(ctx)
+	if err != nil {
+		slog.Error("identity credential-check failed", "err", err)
+		os.Exit(1)
+	}
 	identityOn := configured || oidcIssuer != "" || bootstrapKey != "" || len(legacyTokens) > 0
 	if identityOn && agentDSN == dsn {
 		slog.Warn("agents share the control-plane database credential; set RUNTIME_AGENT_PG_DSN to a role without access to identity and secrets tables")
@@ -393,6 +398,15 @@ func main() {
 	} else {
 		for _, row := range dbAgents {
 			if aerr := agentManager.Attach(ctx, row); aerr != nil {
+				if controlplane.IsFileAgentConflict(aerr) && row.Enabled {
+					if _, derr := agentStore.SetEnabled(ctx, row.TenantID, row.ID, false); derr != nil {
+						slog.Error("managed agent conflict could not be quarantined",
+							"agent", row.ID, "err", derr)
+						os.Exit(1)
+					}
+					slog.Warn("managed agent conflict quarantined as disabled",
+						"agent", row.ID)
+				}
 				slog.Warn("managed agent attach failed at boot", "agent", row.ID, "err", aerr)
 				continue
 			}
@@ -469,7 +483,11 @@ func main() {
 				slog.Warn("oidc provider discovery failed; console OIDC login disabled", "err", perr)
 			}
 		}
-		authr := identity.NewAuthenticator(idStore, oidcVerifier, bootstrapKey, legacyTokens)
+		effectiveBootstrap := effectiveBootstrapKey(credentialConfigured, bootstrapKey, envBool("RUNTIME_ADMIN_BREAK_GLASS"))
+		if credentialConfigured && bootstrapKey != "" && effectiveBootstrap == "" {
+			slog.Warn("bootstrap credential ignored because identity is already configured; set RUNTIME_ADMIN_BREAK_GLASS=1 only for an explicit recovery window")
+		}
+		authr := identity.NewAuthenticator(idStore, oidcVerifier, effectiveBootstrap, legacyTokens)
 		azr := identity.NewAuthorizer(reg.AgentTenants()).WithLiveLookup(reg.TenantOf)
 		if gwHandler != nil {
 			gwHandler.PrincipalFor = controlplane.PrincipalFromContext
@@ -557,7 +575,7 @@ func main() {
 			mw = controlplane.IdentityMiddlewareConsoleOIDCOnly
 		}
 		handler = obs.RequestID(tracedHandler(mw(accessLog(root, cm), authr, azr, onReject)))
-		slog.Info("identity enabled", "oidc", oidcIssuer != "", "console_oidc_only", consoleOIDC.Enabled, "bootstrap", bootstrapKey != "", "legacy_tokens", len(legacyTokens))
+		slog.Info("identity enabled", "oidc", oidcIssuer != "", "console_oidc_only", consoleOIDC.Enabled, "bootstrap", effectiveBootstrap != "", "legacy_tokens", len(legacyTokens))
 	}
 
 	// Mounted OUTSIDE the identity/access-log chain (like /healthz — standard
@@ -578,6 +596,7 @@ func main() {
 				ts = append(ts, obs.ScrapeTarget{
 					Agent: ap.AgentID, Replica: ap.ReplicaIndex,
 					BaseURL: ap.DialBase(), Token: ap.AuthToken,
+					Transport: controlplane.AgentOutboundTransport(ap),
 				})
 			}
 		}
@@ -844,6 +863,16 @@ func validateGatewaySearch(cfg *config.Config, embeddingsOn bool) error {
 		}
 	}
 	return nil
+}
+
+// effectiveBootstrapKey keeps the bootstrap credential limited to initial
+// provisioning. Once any durable identity exists, an operator must explicitly
+// open a break-glass recovery window before the credential is accepted again.
+func effectiveBootstrapKey(configured bool, key string, breakGlass bool) string {
+	if configured && !breakGlass {
+		return ""
+	}
+	return key
 }
 
 // gatewaySelfURL derives the URL agents use to reach the gateway. An explicit

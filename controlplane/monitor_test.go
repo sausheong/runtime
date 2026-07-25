@@ -76,6 +76,40 @@ func TestHealthMonitor_StopsOnCtxCancel(t *testing.T) {
 	}
 }
 
+func TestHealthMonitor_RejectsCrossOriginRedirect(t *testing.T) {
+	var targetCalls atomic.Int32
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		targetCalls.Add(1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer target.Close()
+	source := httptest.NewServer(http.RedirectHandler(target.URL, http.StatusFound))
+	defer source.Close()
+
+	state := make(chan bool, 1)
+	hm := &HealthMonitor{
+		BaseURL:  source.URL,
+		Token:    "must-not-follow",
+		Interval: time.Hour,
+		OnChange: func(ok bool) { state <- ok },
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go hm.Run(ctx)
+
+	select {
+	case ok := <-state:
+		if ok {
+			t.Fatal("redirecting agent reported healthy")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("monitor did not report initial state")
+	}
+	if got := targetCalls.Load(); got != 0 {
+		t.Fatalf("cross-origin redirect target called %d times", got)
+	}
+}
+
 func waitFor(t *testing.T, cond func() bool) {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)

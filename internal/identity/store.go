@@ -264,3 +264,15 @@ func (s *Store) AnyConfigured(ctx context.Context) (bool, error) {
 		`SELECT (SELECT count(1) FROM tenants) + (SELECT count(1) FROM service_keys)`).Scan(&n)
 	return n > 0, err
 }
+
+// AnyCredentialConfigured reports whether a durable human or service
+// credential exists. A tenant row alone is not enough: disabling the bootstrap
+// at that point could lock an operator out between creating the tenant and
+// minting its first administrator credential.
+func (s *Store) AnyCredentialConfigured(ctx context.Context) (bool, error) {
+	var n int
+	err := s.db.QueryRowContext(ctx,
+		`SELECT (SELECT count(1) FROM identity_users) +
+		        (SELECT count(1) FROM service_keys WHERE revoked_at IS NULL)`).Scan(&n)
+	return n > 0, err
+}

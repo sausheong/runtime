@@ -87,8 +87,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-      - run: shellcheck deploy/compose/*.sh
+      - run: shellcheck deploy/compose/*.sh deploy/gcp/*.sh deploy/gcp/control-plane/*.sh
       - run: docker build -f deploy/Dockerfile -t runtime:ci .
+      - name: Build GCP agent images from the documented repository-root context
+        run: |
+          docker build -f deploy/gcp/agent-python/Dockerfile -t nutrition-openai:ci .
+          docker build -f deploy/gcp/agent-claude/Dockerfile -t hello-claude:ci .
+          docker build -f deploy/gcp/agent-food-label/Dockerfile -t food-label-advisor:ci .
       - run: docker compose -f deploy/docker-compose.full.yml config --quiet
       - run: docker compose -f deploy/compose/docker-compose.yml config --quiet
         env:
@@ -96,3 +101,27 @@ jobs:
           RUNTIME_SECRETS_KEYS: ci:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
           RUNTIME_SECRETS_PRIMARY: ci
           GRAFANA_ADMIN_PASSWORD: ci-only-password
+      - name: Validate distributed GCP Compose bundles
+        run: |
+          install /dev/null deploy/gcp/llm.env
+          deploy/gcp/control-plane/stage-obs.sh
+          docker compose -f deploy/gcp/control-plane/docker-compose.yml config --quiet
+          docker compose -f deploy/gcp/agent-go/docker-compose.yml config --quiet
+          docker compose -f deploy/gcp/agent-python/docker-compose.yml config --quiet
+          docker compose -f deploy/gcp/agent-claude/docker-compose.yml config --quiet
+          docker compose -f deploy/gcp/agent-food-label/docker-compose.yml config --quiet
+        env:
+          RUNTIME_IMAGE: runtime:ci
+          NUTRITION_OPENAI_IMAGE: nutrition-openai:ci
+          HELLO_CLAUDE_IMAGE: hello-claude:ci
+          FOOD_LABEL_IMAGE: food-label-advisor:ci
+          RUNTIME_ADMIN_BOOTSTRAP: svk-ci.bootstrap
+          RUNTIME_SECRETS_KEYS: ci:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+          RUNTIME_SECRETS_PRIMARY: ci
+          GRAFANA_ADMIN_PASSWORD: ci-only-password
+          NUTRITION_GO_TOKEN: ci-go-token
+          NUTRITION_OPENAI_TOKEN: ci-python-token
+          HELLO_CLAUDE_TOKEN: ci-claude-token
+          FOOD_LABEL_TOKEN: ci-food-token
+          OPENAI_API_KEY: ci-openai-key
+          ANTHROPIC_API_KEY: ci-anthropic-key

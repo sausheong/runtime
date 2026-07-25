@@ -244,11 +244,12 @@ Runtime integrates agents through a small HTTP and SSE contract:
 | `GET /sessions/{id}/stream?since=N` | Replay and stream sequenced events |
 | `GET /metrics` | Optional agent metrics |
 
-The native Go service also exposes the non-blocking
+The native Go service and Python shim also expose the non-blocking
 `GET /sessions/{id}/events?since=N&limit=M` event-history endpoint. The Python
-contract shim exposes `POST /sessions/{id}/messages` for follow-up turns. These
-are implementation extensions rather than requirements of the common
-conformance suite.
+shim exposes `POST /sessions/{id}/messages` for follow-up turns. These are
+implementation extensions rather than requirements of the common conformance
+suite. Evaluations use the required SSE stream and therefore work across both
+implementations.
 
 The control plane prefixes agent routes with `/agents/{agent}`. Its stable
 public surface is:
@@ -464,7 +465,9 @@ Runtime can route, health-check, enable, disable, and reattach these agents. Sta
 
 - Enable OIDC or service-key identity outside local development.
 - Terminate TLS before the control plane and remote agent endpoints.
-- Remove the bootstrap credential after creating the first tenant administrator.
+- Keep the bootstrap credential outside normal operations. Runtime ignores it
+  after identity is configured unless `RUNTIME_ADMIN_BREAK_GLASS=1` explicitly
+  opens a recovery window.
 - Store tenant credentials through the encrypted broker and maintain recoverable keyring backups.
 - Keep agent and upstream tenant assignments explicit.
 - Keep `RUNTIME_METRICS_ADDR` on a private management network. It is intentionally unauthenticated for Prometheus and is not mounted on the public API listener.

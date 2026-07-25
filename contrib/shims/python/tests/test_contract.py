@@ -1,3 +1,4 @@
+import asyncio
 import base64
 from typing import AsyncIterator
 from fastapi.testclient import TestClient
@@ -25,6 +26,16 @@ def test_healthz_and_meta(tmp_path):
     assert c.get("/healthz").text == "ok"
     m = c.get("/meta").json()
     assert m["agent_id"] == "fake" and m["contract_version"] == "v1"
+
+
+def test_bearer_guards_data_endpoints_but_not_probes(tmp_path):
+    store = Store(str(tmp_path / "shim.db"))
+    c = TestClient(create_app(FakeAdapter(), store, "fake", auth_token="secret"))
+    assert c.get("/healthz").status_code == 200
+    assert c.get("/readyz").status_code == 200
+    assert c.get("/sessions").status_code == 401
+    r = c.get("/sessions", headers={"authorization": "Bearer secret"})
+    assert r.status_code == 200
 
 
 def test_session_stream_to_done(tmp_path):
@@ -66,11 +77,48 @@ def test_follow_up_unknown_session_404(tmp_path):
     assert r.status_code == 404
 
 
+def test_unknown_stream_and_events_404(tmp_path):
+    c, _ = make_client(tmp_path)
+    assert c.get("/sessions/ses-nope/stream").status_code == 404
+    assert c.get("/sessions/ses-nope/events").status_code == 404
+
+
+def test_events_endpoint_is_non_blocking_and_replayable(tmp_path):
+    c, _ = make_client(tmp_path)
+    sid = c.post("/sessions", json={"message": "events"}).json()["session_id"]
+    c.get(f"/sessions/{sid}/stream?since=0")
+    rows = c.get(f"/sessions/{sid}/events?since=1&limit=2").json()
+    assert [row["type"] for row in rows] == ["tool_result", "done"]
+    assert [row["seq"] for row in rows] == [2, 3]
+
+
+def test_concurrent_turn_on_same_session_is_rejected(tmp_path):
+    class SlowAdapter:
+        async def run(self, session_id, message, images, history):
+            await asyncio.sleep(0.2)
+            yield ContractEvent(type="text", text=message)
+
+    store = Store(str(tmp_path / "db.sqlite"))
+    with TestClient(create_app(SlowAdapter(), store, "slow")) as c:
+        sid = c.post("/sessions", json={"message": "first"}).json()["session_id"]
+        r = c.post(f"/sessions/{sid}/messages", json={"message": "second"})
+        assert r.status_code == 409
+        c.get(f"/sessions/{sid}/stream?since=0")
+        assert c.get(f"/sessions/{sid}").json()["turn_count"] == 1
+
+
 def test_session_body_limit(tmp_path):
     c, _ = make_client(tmp_path)
     body = b'{"message":"' + (b"x" * MAX_SESSION_BODY_BYTES) + b'"}'
     r = c.post("/sessions", content=body, headers={"content-type": "application/json"})
     assert r.status_code == 413
+
+
+def test_invalid_image_is_rejected_before_session_creation(tmp_path):
+    c, store = make_client(tmp_path)
+    r = c.post("/sessions", json={"message": "x", "image_b64": "%%%not-base64%%%"})
+    assert r.status_code == 400
+    assert store.list_sessions() == []
 
 
 def test_replay_since(tmp_path):

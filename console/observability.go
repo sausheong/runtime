@@ -39,13 +39,10 @@ type probeFunc func(controlplane.AgentProcess) bool
 // httpProbe is the production probe: a replica is healthy if GET <base>/healthz
 // returns 200 (bearer attached when set). Mirrors the /agents API health check.
 func httpProbe(ap controlplane.AgentProcess) bool {
-	client := &http.Client{Timeout: 1 * time.Second}
+	client := controlplane.NewAgentHTTPClient(ap, time.Second)
 	req, err := http.NewRequest("GET", ap.DialBase()+"/healthz", nil)
 	if err != nil {
 		return false
-	}
-	if ap.AuthToken != "" {
-		req.Header.Set("Authorization", "Bearer "+ap.AuthToken)
 	}
 	resp, err := client.Do(req)
 	if err != nil {

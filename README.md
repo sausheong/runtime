@@ -159,6 +159,7 @@ Important process-level settings are:
 | `RUNTIME_AGENTD_BIN` | Local agent host binary |
 | `RUNTIME_AGENT_ENV_PASSTHROUGH` | Comma-separated extra safe child variables |
 | `RUNTIME_ADMIN_BOOTSTRAP` | Initial superuser secret |
+| `RUNTIME_ADMIN_BREAK_GLASS` | Temporarily re-enable bootstrap after identity is configured; default off |
 | `RUNTIME_SECRETS_KEYS` | Secrets keyring |
 | `RUNTIME_SECRETS_PRIMARY` | Primary keyring entry |
 | `RUNTIME_PUBLIC_URL` | HTTPS public URL used for secure-cookie inference |
@@ -185,7 +186,7 @@ Administrative APIs and the gateway are described in the [operator
 guide](operator-guide.md) and [tenant guide](tenant-guide.md).
 
 Native Go agents link `agentruntime`; Python SDK agents can use the supplied
-contract shim; any language may implement the same HTTP/SSE contract. The
+authenticated contract shim; any language may implement the same HTTP/SSE contract. The
 [agent deployment guide](deploying-sdk-agents.md) contains complete examples,
 the endpoint contract, and framework-specific durability differences. Run the
 conformance command above before registering a custom implementation.
@@ -220,6 +221,6 @@ make helm-lint
 ```
 
 CI also runs race detection on concurrency-heavy packages, `govulncheck`,
-Python-shim tests, Helm rendering, shell checks, and container/Compose
-validation. GitHub Actions are pinned to commit SHAs and Dependabot tracks Go,
+Python-shim tests, Helm rendering, shell checks, GCP image builds, and
+turnkey/distributed Compose validation. GitHub Actions are pinned to commit SHAs and Dependabot tracks Go,
 Actions, Python, and container dependencies.

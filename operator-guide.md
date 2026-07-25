@@ -18,6 +18,12 @@ Open http://localhost:8080/ui and log in with that key. Treat it as root — it 
 the break-glass superuser credential. Use it to create the first tenant and
 tenant-admin (see the [Tenant guide](tenant-guide.md)).
 
+The bootstrap is accepted while the identity database is empty. Once a durable
+identity exists, subsequent restarts ignore it by default even if it remains in
+the deployment secret. For account recovery only, set
+`RUNTIME_ADMIN_BREAK_GLASS=1`, restart, use the bootstrap, then return the value
+to `0` and restart again.
+
 ## Ports
 
 | Service | Host port |
@@ -34,9 +40,10 @@ HTTP is Compose-internal. Postgres is also not published to the host.
 
 ## Persistence & reset
 
-- Data lives in the `pgdata` named volume.
+- Postgres, Prometheus, Alertmanager, Grafana, and Jaeger each use a named
+  volume. Prometheus and Jaeger retain 30 days of data.
 - `docker compose down` **preserves** data; `docker compose up` resumes it.
-- `docker compose down -v` **wipes** the volume (and re-runs the pgvector
+- `docker compose down -v` **wipes all named volumes** (and re-runs the pgvector
   extension init on the next `up`) — a clean reset. (`make compose-reset` does
   the same from the repo root.)
 
@@ -49,6 +56,8 @@ HTTP is Compose-internal. Postgres is also not published to the host.
 - Never place the bootstrap credential, database credentials, keyring values,
   OIDC client secret, or provider credentials in tenant-controlled
   configuration.
+- Keep `RUNTIME_ADMIN_BREAK_GLASS=0` except during a short, supervised recovery
+  window.
 - The bundled stack runs with identity ON; the console and APIs require auth.
 - Local agents are trusted platform subprocesses, not hostile-code sandboxes.
   They share the Runtime host user. Configure `RUNTIME_AGENT_PG_DSN` with a

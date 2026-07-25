@@ -203,6 +203,10 @@ helm install runtime deploy/charts/runtime \
 These map to `RUNTIME_OIDC_ISSUER`, `RUNTIME_OIDC_CLIENT_ID`, and
 `RUNTIME_OIDC_REDIRECT_URL`.
 
+The bootstrap is ignored after identity is configured. For a deliberate
+recovery window, set `identity.breakGlass=true`, restart, recover access, then
+set it back to `false`.
+
 ## Observability
 
 ```bash
@@ -288,6 +292,7 @@ In addition:
 | `secrets.secretsPrimary` | `""` | `RUNTIME_SECRETS_PRIMARY`. |
 | `secrets.adminBootstrap` | `""` | `RUNTIME_ADMIN_BOOTSTRAP`. |
 | `identity.enabled` | `false` | Enable OIDC env vars. |
+| `identity.breakGlass` | `false` | Temporarily accept bootstrap after identity exists. |
 | `identity.oidcIssuer` | `""` | `RUNTIME_OIDC_ISSUER`. |
 | `identity.oidcClientID` | `""` | `RUNTIME_OIDC_CLIENT_ID`. |
 | `identity.oidcRedirectURL` | `""` | `RUNTIME_OIDC_REDIRECT_URL`. |

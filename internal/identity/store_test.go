@@ -106,6 +106,28 @@ func TestStore_AnyConfigured(t *testing.T) {
 	}
 }
 
+func TestStore_AnyCredentialConfigured(t *testing.T) {
+	ctx := context.Background()
+	s, db := freshStore(t)
+	defer db.Close()
+
+	if any, err := s.AnyCredentialConfigured(ctx); err != nil || any {
+		t.Fatalf("fresh credential check = %v, %v", any, err)
+	}
+	if err := s.CreateTenant(ctx, "alpha", "A"); err != nil {
+		t.Fatal(err)
+	}
+	if any, err := s.AnyCredentialConfigured(ctx); err != nil || any {
+		t.Fatalf("tenant-only credential check = %v, %v", any, err)
+	}
+	if err := s.UpsertUser(ctx, "alpha", "admin@example.com", RoleAdmin); err != nil {
+		t.Fatal(err)
+	}
+	if any, err := s.AnyCredentialConfigured(ctx); err != nil || !any {
+		t.Fatalf("user credential check = %v, %v", any, err)
+	}
+}
+
 func TestStore_UpsertUserMultiTenant(t *testing.T) {
 	ctx := context.Background()
 	s, db := freshStore(t)

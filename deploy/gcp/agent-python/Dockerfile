@@ -1,11 +1,11 @@
 # Instance C — OpenAI Agents SDK nutrition agent, served via the Python contract
 # shim. Self-contained: SQLite (shim.db) for Level-1 durability, no external DB.
 #
-# Build from the PROJECTS ROOT (parent of runtime/), and for amd64 since the GCP
-# VMs are x86-64 (build host may be arm64):
+# Build from the repository root, and for amd64 since the GCP VMs are x86-64
+# (the build host may be arm64):
 #   docker build --platform linux/amd64 \
-#     -f runtime/deploy/gcp/agent-python/Dockerfile \
-#     -t nutrition-openai:latest .
+#     -f deploy/gcp/agent-python/Dockerfile \
+#     -t nutrition-openai:git-$(git rev-parse --short=12 HEAD) .
 #
 # The example's pyproject pins runtime-contract = { path = "../../contrib/shims/python" }.
 # The COPY layout below reproduces that relative position: from
@@ -14,8 +14,8 @@
 FROM python:3.12-slim
 COPY --from=ghcr.io/astral-sh/uv:0.11.16 /uv /uvx /bin/
 WORKDIR /app
-COPY runtime/contrib/shims/python /app/contrib/shims/python
-COPY runtime/examples/nutrition-label-openai /app/examples/nutrition-label-openai
+COPY contrib/shims/python /app/contrib/shims/python
+COPY examples/nutrition-label-openai /app/examples/nutrition-label-openai
 WORKDIR /app/examples/nutrition-label-openai
 RUN uv sync --no-dev
 EXPOSE 8302

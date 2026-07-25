@@ -22,5 +22,6 @@
 
 {$SITE_ADDRESS:runtime.sausheong.com} {
 	encode gzip
+	header Strict-Transport-Security "max-age=31536000; includeSubDomains"
 	reverse_proxy runtimed:8080
 }

@@ -5,10 +5,20 @@
 **/.env
 **/*.env
 **/.venv
+**/.pytest_cache
+**/__pycache__
+**/claude-config
+**/*.db
+**/*.sqlite
+**/*.sqlite3
 
 bin
 coverage.out
 food_label_images
+
+/runtimed
+/runtimectl
+/v1-probe
 
 IMPLEMENTATION-HISTORY.md
 IMPLEMENTATION-REPORT.md

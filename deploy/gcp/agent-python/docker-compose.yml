@@ -1,17 +1,16 @@
 # Instance C — OpenAI Agents SDK nutrition agent via the contract shim.
 # Self-contained: SQLite at /data/shim.db, no external DB.
 #
-#   cp .env.example .env        # set LLM creds
+#   cp .env.example .env        # set image, bearer, and LLM credentials
 #   docker compose up -d
 #
 # The control plane (Instance A) dials this agent at http://<C-internal-ip>:8302.
-# NOTE: the shim enforces no bearer auth — port 8302 is protected by the VPC
-# firewall (internal-only). See deploy_plan.md §7.
+# The shim requires the same per-agent bearer configured on the control plane.
 name: runtime-agent-python
 
 services:
   nutrition-openai:
-    image: ${NUTRITION_OPENAI_IMAGE:-asia-southeast1-docker.pkg.dev/mhi-exp-chang-sau-sheong/runtime/nutrition-openai:latest}
+    image: ${NUTRITION_OPENAI_IMAGE:?set NUTRITION_OPENAI_IMAGE to an immutable git tag or digest}
     # Shared LLM-proxy routing (OPENAI_BASE_URL + OPENAI_MODEL) comes from the
     # untracked ../llm.env (one file for all agent VMs). The API key stays in
     # this dir's own .env.
@@ -25,7 +24,8 @@ services:
       # all interfaces on ":port"; uvicorn needs the host spelled out.)
       RUNTIME_LISTEN_ADDR: "0.0.0.0:8302"
       RUNTIME_SHIM_DB: /data/shim.db
-      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      RUNTIME_AGENT_AUTH_TOKEN: ${NUTRITION_OPENAI_TOKEN:?set NUTRITION_OPENAI_TOKEN}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:?set OPENAI_API_KEY}
     volumes:
       - shim-data:/data              # persists shim.db + agent_memory.json
     ports:

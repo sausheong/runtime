@@ -33,6 +33,7 @@ Runtime supervises any process that serves these endpoints over HTTP:
 | `GET /sessions/{id}/stream?since=N` | SSE event stream; replay from seq N |
 | `GET /sessions/{id}` | session status |
 | `GET /sessions` | list sessions |
+| `GET /sessions/{id}/events` | bounded JSON event replay for operator tooling |
 | `POST /sessions/{id}/messages` | follow-up turn (shim extension) |
 
 You do **not** implement these yourself. The
@@ -54,6 +55,7 @@ through:
 | `RUNTIME_LISTEN_ADDR` | `host:port` to bind | injected by `runtimed` |
 | `RUNTIME_AGENT_ID` | agent id on `/meta` | injected by `runtimed` |
 | `RUNTIME_SHIM_DB` | SQLite path for the durable session store | optional; defaults under `workdir` |
+| `RUNTIME_AGENT_AUTH_TOKEN` | bearer required on agent endpoints; health/readiness stay public | recommended for every remote |
 | `OPENAI_*` / `ANTHROPIC_*` | your model credentials | tenant secret, explicit agent env, or named safe passthrough |
 
 ## 2. The adapter + entrypoint
@@ -211,14 +213,14 @@ The examples below show the Claude path; the OpenAI path is identical with
 ### a. Containerize
 
 The agent ships as a self-contained image (SQLite for durable sessions, no
-external DB). Build for **amd64** from the **projects root** (parent of
-`runtime/`), since the GCP VMs are x86-64:
+external DB). Build for **amd64** from the **repository root**, since the GCP
+VMs are x86-64:
 
 ```bash
-cd /path/to/projects                   # contains runtime/ and harness/
+cd /path/to/runtime
 docker build --platform linux/amd64 \
-  -f runtime/deploy/gcp/agent-claude/Dockerfile \
-  -t hello-claude:latest .
+  -f deploy/gcp/agent-claude/Dockerfile \
+  -t hello-claude:git-$(git rev-parse --short=12 HEAD) .
 ```
 
 The Dockerfile (see
@@ -237,8 +239,8 @@ needs. Two things matter:
   With a bare `":8080"` the shim's host parsing yields an empty host and uvicorn
   falls back to `127.0.0.1`, unreachable through Docker's port publish. (The Go
   `agentd` binds all interfaces on `:port`; uvicorn needs the host spelled out.)
-- **Inject the model credentials** (`ANTHROPIC_*`) and a persistent
-  `RUNTIME_SHIM_DB` on a volume.
+- **Inject the model credentials** (`ANTHROPIC_*`), a per-agent
+  `RUNTIME_AGENT_AUTH_TOKEN`, and a persistent `RUNTIME_SHIM_DB` on a volume.
 
 The compose file uses a distinct project `name:` and port, so the agent can run
 as a **second container alongside another shim agent on the same VM** (e.g. an
@@ -253,7 +255,7 @@ sudo docker compose up -d
 ### c. Attach it from the control plane
 
 Add the agent to the control plane's registry as a **remote** entry — only
-`id/name/model/tenant/url` (and `auth_token` if the agent enforces a bearer).
+`id/name/model/tenant/url/auth_token`.
 Spawn-time fields (`kind/command/workdir`) are rejected on a remote entry. From
 [`deploy/gcp/control-plane/runtime.remote.yaml`](deploy/gcp/control-plane/runtime.remote.yaml):
 
@@ -264,6 +266,7 @@ agents:
     model: claude-sonnet-4-6           # display only; the agent's ANTHROPIC_MODEL is authoritative
     tenant: acme                       # MUST match your console users' tenant
     url: http://10.10.0.AGENT_IP:8080
+    auth_token: ${HELLO_CLAUDE_TOKEN}
 ```
 
 > **`tenant` matters.** With identity ON, the console only shows agents in the
@@ -284,12 +287,10 @@ control-plane examples; adapt their network and host settings to your environmen
 
 ### Authentication note
 
-The Python contract shim does **not** enforce a bearer — it trusts the loopback
-proxy and expects to be reached only by `runtimed`. In the GCP deployment, the
-agent's port is protected by the VPC firewall (internal-only); the registry
-entry omits `auth_token` so the config doesn't imply protection the shim doesn't
-provide. Platform authentication is enforced at the **control-plane edge**, not
-at each agent — the same model as Go `agentd` agents.
+Set `RUNTIME_AGENT_AUTH_TOKEN` on the shim and the same `auth_token` on its
+control-plane registry entry. The shim permits unauthenticated liveness and
+readiness probes but requires `Authorization: Bearer ...` everywhere else. The
+GCP firewall remains a second, network-level boundary.
 
 ## 5. Durability caveats
 
@@ -303,6 +304,11 @@ runtime session id (both examples do).
 a partial run, unlike Go/harness agents' DBOS-backed per-turn durability — a
 process killed during a run loses that in-flight turn (completed sessions and
 events remain intact).
+
+The shim serializes turns per session. A second concurrent turn returns HTTP
+409 instead of interleaving events or corrupting adapter state. Graceful
+shutdown drains active tasks for up to ten seconds, then records interruption
+before cancellation.
 
 **Native lifecycle limits are not enforced by the Python shim.** The shim does
 not consume `RUNTIME_AGENT_LIMITS` (`turn_timeout`, `session_timeout`,

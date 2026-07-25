@@ -88,7 +88,6 @@ func NewAPI(reg *Registry, m *obs.ControlMetrics, st store.Store, subjectForward
 		var out []agentStatus
 		var mu sync.Mutex
 		var wg sync.WaitGroup
-		client := &http.Client{Timeout: 1 * time.Second}
 		for _, info := range infos {
 			if hasP && !p.Superuser && info.Tenant != p.TenantID {
 				continue
@@ -103,10 +102,8 @@ func NewAPI(reg *Registry, m *obs.ControlMetrics, st store.Store, subjectForward
 				st := agentStatus{ID: info.ID, Name: info.Name, Model: info.Model}
 				// An agent is healthy if ANY replica answers /healthz.
 				for _, ap := range replicas {
+					client := NewAgentHTTPClient(ap, time.Second)
 					req, _ := http.NewRequest("GET", ap.baseURL()+"/healthz", nil)
-					if ap.AuthToken != "" {
-						req.Header.Set("Authorization", "Bearer "+ap.AuthToken)
-					}
 					resp, err := client.Do(req)
 					if err == nil {
 						ok := resp.StatusCode == 200

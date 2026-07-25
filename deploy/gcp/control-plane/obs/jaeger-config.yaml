@@ -1,0 +1,38 @@
+# Jaeger v2 all-in-one with durable local Badger storage.
+# Appropriate for this single-node deployment; use OpenSearch for horizontal
+# scale. Primary traces expire after 30 days.
+service:
+  extensions: [jaeger_storage, jaeger_query]
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [jaeger_storage_exporter]
+
+extensions:
+  jaeger_query:
+    storage:
+      traces: primary
+  jaeger_storage:
+    backends:
+      primary:
+        badger:
+          directories:
+            keys: /tmp/jaeger/keys
+            values: /tmp/jaeger/values
+          ephemeral: false
+          ttl:
+            spans: 720h
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+      http:
+
+processors:
+  batch:
+
+exporters:
+  jaeger_storage_exporter:
+    trace_storage: primary

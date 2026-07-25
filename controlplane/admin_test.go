@@ -794,3 +794,36 @@ func TestSecretAdmin_RotateSuperuserSpecificTenant(t *testing.T) {
 		t.Fatalf("rotated %v, want [acme]", sa.rotated)
 	}
 }
+
+func TestDecodeRejectsUnknownTrailingAndOversizeBodies(t *testing.T) {
+	type payload struct {
+		Name string `json:"name"`
+	}
+	h := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body payload
+		if !decode(w, r, &body) {
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+
+	for name, body := range map[string]string{
+		"unknown":  `{"name":"ok","extra":true}`,
+		"trailing": `{"name":"ok"} {"name":"again"}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body)))
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("code=%d body=%s", rec.Code, rec.Body.String())
+			}
+		})
+	}
+
+	rec := httptest.NewRecorder()
+	large := `{"name":"` + strings.Repeat("x", int(maxAdminBodyBytes)) + `"}`
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/", strings.NewReader(large)))
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("oversize code=%d body=%s", rec.Code, rec.Body.String())
+	}
+}

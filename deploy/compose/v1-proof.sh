@@ -9,7 +9,7 @@ ROOT="$(cd "$HERE/../.." && pwd)"   # repo root (/Users/sausheong/projects/runti
 # v1-probe does the MCP-session calls bash can't (gateway tool call, sandbox
 # exec). Run from the host against localhost:8080 via `go run`.
 probe() { ( cd "$ROOT" && go run ./cmd/v1-probe "$@" ); }
-cd "$HERE"
+cd "$HERE" || exit 1
 
 fails=0
 pass() { echo "PASS: $*"; }
@@ -51,7 +51,7 @@ docker compose up -d
 
 # 1. runtimed healthy.
 ok=0
-for i in $(seq 1 60); do
+for _ in $(seq 1 60); do
   if curl -sf -H "Authorization: Bearer $RUNTIME_ADMIN_BOOTSTRAP" localhost:8080/healthz >/dev/null 2>&1; then ok=1; break; fi
   sleep 2
 done
@@ -116,7 +116,7 @@ if curl -sf -H "Authorization: Bearer $RUNTIME_ADMIN_BOOTSTRAP" -X POST localhos
 # field), NOT /admin/upstreams (which returns the DB rows, no live state). The
 # bootstrap principal is a superuser, so /gateway/status returns all tenants.
 up=0
-for i in $(seq 1 20); do
+for _ in $(seq 1 20); do
   st="$(curl -s -H "Authorization: Bearer $RUNTIME_ADMIN_BOOTSTRAP" localhost:8080/gateway/status \
      | python3 -c "import sys,json;d=json.load(sys.stdin);L=d if isinstance(d,list) else d.get('upstreams',[]);print(next((u.get('state','') for u in L if u.get('name')=='orders'),''))" 2>/dev/null || echo "")"
   [ "$st" = up ] && { up=1; break; }
@@ -172,7 +172,7 @@ docker compose exec -T postgres psql -U runtime -d runtime -c \
   "CREATE TABLE IF NOT EXISTS m2_persist(id int); INSERT INTO m2_persist VALUES (42);" >/dev/null 2>&1
 docker compose down >/dev/null 2>&1
 docker compose up -d >/dev/null 2>&1
-for i in $(seq 1 30); do docker compose exec -T postgres pg_isready -U runtime >/dev/null 2>&1 && break; sleep 2; done
+for _ in $(seq 1 30); do docker compose exec -T postgres pg_isready -U runtime >/dev/null 2>&1 && break; sleep 2; done
 got="$(docker compose exec -T postgres psql -U runtime -d runtime -tAc 'SELECT id FROM m2_persist' 2>/dev/null | tr -d '[:space:]')"
 [ "$got" = 42 ] && pass "data persists across down/up" || fail "persistence broken (got '$got')"
 

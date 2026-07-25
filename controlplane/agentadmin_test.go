@@ -70,12 +70,39 @@ func TestAgentManagerAttachDoesNotOverrideFileConfiguredAgent(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "operator file") {
 		t.Fatalf("Attach error = %v, want operator-file collision", err)
 	}
+	if !IsFileAgentConflict(err) {
+		t.Fatalf("Attach error = %v, want typed file-agent conflict", err)
+	}
 	ap, ok := reg.Get("shared")
 	if !ok || ap.BaseURL != "http://10.10.0.4:8302" {
 		t.Fatalf("file-configured agent was replaced: ok=%v base=%q", ok, ap.BaseURL)
 	}
 	if reg.IsManaged("shared") {
 		t.Fatal("file-configured agent was incorrectly marked managed")
+	}
+}
+
+func TestDeregisterShadowedRowPreservesFileAgent(t *testing.T) {
+	reg := NewRegistry(&config.Config{Agents: []config.AgentConfig{{
+		ID: "shared", Name: "Operator agent", Model: "test/model",
+		Tenant: "acme", URL: "http://10.10.0.4:8302",
+	}}}, "", "")
+	mgr := NewAgentManager(reg, nil, nil)
+	s := newFakeAgentStore()
+	s.rows["shared"] = agentstore.AgentRow{
+		ID: "shared", TenantID: "acme", Name: "Stale",
+		URL: "https://old.example", Enabled: false,
+	}
+
+	if err := DeregisterAgentShared(context.Background(), s, mgr, "acme", "shared"); err != nil {
+		t.Fatalf("DeregisterAgentShared: %v", err)
+	}
+	if _, ok := s.rows["shared"]; ok {
+		t.Fatal("shadowed persisted row was not deleted")
+	}
+	ap, ok := reg.Get("shared")
+	if !ok || ap.BaseURL != "http://10.10.0.4:8302" {
+		t.Fatalf("file-configured agent was detached: ok=%v ap=%+v", ok, ap)
 	}
 }
 

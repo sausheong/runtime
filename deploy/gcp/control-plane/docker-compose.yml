@@ -30,7 +30,7 @@ services:
       retries: 30
 
   runtimed:
-    image: ${RUNTIME_IMAGE:-asia-southeast1-docker.pkg.dev/mhi-exp-chang-sau-sheong/runtime/runtime:latest}
+    image: ${RUNTIME_IMAGE:?set RUNTIME_IMAGE to an immutable git tag or digest}
     depends_on:
       postgres:
         condition: service_healthy
@@ -42,17 +42,22 @@ services:
       # identity ON: the control plane is publicly reachable through Caddy, so the
       # edge requires a bearer on every /ui + API request. Remote-agent attach is
       # unaffected (that uses the per-agent auth tokens below).
-      RUNTIME_ADMIN_BOOTSTRAP: ${RUNTIME_ADMIN_BOOTSTRAP}
-      RUNTIME_SECRETS_KEYS: ${RUNTIME_SECRETS_KEYS}
-      RUNTIME_SECRETS_PRIMARY: ${RUNTIME_SECRETS_PRIMARY}
+      RUNTIME_ADMIN_BOOTSTRAP: ${RUNTIME_ADMIN_BOOTSTRAP:?set RUNTIME_ADMIN_BOOTSTRAP}
+      RUNTIME_SECRETS_KEYS: ${RUNTIME_SECRETS_KEYS:?set RUNTIME_SECRETS_KEYS}
+      RUNTIME_SECRETS_PRIMARY: ${RUNTIME_SECRETS_PRIMARY:?set RUNTIME_SECRETS_PRIMARY}
       # OIDC human login (optional; "Sign in with Google" on the console). Empty
       # by default → OIDC off, service-key login only. Set in .env to enable.
       RUNTIME_OIDC_ISSUER: ${RUNTIME_OIDC_ISSUER:-}
       RUNTIME_OIDC_CLIENT_ID: ${RUNTIME_OIDC_CLIENT_ID:-}
       RUNTIME_OIDC_CLIENT_SECRET: ${RUNTIME_OIDC_CLIENT_SECRET:-}
       RUNTIME_OIDC_REDIRECT_URL: ${RUNTIME_OIDC_REDIRECT_URL:-}
-      NUTRITION_GO_TOKEN: ${NUTRITION_GO_TOKEN}
-      NUTRITION_OPENAI_TOKEN: ${NUTRITION_OPENAI_TOKEN:-}
+      RUNTIME_PUBLIC_URL: https://${SITE_ADDRESS:-runtime.sausheong.com}
+      RUNTIME_COOKIE_SECURE: "true"
+      RUNTIME_ADMIN_BREAK_GLASS: ${RUNTIME_ADMIN_BREAK_GLASS:-0}
+      NUTRITION_GO_TOKEN: ${NUTRITION_GO_TOKEN:?set NUTRITION_GO_TOKEN}
+      NUTRITION_OPENAI_TOKEN: ${NUTRITION_OPENAI_TOKEN:?set NUTRITION_OPENAI_TOKEN}
+      HELLO_CLAUDE_TOKEN: ${HELLO_CLAUDE_TOKEN:?set HELLO_CLAUDE_TOKEN}
+      FOOD_LABEL_TOKEN: ${FOOD_LABEL_TOKEN:?set FOOD_LABEL_TOKEN}
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
     volumes:
       - ./runtime.remote.yaml:/app/runtime.remote.yaml:ro
@@ -65,10 +70,14 @@ services:
 
   prometheus:
     image: prom/prometheus:v3.12.0
-    command: ["--config.file=/etc/prometheus/prometheus.yml"]
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=30d"
     volumes:
       - ./obs/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - ./obs/rules:/etc/prometheus/rules:ro   # alert rules (prometheus.yml rule_files globs this)
+      - prometheus-data:/prometheus
     ports:
       - "9090:9090"
     depends_on:
@@ -82,9 +91,12 @@ services:
   # wire real notifications. IAP-only (not published to the internet).
   alertmanager:
     image: prom/alertmanager:v0.32.1
-    command: ["--config.file=/etc/alertmanager/alertmanager.yml"]
+    command:
+      - "--config.file=/etc/alertmanager/alertmanager.yml"
+      - "--storage.path=/alertmanager"
     volumes:
       - ./obs/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - alertmanager-data:/alertmanager
     ports:
       - "9093:9093"
     extra_hosts:
@@ -98,6 +110,7 @@ services:
     volumes:
       - ./obs/grafana/provisioning:/etc/grafana/provisioning:ro
       - ./obs/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
     ports:
       - "3000:3000"
     depends_on:
@@ -115,8 +128,10 @@ services:
 
   jaeger:
     image: jaegertracing/jaeger:2.18.0
-    environment:
-      COLLECTOR_OTLP_ENABLED: "true"
+    command: ["--config=/etc/jaeger/config.yaml"]
+    volumes:
+      - ./obs/jaeger-config.yaml:/etc/jaeger/config.yaml:ro
+      - jaeger-data:/tmp
     ports:
       - "16686:16686"
 
@@ -143,5 +158,9 @@ services:
 
 volumes:
   pgdata:
+  prometheus-data:
+  alertmanager-data:
+  grafana-data:
+  jaeger-data:
   caddy_data:
   caddy_config:

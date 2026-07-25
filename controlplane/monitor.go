@@ -25,7 +25,11 @@ func (h *HealthMonitor) Run(ctx context.Context) {
 	if interval == 0 {
 		interval = 10 * time.Second
 	}
-	client := &http.Client{Timeout: 2 * time.Second, Transport: h.Transport}
+	client := &http.Client{
+		Timeout:       2 * time.Second,
+		Transport:     h.Transport,
+		CheckRedirect: rejectCrossOriginRedirect(h.BaseURL),
+	}
 	var last int // 0=unknown, 1=reachable, -1=unreachable
 	probe := func() {
 		ok := h.healthy(ctx, client)

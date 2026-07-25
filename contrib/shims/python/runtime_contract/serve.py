@@ -11,6 +11,8 @@ Operator environment (set by runtimed on the supervised subprocess):
   RUNTIME_SHIM_DB       SQLite path for the Level-1 store (optional; the control
                         plane does NOT inject it, so it defaults to ./shim.db
                         under the agent's workdir)
+  RUNTIME_AGENT_AUTH_TOKEN
+                        optional shared bearer enforced on every data endpoint
 
 The adapter author never reads these. The only seam the author owns is the
 adapter itself (the AgentAdapter protocol).
@@ -48,6 +50,7 @@ def serve(adapter: AdapterOrFactory) -> None:
     host, _, port = addr.partition(":")
     agent_id = os.environ.get("RUNTIME_AGENT_ID", "agent")
     db = os.environ.get("RUNTIME_SHIM_DB", "./shim.db")
+    auth_token = os.environ.get("RUNTIME_AGENT_AUTH_TOKEN", "")
 
     # Resolve the adapter. A factory (incl. a class taking db_path) is called
     # with the db path; an already-constructed adapter is used as-is.
@@ -61,7 +64,7 @@ def serve(adapter: AdapterOrFactory) -> None:
     # the agent's own port and scraped by the control plane over the VPC — same
     # trust model as the Go agentruntime emitter.
     metrics = Metrics(agent_id)
-    app = create_app(resolved, store, agent_id, metrics=metrics)
+    app = create_app(resolved, store, agent_id, metrics=metrics, auth_token=auth_token)
     uvicorn.run(app, host=host or "127.0.0.1", port=int(port or "8000"), log_level="info")
 
 

@@ -91,7 +91,7 @@ class Store:
         with self._lock:
             rows = self._db.execute(
                 "SELECT id, status, turn_count, completed_at, duration_ms, tokens_total "
-                "FROM sessions ORDER BY rowid"
+                "FROM sessions ORDER BY rowid DESC"
             ).fetchall()
         return [{"id": r[0], "status": r[1], "turn_count": r[2],
                  "completed_at": r[3], "duration_ms": r[4], "tokens_total": r[5]} for r in rows]
@@ -113,6 +113,21 @@ class Store:
         with self._lock:
             self._db.execute("UPDATE sessions SET turn_count=? WHERE id=?", (n, sid))
             self._db.commit()
+
+    def increment_turn_count(self, sid: str) -> None:
+        with self._lock:
+            self._db.execute(
+                "UPDATE sessions SET turn_count = turn_count + 1 WHERE id=?", (sid,)
+            )
+            self._db.commit()
+
+    def ready(self) -> bool:
+        with self._lock:
+            return self._db.execute("SELECT 1").fetchone() == (1,)
+
+    def close(self) -> None:
+        with self._lock:
+            self._db.close()
 
     def add_tokens(self, sid: str, tokens: int) -> None:
         """Accumulate this turn's token usage onto the session total. Called with

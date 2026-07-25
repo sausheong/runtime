@@ -2,9 +2,13 @@
 from __future__ import annotations
 import asyncio
 import base64
+import binascii
 import datetime
+import hmac
 import json
+import logging
 import time
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
@@ -17,6 +21,8 @@ from .store import Store
 
 CONTRACT_VERSION = "v1"
 MAX_SESSION_BODY_BYTES = 16 << 20
+_SHUTDOWN_GRACE_SECONDS = 10
+log = logging.getLogger(__name__)
 
 # Telemetry events an adapter may yield for metrics only; never published to the
 # client SSE stream nor persisted (see events.py).
@@ -28,13 +34,41 @@ def create_app(
     store: Store,
     agent_id: str,
     metrics: Metrics | None = None,
+    auth_token: str = "",
 ) -> FastAPI:
-    app = FastAPI()
+    background_tasks: set[asyncio.Task] = set()
+
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI):
+        yield
+        if background_tasks:
+            _, pending = await asyncio.wait(set(background_tasks), timeout=_SHUTDOWN_GRACE_SECONDS)
+            for task in pending:
+                task.cancel()
+            if pending:
+                await asyncio.gather(*pending, return_exceptions=True)
+        store.close()
+
+    app = FastAPI(lifespan=lifespan)
     live: dict[str, list[asyncio.Queue]] = {}
     live_lock = asyncio.Lock()
+    active_sessions: set[str] = set()
+    active_lock = asyncio.Lock()
     # Per-session token usage buffered from a "usage" telemetry event until the
     # turn completes, so each turn records one duration sample carrying its tokens.
     _pending_usage: dict[str, dict | None] = {}
+
+    if auth_token:
+        @app.middleware("http")
+        async def require_bearer(req: Request, call_next):  # noqa: ANN202
+            if req.method == "GET" and req.url.path in ("/healthz", "/readyz"):
+                return await call_next(req)
+            if not hmac.compare_digest(
+                req.headers.get("authorization", ""),
+                f"Bearer {auth_token}",
+            ):
+                return JSONResponse({"error": "unauthorized"}, status_code=401)
+            return await call_next(req)
 
     async def read_session_json(req: Request) -> dict:
         """Read a bounded JSON object without letting Starlette buffer an
@@ -102,36 +136,70 @@ def create_app(
                 await publish(sid, ev)
                 if ev.type == "error":
                     terminal = ContractEvent(type="error", error=ev.error or "agent error")
-        except Exception as e:  # never crash the server
-            terminal = ContractEvent(type="error", error=str(e))
-        duration_ms = int((time.monotonic() - start) * 1000)
-        completed_at = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-        final_status = "completed" if terminal.type == "done" else "error"
-        store.set_completed(sid, final_status, completed_at, duration_ms)
-        row = store.get_session(sid)
-        store.set_turn_count(sid, (row["turn_count"] if row else 0) + 1)
-        if metrics is not None:
-            outcome = "completed" if terminal.type == "done" else "error"
-            metrics.observe_turn(outcome, time.monotonic() - start, _pending_usage.pop(sid, None))
-        await publish(sid, terminal)
+        except asyncio.CancelledError:
+            terminal = ContractEvent(type="error", error="agent execution interrupted")
+        except Exception:  # never crash the server or expose provider internals
+            log.exception("adapter execution failed", extra={"session_id": sid})
+            terminal = ContractEvent(type="error", error="agent execution failed")
+        finally:
+            duration_ms = int((time.monotonic() - start) * 1000)
+            completed_at = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+            final_status = "completed" if terminal.type == "done" else "error"
+            store.set_completed(sid, final_status, completed_at, duration_ms)
+            store.increment_turn_count(sid)
+            if metrics is not None:
+                outcome = "completed" if terminal.type == "done" else "error"
+                metrics.observe_turn(outcome, time.monotonic() - start, _pending_usage.pop(sid, None))
+            await publish(sid, terminal)
+            async with active_lock:
+                active_sessions.discard(sid)
+
+    async def launch_session(sid: str, message: str, images: list[Image]) -> None:
+        async with active_lock:
+            if sid in active_sessions:
+                raise HTTPException(status_code=409, detail="session already has an active turn")
+            active_sessions.add(sid)
+        task = asyncio.create_task(run_session(sid, message, images))
+        background_tasks.add(task)
+        task.add_done_callback(background_tasks.discard)
 
     def parse_images(body: dict) -> list[Image]:
         images: list[Image] = []
+        def decode_image(data: object, mime: object) -> Image:
+            if not isinstance(data, str):
+                raise HTTPException(status_code=400, detail="image data must be base64 text")
+            if mime is not None and not isinstance(mime, str):
+                raise HTTPException(status_code=400, detail="image mime must be text")
+            try:
+                raw = base64.b64decode(data, validate=True)
+            except (binascii.Error, ValueError) as exc:
+                raise HTTPException(status_code=400, detail="invalid base64 image") from exc
+            return Image(mime=mime or "image/jpeg", data=raw)
+
         # Single-image legacy form: image_b64 + image_mime
         b64 = body.get("image_b64")
-        if b64:
-            images.append(Image(mime=body.get("image_mime") or "image/jpeg",
-                                data=base64.b64decode(b64)))
+        if b64 is not None:
+            images.append(decode_image(b64, body.get("image_mime")))
         # Multi-image form: images=[{data: <b64>, mime: <mime>}, ...]
-        for img in body.get("images") or []:
-            if img.get("data"):
-                images.append(Image(mime=img.get("mime") or "image/jpeg",
-                                    data=base64.b64decode(img["data"])))
+        multi = body.get("images") or []
+        if not isinstance(multi, list):
+            raise HTTPException(status_code=400, detail="images must be an array")
+        for img in multi:
+            if not isinstance(img, dict):
+                raise HTTPException(status_code=400, detail="each image must be an object")
+            if "data" in img:
+                images.append(decode_image(img["data"], img.get("mime")))
         return images
 
     @app.get("/healthz", response_class=PlainTextResponse)
     async def healthz() -> str:
         return "ok"
+
+    @app.get("/readyz", response_class=PlainTextResponse)
+    async def readyz() -> str:
+        if not store.ready():
+            raise HTTPException(status_code=503, detail="not ready")
+        return "ready"
 
     @app.get("/meta")
     async def meta() -> JSONResponse:
@@ -140,8 +208,9 @@ def create_app(
     @app.post("/sessions")
     async def create_session(req: Request) -> JSONResponse:
         body = await read_session_json(req)
+        images = parse_images(body)
         sid = store.create_session()
-        asyncio.create_task(run_session(sid, body.get("message", ""), parse_images(body)))
+        await launch_session(sid, body.get("message", ""), images)
         return JSONResponse({"session_id": sid})
 
     @app.post("/sessions/{sid}/messages")
@@ -153,7 +222,8 @@ def create_app(
         if not store.get_session(sid):
             return JSONResponse({"error": "not found"}, status_code=404)
         body = await read_session_json(req)
-        asyncio.create_task(run_session(sid, body.get("message", ""), parse_images(body)))
+        images = parse_images(body)
+        await launch_session(sid, body.get("message", ""), images)
         return JSONResponse({"session_id": sid})
 
     @app.get("/sessions")
@@ -169,6 +239,8 @@ def create_app(
 
     @app.get("/sessions/{sid}/stream")
     async def stream(sid: str, since: int = 0) -> StreamingResponse:
+        if not store.get_session(sid):
+            raise HTTPException(status_code=404, detail="session not found")
         q: asyncio.Queue = asyncio.Queue()
 
         async def gen():
@@ -195,7 +267,23 @@ def create_app(
                     subs = live.get(sid, [])
                     if q in subs:
                         subs.remove(q)
+                    if not subs:
+                        live.pop(sid, None)
 
         return StreamingResponse(gen(), media_type="text/event-stream")
+
+    @app.get("/sessions/{sid}/events")
+    async def events(sid: str, since: int = 0, limit: int = 50) -> JSONResponse:
+        if not store.get_session(sid):
+            raise HTTPException(status_code=404, detail="session not found")
+        limit = min(max(limit, 1), 1000)
+        rows = store.events_since(sid, since)
+        rows = rows[-limit:]
+        out = []
+        for seq, ev in rows:
+            item = ev.to_dict()
+            item["seq"] = seq
+            out.append(item)
+        return JSONResponse(out)
 
     return app

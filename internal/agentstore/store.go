@@ -27,6 +27,9 @@ type AgentRow struct {
 	URL        string
 	AuthSecret string
 	Enabled    bool
+	// Shadowed is a runtime-only presentation flag: a persisted row with the same
+	// id as an operator-file agent. It is never written to or read from Postgres.
+	Shadowed bool
 }
 
 // Store persists managed agents in Postgres.

@@ -92,6 +92,8 @@ spec:
                   key: RUNTIME_ADMIN_BOOTSTRAP
                   optional: true
             {{- end }}
+            - name: RUNTIME_ADMIN_BREAK_GLASS
+              value: {{ ternary "1" "0" .Values.identity.breakGlass | quote }}
             {{- if .Values.identity.enabled }}
             - name: RUNTIME_OIDC_ISSUER
               value: {{ .Values.identity.oidcIssuer | quote }}

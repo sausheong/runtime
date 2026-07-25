@@ -97,18 +97,18 @@
       {{range .Agents}}<tr>
         <td class="mono">{{.ID}}</td>
         <td class="mono">{{.URL}}</td>
-        <td>{{if .Enabled}}<span class="badge badge-ok">enabled</span>{{else}}<span class="badge badge-muted">disabled</span>{{end}}</td>
+        <td>{{if .Shadowed}}<span class="badge badge-danger">shadowed by operator file</span>{{else if .Enabled}}<span class="badge badge-ok">enabled</span>{{else}}<span class="badge badge-muted">disabled</span>{{end}}</td>
         <td class="actions">
-          {{if .Enabled}}<form method="post" action="/ui/onboarding/agents/{{.ID}}/disable" style="display:inline">
+          {{if not .Shadowed}}{{if .Enabled}}<form method="post" action="/ui/onboarding/agents/{{.ID}}/disable" style="display:inline">
             <input type="hidden" name="csrf_token" value="{{$.CSRF}}"><button type="submit" class="ghost">Disable</button>
           </form>{{else}}<form method="post" action="/ui/onboarding/agents/{{.ID}}/enable" style="display:inline">
             <input type="hidden" name="csrf_token" value="{{$.CSRF}}"><button type="submit" class="ghost">Enable</button>
           </form>{{end}}
           <form method="post" action="/ui/onboarding/agents/{{.ID}}/restart" style="display:inline">
             <input type="hidden" name="csrf_token" value="{{$.CSRF}}"><button type="submit" class="ghost">Re-attach</button>
-          </form>
+          </form>{{end}}
           <form method="post" action="/ui/onboarding/agents/{{.ID}}/delete" style="display:inline">
-            <input type="hidden" name="csrf_token" value="{{$.CSRF}}"><button type="submit" class="danger">Remove</button>
+            <input type="hidden" name="csrf_token" value="{{$.CSRF}}"><button type="submit" class="danger">{{if .Shadowed}}Delete stale row{{else}}Remove{{end}}</button>
           </form>
         </td>
       </tr>{{else}}

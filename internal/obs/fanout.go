@@ -21,10 +21,11 @@ import (
 // ScrapeTarget is one agent's metrics endpoint. BaseURL is the full dial base
 // "scheme://host:port"; Token (optional) is the shared bearer for remote agents.
 type ScrapeTarget struct {
-	Agent   string // agent id (used for up/skip series labels)
-	Replica int    // 0-based replica index, surfaced as the "replica" label
-	BaseURL string // full base, e.g. "http://127.0.0.1:8101" or "https://h:8443"
-	Token   string // optional bearer ("" ⇒ no auth header)
+	Agent     string            // agent id (used for up/skip series labels)
+	Replica   int               // 0-based replica index, surfaced as the "replica" label
+	BaseURL   string            // full base, e.g. "http://127.0.0.1:8101" or "https://h:8443"
+	Token     string            // optional bearer ("" ⇒ no auth header)
+	Transport http.RoundTripper // optional connect-time network policy
 }
 
 // perAgentTimeout bounds each sub-scrape so one sick agent can never stall
@@ -60,7 +61,6 @@ const replicaLabel = "replica"
 //   - each family is encoded into a buffer first, so a single bad family is
 //     skipped instead of truncating the whole response mid-stream.
 func FanoutHandler(c *ControlMetrics, targets func() []ScrapeTarget) http.Handler {
-	client := &http.Client{}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		type result struct {
 			agent    string
@@ -74,7 +74,7 @@ func FanoutHandler(c *ControlMetrics, targets func() []ScrapeTarget) http.Handle
 			wg.Add(1)
 			go func(i int, tgt ScrapeTarget) {
 				defer wg.Done()
-				fams, up, reason := scrapeOne(r.Context(), client, tgt)
+				fams, up, reason := scrapeOne(r.Context(), tgt)
 				c.AgentUp(tgt.Agent, tgt.Replica, up)
 				if reason != "" {
 					c.ScrapeSkip(tgt.Agent, tgt.Replica, reason)
@@ -180,9 +180,10 @@ func setLabel(m *dto.Metric, name, val string) {
 
 // scrapeOne fetches and parses one agent's exposition.
 // Returns (families, up, skipReason); skipReason "" means scraped clean.
-func scrapeOne(ctx context.Context, client *http.Client, tgt ScrapeTarget) (map[string]*dto.MetricFamily, bool, string) {
+func scrapeOne(ctx context.Context, tgt ScrapeTarget) (map[string]*dto.MetricFamily, bool, string) {
 	ctx, cancel := context.WithTimeout(ctx, perAgentTimeout)
 	defer cancel()
+	client := &http.Client{Transport: tgt.Transport}
 	req, err := http.NewRequestWithContext(ctx, "GET", tgt.BaseURL+"/metrics", nil)
 	if err != nil {
 		return nil, false, "error"

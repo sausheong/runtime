@@ -55,6 +55,9 @@ services:
       RUNTIME_METRICS_ADDR: ":9091"
       RUNTIME_CONFIG: /app/runtime.compose.yaml
       RUNTIME_ADMIN_BOOTSTRAP: ${RUNTIME_ADMIN_BOOTSTRAP}
+      # The bootstrap credential is accepted for initial provisioning only.
+      # Set to 1 temporarily for a deliberate account-recovery window.
+      RUNTIME_ADMIN_BREAK_GLASS: ${RUNTIME_ADMIN_BREAK_GLASS:-0}
       RUNTIME_SECRETS_KEYS: ${RUNTIME_SECRETS_KEYS}
       RUNTIME_SECRETS_PRIMARY: ${RUNTIME_SECRETS_PRIMARY}
       RUNTIME_EMBED_MODEL: ${RUNTIME_EMBED_MODEL:-bge-small-en-v1.5}
@@ -108,10 +111,14 @@ services:
 
   prometheus:
     image: prom/prometheus:v3.12.0
-    command: ["--config.file=/etc/prometheus/prometheus.yml"]
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=30d"
     volumes:
       - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - ./rules:/etc/prometheus/rules:ro
+      - prometheus-data:/prometheus
     ports:
       - "127.0.0.1:9090:9090"
     extra_hosts:
@@ -121,9 +128,12 @@ services:
 
   alertmanager:
     image: prom/alertmanager:v0.32.1
-    command: ["--config.file=/etc/alertmanager/alertmanager.yml"]
+    command:
+      - "--config.file=/etc/alertmanager/alertmanager.yml"
+      - "--storage.path=/alertmanager"
     volumes:
       - ./alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - alertmanager-data:/alertmanager
     ports:
       - "127.0.0.1:9093:9093"
     extra_hosts:
@@ -137,6 +147,7 @@ services:
     volumes:
       - ../grafana/provisioning:/etc/grafana/provisioning:ro
       - ../grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
     ports:
       - "127.0.0.1:3000:3000"
     depends_on:
@@ -154,8 +165,10 @@ services:
 
   jaeger:
     image: jaegertracing/jaeger:2.18.0
-    environment:
-      COLLECTOR_OTLP_ENABLED: "true"
+    command: ["--config=/etc/jaeger/config.yaml"]
+    volumes:
+      - ../jaeger-config.yaml:/etc/jaeger/config.yaml:ro
+      - jaeger-data:/tmp
     ports:
       - "127.0.0.1:16686:16686"
 
@@ -177,6 +190,10 @@ services:
 
 volumes:
   pgdata:
+  prometheus-data:
+  alertmanager-data:
+  grafana-data:
+  jaeger-data:
 
 networks:
   browser-control:

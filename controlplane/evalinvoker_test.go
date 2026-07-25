@@ -14,9 +14,17 @@ import (
 // the given token, keeping the HTTP drain hermetic (no real agent).
 func newFakeInvoker(base, token string) *evalInvoker {
 	return &evalInvoker{
-		client:  &http.Client{},
 		timeout: 5 * time.Second,
-		resolve: func(string) (string, string, bool) { return base, token, true },
+		resolve: func(string) (AgentProcess, bool) {
+			return AgentProcess{BaseURL: base, AuthToken: token}, true
+		},
+	}
+}
+
+func writeEvalSSE(w http.ResponseWriter, events string) {
+	w.Header().Set("Content-Type", "text/event-stream")
+	for _, event := range strings.Split(events, "\n") {
+		_, _ = w.Write([]byte("data: " + event + "\n\n"))
 	}
 }
 
@@ -25,8 +33,10 @@ func TestEvalInvokerDrivesToDone(t *testing.T) {
 		switch {
 		case r.Method == http.MethodPost && r.URL.Path == "/sessions":
 			_ = json.NewEncoder(w).Encode(map[string]string{"session_id": "s1"})
-		case r.Method == http.MethodGet && r.URL.Path == "/sessions/s1/events":
-			_, _ = w.Write([]byte(`[{"seq":1,"type":"text","text":"hel"},{"seq":2,"type":"text","text":"lo"},{"seq":3,"type":"done"}]`))
+		case r.Method == http.MethodGet && r.URL.Path == "/sessions/s1/stream":
+			writeEvalSSE(w, `{"seq":1,"type":"text","text":"hel"}`+"\n"+
+				`{"seq":2,"type":"text","text":"lo"}`+"\n"+
+				`{"seq":3,"type":"done"}`)
 		default:
 			http.Error(w, "unexpected "+r.Method+" "+r.URL.Path, http.StatusNotFound)
 		}
@@ -48,8 +58,8 @@ func TestEvalInvokerErrorEvent(t *testing.T) {
 		switch {
 		case r.Method == http.MethodPost && r.URL.Path == "/sessions":
 			_ = json.NewEncoder(w).Encode(map[string]string{"session_id": "s1"})
-		case r.Method == http.MethodGet && r.URL.Path == "/sessions/s1/events":
-			_, _ = w.Write([]byte(`[{"seq":1,"type":"error","error":"boom"}]`))
+		case r.Method == http.MethodGet && r.URL.Path == "/sessions/s1/stream":
+			writeEvalSSE(w, `{"seq":1,"type":"error","error":"boom"}`)
 		default:
 			http.Error(w, "unexpected", http.StatusNotFound)
 		}
@@ -75,8 +85,9 @@ func TestEvalInvokerBearer(t *testing.T) {
 		switch {
 		case r.Method == http.MethodPost && r.URL.Path == "/sessions":
 			_ = json.NewEncoder(w).Encode(map[string]string{"session_id": "s1"})
-		case r.Method == http.MethodGet && r.URL.Path == "/sessions/s1/events":
-			_, _ = w.Write([]byte(`[{"seq":1,"type":"text","text":"ok"},{"seq":2,"type":"done"}]`))
+		case r.Method == http.MethodGet && r.URL.Path == "/sessions/s1/stream":
+			writeEvalSSE(w, `{"seq":1,"type":"text","text":"ok"}`+"\n"+
+				`{"seq":2,"type":"done"}`)
 		default:
 			http.Error(w, "unexpected", http.StatusNotFound)
 		}
@@ -98,9 +109,8 @@ func TestEvalInvokerBearer(t *testing.T) {
 
 func TestEvalInvokerNoReplica(t *testing.T) {
 	inv := &evalInvoker{
-		client:  &http.Client{},
 		timeout: time.Second,
-		resolve: func(string) (string, string, bool) { return "", "", false },
+		resolve: func(string) (AgentProcess, bool) { return AgentProcess{}, false },
 	}
 	_, err := inv.Invoke(context.Background(), "ghost", "hi")
 	if err == nil || !strings.Contains(err.Error(), "no replica for agent ghost") {

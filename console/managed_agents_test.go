@@ -90,6 +90,33 @@ func TestManagedAgents_SectionRenders(t *testing.T) {
 	}
 }
 
+func TestManagedAgents_ShadowedRowOffersCleanupOnly(t *testing.T) {
+	reg := controlplane.NewRegistry(&config.Config{Agents: []config.AgentConfig{{
+		ID: "hello", Name: "Operator Hello", Model: "m", Tenant: "t1",
+		URL: "http://10.10.0.4:8080",
+	}}}, "", "")
+	mgr := controlplane.NewAgentManager(reg, nil, nil)
+	as := newFakeAgentStore3()
+	as.rows["hello"] = agentstore.AgentRow{
+		ID: "hello", TenantID: "t1", Name: "Stale", URL: "https://old.example", Enabled: false,
+	}
+	h := Handler(nil, nil, OIDCConfig{}, &Onboarding{
+		Upstreams: &fakeUpstreamStore2{}, Mutator: &fakeMut2{}, Admin: &fakeAdmin2{},
+		Secrets: &fakeSec2{}, Agents: as, AgentMgr: mgr,
+	})
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, adminReq("GET", "/ui/onboarding", nil))
+	body := w.Body.String()
+	if !strings.Contains(body, "shadowed by operator file") ||
+		!strings.Contains(body, "Delete stale row") {
+		t.Fatalf("shadowed cleanup state missing: %s", body)
+	}
+	if strings.Contains(body, "/ui/onboarding/agents/hello/enable") ||
+		strings.Contains(body, "/ui/onboarding/agents/hello/restart") {
+		t.Fatal("shadowed row exposed live-agent actions")
+	}
+}
+
 func TestManagedAgents_RegisterRequiresCSRF(t *testing.T) {
 	h, _, _ := consoleWithAgents(t)
 	form := url.Values{"id": {"x"}, "url": {"http://x"}} // no csrf_token

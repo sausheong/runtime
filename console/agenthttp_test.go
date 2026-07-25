@@ -63,6 +63,22 @@ func TestHTTPAgentClient_Non200IsError(t *testing.T) {
 	}
 }
 
+func TestHTTPAgentClient_EnforcesRestrictedOutbound(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`[]`))
+	}))
+	defer srv.Close()
+
+	c := &httpAgentClient{}
+	ap := controlplane.AgentProcess{
+		Addr:             srv.Listener.Addr().String(),
+		RestrictOutbound: true,
+	}
+	if _, err := c.ListSessions(context.Background(), ap); err == nil {
+		t.Fatal("expected loopback target to be rejected by outbound policy")
+	}
+}
+
 // liveExposition mirrors the shape an agent's /metrics actually serves (see the
 // live nutrition-openai output): tokens by direction, tool calls, turns by
 // outcome, and the turn-duration histogram count/sum.

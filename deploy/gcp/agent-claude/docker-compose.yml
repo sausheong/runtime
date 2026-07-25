@@ -7,13 +7,12 @@
 #   docker compose up -d
 #
 # The control plane (Instance A) dials this agent at http://<C-internal-ip>:8080.
-# NOTE: the shim enforces no bearer auth — port 8080 is protected by the VPC
-# firewall (internal-only).
+# The shim requires the same per-agent bearer configured on the control plane.
 name: runtime-agent-claude
 
 services:
   hello-claude:
-    image: ${HELLO_CLAUDE_IMAGE:-asia-southeast1-docker.pkg.dev/mhi-exp-chang-sau-sheong/runtime/hello-claude:latest}
+    image: ${HELLO_CLAUDE_IMAGE:?set HELLO_CLAUDE_IMAGE to an immutable git tag or digest}
     # Shared LLM-proxy routing (ANTHROPIC_BASE_URL + ANTHROPIC_MODEL) comes from
     # the untracked ../llm.env (one file for all agent VMs). The API key stays in
     # this dir's own .env.
@@ -26,7 +25,8 @@ services:
       # 127.0.0.1, unreachable through Docker's port publish.
       RUNTIME_LISTEN_ADDR: "0.0.0.0:8080"
       RUNTIME_SHIM_DB: /data/shim.db
-      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      RUNTIME_AGENT_AUTH_TOKEN: ${HELLO_CLAUDE_TOKEN:?set HELLO_CLAUDE_TOKEN}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:?set ANTHROPIC_API_KEY}
     volumes:
       - claude-data:/data            # persists shim.db + SDK transcripts
     ports:

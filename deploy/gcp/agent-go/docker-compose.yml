@@ -1,5 +1,5 @@
 # Instance B — native Go nutrition agent, self-contained with its own Postgres.
-# Reuses runtime:latest (agentd is already built into it) with the CMD overridden
+# Reuses an immutable runtime image (agentd is already built into it) with the CMD overridden
 # from /app/runtimed to /app/agentd. The bundled Postgres is plain postgres:16:
 # the nutrition kind needs no pgvector (its learning is a JSON file; platform
 # pgvector memory is opt-in and off for a remote agent).
@@ -26,7 +26,7 @@ services:
       retries: 30
 
   nutrition-go:
-    image: ${RUNTIME_IMAGE:-asia-southeast1-docker.pkg.dev/mhi-exp-chang-sau-sheong/runtime/runtime:latest}
+    image: ${RUNTIME_IMAGE:?set RUNTIME_IMAGE to an immutable git tag or digest}
     command: ["/app/agentd"]      # override the default runtimed CMD
     depends_on:
       postgres:
@@ -41,9 +41,9 @@ services:
       RUNTIME_AGENT_ID: nutrition-go
       RUNTIME_AGENT_KIND: nutrition
       RUNTIME_LISTEN_ADDR: ":8080"
-      RUNTIME_AGENT_AUTH_TOKEN: ${NUTRITION_GO_TOKEN}   # MUST equal A's NUTRITION_GO_TOKEN
+      RUNTIME_AGENT_AUTH_TOKEN: ${NUTRITION_GO_TOKEN:?set NUTRITION_GO_TOKEN}   # MUST equal A's token
       RUNTIME_NUTRITION_DATA_DIR: /data
-      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:?set OPENAI_API_KEY}
     volumes:
       - nutrition-data:/data       # persists nutrition_memory.json across restarts
     ports:

@@ -83,13 +83,10 @@ func (m AgentMetrics) AvgTurnSeconds() float64 {
 type httpAgentClient struct{}
 
 func (httpAgentClient) get(ctx context.Context, ap controlplane.AgentProcess, path string, out any) error {
-	client := &http.Client{Timeout: 1 * time.Second}
+	client := controlplane.NewAgentHTTPClient(ap, time.Second)
 	req, err := http.NewRequestWithContext(ctx, "GET", ap.DialBase()+path, nil)
 	if err != nil {
 		return err
-	}
-	if ap.AuthToken != "" {
-		req.Header.Set("Authorization", "Bearer "+ap.AuthToken)
 	}
 	resp, err := client.Do(req)
 	if err != nil {
@@ -124,13 +121,10 @@ func (c httpAgentClient) ListEvents(ctx context.Context, ap controlplane.AgentPr
 // reads text (not JSON). A non-200 or parse error returns a zero snapshot + the
 // error; callers render an empty card rather than failing the page.
 func (httpAgentClient) Metrics(ctx context.Context, ap controlplane.AgentProcess) (AgentMetrics, error) {
-	client := &http.Client{Timeout: 1 * time.Second}
+	client := controlplane.NewAgentHTTPClient(ap, time.Second)
 	req, err := http.NewRequestWithContext(ctx, "GET", ap.DialBase()+"/metrics", nil)
 	if err != nil {
 		return AgentMetrics{}, err
-	}
-	if ap.AuthToken != "" {
-		req.Header.Set("Authorization", "Bearer "+ap.AuthToken)
 	}
 	resp, err := client.Do(req)
 	if err != nil {

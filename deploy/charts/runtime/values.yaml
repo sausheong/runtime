@@ -62,6 +62,7 @@ secrets:
 
 identity:
   enabled: false
+  breakGlass: false         # temporarily re-enable bootstrap after identity exists
   oidcIssuer: ""          # RUNTIME_OIDC_ISSUER
   oidcClientID: ""        # RUNTIME_OIDC_CLIENT_ID
   oidcRedirectURL: ""     # RUNTIME_OIDC_REDIRECT_URL

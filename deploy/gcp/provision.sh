@@ -10,8 +10,7 @@
 #
 #   PROJECT=my-proj REGION=asia-southeast1 ZONE=asia-southeast1-a ./provision.sh
 #
-# After it prints the internal IPs, fill them into the three .env files and the
-# control-plane runtime.remote.yaml, then run the per-instance bring-up (README).
+# The reserved internal IPs match control-plane/runtime.remote.yaml.
 set -euo pipefail
 
 PROJECT="${PROJECT:?set PROJECT}"
@@ -26,6 +25,14 @@ IMAGE_FAMILY=debian-12
 IMAGE_PROJECT=debian-cloud
 
 g() { gcloud --project "$PROJECT" "$@"; }
+expected_ip() {
+  case "$1" in
+    control-plane) printf '%s\n' 10.10.0.2 ;;
+    agent-go) printf '%s\n' 10.10.0.3 ;;
+    agent-python) printf '%s\n' 10.10.0.4 ;;
+    *) echo "unknown VM role: $1" >&2; return 1 ;;
+  esac
+}
 
 # --- VPC + subnet ---
 g compute networks describe "$NET" >/dev/null 2>&1 || \
@@ -33,6 +40,24 @@ g compute networks describe "$NET" >/dev/null 2>&1 || \
 g compute networks subnets describe "$SUBNET" --region "$REGION" >/dev/null 2>&1 || \
   g compute networks subnets create "$SUBNET" --network "$NET" \
     --region "$REGION" --range 10.10.0.0/24
+
+# Reserve the exact internal addresses referenced by runtime.remote.yaml. This
+# makes a recreate deterministic and prevents an unrelated VM from taking an
+# agent address while the runtime VM is stopped or replaced.
+for vm in control-plane agent-go agent-python; do
+  address_name="runtime-$vm-internal"
+  ip="$(expected_ip "$vm")"
+  if g compute addresses describe "$address_name" --region "$REGION" >/dev/null 2>&1; then
+    actual="$(g compute addresses describe "$address_name" --region "$REGION" --format='get(address)')"
+    if [ "$actual" != "$ip" ]; then
+      echo "$address_name is $actual, expected $ip; refusing a non-deterministic deployment" >&2
+      exit 1
+    fi
+  else
+    g compute addresses create "$address_name" --region "$REGION" \
+      --subnet "$SUBNET" --addresses "$ip"
+  fi
+done
 
 # --- Firewall: SSH only from IAP, all agent/CP ports VPC-internal only ---
 g compute firewall-rules describe runtime-allow-ssh >/dev/null 2>&1 || \
@@ -101,16 +126,25 @@ systemctl enable --now docker
 usermod -aG docker $(getent passwd 1000 | cut -d: -f1) || true'
 
 for vm in control-plane agent-go agent-python; do
-  g compute instances describe "runtime-$vm" --zone "$ZONE" >/dev/null 2>&1 && {
-    echo "runtime-$vm exists, skipping"; continue; }
+  ip="$(expected_ip "$vm")"
+  if g compute instances describe "runtime-$vm" --zone "$ZONE" >/dev/null 2>&1; then
+    actual="$(g compute instances describe "runtime-$vm" --zone "$ZONE" \
+      --format='get(networkInterfaces[0].networkIP)')"
+    if [ "$actual" != "$ip" ]; then
+      echo "runtime-$vm uses $actual, expected reserved address $ip" >&2
+      exit 1
+    fi
+    echo "runtime-$vm exists at $ip, skipping"
+    continue
+  fi
   g compute instances create "runtime-$vm" \
     --zone "$ZONE" --machine-type "$MACHINE" \
     --image-family "$IMAGE_FAMILY" --image-project "$IMAGE_PROJECT" \
-    --network "$NET" --subnet "$SUBNET" --no-address \
+    --network "$NET" --subnet "$SUBNET" --private-network-ip "$ip" --no-address \
     --metadata startup-script="$STARTUP"
 done
 
-echo "--- internal IPs (use these in .env + runtime.remote.yaml) ---"
+echo "--- reserved internal IPs (already match runtime.remote.yaml) ---"
 for vm in control-plane agent-go agent-python; do
   ip=$(g compute instances describe "runtime-$vm" --zone "$ZONE" \
     --format='get(networkInterfaces[0].networkIP)')

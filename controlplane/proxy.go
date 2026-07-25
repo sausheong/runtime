@@ -2,6 +2,7 @@ package controlplane
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httputil"
@@ -11,6 +12,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 
@@ -307,6 +309,32 @@ func (t authTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 	return base.RoundTrip(r)
 }
 
+// NewAgentHTTPClient returns the single policy-aware HTTP client shape used for
+// direct control-plane calls to an agent. It applies the agent's outbound-network
+// restriction and bearer token on every request, and refuses cross-origin
+// redirects so a remote agent cannot redirect its credential to another host.
+//
+// Reverse proxying uses the same transport pieces directly because its streaming
+// lifecycle is owned by httputil.ReverseProxy.
+func NewAgentHTTPClient(ap AgentProcess, timeout time.Duration) *http.Client {
+	return &http.Client{
+		Timeout:       timeout,
+		Transport:     authTransport{token: ap.AuthToken, base: AgentOutboundTransport(ap)},
+		CheckRedirect: rejectCrossOriginRedirect(ap.baseURL()),
+	}
+}
+
+func rejectCrossOriginRedirect(base string) func(*http.Request, []*http.Request) error {
+	origin, _ := url.Parse(base)
+	return func(req *http.Request, _ []*http.Request) error {
+		if origin == nil || !strings.EqualFold(req.URL.Scheme, origin.Scheme) ||
+			!strings.EqualFold(req.URL.Host, origin.Host) {
+			return fmt.Errorf("agent redirect to a different origin is not allowed")
+		}
+		return nil
+	}
+}
+
 // reverseProxy builds a passthrough to the agent at base ("scheme://host:port").
 // When token != "", every forwarded request carries an Authorization: Bearer
 // header (remote agents). FlushInterval = -1 keeps SSE/streaming prompt.
@@ -339,9 +367,19 @@ func reverseProxyWithTransport(base, token string, baseTransport http.RoundTripp
 	return rp
 }
 
-func agentOutboundTransport(ap AgentProcess) http.RoundTripper {
+// AgentOutboundTransport returns the connect-time network-policy transport for
+// an agent. Tenant-managed agents receive a DNS-rebinding-safe public-only
+// transport; operator-file and local agents use the default transport.
+//
+// It is exported for lower-level consumers such as the metrics fan-out package,
+// which cannot import controlplane without creating a package cycle.
+func AgentOutboundTransport(ap AgentProcess) http.RoundTripper {
 	if ap.RestrictOutbound {
 		return netpolicy.PublicTransport()
 	}
 	return nil
+}
+
+func agentOutboundTransport(ap AgentProcess) http.RoundTripper {
+	return AgentOutboundTransport(ap)
 }

@@ -521,6 +521,46 @@ func TestAuthTransport_NoBearerWhenEmpty(t *testing.T) {
 	}
 }
 
+func TestNewAgentHTTPClient_EnforcesRestrictedOutbound(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	restricted := AgentProcess{BaseURL: srv.URL, RestrictOutbound: true}
+	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/healthz", nil)
+	if _, err := NewAgentHTTPClient(restricted, time.Second).Do(req); err == nil {
+		t.Fatal("restricted agent client reached a loopback target")
+	}
+
+	trusted := AgentProcess{BaseURL: srv.URL}
+	resp, err := NewAgentHTTPClient(trusted, time.Second).Get(srv.URL + "/healthz")
+	if err != nil {
+		t.Fatalf("trusted agent client: %v", err)
+	}
+	resp.Body.Close()
+}
+
+func TestNewAgentHTTPClient_RejectsCrossOriginRedirect(t *testing.T) {
+	var leaked string
+	target := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		leaked = r.Header.Get("Authorization")
+	}))
+	defer target.Close()
+	source := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Redirect(w, &http.Request{}, target.URL, http.StatusFound)
+	}))
+	defer source.Close()
+
+	ap := AgentProcess{BaseURL: source.URL, AuthToken: "secret"}
+	if _, err := NewAgentHTTPClient(ap, time.Second).Get(source.URL); err == nil {
+		t.Fatal("cross-origin redirect unexpectedly followed")
+	}
+	if leaked != "" {
+		t.Fatalf("bearer leaked to redirect target: %q", leaked)
+	}
+}
+
 func TestBaseURL_LocalFallbackAndRemote(t *testing.T) {
 	local := AgentProcess{Addr: "127.0.0.1:8101"}
 	if local.baseURL() != "http://127.0.0.1:8101" {

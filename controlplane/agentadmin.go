@@ -2,6 +2,7 @@ package controlplane
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -11,6 +12,12 @@ import (
 	"github.com/sausheong/runtime/internal/config"
 	"github.com/sausheong/runtime/internal/netpolicy"
 )
+
+var errFileAgentConflict = errors.New("persisted managed agent conflicts with operator file")
+
+// IsFileAgentConflict reports whether Attach rejected a persisted row because a
+// trusted operator-file agent owns the same global id.
+func IsFileAgentConflict(err error) bool { return errors.Is(err, errFileAgentConflict) }
 
 // AgentStore is the persistence the dynamic-agent API needs (satisfied by
 // *agentstore.Store). Mirrors UpstreamStore.
@@ -62,7 +69,8 @@ func (m *AgentManager) process(ctx context.Context, row agentstore.AgentRow) (Ag
 // disabled (kept out of routing). Used at boot and by the register API.
 func (m *AgentManager) Attach(ctx context.Context, row agentstore.AgentRow) error {
 	if _, exists := m.reg.Get(row.ID); exists && !m.reg.IsManaged(row.ID) {
-		return fmt.Errorf("agent %q is configured in the operator file; persisted managed row ignored", row.ID)
+		return fmt.Errorf("%w: agent %q is configured in the operator file; persisted managed row ignored",
+			errFileAgentConflict, row.ID)
 	}
 	info, ap, err := m.process(ctx, row)
 	if err != nil {
@@ -97,6 +105,13 @@ func (m *AgentManager) Reattach(id string) {
 
 // IsManaged reports whether id is a dynamically-managed agent.
 func (m *AgentManager) IsManaged(id string) bool { return m.reg.IsManaged(id) }
+
+// IsShadowed reports whether id exists in the live registry as an operator-file
+// agent rather than a dynamically-managed one.
+func (m *AgentManager) IsShadowed(id string) bool {
+	_, exists := m.reg.Get(id)
+	return exists && !m.reg.IsManaged(id)
+}
 
 // AgentParams is the validated request to register a managed agent.
 type AgentParams struct {
@@ -145,9 +160,6 @@ func RegisterAgentShared(ctx context.Context, store AgentStore, mgr *AgentManage
 // DeregisterAgentShared removes a managed agent (scoped to tenant) from the DB
 // and the live registry. Rejects file-config agents (not managed). Idempotent.
 func DeregisterAgentShared(ctx context.Context, store AgentStore, mgr *AgentManager, tenant, id string) error {
-	if _, ok := mgr.reg.Get(id); ok && !mgr.IsManaged(id) {
-		return fmt.Errorf("agent %q is file-configured, not dynamically managed; edit runtime config to remove it", id)
-	}
 	row, ok, err := store.Get(ctx, id)
 	if err != nil {
 		return err
@@ -162,7 +174,12 @@ func DeregisterAgentShared(ctx context.Context, store AgentStore, mgr *AgentMana
 	if !removed {
 		return fmt.Errorf("agent not found")
 	}
-	mgr.Detach(id)
+	// A shadowed row is persistence only: the live registry entry belongs to the
+	// operator file and must remain attached. Deleting the row is the cleanup
+	// action that prevents it from reactivating if the file entry is later removed.
+	if mgr.IsManaged(id) {
+		mgr.Detach(id)
+	}
 	return nil
 }
 
@@ -299,10 +316,20 @@ func RegisterAgentAdmin(mux *http.ServeMux, s AgentStore, adminStore AdminStore,
 			Model   string `json:"model"`
 			URL     string `json:"url"`
 			Enabled bool   `json:"enabled"`
+			State   string `json:"state"`
 		}
 		res := make([]out, 0, len(rows))
 		for _, row := range rows {
-			res = append(res, out{ID: row.ID, Name: row.Name, Model: row.Model, URL: row.URL, Enabled: row.Enabled})
+			state := "attached"
+			if mgr.IsShadowed(row.ID) {
+				state = "shadowed"
+			} else if !row.Enabled {
+				state = "disabled"
+			}
+			res = append(res, out{
+				ID: row.ID, Name: row.Name, Model: row.Model, URL: row.URL,
+				Enabled: row.Enabled, State: state,
+			})
 		}
 		writeJSON(w, http.StatusOK, res)
 	})

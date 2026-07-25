@@ -355,6 +355,11 @@ func Handler(reg *controlplane.Registry, st store.Store, oidc OIDCConfig, onb *O
 			var agents []agentstore.AgentRow
 			if onb.Agents != nil {
 				agents, _ = onb.Agents.List(r.Context(), p.TenantID)
+				if onb.AgentMgr != nil {
+					for i := range agents {
+						agents[i].Shadowed = onb.AgentMgr.IsShadowed(agents[i].ID)
+					}
+				}
 			}
 			var policies []policy.Row
 			if onb.Policies != nil {

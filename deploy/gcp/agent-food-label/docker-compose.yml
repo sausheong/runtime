@@ -8,14 +8,15 @@ name: runtime-agent-food-label
 
 services:
   food-label-advisor:
-    image: ${FOOD_LABEL_IMAGE:-asia-southeast1-docker.pkg.dev/mhi-exp-chang-sau-sheong/runtime/food-label-advisor:latest}
+    image: ${FOOD_LABEL_IMAGE:?set FOOD_LABEL_IMAGE to an immutable git tag or digest}
     env_file:
       - ../llm.env               # ANTHROPIC_BASE_URL + ANTHROPIC_MODEL
     environment:
       RUNTIME_AGENT_ID: food-label-advisor
       RUNTIME_LISTEN_ADDR: "0.0.0.0:8310"
       RUNTIME_SHIM_DB: /data/shim.db
-      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      RUNTIME_AGENT_AUTH_TOKEN: ${FOOD_LABEL_TOKEN:?set FOOD_LABEL_TOKEN}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:?set ANTHROPIC_API_KEY}
     volumes:
       - food-label-data:/data
     ports:

@@ -1,6 +1,7 @@
 package controlplane
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -9,7 +10,6 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"strconv"
 	"strings"
 	"time"
 
@@ -20,35 +20,28 @@ import (
 // event). Overridable via RUNTIME_EVAL_INVOKE_TIMEOUT (a Go duration).
 const evalInvokeDefaultTimeout = 120 * time.Second
 
-// evalPollInterval is the sleep between event polls when no terminal event has
-// arrived yet.
-const evalPollInterval = 200 * time.Millisecond
-
-// evalInvoker drives one agent input to completion over the agent HTTP contract
-// (POST /sessions, then poll GET /sessions/{id}/events). The registry lookup is
-// behind the resolve seam so the HTTP drain is hermetically testable against an
-// httptest server.
+// evalInvoker drives one agent input to completion over the common agent HTTP
+// contract (POST /sessions, then GET /sessions/{id}/stream). The registry lookup
+// is behind the resolve seam so the HTTP drain is hermetically testable.
 type evalInvoker struct {
-	client  *http.Client
 	timeout time.Duration
-	// resolve maps an agentID to its dial base + bearer. The registry-backed
-	// default picks a replica; a test supplies a fake pointing at httptest.
-	resolve func(agentID string) (base, token string, ok bool)
+	// resolve returns the complete process descriptor so outbound policy can never
+	// be dropped by reducing it to URL/token strings.
+	resolve func(agentID string) (AgentProcess, bool)
 }
 
 // NewEvalInvoker returns an eval.Invoker that resolves an agent's replica from
 // the registry (round-robin new-session pick) and drives it over HTTP.
 func NewEvalInvoker(reg *Registry) eval.Invoker {
 	return &evalInvoker{
-		client:  &http.Client{},
 		timeout: evalInvokeTimeoutFromEnv(),
-		resolve: func(agentID string) (string, string, bool) {
+		resolve: func(agentID string) (AgentProcess, bool) {
 			i := reg.NextReplica(agentID)
 			ap, ok := reg.Replica(agentID, i)
 			if !ok {
-				return "", "", false
+				return AgentProcess{}, false
 			}
-			return ap.baseURL(), ap.AuthToken, true
+			return ap, true
 		},
 	}
 }
@@ -66,31 +59,29 @@ func evalInvokeTimeoutFromEnv() time.Duration {
 // (done|error) event, returning the concatenated text output. Bounded by the
 // invoker timeout (derived as a child ctx at the top) and the caller's ctx.
 func (e *evalInvoker) Invoke(ctx context.Context, agentID, input string) (string, error) {
-	base, token, ok := e.resolve(agentID)
+	ap, ok := e.resolve(agentID)
 	if !ok {
 		return "", fmt.Errorf("no replica for agent %s", agentID)
 	}
 	ctx, cancel := context.WithTimeout(ctx, e.timeout)
 	defer cancel()
+	client := NewAgentHTTPClient(ap, 0)
 
-	sid, err := e.startSession(ctx, base, token, input)
+	sid, err := e.startSession(ctx, client, ap.baseURL(), input)
 	if err != nil {
 		return "", err
 	}
-	return e.pollEvents(ctx, base, token, sid)
+	return e.readStream(ctx, client, ap.baseURL(), sid)
 }
 
-func (e *evalInvoker) startSession(ctx context.Context, base, token, input string) (string, error) {
+func (e *evalInvoker) startSession(ctx context.Context, client *http.Client, base, input string) (string, error) {
 	body, _ := json.Marshal(map[string]string{"message": input})
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, base+"/sessions", bytes.NewReader(body))
 	if err != nil {
 		return "", err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	if token != "" {
-		req.Header.Set("Authorization", "Bearer "+token)
-	}
-	resp, err := e.client.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		return "", err
 	}
@@ -115,63 +106,56 @@ type evalEvent struct {
 	Err  string `json:"error"`
 }
 
-func (e *evalInvoker) pollEvents(ctx context.Context, base, token, sid string) (string, error) {
-	var out strings.Builder
-	var since int64
-	for {
-		if err := ctx.Err(); err != nil {
-			return "", err
-		}
-		evs, err := e.fetchEvents(ctx, base, token, sid, since)
-		if err != nil {
-			return "", err
-		}
-		terminal := false
-		for _, ev := range evs {
-			if ev.Seq > since {
-				since = ev.Seq
-			}
-			switch ev.Type {
-			case "text":
-				out.WriteString(ev.Text)
-			case "error":
-				return "", errors.New(ev.Err)
-			case "done":
-				terminal = true
-			}
-		}
-		if terminal {
-			return out.String(), nil
-		}
-		select {
-		case <-ctx.Done():
-			return "", ctx.Err()
-		case <-time.After(evalPollInterval):
-		}
-	}
-}
-
-func (e *evalInvoker) fetchEvents(ctx context.Context, base, token, sid string, since int64) ([]evalEvent, error) {
-	url := base + "/sessions/" + sid + "/events?since=" + strconv.FormatInt(since, 10)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+// readStream consumes the SSE endpoint required by the common contract. Using
+// SSE rather than the native-Go-only /events extension keeps golden-set
+// evaluation compatible with foreign shims.
+func (e *evalInvoker) readStream(ctx context.Context, client *http.Client, base, sid string) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/sessions/"+sid+"/stream?since=0", nil)
 	if err != nil {
-		return nil, err
+		return "", err
 	}
-	if token != "" {
-		req.Header.Set("Authorization", "Bearer "+token)
-	}
-	resp, err := e.client.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
-		return nil, err
+		return "", err
 	}
 	defer resp.Body.Close()
-	rb, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("eval invoke: events non-200: %d %s", resp.StatusCode, strings.TrimSpace(string(rb)))
+		rb, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+		return "", fmt.Errorf("eval invoke: stream non-200: %d %s", resp.StatusCode, strings.TrimSpace(string(rb)))
 	}
-	var evs []evalEvent
-	if err := json.Unmarshal(rb, &evs); err != nil {
-		return nil, fmt.Errorf("eval invoke: unparseable events response: %w", err)
+	if ct := resp.Header.Get("Content-Type"); !strings.HasPrefix(ct, "text/event-stream") {
+		return "", fmt.Errorf("eval invoke: stream content type %q", ct)
 	}
-	return evs, nil
+
+	var out strings.Builder
+	scanner := bufio.NewScanner(resp.Body)
+	scanner.Buffer(make([]byte, 64<<10), 4<<20)
+	total := 0
+	for scanner.Scan() {
+		line := scanner.Text()
+		total += len(line)
+		if total > 16<<20 {
+			return "", fmt.Errorf("eval invoke: stream exceeded 16 MiB")
+		}
+		raw, ok := strings.CutPrefix(line, "data:")
+		if !ok {
+			continue
+		}
+		var ev evalEvent
+		if err := json.Unmarshal([]byte(strings.TrimSpace(raw)), &ev); err != nil {
+			return "", fmt.Errorf("eval invoke: malformed stream event: %w", err)
+		}
+		switch ev.Type {
+		case "text":
+			out.WriteString(ev.Text)
+		case "error":
+			return "", errors.New(ev.Err)
+		case "done":
+			return out.String(), nil
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return "", err
+	}
+	return "", fmt.Errorf("eval invoke: stream ended before a terminal event")
 }

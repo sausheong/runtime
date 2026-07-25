@@ -1,6 +1,8 @@
 package obs
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -12,6 +14,15 @@ import (
 	"github.com/prometheus/common/expfmt"
 	"github.com/prometheus/common/model"
 )
+
+type rejectingTransport struct {
+	called bool
+}
+
+func (t *rejectingTransport) RoundTrip(*http.Request) (*http.Response, error) {
+	t.called = true
+	return nil, errors.New("blocked by test transport")
+}
 
 // fakeAgent serves a fixed body (or behavior) at /metrics.
 func fakeAgent(t *testing.T, handler http.HandlerFunc) string {
@@ -215,6 +226,21 @@ func TestFanoutUnreachableAgent(t *testing.T) {
 	}
 	if v := testutil.ToFloat64(c.agentUp.WithLabelValues("gone", "0")); v != 0 {
 		t.Fatalf("gone up = %v, want 0", v)
+	}
+}
+
+func TestScrapeOneHonorsTargetTransport(t *testing.T) {
+	transport := &rejectingTransport{}
+	families, up, reason := scrapeOne(context.Background(), ScrapeTarget{
+		Agent:     "restricted",
+		BaseURL:   "http://example.test",
+		Transport: transport,
+	})
+	if !transport.called {
+		t.Fatal("target transport was not used")
+	}
+	if families != nil || up || reason != "unreachable" {
+		t.Fatalf("scrapeOne = (%v, %v, %q), want (nil, false, unreachable)", families, up, reason)
 	}
 }
 
