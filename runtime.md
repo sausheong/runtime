@@ -210,6 +210,10 @@ Evaluation recovery currently assumes one active control plane. A
 multi-control-plane deployment needs a distributed claim mechanism before it
 can guarantee that only one replica resumes an incomplete run.
 
+See the [evaluations guide](evals.md) for golden-set and policy JSON formats,
+CLI workflows, online sampling, failure classification, metrics, and console
+paths.
+
 ### 2.8 Observability and Operations
 
 Runtime exposes one Prometheus endpoint for the entire fleet on a separate management listener (`RUNTIME_METRICS_ADDR`, loopback by default). The public control-plane listener does not mount `/metrics`. The control plane merges its own metrics with metrics scraped from agents and enforces the registered agent label so an agent cannot impersonate another series.
@@ -527,9 +531,16 @@ It may not be the right fit when you need a fully managed service with no infras
 | Install the complete platform | [`quickstart.md`](quickstart.md) |
 | Operate the single-host stack | [`operator-guide.md`](operator-guide.md) |
 | Onboard tenants | [`tenant-guide.md`](tenant-guide.md) |
+| Configure agents, pools, limits, pricing, and environment | [`configuration.md`](configuration.md) |
+| Configure identity, secrets, OIDC, and memory | [`identity-and-memory.md`](identity-and-memory.md) |
+| Configure the gateway and sandboxes | [`gateway-and-sandboxes.md`](gateway-and-sandboxes.md) |
+| Operate metrics, logs, tracing, dashboards, and alerts | [`observability.md`](observability.md) |
+| Evaluate agents and configure online scoring | [`evals.md`](evals.md) |
+| Use the CLI/API, contract, native SDK, and development workflow | [`interfaces-and-development.md`](interfaces-and-development.md) |
 | Build or attach Go, Python, or generic agents | [`deploying-sdk-agents.md`](deploying-sdk-agents.md) |
 | Deploy with Helm | [`deploy/charts/runtime/README.md`](deploy/charts/runtime/README.md) |
 | Explore working agents | [`examples/`](examples/) |
+| Audit where former README material moved | [`documentation-map.md`](documentation-map.md) |
 | Validate an implementation | `runtimectl conformance --agent <id>` |
 
 Runtime's design can be summarized in one sentence:

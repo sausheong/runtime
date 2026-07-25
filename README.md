@@ -28,12 +28,24 @@ licence.
 | Bring up the complete single-host stack | [Quickstart](quickstart.md) |
 | Operate identity, persistence, security, and observability | [Operator guide](operator-guide.md) |
 | Onboard a tenant and exercise the platform | [Tenant guide](tenant-guide.md) |
+| Configure agents, pools, autoscaling, limits, pricing, and environment | [Configuration reference](configuration.md) |
+| Configure authentication, secrets, OIDC, and durable memory | [Identity, secrets, and memory](identity-and-memory.md) |
+| Federate MCP/REST tools and operate code/browser sandboxes | [Gateway and sandboxes](gateway-and-sandboxes.md) |
+| Use metrics, logs, request IDs, tracing, dashboards, and alerts | [Observability](observability.md) |
+| Create golden sets, run evaluations, and configure online scoring | [Evaluations guide](evals.md) |
+| Use the CLI/API, implement the agent contract, or develop native agents | [Interfaces and development](interfaces-and-development.md) |
 | Build or attach Go, Python, Claude SDK, or generic agents | [Deploying SDK agents](deploying-sdk-agents.md) |
 | Add TLS and identity to a cloud or on-prem host | [Secured deployment](deploy/secured/README.md) |
 | Deploy on Kubernetes | [Helm chart guide](deploy/charts/runtime/README.md) |
 | See remaining work and release blockers | [Roadmap](ROADMAP.md) |
+| Find material moved out of the former long README | [Documentation map](documentation-map.md) |
 
 Worked agents live under [`examples/`](examples/).
+
+The root README is deliberately an overview. Detailed material from the former
+long-form README has been retained in the topic guides above; the
+[documentation map](documentation-map.md) records the destination of every
+former section.
 
 ## Architecture
 
@@ -146,7 +158,10 @@ agents:
 ```
 
 Set `RUNTIME_CONFIG` to select another file. [`runtime.yaml`](runtime.yaml)
-documents local pools, autoscaling, gateway configuration, and remote agents.
+contains worked examples. The [configuration
+reference](configuration.md) documents local and remote pools, autoscaling,
+limits, pricing, gateway blocks, validation, injected child variables, and the
+full environment model.
 
 Important process-level settings are:
 
@@ -183,7 +198,8 @@ curl -N \
 
 When identity is enabled, send `Authorization: Bearer <service-key>`.
 Administrative APIs and the gateway are described in the [operator
-guide](operator-guide.md) and [tenant guide](tenant-guide.md).
+guide](operator-guide.md), [tenant guide](tenant-guide.md), and [interfaces
+reference](interfaces-and-development.md).
 
 Native Go agents link `agentruntime`; Python SDK agents can use the supplied
 authenticated contract shim; any language may implement the same HTTP/SSE contract. The

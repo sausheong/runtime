@@ -3,6 +3,12 @@
 For the person who runs the platform. Assumes you brought it up via the
 [Quickstart](quickstart.md).
 
+Detailed references are split by concern: [configuration](configuration.md),
+[identity, secrets, and memory](identity-and-memory.md), [gateway and
+sandboxes](gateway-and-sandboxes.md), [observability](observability.md), and
+[evaluations](evals.md). The [documentation map](documentation-map.md) records
+where material from the former long README now lives.
+
 ## Log in to the console
 
 `make compose-init` generated `deploy/compose/.env` with a one-time superuser
@@ -414,6 +420,10 @@ The value must be a non-negative Go duration. Disabling retention logs a warning
 because evaluation data will accumulate. Multi-control-plane recovery requires
 a distributed claim mechanism before more than one replica can safely resume
 the same incomplete run.
+
+See the [evaluations guide](evals.md) for creating golden sets, selecting
+scorers, running batch evaluations, configuring online sampling, and inspecting
+results.
 
 ## Cost metering
 
