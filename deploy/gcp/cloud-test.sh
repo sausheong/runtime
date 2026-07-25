@@ -7,15 +7,18 @@
 # agent-python) and asserts only what is actually running there.
 #
 # Access: opens an IAP tunnel to the control plane's :8080 and drives the runtimed
-# API over localhost. The admin bootstrap token (superuser bearer) is read from
-# the running container, so nothing needs to be supplied out-of-band. Dashboard
-# checks run via a single `gcloud ssh` command on the CP VM (the dashboards only
-# listen on the VM's own localhost).
+# API over localhost. Supply a durable service key in RUNTIME_TOKEN. Bootstrap
+# credentials are disabled after durable credentials exist; retrieving one from
+# the container therefore requires the explicit RUNTIME_ALLOW_BOOTSTRAP=1 opt-in
+# and is intended only for initial provisioning or a deliberate recovery window.
+# Dashboard checks run via a single `gcloud ssh` command on the CP VM (the
+# dashboards only listen on the VM's own localhost).
 #
 # Read-only + ephemeral: the ONLY writes are agent sessions (normal usage). No
 # tenants/keys/config created, nothing deleted. Safe to re-run anytime.
 #
-#   ./cloud-test.sh
+#   RUNTIME_TOKEN=rtk_... ./cloud-test.sh
+#   RUNTIME_ALLOW_BOOTSTRAP=1 ./cloud-test.sh  # initial/recovery only
 #   PROJECT=... ZONE=... CP_VM=... LOCAL_PORT=... ./cloud-test.sh
 #
 # Requires: gcloud (authenticated, IAP access), curl, jq.
@@ -62,10 +65,18 @@ for _ in $(seq 1 30); do
 done
 [ "$ok" = 1 ] || { echo "FATAL: tunnel to $CP_VM:8080 never came up" >&2; cat /tmp/cloud-test-tunnel.log >&2; exit 2; }
 
-# --- admin bootstrap token (superuser bearer), read from the container ---------
-echo "--- fetching admin bootstrap token from $CP_CONTAINER ---"
-TOK="$(cp_ssh "sudo docker exec $CP_CONTAINER printenv RUNTIME_ADMIN_BOOTSTRAP" | tr -d '\r\n[:space:]')"
-[ -n "$TOK" ] || { echo "FATAL: could not read RUNTIME_ADMIN_BOOTSTRAP from $CP_CONTAINER" >&2; exit 2; }
+# --- authentication -----------------------------------------------------------
+TOK="${RUNTIME_TOKEN:-}"
+if [ -n "$TOK" ]; then
+  echo "--- using operator-supplied durable token ---"
+elif [ "${RUNTIME_ALLOW_BOOTSTRAP:-0}" = 1 ]; then
+  echo "--- explicitly retrieving bootstrap token from $CP_CONTAINER ---"
+  TOK="$(cp_ssh "sudo docker exec $CP_CONTAINER printenv RUNTIME_ADMIN_BOOTSTRAP" | tr -d '\r\n[:space:]')"
+  [ -n "$TOK" ] || { echo "FATAL: could not read RUNTIME_ADMIN_BOOTSTRAP from $CP_CONTAINER" >&2; exit 2; }
+else
+  echo "FATAL: set RUNTIME_TOKEN to a durable key; bootstrap retrieval requires RUNTIME_ALLOW_BOOTSTRAP=1" >&2
+  exit 2
+fi
 AUTH=(-H "Authorization: Bearer $TOK")
 
 echo "=============================================================="
@@ -90,7 +101,7 @@ code=$(curl -sS -o /dev/null -w '%{http_code}' "$BASE/agents")
 [ "$code" = 401 ] && pass "unauth /agents 401 (identity gate active)" || fail "unauth /agents code=$code (want 401)"
 
 code=$(curl -sS -o /dev/null -w '%{http_code}' "${AUTH[@]}" "$BASE/agents")
-[ "$code" = 200 ] && pass "authenticated /agents 200 (bootstrap superuser)" || fail "auth /agents code=$code (want 200)"
+[ "$code" = 200 ] && pass "authenticated /agents 200" || fail "auth /agents code=$code (want 200)"
 
 # --- 3. Agent inventory -------------------------------------------------------
 AGENTS_JSON="$(curl -sS "${AUTH[@]}" "$BASE/agents")"
