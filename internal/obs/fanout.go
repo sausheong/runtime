@@ -10,12 +10,12 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	dto "github.com/prometheus/client_model/go"
 	"github.com/prometheus/common/expfmt"
 	"github.com/prometheus/common/model"
+	"github.com/sausheong/runtime/internal/xfan"
 )
 
 // ScrapeTarget is one agent's metrics endpoint. BaseURL is the full dial base
@@ -71,26 +71,23 @@ func FanoutHandler(c *ControlMetrics, targets func() []ScrapeTarget) http.Handle
 		}
 		ts := targets()
 		results := make([]result, len(ts))
-		var wg sync.WaitGroup
-		for i, tgt := range ts {
-			wg.Add(1)
-			go func(i int, tgt ScrapeTarget) {
-				defer wg.Done()
-				fams, up, reason := scrapeOne(r.Context(), tgt)
-				c.AgentUp(tgt.Agent, tgt.Replica, up)
-				if reason != "" {
-					c.ScrapeSkip(tgt.Agent, tgt.Replica, reason)
-					level := slog.LevelWarn
-					if reason == "no_metrics" {
-						level = slog.LevelDebug
-					}
-					slog.Log(r.Context(), level, "metrics fan-out skip",
-						"agent", tgt.Agent, "reason", reason)
+		// Bounded fan-out: one inbound /metrics scrape must not open one socket
+		// per registered target without a ceiling.
+		xfan.Each(r.Context(), len(ts), xfan.DefaultLimit, func(ctx context.Context, i int) {
+			tgt := ts[i]
+			fams, up, reason := scrapeOne(ctx, tgt)
+			c.AgentUp(tgt.Agent, tgt.Replica, up)
+			if reason != "" {
+				c.ScrapeSkip(tgt.Agent, tgt.Replica, reason)
+				level := slog.LevelWarn
+				if reason == "no_metrics" {
+					level = slog.LevelDebug
 				}
-				results[i] = result{agent: tgt.Agent, replica: tgt.Replica, families: fams}
-			}(i, tgt)
-		}
-		wg.Wait()
+				slog.Log(ctx, level, "metrics fan-out skip",
+					"agent", tgt.Agent, "reason", reason)
+			}
+			results[i] = result{agent: tgt.Agent, replica: tgt.Replica, families: fams}
+		})
 
 		// Merge: own registry families first, then each agent's, by name.
 		// Control families are authoritative — agents may not contribute to

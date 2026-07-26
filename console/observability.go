@@ -4,12 +4,12 @@ import (
 	"context"
 	"net/http"
 	"strings"
-	"sync"
 	"time"
 	"unicode/utf8"
 
 	"github.com/sausheong/runtime/controlplane"
 	"github.com/sausheong/runtime/internal/gateway"
+	"github.com/sausheong/runtime/internal/xfan"
 )
 
 // SessionTally counts a single agent's sessions by status.
@@ -156,19 +156,13 @@ func buildAgentFeed(ctx context.Context, reg *controlplane.Registry, client agen
 	}
 	// Fetch each session's events concurrently; preserve session order on merge.
 	perSession := make([][]eventRow, len(sessions))
-	var wg sync.WaitGroup
-	for i := range sessions {
-		wg.Add(1)
-		go func(i int) {
-			defer wg.Done()
-			evs, err := client.ListEvents(ctx, ap, sessions[i].ID, maxEvents)
-			if err != nil {
-				return // skip this session
-			}
-			perSession[i] = evs
-		}(i)
-	}
-	wg.Wait()
+	xfan.Each(ctx, len(sessions), xfan.DefaultLimit, func(ctx context.Context, i int) {
+		evs, err := client.ListEvents(ctx, ap, sessions[i].ID, maxEvents)
+		if err != nil {
+			return // skip this session
+		}
+		perSession[i] = evs
+	})
 
 	out := make([]FeedEntry, 0, maxEvents)
 	for i, evs := range perSession {
@@ -191,15 +185,9 @@ func buildAgentFeed(ctx context.Context, reg *controlplane.Registry, client agen
 // Registry and httpAgentClient both are).
 func buildFleetObs(ctx context.Context, reg *controlplane.Registry, client agentClient, probe probeFunc, infos []controlplane.AgentInfo) FleetObs {
 	f := FleetObs{Agents: make([]AgentObs, len(infos)), TotalAgents: len(infos)}
-	var wg sync.WaitGroup
-	for i := range infos {
-		wg.Add(1)
-		go func(i int) {
-			defer wg.Done()
-			f.Agents[i] = buildAgentObs(ctx, reg, client, probe, infos[i])
-		}(i)
-	}
-	wg.Wait()
+	xfan.Each(ctx, len(infos), xfan.DefaultLimit, func(ctx context.Context, i int) {
+		f.Agents[i] = buildAgentObs(ctx, reg, client, probe, infos[i])
+	})
 	for _, a := range f.Agents {
 		if a.Healthy > 0 {
 			f.HealthyAgents++
