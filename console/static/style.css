@@ -11,9 +11,13 @@
   --border: oklch(0.905 0.008 80);
   --border-strong: oklch(0.835 0.010 80);
   --text: oklch(0.245 0.012 70);
-  --muted: oklch(0.555 0.012 70);
+  /* L=0.530, not 0.555: --muted must clear 4.5:1 on the DARKEST surface it can
+     land on, not the lightest. At 0.555 it passed on --surface (4.69:1) but
+     failed on --bg (4.39:1) and --surface-sunk (4.18:1) — and .subtitle sits in
+     .page-head, i.e. directly on --bg. Now 4.88 / 5.21 / 4.64:1 respectively. */
+  --muted: oklch(0.530 0.012 70);
   /* Darker muted for small text (labels, badges, table headers) where --muted
-     falls below the 4.5:1 WCAG bar on tinted backgrounds. */
+     is legible but leaves too little margin at 12px. */
   --muted-strong: oklch(0.445 0.014 70);
 
   /* Accent: plum. Chosen by elimination — red/green/amber are spoken for by
@@ -43,13 +47,21 @@
   --radius: 8px;
   --radius-sm: 6px;
 
-  /* Type scale: fixed rem, 1.2 ratio. Not fluid — operators view at consistent
-     DPI, and a clamp-sized h1 that shrinks inside a panel looks worse. */
-  --fs-h1: 1.5rem;
-  --fs-h2: 1.125rem;
-  --fs-body: 0.9375rem;
-  --fs-sm: 0.85rem;
-  --fs-xs: 0.75rem;
+  /* Type scale: fixed rem. Not fluid — operators view at consistent DPI, and a
+     clamp-sized h1 that shrinks inside a panel looks worse.
+     Rendered ladder: 24 / 18 / 15 / 13.6 / 12px.
+     The bottom three steps are 1.10x and 1.13x apart, under the 1.25 the design
+     laws ask for, and a detector flags it. Kept deliberately. These are not
+     hierarchy tiers competing for attention; they are body / secondary / label,
+     already separated by weight, colour, and caps. Widening the gaps means
+     shrinking labels below 12px in a dense tool operators read under time
+     pressure — legibility is the higher law here (see PRODUCT.md). Tried
+     15/13/11.5: the ratio moved 1.10x -> 1.15x and the text just got smaller. */
+  --fs-h1: 1.5rem;      /* 24px */
+  --fs-h2: 1.125rem;    /* 18px */
+  --fs-body: 0.9375rem; /* 15px */
+  --fs-sm: 0.85rem;     /* 13.6px — secondary text, descriptions */
+  --fs-xs: 0.75rem;     /* 12px   — uppercase labels, badges, table heads */
 
   --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
 }
@@ -83,7 +95,7 @@ body {
   align-items: center;
   gap: .55rem;
   font-weight: 650;
-  font-size: 1.05rem;
+  font-size: var(--fs-h2);
   color: var(--text);
   text-decoration: none;
   letter-spacing: -.01em;
@@ -98,7 +110,7 @@ body {
   border-radius: var(--radius-sm);
   background: var(--accent);
   color: var(--surface);
-  font-size: 14px; font-weight: 700;
+  font-size: var(--fs-sm); font-weight: 700;
   letter-spacing: -.02em;
 }
 .topbar nav { display: flex; align-items: center; flex-wrap: wrap; gap: .125rem; margin-left: auto; }
@@ -276,7 +288,7 @@ button.play {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  font-size: .8rem;
+  font-size: var(--fs-xs);
   line-height: 1;
 }
 button.ghost {
@@ -337,7 +349,10 @@ button.danger:hover { background: var(--danger-soft); border-color: var(--danger
    the "how", this just gives it room to be a sentence instead of a shrug. */
 .empty { color: var(--muted); font-size: var(--fs-sm); padding: 1.25rem .8rem; line-height: 1.6; }
 .empty strong { color: var(--text); font-weight: 600; }
-.empty code { font-family: var(--mono); font-size: .95em; background: var(--surface-sunk); border: 1px solid var(--border); border-radius: 4px; padding: .1rem .35rem; }
+/* Inherit the parent's size rather than .95em: a relative step off --fs-sm
+   landed on 12.35px, a sixth tier wedged between two tokens for no reason.
+   Mono already reads smaller than sans at the same size. */
+.empty code { font-family: var(--mono); background: var(--surface-sunk); border: 1px solid var(--border); border-radius: 4px; padding: .1rem .35rem; }
 
 /* ---- Stream / pre ----
    The one dark surface in a light UI, and deliberately so: a transcript is
@@ -373,7 +388,7 @@ pre {
   max-width: 360px;
   text-align: center;
 }
-.auth-card .brand { justify-content: center; margin-bottom: 1.5rem; font-size: 1.1rem; }
+.auth-card .brand { justify-content: center; margin-bottom: 1.5rem; font-size: var(--fs-h2); }
 .auth-card form { display: flex; flex-direction: column; gap: .7rem; margin-top: 1rem; }
 .auth-card input { width: 100%; padding: .6rem .7rem; }
 .auth-card button { width: 100%; padding: .6rem; }
