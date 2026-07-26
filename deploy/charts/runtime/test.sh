@@ -114,7 +114,19 @@ grep -q 'kind: StatefulSet'        <<<"$out" || fail "perAgentPods: no StatefulS
 grep -q 'clusterIP: None'          <<<"$out" || fail "perAgentPods: no headless Service"
 grep -q 'serviceName: r-agent-support-hl' <<<"$out" || fail "perAgentPods: wrong serviceName"
 grep -q 'replicas: 2'              <<<"$out" || fail "perAgentPods: replicas not 2"
-grep -q 'DBOS__VMID="support#'     <<<"$out" || fail "perAgentPods: no ordinal VMID derive"
+# The ordinal is resolved declaratively from the StatefulSet pod-index label and
+# interpolated into DBOS__VMID. It must NOT go through a shell: the image is
+# FROM scratch, so a /bin/sh wrapper StartErrors and CrashLoops every agent pod.
+grep -q "fieldPath: metadata.labels\['apps.kubernetes.io/pod-index'\]" <<<"$out" ||
+  fail "perAgentPods: replica ordinal not taken from the pod-index label"
+grep -q 'value: "support#\$(RUNTIME_AGENT_REPLICA)"' <<<"$out" ||
+  fail "perAgentPods: no ordinal VMID derive"
+! grep -qE '^\s*(command|args):.*\bsh\b' <<<"$out" ||
+  fail "perAgentPods: shell wrapper in a scratch image (no /bin/sh exists)"
+# Must exec agentd explicitly: the image's default CMD is /app/runtimed, so an
+# absent command silently runs the control plane inside every agent pod.
+grep -q 'command: \["/app/agentd"\]' <<<"$out" ||
+  fail "perAgentPods: agent container does not exec agentd"
 grep -q 'support-{i}.r-agent-support-hl' <<<"$out" || fail "perAgentPods: generated url not {i}-templated"
 # The dial template must be IDENTICAL on both sides (drift guard): the host base
 # appears in both the headless Service name and the generated url.

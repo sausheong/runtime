@@ -68,6 +68,12 @@ control_service_info() {
 # run_probe separates kubectl/ephemeral-container setup from curl's result.
 # The debug command itself exits zero and emits a marker for every curl outcome;
 # absence of that marker is an infrastructure/setup failure, never a denial.
+#
+# --attach is required, not cosmetic: without it `kubectl debug` returns as soon
+# as the ephemeral container is created and never streams its output, so the
+# marker this function depends on never arrives and every probe fails as a
+# setup error. --profile=general is likewise explicit — the implicit legacy
+# profile is deprecated and prints a warning onto the captured stream.
 PROBE_OUTPUT=""
 PROBE_RC=""
 run_probe() {
@@ -76,7 +82,8 @@ run_probe() {
   local url="$3"
   local output marker
   if ! output="$("$kubectl_bin" debug -n "$namespace" "pod/${pod}" \
-    --quiet --image="$debug_image" --container="${name}-${RANDOM}" -- \
+    --quiet --attach --profile=general \
+    --image="$debug_image" --container="${name}-${RANDOM}" -- \
     sh -c 'curl --fail --silent --show-error --connect-timeout 3 --max-time 10 "$1"; rc=$?; printf "\n__RUNTIME_CURL_EXIT__=%s\n" "$rc"; exit 0' \
     runtime-network-probe "$url" 2>&1)"; then
     fail "debug probe setup failed for pod ${pod}: ${output}"

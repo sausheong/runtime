@@ -2,6 +2,12 @@ apiVersion: v2
 name: runtime
 description: On-prem, durable LLM agent platform (AWS Bedrock AgentCore equivalent)
 type: application
+# perAgentPods derives each agent's replica ordinal from the
+# apps.kubernetes.io/pod-index pod label via the downward API. That label is set
+# by the kubelet only from 1.28 (beta, on by default); on anything older
+# RUNTIME_AGENT_REPLICA would silently resolve to the empty string and every
+# agent would claim ordinal 0. Fail the install instead.
+kubeVersion: ">= 1.28.0-0"
 version: 0.2.0
 appVersion: "0.2.0"
 home: https://github.com/sausheong/runtime

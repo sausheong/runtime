@@ -469,6 +469,33 @@ deploy/charts/runtime/live-networkpolicy-test.sh \
   <namespace> <source-release> <target-release>
 ```
 
+`kind`'s default CNI does enforce NetworkPolicy, so a stock `kind create cluster`
+is sufficient. Two prerequisites are easy to miss, and each fails as a
+CrashLoop rather than an obvious misconfiguration:
+
+- **Each release needs its own restricted role**, and the bundled Bitnami
+  subchart's `runtime` user cannot create it (no `CREATEROLE`). Create it as the
+  superuser in each release's database, then point `secrets.agentPgDsn` at it:
+
+  ```bash
+  kubectl exec -n <ns> <release>-postgresql-0 -- \
+    env PGPASSWORD="$(kubectl get secret -n <ns> <release>-postgresql \
+      -o jsonpath='{.data.postgres-password}' | base64 -d)" \
+    psql -U postgres -d runtime -c \
+      "CREATE ROLE runtime_agent LOGIN PASSWORD '<pw>';
+       GRANT ALL ON DATABASE runtime TO runtime_agent;
+       GRANT ALL ON SCHEMA public TO runtime_agent;"
+  ```
+
+- **The control plane grants that role its table privileges at startup**, so it
+  must start *after* the role exists. If the agents report `permission denied
+  for table runtime_schema_migrations`, `kubectl rollout restart` the
+  control-plane Deployment and let the agent pods retry.
+
+The script needs the ephemeral-containers permission and `kubectl` on PATH; it
+invokes `$KUBECTL` as a single word, so that variable may name a binary but
+cannot carry flags (use `kubectl config use-context` to select a cluster).
+
 The script selects only Running and Ready pods, fails on missing Services, and
 first proves source-side debug/DNS connectivity plus the target release's
 allowed agent and metrics paths. Denial probes emit an explicit in-container

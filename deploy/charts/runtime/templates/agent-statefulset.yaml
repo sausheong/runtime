@@ -44,17 +44,26 @@ spec:
         - name: agentd
           image: {{ include "runtime.image" $root | quote }}
           imagePullPolicy: {{ $root.Values.image.pullPolicy }}
-          # Ordinal-dependent env (RUNTIME_AGENT_REPLICA, DBOS__VMID) is derived
-          # from the pod name ($HOSTNAME = <statefulset>-<ordinal>) at start; all
-          # other env is static and set below.
-          command: ["/bin/sh", "-c"]
-          args:
-            - |
-              ORD="${HOSTNAME##*-}"
-              export RUNTIME_AGENT_REPLICA="$ORD"
-              export DBOS__VMID="{{ $a.id }}#${ORD}"
-              exec /app/agentd
+          # Exec the agent binary directly. The image is FROM scratch and has no
+          # shell, so the previous ["/bin/sh", "-c"] wrapper failed the container
+          # start outright (StartError: stat /bin/sh: no such file or directory).
+          # This must stay an explicit command: the image's default CMD is
+          # /app/runtimed, so dropping the override entirely would silently run
+          # the control plane in every agent pod instead of agentd.
+          command: ["/app/agentd"]
           env:
+            # The StatefulSet ordinal, published by the kubelet as a pod label.
+            # Requires Kubernetes >= 1.28, where apps.kubernetes.io/pod-index
+            # graduated to beta and is set by default; Chart.yaml pins that floor.
+            - name: RUNTIME_AGENT_REPLICA
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.labels['apps.kubernetes.io/pod-index']
+            # Kubernetes expands $(VAR) from an env var declared earlier in this
+            # same list, reproducing the "<agent>#<ordinal>" executor id that
+            # controlplane builds for supervised replicas.
+            - name: DBOS__VMID
+              value: "{{ $a.id }}#$(RUNTIME_AGENT_REPLICA)"
             - name: RUNTIME_LISTEN_ADDR
               value: ":8080"
             - name: RUNTIME_AGENT_ID
