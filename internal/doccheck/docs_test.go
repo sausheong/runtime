@@ -917,6 +917,47 @@ func checkLocalLinks(t *testing.T, root, source string, data []byte) {
 	}
 }
 
+// TestPinnedThirdPartyDigestsDoNotDrift fails when the same third-party image
+// is pinned to different digests in different files. The pgvector digest alone
+// appears in three Compose profiles and both workflows (twice each, once as an
+// image reference and once as a `docker ps --filter ancestor=` value, which
+// must match what is actually pulled or the container lookup silently finds
+// nothing). A prose "keep these in step" comment is not enforcement; this is.
+func TestPinnedThirdPartyDigestsDoNotDrift(t *testing.T) {
+	root := repositoryRoot(t)
+	files := []string{
+		"deploy/docker-compose.yml",
+		"deploy/docker-compose.full.yml",
+		"deploy/compose/docker-compose.yml",
+		".github/workflows/ci.yml",
+		".github/workflows/release.yml",
+	}
+	// image repo -> digest -> the files that pin it that way.
+	seen := map[string]map[string][]string{}
+	re := regexp.MustCompile(`([a-z0-9._/-]+)(?::[A-Za-z0-9._-]+)?@(sha256:[0-9a-f]{64})`)
+	for _, name := range files {
+		data, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(name)))
+		if err != nil {
+			t.Fatalf("read %s: %v", name, err)
+		}
+		for _, m := range re.FindAllStringSubmatch(string(data), -1) {
+			repo, digest := m[1], m[2]
+			if seen[repo] == nil {
+				seen[repo] = map[string][]string{}
+			}
+			seen[repo][digest] = append(seen[repo][digest], name)
+		}
+	}
+	if len(seen) == 0 {
+		t.Fatal("no digest-pinned third-party images found; this test would pass vacuously")
+	}
+	for repo, byDigest := range seen {
+		if len(byDigest) > 1 {
+			t.Errorf("image %s is pinned to %d different digests: %v", repo, len(byDigest), byDigest)
+		}
+	}
+}
+
 func hasExternalScheme(raw string) bool {
 	u, err := url.Parse(raw)
 	return err == nil && u.Scheme != ""

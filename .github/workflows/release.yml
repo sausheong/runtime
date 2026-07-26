@@ -96,6 +96,9 @@ jobs:
           RUNTIME_SECRETS_PRIMARY: release
           RUNTIME_AGENT_DB_PASSWORD: release-agent-db-password
           GRAFANA_ADMIN_PASSWORD: release-validation-only
+          # Required by deploy/compose since the browser egress proxy must bind a
+          # reachable address; ci.yml sets the same for its compose validation.
+          RUNTIME_BROWSER_PROXY_TOKEN: release-only-browser-proxy-token-0123456789ab
       - name: Validate distributed GCP Compose bundles
         run: |
           install /dev/null deploy/gcp/llm.env
