@@ -3,9 +3,26 @@
 // locked-down container; its entire network stack is forced through the egress
 // proxy in this package via --proxy-server, which allows or denies by hostname.
 // The agent can only drive Chrome over CDP, so the proxy adjudicates all of the
-// agent's reachable traffic. (The container itself sits on a docker bridge so it
-// can dial the proxy; a network-level egress boundary that also contains a
-// hypothetical non-proxy-respecting process is recorded as follow-on hardening.)
+// agent's reachable traffic.
+//
+// Egress is contained at two layers, not one. Above, the proxy decides by
+// hostname. Below, RUNTIME_BROWSER_NETWORK places the container on a Docker
+// network that NewDockerBackend inspects at startup and rejects unless it is
+// declared internal — an internal network has no default route, so a process
+// that ignores --proxy-server (a compromised or misconfigured browser) cannot
+// reach the internet at all. Reaching the proxy across that network means the
+// proxy binds a non-loopback address, which ValidateProxyListener refuses
+// without a >=32-character token; the token is delivered to Chromium over CDP
+// (Fetch.authChallenge), never through container environment.
+//
+// The residual reachable surface is precise and worth stating: an internal
+// network is a shared segment, so the proxy host itself (runtimed in the
+// turnkey Compose profile) and any sibling container the operator attaches to
+// that network remain reachable from the browser at layer 3. Those are bounded
+// by the proxy's own policy and by what the operator chooses to attach, not by
+// the network boundary. Leaving RUNTIME_BROWSER_NETWORK empty selects the
+// direct-host install: no private network, CDP published on loopback only, and
+// the proxy alone as the egress control.
 package browser
 
 import (

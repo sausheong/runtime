@@ -137,6 +137,7 @@ jobs:
           RUNTIME_SECRETS_KEYS: ci:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
           RUNTIME_SECRETS_PRIMARY: ci
           RUNTIME_AGENT_DB_PASSWORD: ci-agent-db-password
+          RUNTIME_BROWSER_PROXY_TOKEN: ci-only-browser-proxy-token-0123456789ab
           GRAFANA_ADMIN_PASSWORD: ci-only-password
       - name: Validate distributed GCP Compose bundles
         run: |

@@ -18,12 +18,18 @@
 //	RUNTIME_BROWSER_CPUS            cpu limit (default 1.0)
 //	RUNTIME_BROWSER_PROFILE_MB      tmpfs profile size (default 256)
 //	RUNTIME_BROWSER_RUNTIME         engine runtime, e.g. runsc
-//	RUNTIME_BROWSER_NETWORK         private Docker network for browser/CDP traffic
+//	RUNTIME_BROWSER_NETWORK         private Docker network for browser/CDP traffic;
+//	                                MUST be declared internal (no default route) —
+//	                                startup inspects it and refuses a routable one
 //	RUNTIME_BROWSER_PROXY_HOST      browserd hostname on that private network
 //	RUNTIME_BROWSER_EGRESS_MODE     deny-all | allow-list | allow-all-public (default deny-all)
 //	RUNTIME_BROWSER_EGRESS_ALLOW    comma-separated hostname globs (allow-list mode)
-//	RUNTIME_BROWSER_PROXY_ADDR      host:port the egress proxy listens on (default 127.0.0.1:0)
-//	RUNTIME_BROWSER_PROXY_TOKEN     required (minimum 32 characters) for every non-loopback proxy bind
+//	RUNTIME_BROWSER_PROXY_ADDR      host:port the egress proxy listens on. Default
+//	                                127.0.0.1:0, or 0.0.0.0:0 when
+//	                                RUNTIME_BROWSER_NETWORK is set (a loopback bind
+//	                                is unreachable from a private network)
+//	RUNTIME_BROWSER_PROXY_TOKEN     required (minimum 32 characters) for every non-loopback
+//	                                proxy bind, hence for every private-network deployment
 //	RUNTIME_BROWSER_ALLOW_DIRECT    "1" ⇒ accept calls without the gateway's __rt_tenant key
 //	RUNTIME_BROWSER_SCOPE           "session" ⇒ key browsers by (tenant, session,
 //	                                id) so a handle is invisible to other sessions
@@ -110,9 +116,31 @@ func main() {
 	}
 
 	// Start the egress proxy on a listener the containers can reach.
+	//
+	// An explicit RUNTIME_BROWSER_PROXY_ADDR always wins. Otherwise the right
+	// default depends on the deployment shape:
+	//
+	//   - No private network (direct-host install): browser containers reach
+	//     the proxy over the host gateway, so 127.0.0.1:0 is both reachable
+	//     and the tightest possible bind.
+	//   - Private network set: a loopback bind is NOT reachable from that
+	//     network — containerProxyAddrForHost would advertise
+	//     RUNTIME_BROWSER_PROXY_HOST:<port> pointing at a listener bound to
+	//     another container's loopback, and Chromium fails to connect. Bind
+	//     the wildcard instead.
+	//
+	// The wildcard bind is safe in the private-network shape precisely because
+	// it is not unauthenticated: ValidateProxyListener below rejects any
+	// non-loopback bind without a >=32-character RUNTIME_BROWSER_PROXY_TOKEN,
+	// so a private-network deployment MUST supply one. The credential reaches
+	// Chromium over CDP (Fetch.authChallenge), never via container env.
+	browserNetwork := os.Getenv("RUNTIME_BROWSER_NETWORK")
 	proxyAddr := os.Getenv("RUNTIME_BROWSER_PROXY_ADDR")
 	if proxyAddr == "" {
 		proxyAddr = "127.0.0.1:0"
+		if browserNetwork != "" {
+			proxyAddr = "0.0.0.0:0"
+		}
 	}
 	proxyToken := os.Getenv("RUNTIME_BROWSER_PROXY_TOKEN")
 	if err := browser.ValidateProxyListener(proxyAddr, proxyToken); err != nil {
@@ -162,7 +190,7 @@ func main() {
 			CPUs:      envFloat("RUNTIME_BROWSER_CPUS", 1.0),
 			ProfileMB: envInt("RUNTIME_BROWSER_PROFILE_MB", 256),
 			Runtime:   os.Getenv("RUNTIME_BROWSER_RUNTIME"),
-			Network:   os.Getenv("RUNTIME_BROWSER_NETWORK"),
+			Network:   browserNetwork,
 			ProxyHost: os.Getenv("RUNTIME_BROWSER_PROXY_HOST"),
 		})
 		if err != nil {

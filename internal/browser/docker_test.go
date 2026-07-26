@@ -32,6 +32,22 @@ func TestContainerProxyAddr(t *testing.T) {
 	}
 }
 
+// TestValidateContainerNetwork rejects a network that cannot enforce the
+// layer-3 egress boundary. A non-internal network leaves the container a
+// default route, so a process that ignores --proxy-server reaches the
+// internet directly.
+func TestValidateContainerNetwork(t *testing.T) {
+	if err := validateContainerNetwork(networkInfo{name: "b", exists: true, internal: true}); err != nil {
+		t.Fatalf("internal network rejected: %v", err)
+	}
+	if err := validateContainerNetwork(networkInfo{name: "b", exists: true, internal: false}); err == nil {
+		t.Fatal("non-internal network accepted: layer-3 egress boundary is not enforced")
+	}
+	if err := validateContainerNetwork(networkInfo{name: "b", exists: false}); err == nil {
+		t.Fatal("missing network accepted")
+	}
+}
+
 func TestCDPDialHost(t *testing.T) {
 	t.Setenv("RUNTIME_BROWSER_CDP_DIAL_HOST", "")
 	if got := cdpDialHost(); got != "127.0.0.1" {
