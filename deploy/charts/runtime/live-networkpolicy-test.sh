@@ -80,15 +80,29 @@ run_probe() {
   local pod="$1"
   local name="$2"
   local url="$3"
-  local output marker
+  local output marker container attempt
+  container="${name}-${RANDOM}"
   if ! output="$("$kubectl_bin" debug -n "$namespace" "pod/${pod}" \
     --quiet --attach --profile=general \
-    --image="$debug_image" --container="${name}-${RANDOM}" -- \
+    --image="$debug_image" --container="$container" -- \
     sh -c 'curl --fail --silent --show-error --connect-timeout 3 --max-time 10 "$1"; rc=$?; printf "\n__RUNTIME_CURL_EXIT__=%s\n" "$rc"; exit 0' \
     runtime-network-probe "$url" 2>&1)"; then
     fail "debug probe setup failed for pod ${pod}: ${output}"
   fi
   marker="$(sed -n 's/^__RUNTIME_CURL_EXIT__=\([0-9][0-9]*\)$/\1/p' <<<"$output" | tail -1)"
+  # `kubectl debug --attach` races the container it just created: when the
+  # attach upgrade loses that race it prints "couldn't attach ... falling back
+  # to streaming logs", and under load the fallback can return before the
+  # container has written anything. The container still ran, so read its log
+  # directly rather than reporting a setup failure for a probe that worked.
+  # This is the difference between a flaky acceptance and a trustworthy one.
+  attempt=0
+  while [[ -z "$marker" && "$attempt" -lt 5 ]]; do
+    attempt=$((attempt + 1))
+    sleep 2
+    output="$("$kubectl_bin" logs -n "$namespace" "$pod" -c "$container" 2>&1 || true)"
+    marker="$(sed -n 's/^__RUNTIME_CURL_EXIT__=\([0-9][0-9]*\)$/\1/p' <<<"$output" | tail -1)"
+  done
   [[ -n "$marker" ]] ||
     fail "debug probe on pod ${pod} produced no curl exit marker: ${output}"
   PROBE_RC="$marker"
