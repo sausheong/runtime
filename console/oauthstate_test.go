@@ -76,3 +76,51 @@ func TestSetOAuthStateCookie_Attributes(t *testing.T) {
 		t.Errorf("maxage=%d want >0", c.MaxAge)
 	}
 }
+
+// TestOAuthStateCookieSecureOnHTTPS pins the attribute whose absence broke
+// login on the live HTTPS deployment. The state cookie is only ever returned on
+// a cross-site top-level redirect back from the IdP; on an https origin a
+// browser will not send a non-Secure cookie in that position, so /ui/callback
+// saw no cookie and every sign-in failed with "invalid login state".
+//
+// It must track the other console cookies rather than hardcode true: on a plain
+// http dev origin, forcing Secure would break login the other way.
+func TestOAuthStateCookieSecureOnHTTPS(t *testing.T) {
+	t.Setenv("RUNTIME_COOKIE_SECURE", "")
+	t.Setenv("RUNTIME_PUBLIC_URL", "")
+	t.Setenv("RUNTIME_OIDC_REDIRECT_URL", "https://runtime.example.com/ui/callback")
+
+	for _, tc := range []struct {
+		name string
+		set  func(http.ResponseWriter)
+	}{
+		{"set", func(w http.ResponseWriter) { setOAuthStateCookie(w, "abc") }},
+		{"clear", clearOAuthStateCookie},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			tc.set(w)
+			c := w.Result().Cookies()[0]
+			if !c.Secure {
+				t.Fatalf("%s: cookie is not Secure on an https deployment; the browser will drop it on the IdP redirect and login fails", tc.name)
+			}
+			if c.SameSite != http.SameSiteLaxMode {
+				t.Fatalf("%s: SameSite=%v, want Lax (Strict suppresses the cross-site callback)", tc.name, c.SameSite)
+			}
+		})
+	}
+}
+
+// TestOAuthStateCookieNotSecureOnHTTP is the converse: a plain-http dev origin
+// must NOT get Secure, or the cookie is dropped there instead.
+func TestOAuthStateCookieNotSecureOnHTTP(t *testing.T) {
+	t.Setenv("RUNTIME_COOKIE_SECURE", "")
+	t.Setenv("RUNTIME_PUBLIC_URL", "http://localhost:8080")
+	t.Setenv("RUNTIME_OIDC_REDIRECT_URL", "http://localhost:8080/ui/callback")
+
+	w := httptest.NewRecorder()
+	setOAuthStateCookie(w, "abc")
+	if w.Result().Cookies()[0].Secure {
+		t.Fatal("Secure set on a plain-http origin; the browser would drop the cookie")
+	}
+}

@@ -19,6 +19,13 @@ import (
 // The cookie is scoped to the callback path and SameSite=Lax — Lax is required
 // (not Strict): the callback is a cross-site top-level redirect from the IdP, and
 // Strict would suppress the cookie there, breaking every login.
+//
+// Secure must match the rest of the console's cookies (sessionCookieSecure), and
+// omitting it broke login outright on the HTTPS deployment: browsers reject a
+// non-Secure cookie carried across a cross-site redirect on an https origin, so
+// the cookie never came back to /ui/callback and every sign-in failed the state
+// check with "invalid login state". Every other console cookie already set it;
+// this one was the outlier.
 const oauthStateCookie = "rt_oauth_state"
 
 // newOAuthState returns a fresh random state token (256 bits, hex).
@@ -33,16 +40,18 @@ func newOAuthState() (string, error) {
 func setOAuthStateCookie(w http.ResponseWriter, state string) {
 	http.SetCookie(w, &http.Cookie{
 		Name: oauthStateCookie, Value: state,
-		Path: "/ui/callback", HttpOnly: true, SameSite: http.SameSiteLaxMode,
-		MaxAge: 300, // 5 min: a login round-trip is seconds; bounds replay window.
+		Path: "/ui/callback", HttpOnly: true, Secure: sessionCookieSecure(),
+		SameSite: http.SameSiteLaxMode,
+		MaxAge:   300, // 5 min: a login round-trip is seconds; bounds replay window.
 	})
 }
 
 func clearOAuthStateCookie(w http.ResponseWriter) {
 	http.SetCookie(w, &http.Cookie{
 		Name: oauthStateCookie, Value: "",
-		Path: "/ui/callback", HttpOnly: true, SameSite: http.SameSiteLaxMode,
-		MaxAge: -1,
+		Path: "/ui/callback", HttpOnly: true, Secure: sessionCookieSecure(),
+		SameSite: http.SameSiteLaxMode,
+		MaxAge:   -1,
 	})
 }
 
