@@ -68,6 +68,24 @@
 
 * { box-sizing: border-box; }
 
+/* Skip link: off-screen until focused. Onboarding is a ~5,600px page behind a
+   five-item nav, so without this a keyboard user tabs the entire header on
+   every navigation before reaching any content. */
+.skip-link {
+  position: absolute;
+  left: -9999px;
+  top: 0;
+  z-index: 100;
+  padding: .55rem .9rem;
+  background: var(--surface);
+  color: var(--accent);
+  border: 1px solid var(--accent);
+  border-radius: 0 0 var(--radius) 0;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+.skip-link:focus { left: 0; text-decoration: none; }
+
 body {
   font: var(--fs-body)/1.55 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   margin: 0;
@@ -212,6 +230,10 @@ td.actions { text-align: right; width: 1%; white-space: nowrap; }
 .badge-ok { background: var(--success-bg); color: var(--success-text); border-color: var(--success-border); }
 .badge-muted { background: var(--surface-sunk); color: var(--muted-strong); border-color: var(--border); }
 .badge-danger { background: var(--danger-soft); color: var(--danger); border-color: var(--danger-border); }
+/* Degraded / in-between state. --warning existed as a token but nothing used
+   it, so "unknown" and "degraded" had to borrow ok or danger — both wrong.
+   PRODUCT.md calls those first-class states; this is the badge for them. */
+.badge-warn { background: oklch(0.965 0.03 75); color: oklch(0.44 0.10 75); border-color: oklch(0.86 0.07 75); }
 .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: .4rem; vertical-align: middle; }
 /* Not color alone: ok is a filled dot, off is a hollow ring (WCAG 1.4.1). */
 .dot-ok { background: var(--success); }
@@ -222,6 +244,20 @@ td.actions { text-align: right; width: 1%; white-space: nowrap; }
    containers (stat tiles on the agent + observability pages) have no flex
    context and their children collapse to a vertical stack. */
 .row { display: flex; flex-wrap: wrap; gap: .75rem; }
+
+/* ---- Inline form (a control strip above a table) ----
+   Referenced by observability.html but never defined, so it fell back to
+   display:block: the labels rendered inline at 16px next to a 39px button, and
+   the gap between the primary action and the table below it computed to 0px,
+   making "Launch run" read as a table row. */
+.inline-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: .75rem;
+  margin-bottom: 1.25rem;
+}
+.inline-form label { display: flex; flex-direction: column; gap: .25rem; }
 
 /* ---- Forms ---- */
 form .row { gap: .6rem; align-items: center; }
@@ -372,6 +408,23 @@ pre {
   min-height: 6rem;
   max-height: 70vh;
   overflow: auto;
+}
+
+/* Cedar policy source shown inside a table cell. It is configuration you READ,
+   not machine output you tail, so it must not inherit the dark log treatment
+   above — that rendered a policy as a 426x96px black slab next to a Remove
+   button. Quiet inset instead, sized to its content. */
+pre.policy-text {
+  background: var(--surface-sunk);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: .5rem .6rem;
+  margin: 0;
+  min-height: 0;
+  max-height: 12rem;
+  font-size: var(--fs-sm);
+  line-height: 1.5;
 }
 
 /* ---- Centered auth panel (login) ----
@@ -555,6 +608,7 @@ pre {
   display: flex;
   flex-direction: column-reverse;
   justify-content: flex-end;
+  gap: .3rem;
 }
 .stat-num {
   font-size: 1.4rem;
@@ -564,14 +618,16 @@ pre {
   font-variant-numeric: tabular-nums;
   line-height: 1.2;
 }
-/* Sits visually above the figure (column-reverse), so the gap goes on the
-   bottom edge as rendered — i.e. margin-top in flow terms. */
+/* Spacing between label and figure comes from the container's `gap`, not a
+   margin. Under column-reverse a margin-top lands on the physical TOP of the
+   label — which is the outer edge of the tile, not the space between the two
+   lines — so the measured label-to-value gap was 0px while the comment here
+   claimed otherwise. `gap` is direction-agnostic and cannot get this wrong. */
 .stat-label {
   font-size: var(--fs-xs);
   text-transform: uppercase;
   letter-spacing: .045em;
   color: var(--muted-strong);
-  margin-top: .3rem;
 }
 /* A stat tile that carries a warning signal (e.g. non-zero error count). */
 .stat-warn { border-color: var(--danger-border); background: var(--danger-soft); }

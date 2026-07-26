@@ -1,8 +1,9 @@
 {{define "select-tenant.html"}}<!doctype html>
-<html><head><meta charset="utf-8"><title>Choose a tenant — Runtime</title>
+<html lang="en"><head><meta charset="utf-8"><title>Choose a tenant — Runtime</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="stylesheet" href="/ui/static/style.css"></head>
 <body>
+<a class="skip-link" href="#main">Skip to content</a>
 <header class="topbar">
   <a class="brand" href="/ui"><span class="logo">R</span> Runtime</a>
   <nav>
@@ -13,7 +14,7 @@
     <form method="post" action="/ui/logout"><button type="submit" class="navbtn">Sign out</button></form>
   </nav>
 </header>
-<main class="container">
+<main class="container" id="main">
   <div class="page-head">
     <h1>Choose a tenant</h1>
     <p class="subtitle">Your account has access to more than one tenant. Pick which to work in.</p>

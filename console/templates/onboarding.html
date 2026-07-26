@@ -1,8 +1,9 @@
 {{define "onboarding.html"}}<!doctype html>
-<html><head><meta charset="utf-8"><title>Onboarding — {{.Tenant}}</title>
+<html lang="en"><head><meta charset="utf-8"><title>Onboarding — {{.Tenant}}</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="stylesheet" href="/ui/static/style.css"></head>
 <body>
+<a class="skip-link" href="#main">Skip to content</a>
 <header class="topbar">
   <a class="brand" href="/ui"><span class="logo">R</span> Runtime</a>
   <nav>
@@ -13,7 +14,7 @@
     <form method="post" action="/ui/logout"><button type="submit" class="navbtn">Sign out</button></form>
   </nav>
 </header>
-<main class="container">
+<main class="container" id="main">
   <div class="page-head">
     <h1>Onboarding</h1>
     <p class="subtitle">Manage access and tools for tenant <span class="badge badge-role">{{.Tenant}}</span></p>
@@ -37,7 +38,7 @@
       {{range .Users}}<tr>
         <td class="mono">{{.Subject}}</td>
         <td><span class="badge badge-role">{{.Role}}</span></td>
-        <td class="actions"><form method="post" action="/ui/onboarding/users/{{.Subject}}/delete">
+        <td class="actions"><form method="post" action="/ui/onboarding/users/{{.Subject}}/delete" onsubmit="return confirm('Remove {{.Subject}} from this tenant? They lose console and API access immediately.')">
           <input type="hidden" name="csrf_token" value="{{$.CSRF}}"><button type="submit" class="danger">Remove</button>
         </form></td>
       </tr>{{else}}
@@ -48,8 +49,8 @@
     <form method="post" action="/ui/onboarding/users">
       <input type="hidden" name="csrf_token" value="{{.CSRF}}">
       <div class="row" style="margin-top:1rem">
-        <input name="subject" placeholder="user subject (OIDC sub or email)" required style="flex:1">
-        <select name="role"><option>viewer</option><option>operator</option><option>admin</option></select>
+        <input name="subject" placeholder="user subject (OIDC sub or email)" required style="flex:1" aria-label="user subject (OIDC sub or email)">
+        <select name="role" aria-label="Role"><option>viewer</option><option>operator</option><option>admin</option></select>
         <button type="submit">Add or update user</button>
       </div>
     </form>
@@ -67,7 +68,7 @@
         <td><span class="badge badge-role">{{.Role}}</span></td>
         <td>{{.Label}}</td>
         <td class="actions">
-          <form method="post" action="/ui/onboarding/keys/{{.ID}}/delete">
+          <form method="post" action="/ui/onboarding/keys/{{.ID}}/delete" onsubmit="return confirm('Revoke key {{.ID}}? Anything still using it starts receiving 401s. This cannot be undone.')">
             <input type="hidden" name="csrf_token" value="{{$.CSRF}}"><button type="submit" class="danger">Remove</button>
           </form>
         </td>
@@ -79,8 +80,8 @@
     <form method="post" action="/ui/onboarding/keys">
       <input type="hidden" name="csrf_token" value="{{.CSRF}}">
       <div class="row" style="margin-top:1rem">
-        <input name="label" placeholder="label (e.g. ci-runner)" style="flex:1">
-        <select name="role"><option>viewer</option><option>operator</option><option>admin</option></select>
+        <input name="label" placeholder="label (e.g. ci-runner)" style="flex:1" aria-label="label (e.g. ci-runner)">
+        <select name="role" aria-label="Role"><option>viewer</option><option>operator</option><option>admin</option></select>
         <button type="submit">Mint key</button>
       </div>
     </form>
@@ -99,7 +100,7 @@
         <td class="mono">{{.URL}}</td>
         <td>{{if .Shadowed}}<span class="badge badge-danger">shadowed by operator file</span>{{else if .Enabled}}<span class="badge badge-ok">enabled</span>{{else}}<span class="badge badge-muted">disabled</span>{{end}}</td>
         <td class="actions">
-          {{if not .Shadowed}}{{if .Enabled}}<form method="post" action="/ui/onboarding/agents/{{.ID}}/disable" style="display:inline">
+          {{if not .Shadowed}}{{if .Enabled}}<form method="post" action="/ui/onboarding/agents/{{.ID}}/disable" style="display:inline" onsubmit="return confirm('Disable agent {{.ID}}? It stops accepting new sessions until re-enabled.')">
             <input type="hidden" name="csrf_token" value="{{$.CSRF}}"><button type="submit" class="ghost">Disable</button>
           </form>{{else}}<form method="post" action="/ui/onboarding/agents/{{.ID}}/enable" style="display:inline">
             <input type="hidden" name="csrf_token" value="{{$.CSRF}}"><button type="submit" class="ghost">Enable</button>
@@ -107,7 +108,7 @@
           <form method="post" action="/ui/onboarding/agents/{{.ID}}/restart" style="display:inline">
             <input type="hidden" name="csrf_token" value="{{$.CSRF}}"><button type="submit" class="ghost">Re-attach</button>
           </form>{{end}}
-          <form method="post" action="/ui/onboarding/agents/{{.ID}}/delete" style="display:inline">
+          <form method="post" action="/ui/onboarding/agents/{{.ID}}/delete" style="display:inline" onsubmit="return confirm('Remove agent {{.ID}}? The control plane stops routing to it and its sessions end.')">
             <input type="hidden" name="csrf_token" value="{{$.CSRF}}"><button type="submit" class="danger">{{if .Shadowed}}Delete stale row{{else}}Remove{{end}}</button>
           </form>
         </td>
@@ -119,12 +120,12 @@
     <form method="post" action="/ui/onboarding/agents">
       <input type="hidden" name="csrf_token" value="{{.CSRF}}">
       <div class="row" style="margin-top:1rem">
-        <input name="id" placeholder="agent id (e.g. hello-claude)" style="flex:1">
-        <input name="name" placeholder="display name" style="flex:1">
+        <input name="id" placeholder="agent id (e.g. hello-claude)" style="flex:1" aria-label="agent id (e.g. hello-claude)">
+        <input name="name" placeholder="display name" style="flex:1" aria-label="display name">
       </div>
       <div class="row" style="margin-top:.5rem">
-        <input name="url" placeholder="http://10.0.0.4:8080" style="flex:2">
-        <input name="model" placeholder="model (display)" style="flex:1">
+        <input name="url" placeholder="http://10.0.0.4:8080" style="flex:2" aria-label="Agent URL">
+        <input name="model" placeholder="model (display)" style="flex:1" aria-label="model (display)">
         <button type="submit">Register agent</button>
       </div>
     </form>
@@ -152,8 +153,8 @@
       <input type="hidden" name="csrf_token" value="{{.CSRF}}">
       <input type="hidden" name="type" value="static">
       <div class="row" style="margin-top:1rem">
-        <input name="name" placeholder="ORDERS_API_KEY" style="flex:1">
-        <input name="value" placeholder="value" type="password" style="flex:1">
+        <input name="name" placeholder="ORDERS_API_KEY" style="flex:1" aria-label="Name">
+        <input name="value" placeholder="value" type="password" style="flex:1" aria-label="value">
         <button type="submit">Set credential</button>
       </div>
     </form>
@@ -163,16 +164,16 @@
       <input type="hidden" name="csrf_token" value="{{.CSRF}}">
       <input type="hidden" name="type" value="oauth2_client_credentials">
       <div class="row" style="margin-top:.5rem">
-        <input name="name" placeholder="ORDERS_OAUTH" style="flex:1">
-        <input name="token_url" placeholder="https://auth.example.com/oauth/token" style="flex:2">
+        <input name="name" placeholder="ORDERS_OAUTH" style="flex:1" aria-label="Name">
+        <input name="token_url" placeholder="https://auth.example.com/oauth/token" style="flex:2" aria-label="Token URL">
       </div>
       <div class="row" style="margin-top:.5rem">
-        <input name="client_id" placeholder="client id" style="flex:1">
-        <input name="client_secret" placeholder="client secret" type="password" style="flex:1">
+        <input name="client_id" placeholder="client id" style="flex:1" aria-label="client id">
+        <input name="client_secret" placeholder="client secret" type="password" style="flex:1" aria-label="client secret">
       </div>
       <div class="row" style="margin-top:.5rem">
-        <input name="scopes" placeholder="scope1, scope2" style="flex:1">
-        <input name="audience" placeholder="audience (optional)" style="flex:1">
+        <input name="scopes" placeholder="scope1, scope2" style="flex:1" aria-label="scope1, scope2">
+        <input name="audience" placeholder="audience (optional)" style="flex:1" aria-label="audience (optional)">
         <button type="submit">Set OAuth2 credential</button>
       </div>
     </form>
@@ -182,20 +183,20 @@
       <input type="hidden" name="csrf_token" value="{{.CSRF}}">
       <input type="hidden" name="type" value="oauth2_obo">
       <div class="row" style="margin-top:.5rem">
-        <input name="name" placeholder="ORDERS_OBO" style="flex:1">
-        <input name="token_url" placeholder="https://auth.example.com/oauth/token" style="flex:2">
+        <input name="name" placeholder="ORDERS_OBO" style="flex:1" aria-label="Name">
+        <input name="token_url" placeholder="https://auth.example.com/oauth/token" style="flex:2" aria-label="Token URL">
       </div>
       <div class="row" style="margin-top:.5rem">
-        <input name="client_id" placeholder="client id" style="flex:1">
-        <input name="client_secret" placeholder="client secret" type="password" style="flex:1">
+        <input name="client_id" placeholder="client id" style="flex:1" aria-label="client id">
+        <input name="client_secret" placeholder="client secret" type="password" style="flex:1" aria-label="client secret">
       </div>
       <div class="row" style="margin-top:.5rem">
-        <input name="scopes" placeholder="scope1, scope2" style="flex:1">
-        <input name="audience" placeholder="audience (optional)" style="flex:1">
+        <input name="scopes" placeholder="scope1, scope2" style="flex:1" aria-label="scope1, scope2">
+        <input name="audience" placeholder="audience (optional)" style="flex:1" aria-label="audience (optional)">
       </div>
       <div class="row" style="margin-top:.5rem">
-        <input name="subject_token_type" placeholder="subject token type (optional)" style="flex:1">
-        <input name="requested_token_type" placeholder="requested token type (optional)" style="flex:1">
+        <input name="subject_token_type" placeholder="subject token type (optional)" style="flex:1" aria-label="subject token type (optional)">
+        <input name="requested_token_type" placeholder="requested token type (optional)" style="flex:1" aria-label="requested token type (optional)">
         <button type="submit">Set OBO credential</button>
       </div>
     </form>
@@ -212,7 +213,7 @@
       {{range .Upstreams}}<tr>
         <td>{{.Name}}</td>
         <td><span class="badge badge-muted">{{.Transport}}</span></td>
-        <td class="actions"><form method="post" action="/ui/onboarding/upstreams/{{.ID}}/delete">
+        <td class="actions"><form method="post" action="/ui/onboarding/upstreams/{{.ID}}/delete" onsubmit="return confirm('Remove upstream {{.Name}}? Agents lose the tools it provides.')">
           <input type="hidden" name="csrf_token" value="{{$.CSRF}}"><button type="submit" class="danger">Remove</button>
         </form></td>
       </tr>{{else}}
@@ -222,19 +223,19 @@
     </table>
     <form method="post" action="/ui/onboarding/upstreams" style="margin-top:1rem">
       <input type="hidden" name="csrf_token" value="{{.CSRF}}">
-      <p><input name="name" placeholder="upstream name (e.g. orders)" required style="width:100%"></p>
+      <p><input name="name" placeholder="upstream name (e.g. orders)" required style="width:100%" aria-label="upstream name (e.g. orders)"></p>
       <fieldset>
         <legend>Transport — fill exactly one of the two below</legend>
         <p><label>HTTP (Streamable MCP) URL<br>
-          <input name="url" placeholder="http://host/mcp" style="width:100%"></label></p>
+          <input name="url" placeholder="http://host/mcp" style="width:100%" aria-label="Agent URL"></label></p>
         <p><label>OR OpenAPI spec (REST adapter)<br>
-          <input name="openapi" placeholder="http://host/openapi.yaml" style="width:100%"></label></p>
-        <p><input name="base_url" placeholder="base_url override (optional, OpenAPI only)" style="width:100%"></p>
+          <input name="openapi" placeholder="http://host/openapi.yaml" style="width:100%" aria-label="OpenAPI spec URL"></label></p>
+        <p><input name="base_url" placeholder="base_url override (optional, OpenAPI only)" style="width:100%" aria-label="base_url override (optional, OpenAPI only)"></p>
       </fieldset>
       <fieldset>
         <legend>Per-tenant credential (optional)</legend>
-        <p><input name="cred_secret" placeholder="credential secret name (e.g. ORDERS_API_KEY)" style="width:100%"></p>
-        <p><input name="cred_header" placeholder="header to inject into (e.g. Authorization)" style="width:100%"></p>
+        <p><input name="cred_secret" placeholder="credential secret name (e.g. ORDERS_API_KEY)" style="width:100%" aria-label="credential secret name (e.g. ORDERS_API_KEY)"></p>
+        <p><input name="cred_header" placeholder="header to inject into (e.g. Authorization)" style="width:100%" aria-label="header to inject into (e.g. Authorization)"></p>
       </fieldset>
       <button type="submit">Register upstream</button>
     </form>
@@ -251,7 +252,7 @@
       {{range .Policies}}<tr>
         <td>{{.Name}}</td>
         <td><pre class="policy-text">{{.CedarText}}</pre></td>
-        <td class="actions"><form method="post" action="/ui/onboarding/policies/{{.Name}}/delete">
+        <td class="actions"><form method="post" action="/ui/onboarding/policies/{{.Name}}/delete" onsubmit="return confirm('Delete policy {{.Name}}? Tool calls it currently forbids will be PERMITTED. With no policies left, all tool calls are permitted.')">
           <input type="hidden" name="csrf_token" value="{{$.CSRF}}"><button type="submit" class="danger">Remove</button>
         </form></td>
       </tr>{{else}}
@@ -261,9 +262,9 @@
     </table>
     <form method="post" action="/ui/onboarding/policies" style="margin-top:1rem">
       <input type="hidden" name="csrf_token" value="{{.CSRF}}">
-      <p><input name="name" placeholder="policy name (e.g. no-destructive-sql)" required style="width:100%"></p>
+      <p><input name="name" placeholder="policy name (e.g. no-destructive-sql)" required style="width:100%" aria-label="policy name (e.g. no-destructive-sql)"></p>
       <p><label>Cedar policy (exactly one statement)<br>
-        <textarea name="cedar_text" rows="4" style="width:100%;font-family:monospace" placeholder='forbid (principal, action == Gateway::Action::"call_tool", resource) when &#123; resource.server == "sandbox" &#125;;' required></textarea></label></p>
+        <textarea name="cedar_text" rows="4" style="width:100%;font-family:monospace" placeholder='forbid (principal, action == Gateway::Action::"call_tool", resource) when &#123; resource.server == "sandbox" &#125;;' required aria-label="Cedar text"></textarea></label></p>
       <button type="submit">Add policy</button>
     </form>
   </section>
@@ -290,8 +291,8 @@
     </table>
     <form method="post" action="/ui/onboarding/quotas" style="margin-top:1rem">
       <input type="hidden" name="csrf_token" value="{{.CSRF}}">
-      <p><input name="upstream" placeholder="upstream id (e.g. srv1)" required style="width:100%"></p>
-      <p><label>Rate/min<br><input name="rate" type="number" min="0" placeholder="requests per minute" required style="width:100%"></label></p>
+      <p><input name="upstream" placeholder="upstream id (e.g. srv1)" required style="width:100%" aria-label="upstream id (e.g. srv1)"></p>
+      <p><label>Rate/min<br><input name="rate" type="number" min="0" placeholder="requests per minute" required style="width:100%" aria-label="requests per minute"></label></p>
       <button type="submit">Save quota</button>
     </form>
   </section>
@@ -318,9 +319,9 @@
     </table>
     <form method="post" action="/ui/onboarding/eval-sets" style="margin-top:1rem">
       <input type="hidden" name="csrf_token" value="{{.CSRF}}">
-      <p><input name="name" placeholder="set name (e.g. greetings)" required style="width:100%"></p>
+      <p><input name="name" placeholder="set name (e.g. greetings)" required style="width:100%" aria-label="set name (e.g. greetings)"></p>
       <p><label>Cases (JSON array)<br>
-        <textarea name="cases" rows="8" style="width:100%;font-family:monospace" placeholder='[{"input":"hi","scorer":"contains","expected":"hello"},&#10; {"input":"2+2?","scorer":"exact","expected":"4"}]' required></textarea></label></p>
+        <textarea name="cases" rows="8" style="width:100%;font-family:monospace" placeholder='[{"input":"hi","scorer":"contains","expected":"hello"},&#10; {"input":"2+2?","scorer":"exact","expected":"4"}]' required aria-label="Cases"></textarea></label></p>
       <button type="submit">Add eval set</button>
     </form>
   </section>
@@ -348,11 +349,11 @@
     </table>
     <form method="post" action="/ui/onboarding/eval-policies" style="margin-top:1rem">
       <input type="hidden" name="csrf_token" value="{{.CSRF}}">
-      <p><input name="agent" placeholder="agent id (e.g. support)" required style="width:100%"></p>
+      <p><input name="agent" placeholder="agent id (e.g. support)" required style="width:100%" aria-label="agent id (e.g. support)"></p>
       <p><label>Sample rate (%)<br>
-        <input type="number" name="rate" min="0" max="100" value="10" required></label></p>
+        <input type="number" name="rate" min="0" max="100" value="10" required aria-label="Rate"></label></p>
       <p><label>Criteria (JSON array)<br>
-        <textarea name="criteria" rows="8" style="width:100%;font-family:monospace" placeholder='[{"name":"polite","scorer":"judge","rubric":"Is the reply polite?"}]' required></textarea></label></p>
+        <textarea name="criteria" rows="8" style="width:100%;font-family:monospace" placeholder='[{"name":"polite","scorer":"judge","rubric":"Is the reply polite?"}]' required aria-label="Criteria"></textarea></label></p>
       <button type="submit">Add online eval policy</button>
     </form>
   </section>
