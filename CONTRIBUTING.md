@@ -30,10 +30,10 @@ matters:
 RUNTIME_TEST_PG_DSN="postgres://runtime:runtime@localhost:5432/runtime_test?sslmode=disable" \
   make test-integration
 ```
- Changes to deployment
-templates must also pass the relevant Compose or Helm render checks. Changes to
-public behaviour must update the owning topic guide and
-[documentation-map.md](documentation-map.md).
+
+Changes to deployment templates must also pass the relevant Compose or Helm
+render checks. Changes to public behaviour must update the owning topic guide
+and [documentation-map.md](documentation-map.md).
 
 ### Shell scripts
 

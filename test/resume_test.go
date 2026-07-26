@@ -8,6 +8,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"github.com/sausheong/runtime/internal/pgtest"
 	"io"
 	"net/http"
 	"os"
@@ -23,14 +24,12 @@ import (
 // dsn is the live Postgres used by this integration test. It must be a real,
 // reachable database — the whole point of this test is to exercise the durable
 // path against real Postgres + real DBOS + a real agentd subprocess.
-var dsn = integrationDSN()
-
-func integrationDSN() string {
-	if value := os.Getenv("RUNTIME_PG_DSN"); value != "" {
-		return value
-	}
-	return "postgres://runtime:runtime@localhost:5432/runtime?sslmode=disable"
-}
+// dsn is the database this package's ~30 integration files DROP tables in.
+// Resolved through internal/pgtest so RUNTIME_TEST_PG_DSN redirects the
+// destructive suite here too — CONTRIBUTING.md documents that variable as the
+// way to protect a local database, and honouring it only in internal/* would
+// make that advice actively misleading.
+var dsn = pgtest.DSN()
 
 // listenAddr is the agentd HTTP bind address for both process generations.
 const listenAddr = "127.0.0.1:8091"
