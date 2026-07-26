@@ -195,3 +195,23 @@ listen_addr or url (the chart generates the url) and must have id/name/model.
 {{- fail "runtime: perAgentPods uses one restricted database role and therefore requires all agents to belong to one tenant; use separate releases/databases for other tenants" -}}
 {{- end -}}
 {{- end -}}
+
+{{/*
+runtime.requireAgentGeneration mirrors config.Validate's rule for
+registration_generation so a violation surfaces at render time instead of
+CrashLooping the pod after a successful `helm upgrade`. Checking presence alone
+was not enough: the binary also enforces a 16-128 character bound, so a short
+value rendered cleanly and failed at startup.
+*/}}
+{{- define "runtime.requireAgentGeneration" -}}
+{{- $g := .registration_generation | default "" -}}
+{{- if not $g -}}
+{{- fail (printf "runtime: agent %q requires registration_generation. Keep it stable across ordinary restarts and rotate it when replacing or recreating the agent; runtimed rejects a config without it." .id) -}}
+{{- end -}}
+{{- if or (lt (len $g) 16) (gt (len $g) 128) -}}
+{{- fail (printf "runtime: agent %q registration_generation must be 16-128 characters (got %d); runtimed rejects anything else at startup" .id (len $g)) -}}
+{{- end -}}
+{{- if ne $g (trim $g) -}}
+{{- fail (printf "runtime: agent %q registration_generation must not be surrounded by whitespace" .id) -}}
+{{- end -}}
+{{- end -}}

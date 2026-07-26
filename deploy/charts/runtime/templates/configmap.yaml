@@ -52,9 +52,7 @@ data:
   # check a monolith release renders cleanly, `helm upgrade` reports success,
   # and the pod then CrashLoops on a config runtimed refuses to load.
   {{- range $a := .Values.config.agents }}
-  {{- if not $a.registration_generation }}
-  {{- fail (printf "runtime: agent %q requires registration_generation. Keep it stable across ordinary restarts and rotate it when replacing or recreating the agent; runtimed rejects a config without it." $a.id) }}
-  {{- end }}
+  {{- include "runtime.requireAgentGeneration" $a }}
   {{- end }}
   runtime.yaml: |
     {{- toYaml .Values.config | nindent 4 }}

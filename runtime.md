@@ -244,7 +244,7 @@ The observability stack includes:
 - Correlated control-plane request traces and durable workflow traces, joined by request ID.
 - Jaeger and an OpenTelemetry Collector in the bundled deployment.
 
-Metric labels deliberately exclude session, user, and tenant identifiers to avoid unbounded cardinality and accidental disclosure. Message text and tool arguments are not attached to traces.
+Metric labels deliberately exclude session and user identifiers to avoid unbounded cardinality and accidental disclosure. Tenant IS a label on fleet, usage, and cost series — that attribution is the point of them — so the management listener carries per-tenant data and is bound to loopback and a restricted NetworkPolicy accordingly. Message text and tool arguments are not attached to traces.
 
 ### 2.9 Contract-First, Polyglot Agent Hosting
 

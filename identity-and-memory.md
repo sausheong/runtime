@@ -34,7 +34,7 @@ Set at least:
 RUNTIME_OIDC_ISSUER=https://identity.example.com
 RUNTIME_OIDC_CLIENT_ID=runtime
 RUNTIME_OIDC_CLIENT_SECRET=...
-RUNTIME_OIDC_REDIRECT_URL=https://runtime.example.com/auth/callback
+RUNTIME_OIDC_REDIRECT_URL=https://runtime.example.com/ui/callback
 ```
 
 The console uses the OIDC authorisation-code flow. Users must also have a

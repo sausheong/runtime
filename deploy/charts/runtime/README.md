@@ -200,7 +200,7 @@ helm install runtime deploy/charts/runtime \
   --set identity.enabled=true \
   --set identity.oidcIssuer='https://issuer.example.com' \
   --set identity.oidcClientID='runtime' \
-  --set identity.oidcRedirectURL='https://runtime.example.com/auth/callback'
+  --set identity.oidcRedirectURL='https://runtime.example.com/ui/callback'
 ```
 
 These map to `RUNTIME_OIDC_ISSUER`, `RUNTIME_OIDC_CLIENT_ID`, and

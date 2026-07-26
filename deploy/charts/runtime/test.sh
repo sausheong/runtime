@@ -305,4 +305,15 @@ if helm template r "$CHART" $DSN \
 fi
 ok "monolith fail-closed (registration_generation absent)"
 
+# 23. A too-short generation must also fail at render: config.Validate enforces
+# 16-128 characters, so presence alone is not the rule the binary applies.
+if helm template r "$CHART" $DSN \
+  --set config.agents[0].id=a --set config.agents[0].name=A \
+  --set config.agents[0].model=test/scripted \
+  --set config.agents[0].listen_addr=127.0.0.1:8101 \
+  --set config.agents[0].registration_generation=short >/dev/null 2>&1; then
+  fail "expected monolith registration_generation length fail-closed"
+fi
+ok "monolith fail-closed (registration_generation too short)"
+
 echo "ALL CHART TESTS PASSED"
