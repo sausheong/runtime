@@ -801,7 +801,12 @@ func Serve(ctx context.Context, cfg Config) error {
 	}
 	if cfg.DrainMemory != nil {
 		defer func() {
-			if err := cfg.DrainMemory(10 * time.Second); err != nil {
+			err := cfg.DrainMemory(10 * time.Second)
+			switch {
+			case err == nil:
+			case errors.Is(err, memory.ErrIngestionDetached):
+				slog.Error("memory ingestion abandoned a worker; store calls are now refused", "err", err)
+			default:
 				slog.Error("memory ingestion did not drain cleanly", "err", err)
 			}
 		}()

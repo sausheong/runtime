@@ -2,6 +2,7 @@ package memory
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -164,6 +165,75 @@ func TestKGCloseDoesNotWaitForeverForNonCooperativeWorker(t *testing.T) {
 		t.Fatalf("non-cooperative shutdown took %s", elapsed)
 	}
 	close(release)
+}
+
+// sentinelStore fails the test if any store call arrives after Close has
+// declared the drain finished. It stands in for the real *sql.DB, whose
+// handle agentd closes once Serve returns.
+type sentinelStore struct {
+	mu                sync.Mutex
+	closed            bool
+	touchedAfterClose bool
+}
+
+func (s *sentinelStore) markClosed() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.closed = true
+}
+
+func (s *sentinelStore) touch() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		s.touchedAfterClose = true
+	}
+}
+
+func (s *sentinelStore) violated() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.touchedAfterClose
+}
+
+// TestKGDetachedWorkerCannotTouchStoreAfterClose releases a deliberately
+// non-cooperative dependency only AFTER Close has returned and the owner has
+// closed the store, and proves no store call reaches it.
+func TestKGDetachedWorkerCannotTouchStoreAfterClose(t *testing.T) {
+	sent := &sentinelStore{}
+	release := make(chan struct{})
+	ext := &blockingExtractor{started: make(chan struct{}), release: release}
+	k := newKGWithIngest(&kgFakeEmbedder{}, ext,
+		func(context.Context, []float32, int, float64, string) ([]hmem.Entry, error) {
+			sent.touch()
+			return nil, nil
+		},
+		func(context.Context, hmem.Entry, string) error {
+			sent.touch()
+			return nil
+		}, 0.85, 2, 1, nil)
+
+	k.Ingest(context.Background(), twoMsgThread())
+	<-ext.started
+
+	// Close gives up on the non-cooperative worker and reports it.
+	err := k.Close(20 * time.Millisecond)
+	if err == nil {
+		t.Fatal("Close reported a clean drain while a worker was still running")
+	}
+	if !errors.Is(err, ErrIngestionDetached) {
+		t.Fatalf("Close must report the detached case via ErrIngestionDetached, got %v", err)
+	}
+	// The owner now closes the backing store, exactly as agentd does.
+	sent.markClosed()
+
+	// Only now does the stuck dependency release; the worker resumes and
+	// would, unguarded, call search/save on a closed store.
+	close(release)
+	time.Sleep(200 * time.Millisecond)
+	if sent.violated() {
+		t.Fatal("detached worker reached the store after it was closed")
+	}
 }
 
 func TestKGRejectsIngestAfterClose(t *testing.T) {

@@ -60,6 +60,34 @@ type KG struct {
 	cancel      context.CancelFunc
 	workers     sync.WaitGroup
 	closed      bool
+	// storeDetached latches shut when Close stops waiting on a worker that
+	// ignored cancellation. Guarded by lifecycleMu (deliberately the same lock
+	// as closed/lifecycle: a second mutex here would introduce a lock-ordering
+	// hazard between Close and the background workers).
+	storeDetached bool
+}
+
+// ErrIngestionDrainTimeout reports that accepted ingestion workers did not
+// finish within the graceful window and only stopped once their lifecycle
+// context was cancelled. The workers are gone by the time Close returns, so the
+// backing store is safe to close.
+var ErrIngestionDrainTimeout = errors.New("memory ingestion graceful drain timed out")
+
+// ErrIngestionDetached reports that an ingestion worker ignored cancellation and
+// was still running when Close gave up. Close latches the store gate shut before
+// returning this, so the abandoned worker's next store call is refused rather
+// than reaching a handle its owner is about to close.
+var ErrIngestionDetached = errors.New("memory ingestion ignored cancellation; workers remain detached")
+
+// mayTouchStore reports whether a background worker may still enter the backing
+// store. Close latches this shut once it stops waiting, so a worker that
+// outlived the drain deadline cannot call into a handle its owner is about to
+// close. Callers must check it immediately before each store call and return
+// early when it is false — never hold lifecycleMu across the store call itself.
+func (g *KG) mayTouchStore() bool {
+	g.lifecycleMu.Lock()
+	defer g.lifecycleMu.Unlock()
+	return !g.storeDetached
 }
 
 var _ hrt.KnowledgeGraph = (*KG)(nil)
@@ -367,6 +395,10 @@ func (g *KG) runIngest(sctx StrategyContext, thread []hrt.Message) {
 	// Re-attach the actor (carried as data on sctx, since the background ctx has
 	// none) so isDuplicate's search + save are actor-scoped.
 	ctx := WithActor(g.lifecycle, sctx.Actor)
+	if !g.mayTouchStore() {
+		slog.Debug("memory: ingest abandoned before extract; store detached")
+		return
+	}
 	facts, err := g.extractor.Extract(ctx, thread)
 	if err != nil {
 		slog.Warn("memory: ingest extract failed", "err", err)
@@ -379,6 +411,10 @@ func (g *KG) runIngest(sctx StrategyContext, thread []hrt.Message) {
 		}
 		if g.isDuplicate(ctx, f) {
 			continue
+		}
+		if !g.mayTouchStore() {
+			slog.Debug("memory: ingest save skipped; store detached")
+			return
 		}
 		if err := g.save(ctx, hmem.Entry{Content: f, Origin: ingestOrigin, Tags: ingestTags}, KindFact); err != nil {
 			slog.Warn("memory: ingest save failed", "err", err)
@@ -424,9 +460,16 @@ func (g *KG) Close(timeout time.Duration) error {
 	}
 	select {
 	case <-done:
-		return fmt.Errorf("memory ingestion graceful drain timed out: %w", context.DeadlineExceeded)
+		return fmt.Errorf("%w: %w", ErrIngestionDrainTimeout, context.DeadlineExceeded)
 	case <-time.After(cancelWait):
-		return errors.New("memory ingestion ignored cancellation; workers remain detached")
+		// The worker is still running and we are about to hand control back to
+		// an owner that will close the backing store. Latch the store gate shut
+		// BEFORE returning, so the abandoned worker's next store call is refused
+		// instead of reaching a closed handle.
+		g.lifecycleMu.Lock()
+		g.storeDetached = true
+		g.lifecycleMu.Unlock()
+		return ErrIngestionDetached
 	}
 }
 
@@ -437,8 +480,20 @@ func (g *KG) isDuplicate(ctx context.Context, fact string) bool {
 	if g.embedder == nil || g.search == nil {
 		return false
 	}
+	// Both the embed and the search are background store touches; refuse them
+	// once Close has detached the store. Returning false here means "not known
+	// to be a duplicate" — the caller's own gate stops the follow-on save, so no
+	// write escapes.
+	if !g.mayTouchStore() {
+		slog.Debug("memory: dedup skipped; store detached")
+		return false
+	}
 	vec, err := g.embedder.Embed(ctx, fact)
 	if err != nil {
+		return false
+	}
+	if !g.mayTouchStore() {
+		slog.Debug("memory: dedup search skipped; store detached")
 		return false
 	}
 	hits, err := g.search(ctx, vec, 1, g.dedupFloor, KindFact)
