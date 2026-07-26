@@ -7,7 +7,10 @@
 # Authentication) and terminate TLS upstream.
 services:
   postgres:
-    image: pgvector/pgvector:pg16
+    # Digest-pinned: `pg16` is a major-only tag, so the database minor/patch
+    # would otherwise change silently under a deployment the release contract
+    # calls reproducible. Refresh the digest as a reviewed dependency update.
+    image: pgvector/pgvector:pg16@sha256:1d533553fefe4f12e5d80c7b80622ba0c382abb5758856f52983d8789179f0fb
     environment:
       POSTGRES_USER: runtime
       POSTGRES_PASSWORD: runtime

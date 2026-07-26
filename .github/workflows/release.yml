@@ -15,7 +15,11 @@ jobs:
     runs-on: ubuntu-latest
     services:
       postgres:
-        image: pgvector/pgvector:pg16
+        # Digest-pinned: `pg16` is a major-only tag, so the PostgreSQL the
+        # release integration suite runs against would otherwise change
+        # minor/patch silently under a release the contract calls reproducible.
+        # Keep this digest in step with deploy/compose/docker-compose.yml.
+        image: pgvector/pgvector:pg16@sha256:1d533553fefe4f12e5d80c7b80622ba0c382abb5758856f52983d8789179f0fb
         env:
           POSTGRES_USER: runtime
           POSTGRES_PASSWORD: runtime
@@ -47,7 +51,10 @@ jobs:
         run: make security-scan
       - name: Enable PostgreSQL integration features
         run: |
-          container_id=$(docker ps --filter ancestor=pgvector/pgvector:pg16 --format '{{.ID}}' | head -1)
+          # Match on the digest, not the tag: pulling `repo:tag@digest` leaves the
+          # local image untagged, so an `ancestor=pgvector/pgvector:pg16` filter
+          # matches nothing and the `test -n` below would fail closed.
+          container_id=$(docker ps --filter ancestor=pgvector/pgvector@sha256:1d533553fefe4f12e5d80c7b80622ba0c382abb5758856f52983d8789179f0fb --format '{{.ID}}' | head -1)
           test -n "$container_id"
           docker exec "$container_id" psql -U runtime -d runtime -c 'CREATE EXTENSION IF NOT EXISTS vector'
           docker exec "$container_id" psql -U runtime -d runtime -c \
@@ -72,7 +79,15 @@ jobs:
           bash deploy/charts/runtime/test.sh
       - name: Validate shell and Compose deployment assets
         run: |
-          shellcheck deploy/compose/*.sh deploy/compose/initdb/*.sh deploy/gcp/*.sh deploy/gcp/control-plane/*.sh deploy/charts/runtime/*.sh
+          # error and warning findings block; info and style are advisory for
+          # these scripts. Their dominant SC2086 hits are deliberate word
+          # splitting: the DSN and AGENTS variables in
+          # deploy/charts/runtime/test.sh each hold several --set flags that must
+          # split into separate helm arguments, so quoting them as SC2086 advises
+          # would break the chart render matrix. The threshold must stay
+          # explicit: shellcheck defaults to "style", which exits non-zero on
+          # those advisory findings and leaves the gate permanently red.
+          shellcheck --severity=warning deploy/compose/*.sh deploy/compose/initdb/*.sh deploy/gcp/*.sh deploy/gcp/control-plane/*.sh deploy/charts/runtime/*.sh
           docker compose -f deploy/docker-compose.full.yml config --quiet
           docker compose -f deploy/compose/docker-compose.yml config --quiet
         env:
@@ -81,6 +96,9 @@ jobs:
           RUNTIME_SECRETS_PRIMARY: release
           RUNTIME_AGENT_DB_PASSWORD: release-agent-db-password
           GRAFANA_ADMIN_PASSWORD: release-validation-only
+          # Required by deploy/compose since the browser egress proxy must bind a
+          # reachable address; ci.yml sets the same for its compose validation.
+          RUNTIME_BROWSER_PROXY_TOKEN: release-only-browser-proxy-token-0123456789ab
       - name: Validate distributed GCP Compose bundles
         run: |
           install /dev/null deploy/gcp/llm.env
@@ -145,6 +163,19 @@ jobs:
           grype nutrition-openai:release-validation --fail-on high --only-fixed
           grype hello-claude:release-validation --fail-on high --only-fixed
           grype food-label-advisor:release-validation --fail-on high --only-fixed
+      - name: Generate complete vulnerability reports
+        # Diagnostic, never a gate. The preceding "--fail-on high --only-fixed"
+        # step is what blocks publication; this one runs unfiltered so that
+        # no-fix, wont-fix, and unknown-fix findings -- which --only-fixed
+        # discards as an ignore filter -- are recorded for operator review.
+        # The "|| true" is deliberate: a report must not fail the release.
+        run: |
+          mkdir -p dist
+          for img in runtime runtime-sandbox runtime-browser runtime-embedder \
+                     nutrition-openai hello-claude food-label-advisor; do
+            grype "$img:release-validation" -o json \
+              > "dist/$img-vulnerabilities.json" || true
+          done
       - name: Authenticate to GHCR
         env:
           GH_TOKEN: ${{ github.token }}
@@ -194,4 +225,11 @@ jobs:
             dist/runtime-browser.spdx.json \
             dist/runtime-embedder.spdx.json \
             dist/runtime-chart.spdx.json \
-            dist/runtime-chart.sigstore.json
+            dist/runtime-chart.sigstore.json \
+            dist/runtime-vulnerabilities.json \
+            dist/runtime-sandbox-vulnerabilities.json \
+            dist/runtime-browser-vulnerabilities.json \
+            dist/runtime-embedder-vulnerabilities.json \
+            dist/nutrition-openai-vulnerabilities.json \
+            dist/hello-claude-vulnerabilities.json \
+            dist/food-label-advisor-vulnerabilities.json

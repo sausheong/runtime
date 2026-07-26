@@ -53,15 +53,66 @@ proved.
 Optional images pin their language or operating-system base and their Python
 application dependencies where applicable. Updating a base digest or pinned
 package is a reviewed dependency update and must pass the complete image build
-smoke-test, SBOM, and actionable high-severity vulnerability gate. The
-blocking Grype invocation uses `--only-fixed`: a high or critical finding with
-a published remediation blocks release, while no-fix findings remain visible
-for operator risk review instead of making the gate permanently
-non-actionable. Base digests must still be refreshed regularly; `--only-fixed`
-is not an assertion that no other advisory exists. A repository-level Grype
-exception is permitted only when it names one advisory, records the
-non-reachability or compensating control, and states when it must be removed.
-Review every exception during a base-image update and every release.
+smoke-test, SBOM, and actionable high-severity vulnerability gate.
+
+### Vulnerability gate and exception policy
+
+Two separate Grype invocations run over all seven built images
+(`runtime`, `runtime-sandbox`, `runtime-browser`, `runtime-embedder`,
+`nutrition-openai`, `hello-claude`, `food-label-advisor`):
+
+1. **The blocking gate** — `grype <image> --fail-on high --only-fixed`. A high
+   or critical finding with a published remediation blocks the release. Grype
+   applies `--only-fixed` as an *ignore filter*, so this invocation genuinely
+   cannot see no-fix, wont-fix, or unknown-fix findings. That is what keeps the
+   gate actionable, and it is also why the gate alone is not a risk report.
+2. **The complete report** — an unfiltered `grype <image> -o json` per image,
+   run immediately after the gate. It is non-blocking by design (`|| true`): a
+   report must never fail a release. This is the only place no-fix, wont-fix,
+   and unknown-fix findings are visible.
+
+The release attaches the seven reports to the GitHub release as
+`<image>-vulnerabilities.json`, alongside the SBOMs and signatures. CI writes
+the same reports and additionally prints a per-image table to the job log.
+Review no-fix and unknown-fix risk from those reports, never from the gate.
+
+Base digests must still be refreshed regularly; `--only-fixed` is not an
+assertion that no other advisory exists.
+
+A repository-level Grype exception in `.grype.yaml` is permitted only when it
+names one advisory, scopes itself to the affected package, and records four
+review fields as YAML comments on the rule: `owner`, `rationale`,
+`removal-trigger`, and `review-by`. The fields are comments rather than mapping
+keys because grype accepts unknown keys but silently discards them, so a
+structured `owner:` would parse without ever reaching the effective
+configuration. Review every exception during a base-image update and every
+release, and remove any whose `review-by` date has passed.
+
+### Third-party image pinning
+
+Every third-party image in a deployment path the release contract calls
+reproducible is pinned by digest, not by tag: the PostgreSQL images
+(`pgvector/pgvector`, `postgres`), the observability sidecars (Prometheus,
+Alertmanager, Grafana, the OpenTelemetry Collector, Jaeger), and Caddy. The
+`pg16` and `16` tags are major-only, so without a digest the database
+minor/patch would change silently under a pinned release. The CI and release
+workflow service containers are pinned to the same PostgreSQL digest.
+
+Pulling `repo:tag@digest` leaves the local image untagged, so the workflow
+steps that locate the running PostgreSQL container filter on
+`ancestor=<repo>@<digest>` rather than on the tag.
+
+The bundled Bitnami PostgreSQL subchart under
+`deploy/charts/runtime/charts/postgresql/` is vendored upstream content that
+`make helm-deps` re-fetches, so its image references are not edited in place.
+Its digest is pinned from `deploy/charts/runtime/values.yaml` via
+`postgresql.image.digest`, which the subchart honours over its tag. The
+subchart's volume-permissions and metrics-exporter images are left
+upstream-controlled because both features are disabled by default and neither
+image is pulled; pin them via `postgresql.volumePermissions.image.digest` and
+`postgresql.metrics.image.digest` if you enable them.
+
+Refresh every digest above as a reviewed dependency update.
 
 ## Rollback
 

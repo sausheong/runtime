@@ -9,7 +9,13 @@ import (
 	"strings"
 
 	"github.com/sausheong/harness/tool"
+	"github.com/sausheong/runtime/internal/httplimit"
 )
+
+// maxHCSResponseBytes bounds the third-party dataset response. This client
+// has no timeout of its own (only the caller's ctx), so the byte ceiling is
+// the only allocation bound.
+const maxHCSResponseBytes = 4 << 20
 
 // hcsResourceID is the data.gov.sg resource for the HPB Healthier Choice
 // Symbol product list. Copied from the Python HCS_RESOURCE_ID constant.
@@ -207,7 +213,7 @@ func (t *tools) queryHCS(ctx context.Context, productName string) (string, error
 			} `json:"records"`
 		} `json:"result"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
+	if err := httplimit.DecodeJSON(resp.Body, maxHCSResponseBytes, &parsed); err != nil {
 		return "", err
 	}
 	records := parsed.Result.Records

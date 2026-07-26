@@ -13,6 +13,7 @@ import (
 	"time"
 
 	hrt "github.com/sausheong/harness/runtime"
+	"github.com/sausheong/runtime/internal/httplimit"
 )
 
 // Extractor reads a finished conversation thread and returns durable facts worth
@@ -93,7 +94,7 @@ func (e *httpExtractor) Extract(ctx context.Context, thread []hrt.Message) ([]st
 		return nil, fmt.Errorf("memory: extract status %d", resp.StatusCode)
 	}
 	var cr chatResponse
-	if err := json.NewDecoder(resp.Body).Decode(&cr); err != nil {
+	if err := httplimit.DecodeJSON(resp.Body, maxMemoryResponseBytes, &cr); err != nil {
 		return nil, fmt.Errorf("memory: extract decode: %w", err)
 	}
 	if len(cr.Choices) == 0 {

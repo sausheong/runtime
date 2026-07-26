@@ -243,10 +243,10 @@ sandboxes.
 | `RUNTIME_BROWSER_MAX_LIFETIME` | `1h` | Absolute expiry |
 | `RUNTIME_BROWSER_SCOPE` | Tenant | Set to `session` for session ownership |
 | `RUNTIME_BROWSER_RUNTIME` | Docker default | Optional hardened OCI runtime |
-| `RUNTIME_BROWSER_NETWORK` | Deployment network | Container network |
+| `RUNTIME_BROWSER_NETWORK` | Deployment network | Private container network. Must be `internal: true`; startup inspects it and refuses a routable one |
 | `RUNTIME_BROWSER_EGRESS_MODE` | `deny-all` | Network policy |
 | `RUNTIME_BROWSER_EGRESS_ALLOW` | Empty | Comma-separated host allowlist |
-| `RUNTIME_BROWSER_PROXY_ADDR` | `127.0.0.1:0` | Egress-proxy bind address |
+| `RUNTIME_BROWSER_PROXY_ADDR` | `127.0.0.1:0`, or `0.0.0.0:0` when `RUNTIME_BROWSER_NETWORK` is set | Egress-proxy bind address |
 | `RUNTIME_BROWSER_PROXY_TOKEN` | Empty | Minimum 32-character proxy credential, required for a non-loopback bind |
 | `RUNTIME_BROWSER_PROXY_MAX_REQUESTS` | `128` | Concurrent proxy requests |
 | `RUNTIME_BROWSER_PROXY_MAX_TUNNELS` | `64` | Concurrent CONNECT tunnels |
@@ -270,14 +270,40 @@ separate from control-plane credentials and internal networks, limit resources,
 use a hardened runtime where available, and avoid mounting host data. If the
 egress proxy fails, browsing fails closed.
 
-For containerised `browserd`, prefer a private Docker network, set
-`RUNTIME_BROWSER_PROXY_HOST` to the service name, bind the proxy to the private
-interface, and set a strong `RUNTIME_BROWSER_PROXY_TOKEN`. Startup rejects
-every non-loopback proxy bind without that credential. Chromium does not honour
-credentials embedded in manual proxy URLs, so `browserd` supplies the token
-only in response to a CDP proxy-authentication challenge and cancels origin
-server authentication challenges; the token is not placed in the browser
-container's proxy URL. In direct-host mode CDP is published only on loopback;
+Egress is contained at two layers, and the hostname policy above is only the
+upper one. Setting `RUNTIME_BROWSER_NETWORK` places browser containers on a
+private Docker network that **must be declared `internal: true`**. `browserd`
+inspects the network at startup and refuses to start if it is routable or
+absent, because an internal network is what installs no default route: a
+process that ignores `--proxy-server` — a compromised or misconfigured browser,
+not just a policy-abiding one — then has no path to the internet at all. This
+is enforced in code, not merely recommended. The turnkey Compose profile ships
+this shape by default.
+
+Reaching the proxy from that network means the proxy cannot bind loopback, so
+it binds all interfaces, and a non-loopback bind requires a
+`RUNTIME_BROWSER_PROXY_TOKEN` of at least 32 characters. That is not optional:
+startup rejects the combination without it, so **every private-network
+deployment must provision a token** (`make compose-init` generates one). Set
+`RUNTIME_BROWSER_PROXY_HOST` to the name by which browser containers reach
+`browserd` (the Compose service name). Chromium does not honour credentials
+embedded in manual proxy URLs, so `browserd` supplies the token only in
+response to a CDP proxy-authentication challenge and cancels origin server
+authentication challenges; the token is never placed in the browser container's
+proxy URL or environment.
+
+The residual reachable surface, stated precisely: the network boundary removes
+the route to the internet, but an internal network is a *shared segment*. The
+proxy host itself (`runtimed` in the turnkey profile) and any sibling container
+the operator attaches to that network remain reachable from the browser at
+layer 3. **The proxy is not the complete reachable surface — it is the complete
+egress path to the internet.** What sits beside the browser on
+`browser-control` is bounded by the proxy's own policy and by deployment
+hygiene, so attach nothing to that network that the browser should not reach.
+
+Leaving `RUNTIME_BROWSER_NETWORK` empty selects direct-host mode: no private
+network, no network inspection, the proxy on `127.0.0.1:0`, and the proxy alone
+as the egress control. In that mode CDP is published only on loopback;
 non-loopback `RUNTIME_BROWSER_CDP_PUBLISH_HOST` values are ignored.
 `RUNTIME_BROWSER_CDP_DIAL_HOST=host.docker.internal` is useful when `browserd`
 runs in a container but Chrome publishes its CDP port on the host.

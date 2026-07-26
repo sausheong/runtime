@@ -11,13 +11,13 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/sausheong/runtime/internal/identity"
 	"github.com/sausheong/runtime/internal/obs"
 	"github.com/sausheong/runtime/internal/rheader"
 	"github.com/sausheong/runtime/internal/store"
+	"github.com/sausheong/runtime/internal/xfan"
 )
 
 // stripRuntimeHeaders deletes every inbound header under the reserved
@@ -91,9 +91,13 @@ func NewAPI(reg *Registry, m *obs.ControlMetrics, st store.Store, subjectForward
 		}
 		p, hasP := PrincipalFromContext(r.Context())
 		infos := reg.List()
-		var out []agentStatus
-		var mu sync.Mutex
-		var wg sync.WaitGroup
+		type agentTarget struct {
+			info     AgentInfo
+			replicas []AgentProcess
+		}
+		// Filter first, then fan out over the survivors: the ceiling applies to
+		// the probes actually issued.
+		var targets []agentTarget
 		for _, info := range infos {
 			if hasP && !p.Superuser && info.Tenant != p.TenantID {
 				continue
@@ -102,30 +106,33 @@ func NewAPI(reg *Registry, m *obs.ControlMetrics, st store.Store, subjectForward
 				continue // administratively disabled: hidden from the public listing
 			}
 			replicas, _ := reg.Replicas(info.ID)
-			wg.Add(1)
-			go func(info AgentInfo, replicas []AgentProcess) {
-				defer wg.Done()
-				st := agentStatus{ID: info.ID, Name: info.Name, Model: info.Model}
-				// An agent is healthy if ANY replica answers /healthz.
-				for _, ap := range replicas {
-					client := NewAgentHTTPClient(ap, time.Second)
-					req, _ := http.NewRequest("GET", ap.baseURL()+"/healthz", nil)
-					resp, err := client.Do(req)
-					if err == nil {
-						ok := resp.StatusCode == 200
-						resp.Body.Close()
-						if ok {
-							st.Healthy = true
-							break
-						}
+			targets = append(targets, agentTarget{info: info, replicas: replicas})
+		}
+		// Pre-sized and index-disjoint: no mutex, and the response order is
+		// deterministic (registry order) rather than completion order.
+		out := make([]agentStatus, len(targets))
+		xfan.Each(r.Context(), len(targets), xfan.DefaultLimit, func(ctx context.Context, i int) {
+			t := targets[i]
+			st := agentStatus{ID: t.info.ID, Name: t.info.Name, Model: t.info.Model}
+			// An agent is healthy if ANY replica answers /healthz.
+			for _, ap := range t.replicas {
+				client := NewAgentHTTPClient(ap, time.Second)
+				req, err := http.NewRequestWithContext(ctx, "GET", ap.baseURL()+"/healthz", nil)
+				if err != nil {
+					continue
+				}
+				resp, err := client.Do(req)
+				if err == nil {
+					ok := resp.StatusCode == 200
+					resp.Body.Close()
+					if ok {
+						st.Healthy = true
+						break
 					}
 				}
-				mu.Lock()
-				out = append(out, st)
-				mu.Unlock()
-			}(info, replicas)
-		}
-		wg.Wait()
+			}
+			out[i] = st
+		})
 		if out == nil {
 			out = []agentStatus{}
 		}

@@ -49,7 +49,50 @@ type dockerBackend struct {
 	cfg DockerConfig
 }
 
+// networkInfo is the subset of a Docker network inspection the egress
+// boundary depends on.
+type networkInfo struct {
+	name     string
+	exists   bool
+	internal bool
+}
+
+// validateContainerNetwork fails closed unless the configured browser network
+// can enforce egress below the application layer. Chromium honours
+// --proxy-server, but a compromised or misconfigured browser process need
+// not; an internal Docker network has no default route, so non-proxy egress
+// fails at layer 3 regardless.
+func validateContainerNetwork(n networkInfo) error {
+	if !n.exists {
+		return fmt.Errorf("browser network %q does not exist", n.name)
+	}
+	if !n.internal {
+		return fmt.Errorf("browser network %q is not internal: a routable network "+
+			"lets a browser process bypass the egress proxy; declare it `internal: true`", n.name)
+	}
+	return nil
+}
+
+// inspectContainerNetwork reads the engine's view of name. Any inspect failure
+// — a missing network, an unreachable daemon, a permission error — is returned
+// as an error rather than folded into networkInfo.exists, so the caller fails
+// closed on all of them and the operator sees the daemon's own diagnosis. The
+// exists=false arm of validateContainerNetwork therefore guards the pure
+// decision function, not this path.
+func inspectContainerNetwork(ctx context.Context, cli *client.Client, name string) (networkInfo, error) {
+	res, err := cli.NetworkInspect(ctx, name, client.NetworkInspectOptions{})
+	if err != nil {
+		return networkInfo{}, fmt.Errorf("inspect browser network %q: %w", name, err)
+	}
+	return networkInfo{name: name, exists: true, internal: res.Network.Internal}, nil
+}
+
 // NewDockerBackend connects to the engine (DOCKER_HOST or default socket).
+// When cfg.Network is set, the network is inspected and REJECTED unless it is
+// internal — the private-network mode's whole point is a layer-3 boundary, and
+// a routable network silently removes it. cfg.Network == "" is the documented
+// direct-host install (CDP published on loopback, no private network), which
+// has no network to validate and is left unchanged.
 func NewDockerBackend(cfg DockerConfig) (Backend, error) {
 	if cfg.Image == "" {
 		cfg.Image = "runtime-browser:latest"
@@ -66,6 +109,17 @@ func NewDockerBackend(cfg DockerConfig) (Backend, error) {
 	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
 	if err != nil {
 		return nil, err
+	}
+	if cfg.Network != "" {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		info, err := inspectContainerNetwork(ctx, cli, cfg.Network)
+		if err != nil {
+			return nil, err
+		}
+		if err := validateContainerNetwork(info); err != nil {
+			return nil, err
+		}
 	}
 	return &dockerBackend{cli: cli, cfg: cfg}, nil
 }

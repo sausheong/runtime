@@ -13,6 +13,7 @@ import (
 	"time"
 
 	hrt "github.com/sausheong/harness/runtime"
+	"github.com/sausheong/runtime/internal/httplimit"
 )
 
 // EpisodeExtractor reads a finished thread and returns timestamped event records
@@ -65,7 +66,7 @@ func (e *httpEpisodeExtractor) Extract(ctx context.Context, thread []hrt.Message
 		return nil, fmt.Errorf("memory: episode status %d", resp.StatusCode)
 	}
 	var cr chatResponse
-	if err := json.NewDecoder(resp.Body).Decode(&cr); err != nil {
+	if err := httplimit.DecodeJSON(resp.Body, maxMemoryResponseBytes, &cr); err != nil {
 		return nil, fmt.Errorf("memory: episode decode: %w", err)
 	}
 	if len(cr.Choices) == 0 {

@@ -313,7 +313,7 @@ func ApplyMigrationsLocked(ctx context.Context, db *sql.DB, component string, mi
 	}
 
 	rows, err := tx.QueryContext(ctx,
-		`SELECT version, checksum FROM runtime_schema_migrations WHERE component=$1 ORDER BY version`,
+		`SELECT version, checksum FROM public.runtime_schema_migrations WHERE component=$1 ORDER BY version`,
 		component)
 	if err != nil {
 		return err
@@ -361,7 +361,7 @@ func ApplyMigrationsLocked(ctx context.Context, db *sql.DB, component string, mi
 			return fmt.Errorf("apply %s migration %d (%s): %w", component, migration.Version, migration.Name, err)
 		}
 		if _, err := tx.ExecContext(ctx,
-			`INSERT INTO runtime_schema_migrations (component, version, name, checksum) VALUES ($1,$2,$3,$4)`,
+			`INSERT INTO public.runtime_schema_migrations (component, version, name, checksum) VALUES ($1,$2,$3,$4)`,
 			component, migration.Version, migration.Name, migrationChecksum(migration)); err != nil {
 			return fmt.Errorf("record %s migration %d: %w", component, migration.Version, err)
 		}
@@ -377,7 +377,7 @@ func migrationChecksum(m Migration) string {
 func CheckSchemaVersion(ctx context.Context, db *sql.DB, component string, minSupported, maxSupported int) error {
 	var version int
 	err := db.QueryRowContext(ctx,
-		`SELECT COALESCE(max(version),0) FROM runtime_schema_migrations WHERE component=$1`,
+		`SELECT COALESCE(max(version),0) FROM public.runtime_schema_migrations WHERE component=$1`,
 		component).Scan(&version)
 	if err != nil {
 		return fmt.Errorf("check %s schema version: %w", component, err)
@@ -398,7 +398,7 @@ func CheckSchemaMigrations(ctx context.Context, db *sql.DB, component string, mi
 	}
 	rows, err := db.QueryContext(ctx, `
 		SELECT version, name, checksum
-		  FROM runtime_schema_migrations
+		  FROM public.runtime_schema_migrations
 		 WHERE component=$1
 		 ORDER BY version`, component)
 	if err != nil {
@@ -452,57 +452,239 @@ func CheckCoreSchema(ctx context.Context, db *sql.DB) error {
 	if tableCount != 4 || rlsCount != 4 {
 		return fmt.Errorf("core schema integrity: required tables=%d/4 row-security=%d/4", tableCount, rlsCount)
 	}
-	var policyCount int
-	if err := db.QueryRowContext(ctx, `
-		SELECT count(*)
-		  FROM pg_catalog.pg_policy p
-		  JOIN pg_catalog.pg_class c ON c.oid=p.polrelid
-		  JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
-		 WHERE n.nspname='public'
-		   AND (c.relname, p.polname) IN (
-		       ('sessions','runtime_agent_tenant_sessions'),
-		       ('session_events','runtime_agent_tenant_events'),
-		       ('session_transcripts','runtime_agent_tenant_transcripts'),
-		       ('online_eval_results','runtime_agent_tenant_online_results')
-		   )`).Scan(&policyCount); err != nil {
-		return fmt.Errorf("check core row-security policies: %w", err)
+	if err := checkCorePolicies(ctx, db); err != nil {
+		return err
 	}
-	if policyCount != 4 {
-		return fmt.Errorf("core schema integrity: required row-security policies=%d/4", policyCount)
+	if err := checkCoreTriggers(ctx, db); err != nil {
+		return err
 	}
-	var triggerCount int
-	if err := db.QueryRowContext(ctx, `
-		SELECT count(*)
-		  FROM pg_catalog.pg_trigger t
-		  JOIN pg_catalog.pg_class c ON c.oid=t.tgrelid
-		  JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
-		 WHERE n.nspname='public' AND NOT t.tgisinternal AND t.tgenabled <> 'D'
-		   AND (c.relname, t.tgname) IN (
-		       ('session_transcripts','runtime_session_transcript_tenant'),
-		       ('online_eval_results','runtime_online_eval_tenant')
-		   )`,
-	).Scan(&triggerCount); err != nil {
-		return fmt.Errorf("check core tenant-integrity triggers: %w", err)
+	return checkCoreForeignKeys(ctx, db)
+}
+
+// expectedPolicy is the authoritative definition of one core row-security
+// policy. Predicates are the normalized text PostgreSQL renders from
+// pg_get_expr, not the source DDL: the server adds parentheses and ::text
+// casts, so these strings are what a correct schema actually reports. All four
+// policies use the same expression for USING and WITH CHECK.
+type expectedPolicy struct {
+	table, name, qual string
+}
+
+var corePolicies = []expectedPolicy{
+	{"sessions", "runtime_agent_tenant_sessions",
+		`(((runtime_agent_tenant() = '*'::text) OR (tenant_id = runtime_agent_tenant())) AND ((runtime_agent_id() = '*'::text) OR (agent_id = runtime_agent_id())))`},
+	{"session_events", "runtime_agent_tenant_events",
+		`runtime_agent_can_access_session(session_id)`},
+	{"session_transcripts", "runtime_agent_tenant_transcripts",
+		`(((runtime_agent_tenant() = '*'::text) OR (tenant = runtime_agent_tenant())) AND runtime_agent_can_access_session(session_id))`},
+	{"online_eval_results", "runtime_agent_tenant_online_results",
+		`(((runtime_agent_tenant() = '*'::text) OR (tenant = runtime_agent_tenant())) AND runtime_agent_can_access_session(session_id))`},
+}
+
+// checkCorePolicies verifies each policy's semantics, not just its name: a
+// policy rewritten to USING (true), narrowed to FOR SELECT, or turned
+// restrictive under the same name must be rejected.
+//
+// It also asserts each core table carries EXACTLY its one expected policy.
+// PostgreSQL ORs permissive policies together, so an operator who leaves the
+// core policy untouched and merely ADDS `USING (true)` alongside it defeats
+// tenant isolation entirely; verifying only the expected policies would accept
+// that. The extra names are reported so an operator can act on them.
+func checkCorePolicies(ctx context.Context, db *sql.DB) error {
+	for _, want := range corePolicies {
+		var (
+			policyCount int
+			extraNames  string
+		)
+		if err := db.QueryRowContext(ctx, `
+			SELECT (SELECT count(*) FROM pg_catalog.pg_policy p
+			         WHERE p.polrelid=c.oid),
+			       array_to_string(ARRAY(
+			           SELECT p.polname FROM pg_catalog.pg_policy p
+			            WHERE p.polrelid=c.oid AND p.polname <> $2
+			            ORDER BY p.polname), ',')
+			  FROM pg_catalog.pg_class c
+			  JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
+			 WHERE n.nspname='public' AND c.relname=$1`,
+			want.table, want.name).Scan(&policyCount, &extraNames); err != nil {
+			return fmt.Errorf("check core row-security policy set on %q: %w", want.table, err)
+		}
+		if policyCount != 1 {
+			return fmt.Errorf("core schema integrity: table %q carries %d row-security policies, want exactly 1 (%q); unexpected: [%s]",
+				want.table, policyCount, want.name, extraNames)
+		}
+		var (
+			cmd        string
+			permissive bool
+			qual       string
+			withCheck  string
+		)
+		err := db.QueryRowContext(ctx, `
+			SELECT p.polcmd, p.polpermissive,
+			       COALESCE(pg_catalog.pg_get_expr(p.polqual, p.polrelid), ''),
+			       COALESCE(pg_catalog.pg_get_expr(p.polwithcheck, p.polrelid), '')
+			  FROM pg_catalog.pg_policy p
+			  JOIN pg_catalog.pg_class c ON c.oid=p.polrelid
+			  JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
+			 WHERE n.nspname='public' AND c.relname=$1 AND p.polname=$2`,
+			want.table, want.name).Scan(&cmd, &permissive, &qual, &withCheck)
+		if errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("core schema integrity: row-security policy %q on %q is missing",
+				want.name, want.table)
+		}
+		if err != nil {
+			return fmt.Errorf("check core row-security policy %q on %q: %w", want.name, want.table, err)
+		}
+		if cmd != "*" {
+			return fmt.Errorf("core schema integrity: row-security policy %q on %q applies to command %q, want ALL",
+				want.name, want.table, cmd)
+		}
+		if !permissive {
+			return fmt.Errorf("core schema integrity: row-security policy %q on %q is not permissive",
+				want.name, want.table)
+		}
+		if qual != want.qual {
+			return fmt.Errorf("core schema integrity: row-security policy %q on %q has an unexpected USING predicate",
+				want.name, want.table)
+		}
+		if withCheck != want.qual {
+			return fmt.Errorf("core schema integrity: row-security policy %q on %q has an unexpected WITH CHECK predicate",
+				want.name, want.table)
+		}
 	}
-	if triggerCount != 2 {
-		return fmt.Errorf("core schema integrity: required tenant-integrity triggers=%d/2", triggerCount)
+	return nil
+}
+
+// coreTriggerType is BEFORE|ROW|INSERT|UPDATE as pg_trigger.tgtype encodes it.
+// Compared as an integer so a redirected timing or event set is rejected.
+const coreTriggerType = 23
+
+// coreTriggerFunction is the fully-qualified tenant-integrity trigger function.
+const coreTriggerFunction = "public.runtime_enforce_session_child_tenant"
+
+// coreTriggerColumns are the UPDATE OF columns each tenant-integrity trigger
+// must fire on, sorted and comma-joined to match the server-side rendering.
+// tgtype alone encodes ROW|BEFORE|INSERT|UPDATE but says nothing about WHICH
+// columns UPDATE watches: a trigger recreated as `UPDATE OF tenant` keeps
+// tgtype=23 while letting a child row be repointed at another parent session,
+// escaping the tenant check.
+const coreTriggerColumns = "session_id,tenant"
+
+var coreTriggers = []struct{ table, name string }{
+	{"session_transcripts", "runtime_session_transcript_tenant"},
+	{"online_eval_results", "runtime_online_eval_tenant"},
+}
+
+// checkCoreTriggers verifies each tenant-integrity trigger still fires BEFORE
+// each affected row and still executes the control-plane enforcement function,
+// so a trigger redirected to a permissive stand-in is rejected.
+func checkCoreTriggers(ctx context.Context, db *sql.DB) error {
+	for _, want := range coreTriggers {
+		var (
+			tgtype   int
+			enabled  string
+			function string
+			columns  string
+		)
+		err := db.QueryRowContext(ctx, `
+			SELECT t.tgtype, t.tgenabled, np.nspname || '.' || p.proname,
+			       array_to_string(ARRAY(
+			           SELECT a.attname FROM unnest(t.tgattr) k
+			             JOIN pg_catalog.pg_attribute a
+			               ON a.attrelid=t.tgrelid AND a.attnum=k
+			            ORDER BY a.attname), ',')
+			  FROM pg_catalog.pg_trigger t
+			  JOIN pg_catalog.pg_class c ON c.oid=t.tgrelid
+			  JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
+			  JOIN pg_catalog.pg_proc p ON p.oid=t.tgfoid
+			  JOIN pg_catalog.pg_namespace np ON np.oid=p.pronamespace
+			 WHERE n.nspname='public' AND NOT t.tgisinternal
+			   AND c.relname=$1 AND t.tgname=$2`,
+			want.table, want.name).Scan(&tgtype, &enabled, &function, &columns)
+		if errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("core schema integrity: tenant-integrity trigger %q on %q is missing",
+				want.name, want.table)
+		}
+		if err != nil {
+			return fmt.Errorf("check core tenant-integrity trigger %q on %q: %w", want.name, want.table, err)
+		}
+		if tgtype != coreTriggerType {
+			return fmt.Errorf("core schema integrity: tenant-integrity trigger %q on %q has timing/event mask %d, want %d",
+				want.name, want.table, tgtype, coreTriggerType)
+		}
+		if enabled != "O" {
+			return fmt.Errorf("core schema integrity: tenant-integrity trigger %q on %q is not enabled (tgenabled=%q)",
+				want.name, want.table, enabled)
+		}
+		if function != coreTriggerFunction {
+			return fmt.Errorf("core schema integrity: tenant-integrity trigger %q on %q executes %q, want %q",
+				want.name, want.table, function, coreTriggerFunction)
+		}
+		if columns != coreTriggerColumns {
+			return fmt.Errorf("core schema integrity: tenant-integrity trigger %q on %q fires on UPDATE OF (%s), want (%s)",
+				want.name, want.table, columns, coreTriggerColumns)
+		}
 	}
-	var foreignKeyCount int
-	if err := db.QueryRowContext(ctx, `
-		SELECT count(*)
-		  FROM pg_catalog.pg_constraint fk
-		  JOIN pg_catalog.pg_class child ON child.oid=fk.conrelid
-		  JOIN pg_catalog.pg_class parent ON parent.oid=fk.confrelid
-		  JOIN pg_catalog.pg_namespace n ON n.oid=child.relnamespace
-		 WHERE n.nspname='public'
-		   AND fk.contype='f' AND fk.confdeltype='c'
-		   AND parent.relname='sessions'
-		   AND child.relname IN ('session_events','session_transcripts','online_eval_results')`,
-	).Scan(&foreignKeyCount); err != nil {
-		return fmt.Errorf("check core session foreign keys: %w", err)
-	}
-	if foreignKeyCount != 3 {
-		return fmt.Errorf("core schema integrity: required session foreign keys=%d/3", foreignKeyCount)
+	return nil
+}
+
+var coreForeignKeys = []struct{ table, name string }{
+	{"session_events", "session_events_session_id_fkey"},
+	{"session_transcripts", "session_transcripts_session_id_fkey"},
+	{"online_eval_results", "online_eval_results_session_id_fkey"},
+}
+
+// checkCoreForeignKeys verifies each session child key still cascades deletes
+// from exactly sessions(id), so a same-named constraint repointed at another
+// column or downgraded to NO ACTION is rejected. The column arrays are
+// flattened with array_to_string so they scan into a plain string over the pgx
+// stdlib driver without an array codec.
+func checkCoreForeignKeys(ctx context.Context, db *sql.DB) error {
+	for _, want := range coreForeignKeys {
+		var (
+			deleteAction string
+			validated    bool
+			childColumns string
+			parentCols   string
+		)
+		err := db.QueryRowContext(ctx, `
+			SELECT fk.confdeltype, fk.convalidated,
+			       array_to_string(ARRAY(
+			           SELECT a.attname FROM unnest(fk.conkey) k
+			             JOIN pg_catalog.pg_attribute a
+			               ON a.attrelid=fk.conrelid AND a.attnum=k), ','),
+			       array_to_string(ARRAY(
+			           SELECT a.attname FROM unnest(fk.confkey) k
+			             JOIN pg_catalog.pg_attribute a
+			               ON a.attrelid=fk.confrelid AND a.attnum=k), ',')
+			  FROM pg_catalog.pg_constraint fk
+			  JOIN pg_catalog.pg_class child ON child.oid=fk.conrelid
+			  JOIN pg_catalog.pg_class parent ON parent.oid=fk.confrelid
+			  JOIN pg_catalog.pg_namespace n ON n.oid=child.relnamespace
+			  JOIN pg_catalog.pg_namespace pn ON pn.oid=parent.relnamespace
+			 WHERE n.nspname='public' AND pn.nspname='public'
+			   AND fk.contype='f' AND fk.conname=$1
+			   AND child.relname=$2 AND parent.relname='sessions'`,
+			want.name, want.table).Scan(&deleteAction, &validated, &childColumns, &parentCols)
+		if errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("core schema integrity: session foreign key %q on %q is missing",
+				want.name, want.table)
+		}
+		if err != nil {
+			return fmt.Errorf("check core session foreign key %q on %q: %w", want.name, want.table, err)
+		}
+		if deleteAction != "c" {
+			return fmt.Errorf("core schema integrity: session foreign key %q on %q does not cascade deletes (confdeltype=%q)",
+				want.name, want.table, deleteAction)
+		}
+		if !validated {
+			return fmt.Errorf("core schema integrity: session foreign key %q on %q is not validated",
+				want.name, want.table)
+		}
+		if childColumns != "session_id" || parentCols != "id" {
+			return fmt.Errorf("core schema integrity: session foreign key %q on %q maps (%s) to sessions(%s), want (session_id) to sessions(id)",
+				want.name, want.table, childColumns, parentCols)
+		}
 	}
 	return nil
 }

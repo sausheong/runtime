@@ -20,7 +20,7 @@ commands run from there.
 
 ```bash
 cd runtime
-make compose-init                            # generates bootstrap, secrets, and Grafana credentials
+make compose-init                            # generates bootstrap, secrets, browser-proxy, and Grafana credentials
 cd deploy/compose
 docker compose --profile build-only build    # builds runtimed, embedder, AND sandbox/browser images
 docker compose up                            # starts all six pillars

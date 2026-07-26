@@ -139,9 +139,24 @@ postgresql:
   # `docker.io/bitnami/postgresql:<x>-debian-12-rN` tags now 404 (only `latest` +
   # digests remain there); the pinned tags live under `bitnamilegacy/postgresql`.
   # Point the subchart at the legacy repo so the bundled-PG path actually pulls.
+  #
+  # Third-party image pinning: charts/postgresql/ is VENDORED upstream content
+  # (`make helm-deps` re-fetches it), so its image references are not edited in
+  # place -- any edit would be lost on the next `helm dependency update`. The
+  # digest below is therefore set as a values override, which the subchart's
+  # common.images.image helper honours over `tag`. Refresh it together with the
+  # subchart version as a reviewed dependency update.
+  #
+  # The subchart's two other images (volumePermissions, metrics/postgres-exporter)
+  # are upstream-controlled and NOT pinned here because both features are
+  # disabled by default, so neither image is ever pulled. Pin them via
+  # postgresql.volumePermissions.image.digest / postgresql.metrics.image.digest
+  # if you enable those features.
   image:
     registry: docker.io
     repository: bitnamilegacy/postgresql
+    # bitnamilegacy/postgresql:17.6.0-debian-12-r4 (the subchart's pinned tag)
+    digest: sha256:926356130b77d5742d8ce605b258d35db9b62f2f8fd1601f9dbaef0c8a710a8d
 
 # Escape hatches for the DinD opt-in (empty by default).
 extraContainers: []

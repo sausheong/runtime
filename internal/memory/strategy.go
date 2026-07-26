@@ -56,12 +56,21 @@ type Strategy interface {
 func (g *KG) runStrategies(sctx StrategyContext, thread []hrt.Message) {
 	lifecycle := g.lifecycle
 	if lifecycle == nil {
-		lifecycle = context.Background()
+		// An admitted worker always has a lifecycle: ingestWith initialises it
+		// under lifecycleMu before Add(1). A nil here is a programming error, and
+		// falling back to context.Background() would spawn an UNCANCELLABLE
+		// worker that Close could never stop. Do no work instead.
+		slog.Error("memory: strategy run without a lifecycle context; skipping")
+		return
 	}
 	ctx := WithActor(lifecycle, sctx.Actor)
 	for _, st := range g.strategies {
 		if !st.ShouldRun(thread) {
 			continue
+		}
+		if !g.mayTouchStore() {
+			slog.Debug("memory: strategy extract skipped; store detached", "kind", st.Kind())
+			return
 		}
 		records, err := st.Extract(ctx, thread)
 		if err != nil {
@@ -78,6 +87,10 @@ func (g *KG) runStrategies(sctx StrategyContext, thread []hrt.Message) {
 				if st.Dedup() && g.isDuplicate(ctx, r) {
 					continue
 				}
+				if !g.mayTouchStore() {
+					slog.Debug("memory: strategy save skipped; store detached", "kind", st.Kind())
+					return
+				}
 				if err := g.save(ctx, hmem.Entry{Content: r, Origin: ingestOrigin, Tags: ingestTags}, st.Kind()); err != nil {
 					slog.Warn("memory: strategy save failed", "kind", st.Kind(), "err", err)
 					continue
@@ -93,6 +106,10 @@ func (g *KG) runStrategies(sctx StrategyContext, thread []hrt.Message) {
 			content := strings.TrimSpace(records[0])
 			if content == "" || sctx.SessionID == "" || g.putSummary == nil {
 				continue
+			}
+			if !g.mayTouchStore() {
+				slog.Debug("memory: summary write skipped; store detached", "kind", st.Kind())
+				return
 			}
 			if err := g.putSummary(ctx, sctx.SessionID, content); err != nil {
 				slog.Warn("memory: summary write failed", "session", sctx.SessionID, "err", err)

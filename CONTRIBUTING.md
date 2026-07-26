@@ -24,6 +24,26 @@ templates must also pass the relevant Compose or Helm render checks. Changes to
 public behaviour must update the owning topic guide and
 [documentation-map.md](documentation-map.md).
 
+### Shell scripts
+
+CI and the release workflow lint the deployment scripts with ShellCheck. Run the
+same gate locally; if `shellcheck` is not installed, use the container fallback,
+which needs nothing but Docker:
+
+```bash
+docker run --rm -v "$PWD:/mnt" -w /mnt koalaman/shellcheck:stable --severity=warning \
+  deploy/compose/*.sh deploy/compose/initdb/*.sh deploy/gcp/*.sh \
+  deploy/gcp/control-plane/*.sh deploy/charts/runtime/*.sh
+```
+
+Severity policy: `error` and `warning` findings block, while `info` and `style`
+findings are advisory for these scripts. Keep `--severity=warning` explicit —
+ShellCheck defaults to `style`, which exits non-zero on advisory findings and
+would leave the gate permanently red. Several of those advisory findings are
+deliberate: the `DSN` and `AGENTS` variables in `deploy/charts/runtime/test.sh`
+each hold multiple `--set` flags that must word-split into separate `helm`
+arguments, so quoting them as SC2086 advises would break the render matrix.
+
 ## Pull requests
 
 - Explain the user-visible result and operational risks.

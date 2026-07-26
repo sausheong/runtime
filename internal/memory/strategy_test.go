@@ -38,6 +38,7 @@ func TestRunStrategies_AccumulateSavesEachNonDuplicate(t *testing.T) {
 		// no embedder ⇒ isDuplicate returns false ⇒ everything saves
 	}
 	g.strategies = []Strategy{&fakeStrategy{kind: KindFact, mode: WriteAccumulate, shouldRun: true, records: []string{"a", "b"}}}
+	g.initLifecycle()
 	g.runStrategies(StrategyContext{SessionID: "s1"}, []hrt.Message{{Role: "user", Content: "hi there friend"}})
 	if len(saved) != 2 || saved[0] != "a" || saved[1] != "b" {
 		t.Fatalf("accumulate should save 2 in order, got %v", saved)
@@ -51,6 +52,7 @@ func TestRunStrategies_AccumulateSkipsEmptyAndTrims(t *testing.T) {
 		dedupFloor: 0.85,
 	}
 	g.strategies = []Strategy{&fakeStrategy{kind: KindFact, mode: WriteAccumulate, shouldRun: true, records: []string{"  spaced  ", "  ", ""}}}
+	g.initLifecycle()
 	g.runStrategies(StrategyContext{}, []hrt.Message{{Role: "user", Content: "hello"}})
 	if len(saved) != 1 || saved[0] != "spaced" {
 		t.Fatalf("empty/whitespace records must be skipped, content trimmed, got %v", saved)
@@ -63,6 +65,7 @@ func TestRunStrategies_AccumulateCarriesIngestOriginAndTags(t *testing.T) {
 		save: func(_ context.Context, e hmem.Entry, _ string) error { got = e; return nil },
 	}
 	g.strategies = []Strategy{&fakeStrategy{kind: KindFact, mode: WriteAccumulate, shouldRun: true, records: []string{"fact"}}}
+	g.initLifecycle()
 	g.runStrategies(StrategyContext{}, nil)
 	if got.Origin != ingestOrigin || len(got.Tags) != 1 || got.Tags[0] != "auto" {
 		t.Fatalf("accumulate must carry ingest origin + auto tag: %+v", got)
@@ -76,12 +79,57 @@ func TestRunStrategies_ShouldRunGatesStrategy(t *testing.T) {
 	}
 	fs := &fakeStrategy{kind: KindFact, mode: WriteAccumulate, shouldRun: false, records: []string{"nope"}}
 	g.strategies = []Strategy{fs}
+	g.initLifecycle()
 	g.runStrategies(StrategyContext{SessionID: "s1"}, nil)
 	if fs.ran {
 		t.Fatal("Extract must not run when ShouldRun is false")
 	}
 	if len(saved) != 0 {
 		t.Fatalf("gated strategy must save nothing, got %v", saved)
+	}
+}
+
+// TestRunStrategies_DetachedStoreRefusesAllWrites covers the strategy pipeline's
+// half of the store gate (the KG-level test exercises the legacy extractor path).
+// Once Close has latched the store shut, neither the accumulate save nor the
+// supersede summary write may reach the backing store.
+func TestRunStrategies_DetachedStoreRefusesAllWrites(t *testing.T) {
+	saves, puts := 0, 0
+	g := &KG{
+		save:       func(_ context.Context, _ hmem.Entry, _ string) error { saves++; return nil },
+		putSummary: func(_ context.Context, _, _ string) error { puts++; return nil },
+	}
+	g.strategies = []Strategy{
+		&fakeStrategy{kind: KindFact, mode: WriteAccumulate, shouldRun: true, records: []string{"fact"}},
+		&fakeStrategy{kind: KindSummary, mode: WriteSupersede, shouldRun: true, records: []string{"digest"}},
+	}
+	g.initLifecycle()
+	g.storeDetached = true // as Close latches it when a worker outlives the drain
+	g.runStrategies(StrategyContext{SessionID: "s1"}, nil)
+	if saves != 0 || puts != 0 {
+		t.Fatalf("a detached store must refuse every strategy write, got %d saves and %d summary writes", saves, puts)
+	}
+}
+
+// TestRunStrategies_NilLifecycleDoesNoWork pins the shutdown-safety precondition:
+// a nil lifecycle must not degrade to context.Background(), because that would
+// spawn an uncancellable worker Close could never stop. Production always
+// initialises the lifecycle under lifecycleMu before admitting a worker, so a nil
+// here is a programming error and the run must do nothing.
+func TestRunStrategies_NilLifecycleDoesNoWork(t *testing.T) {
+	saves := 0
+	g := &KG{
+		save: func(_ context.Context, _ hmem.Entry, _ string) error { saves++; return nil },
+	}
+	fs := &fakeStrategy{kind: KindFact, mode: WriteAccumulate, shouldRun: true, records: []string{"fact"}}
+	g.strategies = []Strategy{fs}
+	// Deliberately no initLifecycle().
+	g.runStrategies(StrategyContext{SessionID: "s1"}, nil)
+	if fs.ran {
+		t.Fatal("a nil lifecycle must not run a strategy: the worker would be uncancellable")
+	}
+	if saves != 0 {
+		t.Fatalf("a nil lifecycle must save nothing, got %d saves", saves)
 	}
 }
 
@@ -92,6 +140,7 @@ func TestRunStrategies_SupersedeSkipsWithoutSession(t *testing.T) {
 	}
 	g.strategies = []Strategy{&fakeStrategy{kind: KindSummary, mode: WriteSupersede, shouldRun: true, records: []string{"digest"}}}
 	// Empty SessionID ⇒ supersede branch must skip (no summary without a session).
+	g.initLifecycle()
 	g.runStrategies(StrategyContext{}, nil)
 	if putCalls != 0 {
 		t.Fatalf("supersede must skip when SessionID is empty, putSummary called %d times", putCalls)
@@ -112,6 +161,7 @@ func TestRunStrategies_SupersedeWritesSummaryAndFiresHook(t *testing.T) {
 		onSummaryWrite: func() { hookFired = true },
 	}
 	g.strategies = []Strategy{&fakeStrategy{kind: KindSummary, mode: WriteSupersede, shouldRun: true, records: []string{"  the digest  ", "ignored"}}}
+	g.initLifecycle()
 	g.runStrategies(StrategyContext{SessionID: "s9"}, nil)
 	if gotSession != "s9" || gotContent != "the digest" {
 		t.Fatalf("supersede must write records[0] trimmed for the session: session=%q content=%q", gotSession, gotContent)
@@ -143,6 +193,7 @@ func TestRunStrategies_EpisodeSkipsDedupAndStampsKind(t *testing.T) {
 		kind: KindEpisode, mode: WriteAccumulate, dedup: false, shouldRun: true,
 		records: []string{"deployed staging", "deployed staging"},
 	}}
+	g.initLifecycle()
 	g.runStrategies(StrategyContext{Actor: "a1"}, []hrt.Message{{Role: "user", Content: "hi there"}})
 	if len(got) != 2 {
 		t.Fatalf("episode (Dedup=false) must save every record incl. duplicates, got %d: %v", len(got), got)
@@ -166,6 +217,7 @@ func TestRunStrategies_FactStillDedups(t *testing.T) {
 		kind: KindFact, mode: WriteAccumulate, dedup: true, shouldRun: true,
 		records: []string{"dup fact"},
 	}}
+	g.initLifecycle()
 	g.runStrategies(StrategyContext{}, []hrt.Message{{Role: "user", Content: "hi there"}})
 	if count != 0 {
 		t.Fatalf("fact (Dedup=true) must skip a duplicate, saved %d", count)

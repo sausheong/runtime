@@ -15,7 +15,10 @@ name: runtime
 
 services:
   postgres:
-    image: pgvector/pgvector:pg16
+    # Digest-pinned: `pg16` is a major-only tag, so the database minor/patch
+    # would otherwise change silently under a deployment the release contract
+    # calls reproducible. Refresh the digest as a reviewed dependency update.
+    image: pgvector/pgvector:pg16@sha256:1d533553fefe4f12e5d80c7b80622ba0c382abb5758856f52983d8789179f0fb
     environment:
       POSTGRES_USER: runtime
       POSTGRES_PASSWORD: runtime
@@ -96,6 +99,20 @@ services:
       # non-proxy egress has no route to the internet or data services.
       RUNTIME_BROWSER_NETWORK: runtime_browser-control
       RUNTIME_BROWSER_PROXY_HOST: runtimed
+      # The egress proxy must be reachable from the internal browser network,
+      # so it binds all interfaces (runtimed's only ones are loopback, the
+      # default compose network, and browser-control) and requires a token.
+      # 0.0.0.0 is one of the loopback/wildcard literals
+      # containerProxyAddrForHost rewrites, so the browser container is handed
+      # RUNTIME_BROWSER_PROXY_HOST:3128 — i.e. runtimed:3128 — not 0.0.0.0:3128.
+      # Chromium receives the credential over CDP, never in container
+      # environment.
+      RUNTIME_BROWSER_PROXY_ADDR: 0.0.0.0:3128
+      # Upgrading an existing deployment: append the line this message names to
+      # deploy/compose/.env. Do NOT reach for `make compose-init FORCE=--force`
+      # — it regenerates RUNTIME_SECRETS_KEYS under the same "primary" key id,
+      # which leaves already-sealed secrets undecryptable.
+      RUNTIME_BROWSER_PROXY_TOKEN: "${RUNTIME_BROWSER_PROXY_TOKEN:?new installs run make compose-init; upgrades append RUNTIME_BROWSER_PROXY_TOKEN=<openssl rand -hex 32> to deploy/compose/.env}"
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
     volumes:
       - ./runtime.compose.yaml:/app/runtime.compose.yaml:ro
@@ -124,7 +141,7 @@ services:
       - "8080:8080"
 
   prometheus:
-    image: prom/prometheus:v3.12.0
+    image: prom/prometheus:v3.12.0@sha256:69f5241418838263316593f7274a304b095c40bcf22e57272865da91bd60a8ac
     command:
       - "--config.file=/etc/prometheus/prometheus.yml"
       - "--storage.tsdb.path=/prometheus"
@@ -141,7 +158,7 @@ services:
       - alertmanager
 
   alertmanager:
-    image: prom/alertmanager:v0.32.1
+    image: prom/alertmanager:v0.32.1@sha256:51a825c2a40acc3e338fdd00d622e01ec090f72be2b3ea46be0839cd47a4d286
     command:
       - "--config.file=/etc/alertmanager/alertmanager.yml"
       - "--storage.path=/alertmanager"
@@ -154,7 +171,7 @@ services:
       - "host.docker.internal:host-gateway"
 
   grafana:
-    image: grafana/grafana:13.1.0
+    image: grafana/grafana:13.1.0@sha256:121a7a9ece6dc10b969f1f96eed64b4f07dfac0d0b8abc070f7cb83bbde86f63
     environment:
       GF_AUTH_ANONYMOUS_ENABLED: "false"
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?run make compose-init}
@@ -168,7 +185,7 @@ services:
       - prometheus
 
   otel-collector:
-    image: otel/opentelemetry-collector-contrib:0.153.0
+    image: otel/opentelemetry-collector-contrib:0.153.0@sha256:93aad750175cbf1a973ae1c5886c3371f4d800f61be25cdd26870b8441ffe9fa
     command: ["--config=/etc/otel/collector-config.yaml"]
     volumes:
       - ../otel/collector-config.yaml:/etc/otel/collector-config.yaml:ro
@@ -178,7 +195,7 @@ services:
       - jaeger
 
   jaeger:
-    image: jaegertracing/jaeger:2.18.0
+    image: jaegertracing/jaeger:2.18.0@sha256:d2cbd047e44b50c11454820f84fd5f34c24a435e5301cf94fe026bf055db80b3
     command: ["--config=/etc/jaeger/config.yaml"]
     volumes:
       - ../jaeger-config.yaml:/etc/jaeger/config.yaml:ro
