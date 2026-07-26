@@ -64,6 +64,26 @@ func dialHarness(ctx context.Context, s config.GatewayServer) (upstreamConn, err
 	})
 }
 
+// stdioSubsystemPrefixes are inherited variables a stdio child legitimately
+// needs: the sandbox and browser subsystems are configured entirely through
+// the environment, and runtimed spawns sandboxd and browserd as stdio servers.
+//
+// Blanking these was a real defect rather than a conservative choice. With
+// RUNTIME_BROWSER_NETWORK cleared, browserd skips the internal-network branch
+// altogether — no network validation, no private network, and CDP published on
+// a host interface — so the egress boundary silently evaporated in exactly the
+// deployment that configures it. RUNTIME_*_SCOPE cleared likewise downgraded
+// session isolation to tenant scope while the operator guide called session
+// scope the shipped default, and RUNTIME_*_RUNTIME cleared dropped gVisor.
+//
+// These carry subsystem configuration, not control-plane authority: no DSN, no
+// provider key, no identity or keyring material has this shape. The browser
+// proxy token does, but it is browserd's own process-internal credential
+// (browserd serves the proxy that demands it and answers the challenge itself),
+// and forwarding it keeps an explicitly pinned value working instead of being
+// silently replaced by a generated one.
+var stdioSubsystemPrefixes = []string{"RUNTIME_SANDBOX_", "RUNTIME_BROWSER_"}
+
 // stdioEnv neutralizes every inherited parent variable except a small
 // process-runtime allowlist. The harness MCP client merges this map over
 // os.Environ, so empty values are required to prevent unrelated provider,
@@ -80,6 +100,10 @@ func stdioEnv(explicit map[string]string) map[string]string {
 		"SSL_CERT_DIR": {}, "SSL_CERT_FILE": {}, "TMPDIR": {}, "TZ": {}, "USER": {},
 		"OTEL_EXPORTER_OTLP_ENDPOINT": {}, "RUNTIME_LOG_FORMAT": {},
 		"RUNTIME_TRACE_SAMPLE_RATIO": {}, "RUNTIME_TRACING_ENABLED": {},
+		// The container-engine endpoint sandboxd and browserd dial. Not a
+		// credential; without it they fall back to the default socket, which
+		// is wrong wherever the operator pointed the runtime elsewhere.
+		"DOCKER_HOST": {},
 	}
 	for _, entry := range os.Environ() {
 		name, _, ok := strings.Cut(entry, "=")
@@ -89,9 +113,21 @@ func stdioEnv(explicit map[string]string) map[string]string {
 		if _, keep := allowed[name]; keep {
 			continue
 		}
+		if hasAnyPrefix(name, stdioSubsystemPrefixes) {
+			continue
+		}
 		if _, configured := env[name]; !configured {
 			env[name] = ""
 		}
 	}
 	return env
+}
+
+func hasAnyPrefix(name string, prefixes []string) bool {
+	for _, p := range prefixes {
+		if strings.HasPrefix(name, p) {
+			return true
+		}
+	}
+	return false
 }

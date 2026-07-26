@@ -27,6 +27,20 @@ a release is tagged, while the current default branch remains pre-release.
   declared `internal`, so a browser process that ignores `--proxy-server` has
   no route off the segment.
 
+### Fixed
+
+- Sandbox and browser configuration reaches the subsystems again. `runtimed`
+  spawns `sandboxd` and `browserd` as stdio gateway servers, and the stdio
+  environment scrub blanked every inherited variable outside a small allowlist
+  — including all `RUNTIME_SANDBOX_*` / `RUNTIME_BROWSER_*` settings and
+  `DOCKER_HOST`. The effect was silent and security-relevant: with
+  `RUNTIME_BROWSER_NETWORK` cleared, `browserd` skipped the internal-network
+  branch entirely (no validation, no private network, CDP published on a host
+  interface), session-scoped isolation degraded to tenant scope, and a
+  configured gVisor runtime was not applied. The scrub still blocks
+  control-plane credentials; it now forwards subsystem configuration.
+  Unreleased — introduced after v0.2.0.
+
 ### Changed
 
 - The browser egress proxy now binds an address reachable from the private
