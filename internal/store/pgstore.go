@@ -484,8 +484,35 @@ var corePolicies = []expectedPolicy{
 // checkCorePolicies verifies each policy's semantics, not just its name: a
 // policy rewritten to USING (true), narrowed to FOR SELECT, or turned
 // restrictive under the same name must be rejected.
+//
+// It also asserts each core table carries EXACTLY its one expected policy.
+// PostgreSQL ORs permissive policies together, so an operator who leaves the
+// core policy untouched and merely ADDS `USING (true)` alongside it defeats
+// tenant isolation entirely; verifying only the expected policies would accept
+// that. The extra names are reported so an operator can act on them.
 func checkCorePolicies(ctx context.Context, db *sql.DB) error {
 	for _, want := range corePolicies {
+		var (
+			policyCount int
+			extraNames  string
+		)
+		if err := db.QueryRowContext(ctx, `
+			SELECT (SELECT count(*) FROM pg_catalog.pg_policy p
+			         WHERE p.polrelid=c.oid),
+			       array_to_string(ARRAY(
+			           SELECT p.polname FROM pg_catalog.pg_policy p
+			            WHERE p.polrelid=c.oid AND p.polname <> $2
+			            ORDER BY p.polname), ',')
+			  FROM pg_catalog.pg_class c
+			  JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
+			 WHERE n.nspname='public' AND c.relname=$1`,
+			want.table, want.name).Scan(&policyCount, &extraNames); err != nil {
+			return fmt.Errorf("check core row-security policy set on %q: %w", want.table, err)
+		}
+		if policyCount != 1 {
+			return fmt.Errorf("core schema integrity: table %q carries %d row-security policies, want exactly 1 (%q); unexpected: [%s]",
+				want.table, policyCount, want.name, extraNames)
+		}
 		var (
 			cmd        string
 			permissive bool
@@ -535,6 +562,14 @@ const coreTriggerType = 23
 // coreTriggerFunction is the fully-qualified tenant-integrity trigger function.
 const coreTriggerFunction = "public.runtime_enforce_session_child_tenant"
 
+// coreTriggerColumns are the UPDATE OF columns each tenant-integrity trigger
+// must fire on, sorted and comma-joined to match the server-side rendering.
+// tgtype alone encodes ROW|BEFORE|INSERT|UPDATE but says nothing about WHICH
+// columns UPDATE watches: a trigger recreated as `UPDATE OF tenant` keeps
+// tgtype=23 while letting a child row be repointed at another parent session,
+// escaping the tenant check.
+const coreTriggerColumns = "session_id,tenant"
+
 var coreTriggers = []struct{ table, name string }{
 	{"session_transcripts", "runtime_session_transcript_tenant"},
 	{"online_eval_results", "runtime_online_eval_tenant"},
@@ -549,9 +584,15 @@ func checkCoreTriggers(ctx context.Context, db *sql.DB) error {
 			tgtype   int
 			enabled  string
 			function string
+			columns  string
 		)
 		err := db.QueryRowContext(ctx, `
-			SELECT t.tgtype, t.tgenabled, np.nspname || '.' || p.proname
+			SELECT t.tgtype, t.tgenabled, np.nspname || '.' || p.proname,
+			       array_to_string(ARRAY(
+			           SELECT a.attname FROM unnest(t.tgattr) k
+			             JOIN pg_catalog.pg_attribute a
+			               ON a.attrelid=t.tgrelid AND a.attnum=k
+			            ORDER BY a.attname), ',')
 			  FROM pg_catalog.pg_trigger t
 			  JOIN pg_catalog.pg_class c ON c.oid=t.tgrelid
 			  JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
@@ -559,7 +600,7 @@ func checkCoreTriggers(ctx context.Context, db *sql.DB) error {
 			  JOIN pg_catalog.pg_namespace np ON np.oid=p.pronamespace
 			 WHERE n.nspname='public' AND NOT t.tgisinternal
 			   AND c.relname=$1 AND t.tgname=$2`,
-			want.table, want.name).Scan(&tgtype, &enabled, &function)
+			want.table, want.name).Scan(&tgtype, &enabled, &function, &columns)
 		if errors.Is(err, sql.ErrNoRows) {
 			return fmt.Errorf("core schema integrity: tenant-integrity trigger %q on %q is missing",
 				want.name, want.table)
@@ -578,6 +619,10 @@ func checkCoreTriggers(ctx context.Context, db *sql.DB) error {
 		if function != coreTriggerFunction {
 			return fmt.Errorf("core schema integrity: tenant-integrity trigger %q on %q executes %q, want %q",
 				want.name, want.table, function, coreTriggerFunction)
+		}
+		if columns != coreTriggerColumns {
+			return fmt.Errorf("core schema integrity: tenant-integrity trigger %q on %q fires on UPDATE OF (%s), want (%s)",
+				want.name, want.table, columns, coreTriggerColumns)
 		}
 	}
 	return nil

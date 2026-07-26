@@ -464,38 +464,57 @@ func TestCoreSchemaRestrictedPreflightRejectsMissingSecurityObjects(t *testing.T
 		t.Fatalf("preflight rejected a freshly migrated schema: %v", err)
 	}
 
+	// Mutations that leave an object behind which repair() does not remove --
+	// repair only recreates the objects the core schema owns, so a stray
+	// policy or helper function would persist and fail every later check.
 	cases := []struct {
-		name   string
-		mutate string
+		name    string
+		mutate  string
+		cleanup string
 	}{
-		{"table", `DROP TABLE session_events CASCADE`},
-		{"row security", `ALTER TABLE sessions DISABLE ROW LEVEL SECURITY`},
-		{"policy", `DROP POLICY runtime_agent_tenant_sessions ON sessions`},
-		{"trigger", `DROP TRIGGER runtime_session_transcript_tenant ON session_transcripts`},
-		{"foreign key", `ALTER TABLE online_eval_results DROP CONSTRAINT online_eval_results_session_id_fkey`},
+		{"table", `DROP TABLE session_events CASCADE`, ""},
+		{"row security", `ALTER TABLE sessions DISABLE ROW LEVEL SECURITY`, ""},
+		{"policy", `DROP POLICY runtime_agent_tenant_sessions ON sessions`, ""},
+		{"trigger", `DROP TRIGGER runtime_session_transcript_tenant ON session_transcripts`, ""},
+		{"foreign key", `ALTER TABLE online_eval_results DROP CONSTRAINT online_eval_results_session_id_fkey`, ""},
 		// The cases below all PRESERVE the object name and only weaken its
 		// semantics, so a name-counting preflight would accept them.
-		{"policy predicate weakened", `ALTER POLICY runtime_agent_tenant_sessions ON sessions USING (true) WITH CHECK (true)`},
-		{"policy with-check weakened", `ALTER POLICY runtime_agent_tenant_transcripts ON session_transcripts WITH CHECK (true)`},
+		{"policy predicate weakened", `ALTER POLICY runtime_agent_tenant_sessions ON sessions USING (true) WITH CHECK (true)`, ""},
+		{"policy with-check weakened", `ALTER POLICY runtime_agent_tenant_transcripts ON session_transcripts WITH CHECK (true)`, ""},
 		{"policy narrowed to select", `DROP POLICY runtime_agent_tenant_events ON session_events;
 			CREATE POLICY runtime_agent_tenant_events ON session_events FOR SELECT
-			USING (runtime_agent_can_access_session(session_id))`},
+			USING (runtime_agent_can_access_session(session_id))`, ""},
 		{"trigger redirected to permissive function", `CREATE OR REPLACE FUNCTION runtime_test_permissive_child()
 			RETURNS TRIGGER LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$;
 			DROP TRIGGER runtime_online_eval_tenant ON online_eval_results;
 			CREATE TRIGGER runtime_online_eval_tenant BEFORE INSERT OR UPDATE OF session_id, tenant
-			ON online_eval_results FOR EACH ROW EXECUTE FUNCTION runtime_test_permissive_child()`},
+			ON online_eval_results FOR EACH ROW EXECUTE FUNCTION runtime_test_permissive_child()`,
+			`DROP FUNCTION IF EXISTS runtime_test_permissive_child() CASCADE`},
 		{"trigger timing changed to after", `DROP TRIGGER runtime_session_transcript_tenant ON session_transcripts;
 			CREATE TRIGGER runtime_session_transcript_tenant AFTER INSERT OR UPDATE OF session_id, tenant
-			ON session_transcripts FOR EACH ROW EXECUTE FUNCTION runtime_enforce_session_child_tenant()`},
-		{"trigger disabled", `ALTER TABLE session_transcripts DISABLE TRIGGER runtime_session_transcript_tenant`},
+			ON session_transcripts FOR EACH ROW EXECUTE FUNCTION runtime_enforce_session_child_tenant()`, ""},
+		{"trigger disabled", `ALTER TABLE session_transcripts DISABLE TRIGGER runtime_session_transcript_tenant`, ""},
+		// PostgreSQL ORs permissive policies together, so an EXTRA policy
+		// alongside an intact core policy defeats tenant isolation.
+		{"extra permissive policy", `CREATE POLICY zz_extra_permissive ON sessions
+			FOR ALL TO PUBLIC USING (true) WITH CHECK (true)`,
+			`DROP POLICY IF EXISTS zz_extra_permissive ON sessions`},
+		// tgtype still encodes ROW|BEFORE|INSERT|UPDATE when session_id is
+		// dropped from the UPDATE OF column list, but repointing a child row
+		// at another parent session then escapes the tenant check.
+		{"trigger update columns narrowed", `DROP TRIGGER runtime_session_transcript_tenant ON session_transcripts;
+			CREATE TRIGGER runtime_session_transcript_tenant BEFORE INSERT OR UPDATE OF tenant
+			ON session_transcripts FOR EACH ROW EXECUTE FUNCTION runtime_enforce_session_child_tenant()`, ""},
 		{"foreign key cascade weakened", `ALTER TABLE session_events DROP CONSTRAINT session_events_session_id_fkey;
 			ALTER TABLE session_events ADD CONSTRAINT session_events_session_id_fkey
-			FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE NO ACTION`},
+			FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE NO ACTION`, ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			repair(t)
+			if tc.cleanup != "" {
+				t.Cleanup(func() { _, _ = db.ExecContext(ctx, tc.cleanup) })
+			}
 			if _, err := db.ExecContext(ctx, tc.mutate); err != nil {
 				t.Fatal(err)
 			}
