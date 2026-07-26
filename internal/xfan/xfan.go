@@ -18,10 +18,15 @@ const DefaultLimit = 16
 // Each runs fn for each index in [0, n) with at most limit invocations running
 // concurrently, and returns only after every started call has returned.
 //
-// ctx is passed to fn and also gates scheduling: once ctx is done, no further
-// indices start, but already-running calls are awaited, so Each never returns
-// while it still owns a live goroutine. fn is responsible for honouring ctx.
-// A limit below 1 becomes DefaultLimit.
+// ctx is passed to fn and also gates scheduling: once ctx is done Each stops
+// starting new indices, but already-running calls are awaited, so Each never
+// returns while it still owns a live goroutine. fn is responsible for honouring
+// ctx. A limit below 1 becomes DefaultLimit.
+//
+// Cancellation therefore means SOME indices may not run at all. Callers that
+// write into a pre-sized slice must treat unwritten entries as absent rather
+// than as zero-valued results — an unrun index left as a zero struct would be
+// serialized as a real, empty record.
 func Each(ctx context.Context, n, limit int, fn func(ctx context.Context, i int)) {
 	if n <= 0 {
 		return
@@ -35,9 +40,16 @@ func Each(ctx context.Context, n, limit int, fn func(ctx context.Context, i int)
 	sem := make(chan struct{}, limit)
 	var wg sync.WaitGroup
 	for i := 0; i < n; i++ {
+		// Checked before the select because a select with two ready cases picks
+		// at random: relying on it alone starts work on an already-cancelled
+		// context roughly half the time.
+		if ctx.Err() != nil {
+			wg.Wait() // stop scheduling, but never abandon running work
+			return
+		}
 		select {
 		case <-ctx.Done():
-			wg.Wait() // stop scheduling, but never abandon running work
+			wg.Wait()
 			return
 		case sem <- struct{}{}:
 		}

@@ -77,12 +77,19 @@ func dialHarness(ctx context.Context, s config.GatewayServer) (upstreamConn, err
 // scope the shipped default, and RUNTIME_*_RUNTIME cleared dropped gVisor.
 //
 // These carry subsystem configuration, not control-plane authority: no DSN, no
-// provider key, no identity or keyring material has this shape. The browser
-// proxy token does, but it is browserd's own process-internal credential
-// (browserd serves the proxy that demands it and answers the challenge itself),
-// and forwarding it keeps an explicitly pinned value working instead of being
-// silently replaced by a generated one.
+// provider key, no identity or keyring material has this shape.
 var stdioSubsystemPrefixes = []string{"RUNTIME_SANDBOX_", "RUNTIME_BROWSER_"}
+
+// stdioSubsystemDenied are variables the prefix rule would otherwise forward
+// but which are credentials rather than configuration. stdioEnv serves EVERY
+// stdio upstream, including operator-configured third-party MCP servers, so a
+// prefix match is not evidence that the recipient is browserd. The browser
+// proxy token gates egress for a browser sharing an internal network segment
+// with the proxy; browserd mints its own when this is unset, so withholding it
+// costs nothing beyond an operator's ability to pin one value.
+var stdioSubsystemDenied = map[string]struct{}{
+	"RUNTIME_BROWSER_PROXY_TOKEN": {},
+}
 
 // stdioEnv neutralizes every inherited parent variable except a small
 // process-runtime allowlist. The harness MCP client merges this map over
@@ -100,10 +107,13 @@ func stdioEnv(explicit map[string]string) map[string]string {
 		"SSL_CERT_DIR": {}, "SSL_CERT_FILE": {}, "TMPDIR": {}, "TZ": {}, "USER": {},
 		"OTEL_EXPORTER_OTLP_ENDPOINT": {}, "RUNTIME_LOG_FORMAT": {},
 		"RUNTIME_TRACE_SAMPLE_RATIO": {}, "RUNTIME_TRACING_ENABLED": {},
-		// The container-engine endpoint sandboxd and browserd dial. Not a
-		// credential; without it they fall back to the default socket, which
-		// is wrong wherever the operator pointed the runtime elsewhere.
-		"DOCKER_HOST": {},
+		// The container-engine connection sandboxd and browserd dial. Both call
+		// client.FromEnv, which reads all four of these; forwarding only
+		// DOCKER_HOST would break exactly the remote-daemon case that motivates
+		// forwarding it at all. DOCKER_CERT_PATH names a directory, not a
+		// secret — the certificates themselves are read from disk by the child.
+		"DOCKER_HOST": {}, "DOCKER_API_VERSION": {},
+		"DOCKER_CERT_PATH": {}, "DOCKER_TLS_VERIFY": {},
 	}
 	for _, entry := range os.Environ() {
 		name, _, ok := strings.Cut(entry, "=")
@@ -113,7 +123,8 @@ func stdioEnv(explicit map[string]string) map[string]string {
 		if _, keep := allowed[name]; keep {
 			continue
 		}
-		if hasAnyPrefix(name, stdioSubsystemPrefixes) {
+		if _, denied := stdioSubsystemDenied[name]; !denied &&
+			hasAnyPrefix(name, stdioSubsystemPrefixes) {
 			continue
 		}
 		if _, configured := env[name]; !configured {

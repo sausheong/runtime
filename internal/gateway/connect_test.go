@@ -36,7 +36,10 @@ func TestStdioEnvForwardsSubsystemConfiguration(t *testing.T) {
 		"RUNTIME_BROWSER_SCOPE":      "session",
 		"RUNTIME_SANDBOX_SCOPE":      "session",
 		"RUNTIME_SANDBOX_RUNTIME":    "runsc",
-		"DOCKER_HOST":                "unix:///var/run/docker.sock",
+		"DOCKER_HOST":                "tcp://engine.internal:2376",
+		"DOCKER_API_VERSION":         "1.45",
+		"DOCKER_CERT_PATH":           "/certs",
+		"DOCKER_TLS_VERIFY":          "1",
 	}
 	for k, v := range forwarded {
 		t.Setenv(k, v)
@@ -66,5 +69,22 @@ func TestStdioEnvStillBlocksControlPlaneCredentials(t *testing.T) {
 		if env[k] != "" {
 			t.Errorf("%s leaked to stdio child: %q", k, env[k])
 		}
+	}
+}
+
+// TestStdioEnvDoesNotForwardTheBrowserProxyToken guards the boundary of the
+// prefix rule. stdioEnv serves every stdio upstream, including third-party MCP
+// servers an operator configures, so a RUNTIME_BROWSER_ prefix does not prove
+// the recipient is browserd. The proxy token is a credential; browserd mints
+// its own when it is unset, so withholding it is safe.
+func TestStdioEnvDoesNotForwardTheBrowserProxyToken(t *testing.T) {
+	t.Setenv("RUNTIME_BROWSER_PROXY_TOKEN", "0123456789abcdef0123456789abcdef")
+	t.Setenv("RUNTIME_BROWSER_NETWORK", "runtime_browser-control")
+	env := stdioEnv(nil)
+	if v, blanked := env["RUNTIME_BROWSER_PROXY_TOKEN"]; !blanked || v != "" {
+		t.Fatalf("proxy token reached a stdio child: blanked=%v value=%q", blanked, v)
+	}
+	if _, blanked := env["RUNTIME_BROWSER_NETWORK"]; blanked {
+		t.Fatal("the deny entry must not disable the prefix rule for ordinary configuration")
 	}
 }
