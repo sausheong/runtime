@@ -4,7 +4,7 @@
 <header class="topbar">
   <a class="brand" href="/ui"><span class="logo">R</span> Runtime</a>
   <nav>
-    <a href="/ui">Agents</a>
+    <a href="/ui" aria-current="page">Agents</a>
     <a href="/ui/observability">Observability</a>
     <a href="/ui/onboarding">Onboarding</a>
     <a href="/ui/select-tenant">Switch tenant</a>
@@ -27,7 +27,11 @@
           <td><span class="badge badge-muted mono">{{.Model}}</span></td>
         </tr>
       {{else}}
-        <tr><td colspan="3" class="empty">No agents registered.</td></tr>
+        <tr><td colspan="3" class="empty">
+          <strong>No agents registered.</strong><br>
+          Agents come from the control plane's config file, or are attached at
+          runtime with <code>runtimectl admin agent add --id &lt;id&gt; --url &lt;url&gt;</code>.
+        </td></tr>
       {{end}}
       </tbody>
     </table>

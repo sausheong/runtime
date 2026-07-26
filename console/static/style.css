@@ -1,46 +1,80 @@
-/* Runtime console — self-contained styles (no external fonts/CDN; air-gap safe). */
+/* Runtime console — self-contained styles (no external fonts/CDN; air-gap safe).
+   Design system: see DESIGN.md at the repository root. Product register,
+   light + warm theme, Restrained colour (tinted neutrals + one accent). */
 :root {
-  --bg: #f6f7f9;
-  --surface: #ffffff;
-  --border: #e5e7eb;
-  --border-strong: #d1d5db;
-  --text: #111827;
-  --muted: #6b7280;
-  /* Darker muted for small text (labels, badges, table headers) where #6b7280
-     falls below the 4.5:1 WCAG bar on tinted backgrounds. ~7:1 on white. */
-  --muted-strong: #4b5563;
-  --accent: #4f46e5;
-  --accent-hover: #4338ca;
-  --accent-soft: #eef2ff;
-  --success-bg: #ecfdf5;
-  --success-border: #a7f3d0;
-  --success-text: #065f46;
-  --success: #10b981;   /* health/ok dot */
-  --row-hover: #fafafe; /* table row hover tint */
-  --danger: #b91c1c;
-  --danger-soft: #fef2f2;
-  --danger-border: #f4c9c9;
-  --shadow: 0 1px 2px rgba(16, 24, 40, .04), 0 1px 3px rgba(16, 24, 40, .08);
-  --radius: 10px;
+  /* Neutrals. Warm-tinted (hue ~80-85) rather than pure grey: no #fff, no #000.
+     A neutral with a trace of chroma reads as paper; a pure one reads as a
+     framework default. Chroma stays under .01 so nothing looks coloured. */
+  --bg: oklch(0.972 0.006 85);
+  --surface: oklch(0.995 0.003 85);
+  --surface-sunk: oklch(0.955 0.008 85);   /* table heads, toolbars, insets */
+  --border: oklch(0.905 0.008 80);
+  --border-strong: oklch(0.835 0.010 80);
+  --text: oklch(0.245 0.012 70);
+  --muted: oklch(0.555 0.012 70);
+  /* Darker muted for small text (labels, badges, table headers) where --muted
+     falls below the 4.5:1 WCAG bar on tinted backgrounds. */
+  --muted-strong: oklch(0.445 0.014 70);
+
+  /* Accent: plum. Chosen by elimination — red/green/amber are spoken for by
+     danger/success/warning, and blue/violet is the category reflex this console
+     previously fell into (indigo #4f46e5). Deep plum on warm paper is distinct
+     from every semantic hue, so a link can never be misread as a state. */
+  --accent: oklch(0.45 0.14 335);
+  --accent-hover: oklch(0.375 0.14 335);
+  --accent-soft: oklch(0.955 0.022 335);
+
+  --success: oklch(0.52 0.12 155);
+  --success-bg: oklch(0.965 0.025 155);
+  --success-border: oklch(0.865 0.055 155);
+  --success-text: oklch(0.40 0.09 155);
+  --warning: oklch(0.62 0.13 75);
+  --danger: oklch(0.505 0.165 27);
+  --danger-soft: oklch(0.965 0.018 27);
+  --danger-border: oklch(0.865 0.055 27);
+
+  --row-hover: oklch(0.968 0.010 335);  /* faintest accent wash on hover */
+
+  /* Exactly one shadow, used only where something genuinely floats (the login
+     panel over an empty field). Elevation elsewhere is a hairline border: a
+     drop shadow under every panel is the SaaS-card tell. */
+  --shadow: 0 1px 2px oklch(0.245 0.012 70 / .05), 0 2px 8px oklch(0.245 0.012 70 / .06);
+
+  --radius: 8px;
+  --radius-sm: 6px;
+
+  /* Type scale: fixed rem, 1.2 ratio. Not fluid — operators view at consistent
+     DPI, and a clamp-sized h1 that shrinks inside a panel looks worse. */
+  --fs-h1: 1.5rem;
+  --fs-h2: 1.125rem;
+  --fs-body: 0.9375rem;
+  --fs-sm: 0.85rem;
+  --fs-xs: 0.75rem;
+
+  --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
 }
 
 * { box-sizing: border-box; }
 
 body {
-  font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font: var(--fs-body)/1.55 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   margin: 0;
   color: var(--text);
   background: var(--bg);
   -webkit-font-smoothing: antialiased;
 }
 
-/* ---- Top bar ---- */
+/* ---- Top bar ----
+   min-height rather than height, and the bar is allowed to wrap: with five nav
+   items the row is ~396px wide, so on a 375px phone a fixed single line forced
+   the whole document to scroll horizontally on every authenticated page. */
 .topbar {
   display: flex;
   align-items: center;
-  gap: 1rem;
-  height: 56px;
-  padding: 0 1.5rem;
+  flex-wrap: wrap;
+  gap: .5rem 1rem;
+  min-height: 56px;
+  padding: .5rem 1.5rem;
   background: var(--surface);
   border-bottom: 1px solid var(--border);
 }
@@ -54,24 +88,32 @@ body {
   text-decoration: none;
   letter-spacing: -.01em;
 }
+/* Flat accent square, not a gradient tile. The gradient logo is the single most
+   reliable "generated SaaS admin" tell, and it spent the accent colour on
+   decoration in a UI where accent is supposed to mean "actionable". */
 .brand .logo {
   display: inline-grid;
   place-items: center;
-  width: 26px; height: 26px;
-  border-radius: 7px;
-  background: linear-gradient(135deg, var(--accent), #7c73f0);
-  color: #fff;
-  font-size: 15px; font-weight: 700;
+  width: 24px; height: 24px;
+  border-radius: var(--radius-sm);
+  background: var(--accent);
+  color: var(--surface);
+  font-size: 14px; font-weight: 700;
+  letter-spacing: -.02em;
 }
-.topbar nav { display: flex; align-items: center; gap: .25rem; margin-left: auto; }
+.topbar nav { display: flex; align-items: center; flex-wrap: wrap; gap: .125rem; margin-left: auto; }
 .topbar nav a, .topbar nav .navbtn {
-  padding: .4rem .7rem;
-  border-radius: 7px;
-  color: var(--muted);
+  padding: .35rem .65rem;
+  border-radius: var(--radius-sm);
+  color: var(--muted-strong);
   text-decoration: none;
   font-weight: 500;
+  font-size: var(--fs-sm);
 }
-.topbar nav a:hover { background: var(--bg); color: var(--text); text-decoration: none; }
+.topbar nav a:hover { background: var(--surface-sunk); color: var(--text); text-decoration: none; }
+/* Current page: an ink-weight label, not an accent fill. Accent stays reserved
+   for things you can act on. */
+.topbar nav a[aria-current="page"] { color: var(--text); font-weight: 620; }
 .topbar nav form { margin: 0; }
 .topbar nav .navbtn {
   background: transparent;
@@ -83,61 +125,75 @@ body {
 .topbar nav .navbtn:hover { background: var(--bg); color: var(--text); }
 
 /* ---- Layout ---- */
-.container { max-width: 960px; margin: 0 auto; padding: 2rem 1.5rem 4rem; }
-.page-head { margin: 0 0 1.5rem; }
-h1 { font-size: 1.4rem; font-weight: 650; margin: 0 0 .25rem; letter-spacing: -.02em; }
-h2 { font-size: 1.05rem; font-weight: 600; margin: 0 0 .9rem; letter-spacing: -.01em; }
-.subtitle { color: var(--muted); font-size: .9rem; margin: 0; }
-.breadcrumb { font-size: .85rem; margin: 0 0 1rem; }
+.container { max-width: 1040px; margin: 0 auto; padding: 2rem 1.5rem 4rem; }
+/* Rhythm is deliberately uneven: a generous gap below the page head, tighter
+   gaps between sibling panels. Uniform spacing everywhere is the monotony that
+   makes an interface read as generated. */
+.page-head { margin: 0 0 2rem; }
+h1 { font-size: var(--fs-h1); font-weight: 640; margin: 0 0 .35rem; letter-spacing: -.022em; }
+h2 { font-size: var(--fs-h2); font-weight: 620; margin: 0 0 .85rem; letter-spacing: -.012em; }
+.subtitle { color: var(--muted); font-size: var(--fs-sm); margin: 0; max-width: 68ch; }
+.breadcrumb { font-size: var(--fs-sm); margin: 0 0 1rem; }
 .breadcrumb a { color: var(--muted); text-decoration: none; }
 .breadcrumb a:hover { color: var(--accent); }
 
 a { color: var(--accent); text-decoration: none; }
 a:hover { text-decoration: underline; }
 
-/* ---- Cards ---- */
+/* ---- Panels (was: cards) ----
+   A bordered region with a heading, not a floating tile. No shadow: on a tinted
+   field one hairline separates plenty, and a shadow under every panel is the
+   thing that makes an operator tool look like a template. Never nested. */
 .card {
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  box-shadow: var(--shadow);
-  padding: 1.25rem 1.4rem;
-  margin-bottom: 1.25rem;
+  padding: 1.25rem 1.5rem;
+  margin-bottom: 1rem;
 }
 .card > h2:first-child { margin-top: 0; }
-.card-desc { color: var(--muted); font-size: .85rem; margin: -.5rem 0 1rem; }
+.card-desc { color: var(--muted); font-size: var(--fs-sm); margin: -.5rem 0 1rem; max-width: 68ch; }
 
 /* ---- Tables ---- */
 table { border-collapse: collapse; width: 100%; }
+/* Sunk header: a tonal shift reads as structure without adding a second border
+   weight, and keeps the header legible when a table scrolls under it. */
 thead th {
   text-align: left;
-  font-size: .72rem;
+  font-size: var(--fs-xs);
   text-transform: uppercase;
-  letter-spacing: .04em;
+  letter-spacing: .045em;
   color: var(--muted-strong);
   font-weight: 600;
-  padding: .5rem .75rem;
+  padding: .55rem .8rem;
+  background: var(--surface-sunk);
   border-bottom: 1px solid var(--border);
 }
-tbody td { padding: .7rem .75rem; border-bottom: 1px solid var(--border); vertical-align: middle; }
+thead th:first-child { border-top-left-radius: var(--radius-sm); }
+thead th:last-child { border-top-right-radius: var(--radius-sm); }
+tbody td { padding: .7rem .8rem; border-bottom: 1px solid var(--border); vertical-align: middle; }
 tbody tr:last-child td { border-bottom: none; }
 tbody tr:hover { background: var(--row-hover); }
 td.actions { text-align: right; width: 1%; white-space: nowrap; }
-.mono { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: .85rem; }
+.mono { font-family: var(--mono); font-size: var(--fs-sm); }
 
-/* ---- Badges ---- */
+/* ---- Badges ----
+   Enumerated state only (role, health, model) — never decoration. Each carries
+   a hairline as well as a tint so it survives forced-colors and low-quality
+   displays where a pale wash disappears. */
 .badge {
   display: inline-block;
   padding: .15rem .55rem;
   border-radius: 999px;
-  font-size: .75rem;
+  font-size: var(--fs-xs);
   font-weight: 600;
-  line-height: 1.4;
+  line-height: 1.45;
+  border: 1px solid transparent;
 }
-.badge-role { background: var(--accent-soft); color: var(--accent); }
-.badge-ok { background: var(--success-bg); color: var(--success-text); }
-.badge-muted { background: #f3f4f6; color: var(--muted-strong); }
-.badge-danger { background: var(--danger-soft); color: var(--danger); }
+.badge-role { background: var(--accent-soft); color: var(--accent); border-color: oklch(0.885 0.045 335); }
+.badge-ok { background: var(--success-bg); color: var(--success-text); border-color: var(--success-border); }
+.badge-muted { background: var(--surface-sunk); color: var(--muted-strong); border-color: var(--border); }
+.badge-danger { background: var(--danger-soft); color: var(--danger); border-color: var(--danger-border); }
 .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: .4rem; vertical-align: middle; }
 /* Not color alone: ok is a filled dot, off is a hollow ring (WCAG 1.4.1). */
 .dot-ok { background: var(--success); }
@@ -151,18 +207,24 @@ td.actions { text-align: right; width: 1%; white-space: nowrap; }
 
 /* ---- Forms ---- */
 form .row { gap: .6rem; align-items: center; }
-label { font-size: .85rem; font-weight: 500; color: var(--text); }
+label { font-size: var(--fs-sm); font-weight: 500; color: var(--text); }
 input[type=text], input[type=password], input:not([type]), select {
   font: inherit;
   padding: .5rem .65rem;
   border: 1px solid var(--border-strong);
-  border-radius: 8px;
-  background: #fff;
+  border-radius: var(--radius);
+  background: var(--surface);
   color: var(--text);
   min-width: 0;
+  transition: border-color .15s ease, box-shadow .15s ease;
 }
-input::placeholder { color: #9ca3af; }
+input::placeholder { color: var(--muted); }
 input:focus, select:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+input:disabled, select:disabled, textarea:disabled {
+  background: var(--surface-sunk);
+  color: var(--muted);
+  cursor: not-allowed;
+}
 
 /* Keyboard focus for everything else: links, buttons, nav. Inputs keep their
    ring above; this restores a visible indicator the custom styling otherwise
@@ -173,21 +235,33 @@ a:focus-visible, button:focus-visible, .btn:focus-visible, .navbtn:focus-visible
   outline-offset: 2px;
   border-radius: 4px;
 }
-fieldset { border: 1px solid var(--border); border-radius: 8px; padding: .8rem 1rem; margin: .8rem 0; }
-legend { font-size: .8rem; font-weight: 600; color: var(--muted); padding: 0 .4rem; }
+fieldset { border: 1px solid var(--border); border-radius: var(--radius); padding: .9rem 1.1rem; margin: .9rem 0; }
+legend { font-size: var(--fs-xs); font-weight: 600; text-transform: uppercase; letter-spacing: .045em; color: var(--muted-strong); padding: 0 .4rem; }
 
 button, .btn {
   font: inherit;
   font-weight: 600;
+  font-size: var(--fs-sm);
   padding: .5rem .9rem;
-  border-radius: 8px;
+  border-radius: var(--radius);
   border: 1px solid var(--accent);
   background: var(--accent);
-  color: #fff;
+  color: var(--surface);
   cursor: pointer;
-  transition: background .12s ease;
+  transition: background .15s ease, border-color .15s ease;
 }
 button:hover, .btn:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
+button:active, .btn:active { background: var(--accent-hover); }
+/* Disabled was previously unstyled: a primary-looking button that silently does
+   nothing. Every interactive element here ships default/hover/focus/active/
+   disabled. */
+button:disabled, .btn:disabled, button[aria-disabled="true"] {
+  background: var(--surface-sunk);
+  border-color: var(--border);
+  color: var(--muted);
+  cursor: not-allowed;
+}
+button:disabled:hover, .btn:disabled:hover { background: var(--surface-sunk); border-color: var(--border); }
 button.play {
   width: 2.1rem;
   height: 2.1rem;
@@ -201,31 +275,35 @@ button.play {
 }
 button.ghost {
   background: transparent;
-  color: var(--muted);
+  color: var(--muted-strong);
   border-color: var(--border-strong);
 }
-button.ghost:hover { background: var(--bg); color: var(--text); }
+button.ghost:hover { background: var(--surface-sunk); color: var(--text); border-color: var(--border-strong); }
 button.danger {
   background: transparent;
   color: var(--danger);
   border-color: var(--danger-border);
   padding: .35rem .7rem;
-  font-size: .85rem;
+  font-size: var(--fs-sm);
 }
 button.danger:hover { background: var(--danger-soft); border-color: var(--danger); }
 
-/* ---- Flash / alerts ---- */
+/* ---- Flash / alerts ----
+   Full border plus a tint, never a thick left stripe: the side-stripe callout
+   is a banned pattern, and it also breaks alignment with everything else on
+   the page. */
 .flash {
   display: flex; align-items: center; gap: .5rem;
   padding: .7rem .9rem;
   background: var(--success-bg);
   border: 1px solid var(--success-border);
   color: var(--success-text);
-  border-radius: 8px;
-  font-size: .9rem;
+  border-radius: var(--radius);
+  font-size: var(--fs-sm);
   margin-bottom: 1.25rem;
   word-break: break-all;
 }
+.flash-error { background: var(--danger-soft); border-color: var(--danger-border); color: var(--danger); }
 
 /* ---- New-key reveal (shown once, on creation) ---- */
 .key-reveal {
@@ -235,103 +313,119 @@ button.danger:hover { background: var(--danger-soft); border-color: var(--danger
   padding: .9rem 1rem;
   margin-bottom: 1.25rem;
 }
-.key-reveal-head { margin: 0 0 .5rem; font-size: .85rem; font-weight: 600; color: var(--accent-hover); }
+.key-reveal-head { margin: 0 0 .5rem; font-size: var(--fs-sm); font-weight: 600; color: var(--accent-hover); }
 .key-reveal-value {
   display: block;
-  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-  font-size: .9rem;
+  font-family: var(--mono);
+  font-size: var(--fs-sm);
   background: var(--surface);
   border: 1px solid var(--border-strong);
-  border-radius: 8px;
+  border-radius: var(--radius);
   padding: .55rem .7rem;
   overflow-wrap: anywhere;
   user-select: all;
 }
 
-/* ---- Empty state ---- */
-.empty { color: var(--muted); font-size: .9rem; padding: .6rem .75rem; }
+/* ---- Empty state ----
+   Teaches the next action rather than announcing absence; the templates supply
+   the "how", this just gives it room to be a sentence instead of a shrug. */
+.empty { color: var(--muted); font-size: var(--fs-sm); padding: 1.25rem .8rem; line-height: 1.6; }
+.empty strong { color: var(--text); font-weight: 600; }
+.empty code { font-family: var(--mono); font-size: .95em; background: var(--surface-sunk); border: 1px solid var(--border); border-radius: 4px; padding: .1rem .35rem; }
 
-/* ---- Stream / pre ---- */
+/* ---- Stream / pre ----
+   The one dark surface in a light UI, and deliberately so: a transcript is
+   verbatim machine output, and the tonal break says "this is not chrome, this
+   is the log". Warm-tinted like every other neutral so it reads as part of the
+   system rather than a pasted-in slate block. */
 pre {
-  background: #0f172a;
-  color: #e2e8f0;
+  background: oklch(0.245 0.014 70);
+  color: oklch(0.895 0.008 85);
   padding: 1rem 1.1rem;
   border-radius: var(--radius);
   white-space: pre-wrap;
   word-break: break-word;
-  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-  font-size: .85rem;
-  line-height: 1.55;
+  font-family: var(--mono);
+  font-size: var(--fs-sm);
+  line-height: 1.6;
   min-height: 6rem;
   max-height: 70vh;
   overflow: auto;
 }
 
-/* ---- Centered auth card (login) ---- */
+/* ---- Centered auth panel (login) ----
+   The one place a shadow is earned: this genuinely floats over an empty field
+   with nothing else on screen to establish depth. */
 .auth-wrap { min-height: 100vh; display: grid; place-items: center; padding: 1.5rem; }
 .auth-card {
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 14px;
+  border-radius: 12px;
   box-shadow: var(--shadow);
-  padding: 2rem;
+  padding: 2.25rem 2rem;
   width: 100%;
   max-width: 360px;
   text-align: center;
 }
-.auth-card .brand { justify-content: center; margin-bottom: 1.25rem; font-size: 1.15rem; }
+.auth-card .brand { justify-content: center; margin-bottom: 1.5rem; font-size: 1.1rem; }
 .auth-card form { display: flex; flex-direction: column; gap: .7rem; margin-top: 1rem; }
 .auth-card input { width: 100%; padding: .6rem .7rem; }
 .auth-card button { width: 100%; padding: .6rem; }
-.auth-hint { color: var(--muted); font-size: .82rem; margin-top: 1rem; }
+.auth-hint { color: var(--muted); font-size: var(--fs-sm); margin-top: 1.25rem; line-height: 1.6; }
 
 /* ---- Top-bar accent button (landing sign-in) ---- */
 .navbtn-accent {
   background: var(--accent) !important;
-  color: #fff !important;
+  color: var(--surface) !important;
   border: 1px solid var(--accent) !important;
   font-weight: 600;
 }
-.navbtn-accent:hover { background: var(--accent-hover) !important; color: #fff !important; text-decoration: none; }
+.navbtn-accent:hover { background: var(--accent-hover) !important; color: var(--surface) !important; text-decoration: none; }
 
-/* ---- Landing page ---- */
-.landing { max-width: 960px; margin: 0 auto; padding: 0 1.5rem 4rem; }
+/* ---- Landing page ----
+   The one surface here that is closer to brand register: it is what an operator
+   sees before authenticating. Left-aligned rather than centre-stacked — the
+   centred eyebrow/title/sub/CTA column is the SaaS hero template, and this page
+   is addressing someone who already self-hosted the product, not a prospect. */
+.landing { max-width: 1040px; margin: 0 auto; padding: 0 1.5rem 4rem; }
 .hero {
-  text-align: center;
-  padding: 4.5rem 1rem 3.5rem;
-  max-width: 680px;
-  margin: 0 auto;
+  padding: 4.5rem 0 3rem;
+  max-width: 46rem;
 }
+/* A quiet label, not a pill: the accent-filled capsule reads as marketing
+   chrome and spends accent on decoration. */
 .eyebrow {
-  display: inline-block;
-  font-size: .75rem;
+  display: block;
+  font-size: var(--fs-xs);
   font-weight: 600;
   text-transform: uppercase;
-  letter-spacing: .06em;
-  color: var(--accent);
-  background: var(--accent-soft);
-  padding: .25rem .7rem;
-  border-radius: 999px;
-  margin-bottom: 1.25rem;
+  letter-spacing: .09em;
+  color: var(--muted-strong);
+  margin-bottom: 1rem;
 }
 .hero-title {
-  font-size: 2.6rem;
-  line-height: 1.1;
-  font-weight: 700;
-  letter-spacing: -.03em;
+  font-size: 2.5rem;
+  line-height: 1.08;
+  font-weight: 680;
+  letter-spacing: -.032em;
   margin: 0 0 1rem;
+  max-width: 18ch;
 }
 .hero-sub {
-  font-size: 1.05rem;
-  line-height: 1.6;
-  color: var(--muted);
-  margin: 0 auto 2rem;
-  max-width: 540px;
+  font-size: 1.0625rem;
+  line-height: 1.65;
+  color: var(--muted-strong);
+  margin: 0 0 2rem;
+  max-width: 62ch;
 }
-.hero-cta { display: flex; flex-direction: column; align-items: center; gap: .8rem; }
-.cta-hint { color: var(--muted); font-size: .82rem; margin: 0; }
+.hero-cta { display: flex; flex-direction: column; align-items: flex-start; gap: .8rem; }
+.cta-hint { color: var(--muted); font-size: var(--fs-sm); margin: 0; }
 
-/* Google button — Google brand guidance: white surface, neutral border. */
+/* Google button — Google brand guidance: white surface, neutral border. The
+   #fff / #3c4043 / #f8f9fa values are Google's, not ours, and are the one place
+   in this stylesheet exempt from the tinted-neutral rule: a sign-in button that
+   deviates from the published spec is a trust signal in the wrong direction.
+   The shadow is ours, so it uses the warm system token. */
 .btn-google {
   display: inline-flex;
   align-items: center;
@@ -339,54 +433,60 @@ pre {
   background: #fff;
   color: #3c4043;
   border: 1px solid var(--border-strong);
-  border-radius: 8px;
+  border-radius: var(--radius);
   padding: .7rem 1.4rem;
-  font-size: .98rem;
+  font-size: var(--fs-body);
   font-weight: 600;
   text-decoration: none;
   box-shadow: var(--shadow);
-  transition: background .12s ease, box-shadow .12s ease;
+  transition: background .15s ease, box-shadow .15s ease;
 }
 .btn-google:hover {
   background: #f8f9fa;
   text-decoration: none;
-  box-shadow: 0 1px 3px rgba(16,24,40,.12), 0 2px 6px rgba(16,24,40,.10);
+  box-shadow: 0 1px 3px oklch(0.245 0.012 70 / .10), 0 3px 10px oklch(0.245 0.012 70 / .10);
 }
 .btn-google .g-logo { flex: none; }
 
 /* Token fallback form (shown only when OIDC is off) */
-.token-form { display: flex; gap: .5rem; flex-wrap: wrap; justify-content: center; }
+.token-form { display: flex; gap: .5rem; flex-wrap: wrap; }
 .token-form input { min-width: 220px; padding: .6rem .7rem; }
 
-/* Pillars */
-.pillars { margin-top: 1.5rem; }
+/* Pillars ----
+   Was six identical shadowed tiles in a 3x2 grid: the "icon + heading + text,
+   repeated endlessly" card grid, and a banned pattern. These six items are a
+   LIST of what the platform provides, so they are set as a list — hairline
+   rules, no boxes, name and description on one line at width. Reads faster and
+   stops competing with the hero. */
+.pillars { margin-top: 2.5rem; border-top: 1px solid var(--border); padding-top: 2rem; }
 .pillars-head {
-  text-align: center;
-  font-size: 1.1rem;
+  font-size: var(--fs-xs);
   font-weight: 600;
-  color: var(--text);
-  margin: 0 0 1.5rem;
+  text-transform: uppercase;
+  letter-spacing: .09em;
+  color: var(--muted-strong);
+  margin: 0 0 1.25rem;
 }
 .pillar-grid {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 1rem;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0 3rem;
 }
 .pillar {
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  box-shadow: var(--shadow);
-  padding: 1.1rem 1.2rem;
+  display: grid;
+  grid-template-columns: 9rem 1fr;
+  gap: 1rem;
+  align-items: baseline;
+  padding: .8rem 0;
+  border-bottom: 1px solid var(--border);
 }
-.pillar-name { display: block; font-weight: 650; margin-bottom: .25rem; letter-spacing: -.01em; }
-.pillar-desc { display: block; font-size: .85rem; color: var(--muted); line-height: 1.45; }
+.pillar-name { font-weight: 620; letter-spacing: -.01em; font-size: var(--fs-sm); }
+.pillar-desc { font-size: var(--fs-sm); color: var(--muted-strong); line-height: 1.55; }
 
 .landing-foot {
-  text-align: center;
   color: var(--muted);
-  font-size: .82rem;
-  padding: 2rem 1.5rem 3rem;
+  font-size: var(--fs-sm);
+  padding: 2rem 0 3rem;
   border-top: 1px solid var(--border);
   margin-top: 2rem;
 }
@@ -395,28 +495,63 @@ pre {
   * { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; scroll-behavior: auto !important; }
 }
 
+/* Two-up pillar list needs a single column before the 640px phone breakpoint:
+   a 9rem name gutter beside a description does not survive a tablet width. */
+@media (max-width: 860px) {
+  .pillar-grid { grid-template-columns: 1fr; gap: 0; }
+}
+
 @media (max-width: 640px) {
-  .hero-title { font-size: 2rem; }
-  .pillar-grid { grid-template-columns: 1fr; }
-  .hero { padding-top: 3rem; }
+  .hero-title { font-size: 1.9rem; max-width: none; }
+  .hero { padding: 3rem 0 2.5rem; }
+  /* Name stacks above description once the gutter no longer fits. */
+  .pillar { grid-template-columns: 1fr; gap: .2rem; }
   /* Stat tiles: two-up grid so they wrap evenly instead of leaving an orphan. */
   .row .stat { flex: 1 1 calc(50% - .75rem); min-width: 0; }
   .container { padding: 1.25rem 1rem 3rem; }
+  .card { padding: 1rem 1.1rem; }
   .status-strip { gap: .4rem .75rem; }
+  /* Nav drops to its own full-width line below the brand rather than being
+     squeezed beside it; margin-left:auto would otherwise push it off-canvas. */
+  .topbar { padding: .5rem 1rem; }
+  .topbar nav { margin-left: 0; width: 100%; gap: .125rem .25rem; }
 }
 
-/* ---- Stat tiles (observability) ---- */
+/* ---- Stat tiles (observability) ----
+   Left-aligned, label above value, no shadow. Centred big-number-over-small-
+   label tiles are the hero-metric template; left alignment also lets the eye
+   scan a row of figures down a common edge, which is what these are for. */
 .stat {
   flex: 1;
   min-width: 110px;
-  padding: .9rem 1rem;
-  background: var(--bg);
+  padding: .75rem .9rem;
+  background: var(--surface-sunk);
   border: 1px solid var(--border);
-  border-radius: 10px;
-  text-align: center;
+  border-radius: var(--radius);
+  /* The markup emits value-then-label; column-reverse lifts the label above the
+     figure without touching eight template lines. The DOM order is also the
+     better reading order for a screen reader ("1,240 — tokens in"). */
+  display: flex;
+  flex-direction: column-reverse;
+  justify-content: flex-end;
 }
-.stat-num { font-size: 1.6rem; font-weight: 650; letter-spacing: -.02em; color: var(--text); font-variant-numeric: tabular-nums; }
-.stat-label { font-size: .75rem; text-transform: uppercase; letter-spacing: .04em; color: var(--muted-strong); margin-top: .2rem; }
+.stat-num {
+  font-size: 1.4rem;
+  font-weight: 620;
+  letter-spacing: -.022em;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.2;
+}
+/* Sits visually above the figure (column-reverse), so the gap goes on the
+   bottom edge as rendered — i.e. margin-top in flow terms. */
+.stat-label {
+  font-size: var(--fs-xs);
+  text-transform: uppercase;
+  letter-spacing: .045em;
+  color: var(--muted-strong);
+  margin-top: .3rem;
+}
 /* A stat tile that carries a warning signal (e.g. non-zero error count). */
 .stat-warn { border-color: var(--danger-border); background: var(--danger-soft); }
 .stat-warn .stat-num { color: var(--danger); }
@@ -431,9 +566,8 @@ pre {
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  box-shadow: var(--shadow);
   margin-bottom: 1.25rem;
-  font-size: .9rem;
+  font-size: var(--fs-sm);
 }
 .status-strip .status-health { display: inline-flex; align-items: center; font-weight: 600; }
 .status-strip .status-sep { width: 1px; height: 1.1rem; background: var(--border); }
