@@ -144,6 +144,29 @@ for vm in control-plane agent-go agent-python; do
     --metadata startup-script="$STARTUP"
 done
 
+# --- Public ingress for the control plane (console + API via Caddy) ---
+# Both steps below are required for https://<site> to work, and BOTH are lost
+# when the control-plane VM is recreated: instances are created --no-address, so
+# a rebuilt VM has no public IP, and tags do not survive deletion either. Without
+# the IP there is nowhere for DNS to point; without the runtime-https tag the
+# firewall rule does not apply, so Caddy's ACME HTTP-01 challenge cannot be
+# reached and TLS never issues. Both were observed taking the live endpoint down
+# after a rebuild, which is why they are automated here rather than documented.
+#
+# Set CP_PUBLIC_ADDRESS to a reserved static address name or IP to attach it.
+# Left unset, the control plane stays private (IAP-only) — the safe default.
+CP_PUBLIC_ADDRESS="${CP_PUBLIC_ADDRESS:-}"
+if [ -n "$CP_PUBLIC_ADDRESS" ]; then
+  if [ -z "$(g compute instances describe runtime-control-plane --zone "$ZONE" \
+      --format='get(networkInterfaces[0].accessConfigs[0].natIP)')" ]; then
+    g compute instances add-access-config runtime-control-plane --zone "$ZONE" \
+      --address "$CP_PUBLIC_ADDRESS" --access-config-name external-nat
+  fi
+  g compute instances add-tags runtime-control-plane --zone "$ZONE" --tags runtime-https
+  echo "control plane public address: $(g compute instances describe runtime-control-plane \
+    --zone "$ZONE" --format='get(networkInterfaces[0].accessConfigs[0].natIP)')"
+fi
+
 echo "--- reserved internal IPs (already match runtime.remote.yaml) ---"
 for vm in control-plane agent-go agent-python; do
   ip=$(g compute instances describe "runtime-$vm" --zone "$ZONE" \

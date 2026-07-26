@@ -11,6 +11,12 @@ name: runtime-agent-python
 services:
   nutrition-openai:
     image: ${NUTRITION_OPENAI_IMAGE:?set NUTRITION_OPENAI_IMAGE to an immutable git tag or digest}
+    # Run as the image's non-root uid. Without this Docker creates the named
+    # volume below as root:root 0755, and the container (USER agent, uid 1000)
+    # cannot create its SQLite file: "unable to open database file" on a fresh
+    # install, "attempt to write a readonly database" on one that predates the
+    # image going non-root. Both were observed on the live GCP deployment.
+    user: "1000:1000"
     # Shared LLM-proxy routing (OPENAI_BASE_URL + OPENAI_MODEL) comes from the
     # untracked ../llm.env (one file for all agent VMs). The API key stays in
     # this dir's own .env.

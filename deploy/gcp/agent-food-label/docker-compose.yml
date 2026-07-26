@@ -9,6 +9,12 @@ name: runtime-agent-food-label
 services:
   food-label-advisor:
     image: ${FOOD_LABEL_IMAGE:?set FOOD_LABEL_IMAGE to an immutable git tag or digest}
+    # Run as the image's non-root uid. Without this Docker creates the named
+    # volume below as root:root 0755, and the container (USER agent, uid 1000)
+    # cannot create its SQLite file: "unable to open database file" on a fresh
+    # install, "attempt to write a readonly database" on one that predates the
+    # image going non-root. Both were observed on the live GCP deployment.
+    user: "1000:1000"
     env_file:
       - ../llm.env               # ANTHROPIC_BASE_URL + ANTHROPIC_MODEL
     environment:
