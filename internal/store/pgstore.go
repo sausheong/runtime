@@ -54,6 +54,18 @@ type Migration struct {
 	SQL     string
 }
 
+var coreMigrations = []Migration{
+	{Version: 1, Name: "baseline", SQL: schemaSQL},
+	{Version: 2, Name: "agent-tenant-row-security", SQL: tenantRLSSQL},
+	{Version: 3, Name: "row-security-session-user", SQL: tenantRLSSessionUserSQL},
+	{Version: 4, Name: "quarantine-legacy-unowned-sessions", SQL: quarantineLegacySessionsSQL},
+	{Version: 5, Name: "enforce-child-tenant-integrity", SQL: childTenantIntegritySQL},
+	{Version: 6, Name: "test-role-wildcard-support", SQL: testRoleWildcardSQL},
+	{Version: 7, Name: "bind-sessions-to-agent-generation", SQL: sessionAgentGenerationSQL},
+	{Version: 8, Name: "scope-agent-roles-to-agent-identity", SQL: agentRoleScopeSQL},
+	{Version: 9, Name: "repair-referential-integrity", SQL: referentialIntegritySQL},
+}
+
 func (p *pgStore) Ping(ctx context.Context) error { return p.db.PingContext(ctx) }
 
 func NewPGStore(ctx context.Context, dsn string) (Store, error) {
@@ -77,17 +89,7 @@ func newPGStore(ctx context.Context, dsn string, applyDDL bool) (Store, error) {
 		return nil, fmt.Errorf("ping postgres: %w", err)
 	}
 	if applyDDL {
-		if err := ApplyMigrationsLocked(ctx, db, coreSchemaComponent, 1, coreSchemaVersion, []Migration{
-			{Version: 1, Name: "baseline", SQL: schemaSQL},
-			{Version: 2, Name: "agent-tenant-row-security", SQL: tenantRLSSQL},
-			{Version: 3, Name: "row-security-session-user", SQL: tenantRLSSessionUserSQL},
-			{Version: 4, Name: "quarantine-legacy-unowned-sessions", SQL: quarantineLegacySessionsSQL},
-			{Version: 5, Name: "enforce-child-tenant-integrity", SQL: childTenantIntegritySQL},
-			{Version: 6, Name: "test-role-wildcard-support", SQL: testRoleWildcardSQL},
-			{Version: 7, Name: "bind-sessions-to-agent-generation", SQL: sessionAgentGenerationSQL},
-			{Version: 8, Name: "scope-agent-roles-to-agent-identity", SQL: agentRoleScopeSQL},
-			{Version: 9, Name: "repair-referential-integrity", SQL: referentialIntegritySQL},
-		}); err != nil {
+		if err := ApplyMigrationsLocked(ctx, db, coreSchemaComponent, 1, coreSchemaVersion, coreMigrations); err != nil {
 			db.Close()
 			return nil, err
 		}
@@ -102,7 +104,7 @@ func newPGStore(ctx context.Context, dsn string, applyDDL bool) (Store, error) {
 			db.Close()
 			return nil, err
 		}
-	} else if err := CheckSchemaVersion(ctx, db, coreSchemaComponent, coreSchemaVersion, coreSchemaVersion); err != nil {
+	} else if err := CheckCoreSchema(ctx, db); err != nil {
 		db.Close()
 		return nil, err
 	}
@@ -383,6 +385,124 @@ func CheckSchemaVersion(ctx context.Context, db *sql.DB, component string, minSu
 	if version < minSupported || version > maxSupported {
 		return fmt.Errorf("component %q schema version %d outside supported range %d..%d",
 			component, version, minSupported, maxSupported)
+	}
+	return nil
+}
+
+// CheckSchemaMigrations validates the complete immutable ledger without
+// applying DDL. It is suitable for restricted binaries that can read the
+// migration table but must never own or repair schema objects.
+func CheckSchemaMigrations(ctx context.Context, db *sql.DB, component string, minSupported, maxSupported int, expected []Migration) error {
+	if component == "" || minSupported < 1 || maxSupported < minSupported || len(expected) < maxSupported {
+		return fmt.Errorf("invalid schema preflight for component %q", component)
+	}
+	rows, err := db.QueryContext(ctx, `
+		SELECT version, name, checksum
+		  FROM runtime_schema_migrations
+		 WHERE component=$1
+		 ORDER BY version`, component)
+	if err != nil {
+		return fmt.Errorf("check %s migration ledger: %w", component, err)
+	}
+	defer rows.Close()
+	seen := 0
+	for rows.Next() {
+		var version int
+		var name, checksum string
+		if err := rows.Scan(&version, &name, &checksum); err != nil {
+			return fmt.Errorf("read %s migration ledger: %w", component, err)
+		}
+		if version != seen+1 || version > maxSupported {
+			return fmt.Errorf("component %q migration ledger is not contiguous at version %d", component, version)
+		}
+		want := expected[version-1]
+		if name != want.Name || checksum != migrationChecksum(want) {
+			return fmt.Errorf("component %q migration %d name or checksum mismatch", component, version)
+		}
+		seen = version
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("read %s migration ledger: %w", component, err)
+	}
+	if seen < minSupported || seen > maxSupported {
+		return fmt.Errorf("component %q schema version %d outside supported range %d..%d",
+			component, seen, minSupported, maxSupported)
+	}
+	return nil
+}
+
+// CheckCoreSchema validates the immutable core ledger and the structural
+// objects a restricted agent relies on. Every query is read-only.
+func CheckCoreSchema(ctx context.Context, db *sql.DB) error {
+	if err := CheckSchemaMigrations(ctx, db, coreSchemaComponent,
+		coreSchemaVersion, coreSchemaVersion, coreMigrations); err != nil {
+		return err
+	}
+	var tableCount, rlsCount int
+	if err := db.QueryRowContext(ctx, `
+		SELECT count(*), count(*) FILTER (WHERE c.relrowsecurity)
+		  FROM pg_catalog.pg_class c
+		  JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
+		 WHERE n.nspname='public'
+		   AND c.relkind IN ('r','p')
+		   AND c.relname IN ('sessions','session_events','session_transcripts','online_eval_results')`,
+	).Scan(&tableCount, &rlsCount); err != nil {
+		return fmt.Errorf("check core tables and row security: %w", err)
+	}
+	if tableCount != 4 || rlsCount != 4 {
+		return fmt.Errorf("core schema integrity: required tables=%d/4 row-security=%d/4", tableCount, rlsCount)
+	}
+	var policyCount int
+	if err := db.QueryRowContext(ctx, `
+		SELECT count(*)
+		  FROM pg_catalog.pg_policy p
+		  JOIN pg_catalog.pg_class c ON c.oid=p.polrelid
+		  JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
+		 WHERE n.nspname='public'
+		   AND (c.relname, p.polname) IN (
+		       ('sessions','runtime_agent_tenant_sessions'),
+		       ('session_events','runtime_agent_tenant_events'),
+		       ('session_transcripts','runtime_agent_tenant_transcripts'),
+		       ('online_eval_results','runtime_agent_tenant_online_results')
+		   )`).Scan(&policyCount); err != nil {
+		return fmt.Errorf("check core row-security policies: %w", err)
+	}
+	if policyCount != 4 {
+		return fmt.Errorf("core schema integrity: required row-security policies=%d/4", policyCount)
+	}
+	var triggerCount int
+	if err := db.QueryRowContext(ctx, `
+		SELECT count(*)
+		  FROM pg_catalog.pg_trigger t
+		  JOIN pg_catalog.pg_class c ON c.oid=t.tgrelid
+		  JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
+		 WHERE n.nspname='public' AND NOT t.tgisinternal AND t.tgenabled <> 'D'
+		   AND (c.relname, t.tgname) IN (
+		       ('session_transcripts','runtime_session_transcript_tenant'),
+		       ('online_eval_results','runtime_online_eval_tenant')
+		   )`,
+	).Scan(&triggerCount); err != nil {
+		return fmt.Errorf("check core tenant-integrity triggers: %w", err)
+	}
+	if triggerCount != 2 {
+		return fmt.Errorf("core schema integrity: required tenant-integrity triggers=%d/2", triggerCount)
+	}
+	var foreignKeyCount int
+	if err := db.QueryRowContext(ctx, `
+		SELECT count(*)
+		  FROM pg_catalog.pg_constraint fk
+		  JOIN pg_catalog.pg_class child ON child.oid=fk.conrelid
+		  JOIN pg_catalog.pg_class parent ON parent.oid=fk.confrelid
+		  JOIN pg_catalog.pg_namespace n ON n.oid=child.relnamespace
+		 WHERE n.nspname='public'
+		   AND fk.contype='f' AND fk.confdeltype='c'
+		   AND parent.relname='sessions'
+		   AND child.relname IN ('session_events','session_transcripts','online_eval_results')`,
+	).Scan(&foreignKeyCount); err != nil {
+		return fmt.Errorf("check core session foreign keys: %w", err)
+	}
+	if foreignKeyCount != 3 {
+		return fmt.Errorf("core schema integrity: required session foreign keys=%d/3", foreignKeyCount)
 	}
 	return nil
 }
@@ -763,30 +883,38 @@ func (p *pgStore) AppendTranscript(ctx context.Context, sessionID string, turn i
 }
 
 func (p *pgStore) PutOnlineResult(ctx context.Context, sessionID, criterion, tenant, actor, scorer string, passed bool, detail string) error {
-	_, err := p.PutOnlineResultIfNew(
+	_, _, err := p.PutOnlineResultIfNew(
 		ctx, sessionID, criterion, tenant, actor, scorer, passed, detail)
 	return err
 }
 
-func (p *pgStore) PutOnlineResultIfNew(ctx context.Context, sessionID, criterion, tenant, actor, scorer string, passed bool, detail string) (bool, error) {
-	var inserted bool
+func (p *pgStore) PutOnlineResultIfNew(ctx context.Context, sessionID, criterion, tenant, actor, scorer string, passed bool, detail string) (bool, bool, error) {
+	var authoritative bool
 	err := p.db.QueryRowContext(ctx,
 		`INSERT INTO online_eval_results (session_id, criterion_name, tenant, actor_id, scorer, passed, detail)
 		 SELECT s.id,$2,s.tenant_id,$3,$4,$5,$6
 		   FROM sessions s
 		  WHERE s.id=$1
-		 ON CONFLICT (session_id, criterion_name) DO UPDATE SET
-		   passed=EXCLUDED.passed, detail=EXCLUDED.detail, scorer=EXCLUDED.scorer,
-		   tenant=EXCLUDED.tenant, actor_id=EXCLUDED.actor_id
-		 RETURNING (xmax = 0)`,
-		sessionID, criterion, actor, scorer, passed, detail).Scan(&inserted)
+		 ON CONFLICT (session_id, criterion_name) DO NOTHING
+		 RETURNING passed`,
+		sessionID, criterion, actor, scorer, passed, detail).Scan(&authoritative)
+	if err == nil {
+		return true, authoritative, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return false, false, fmt.Errorf("put online result (%s %s): %w", sessionID, criterion, err)
+	}
+	err = p.db.QueryRowContext(ctx,
+		`SELECT passed FROM online_eval_results
+		  WHERE session_id=$1 AND criterion_name=$2`,
+		sessionID, criterion).Scan(&authoritative)
+	if err == nil {
+		return false, authoritative, nil
+	}
 	if errors.Is(err, sql.ErrNoRows) {
-		return false, fmt.Errorf("put online result (%s %s): session missing", sessionID, criterion)
+		return false, false, fmt.Errorf("put online result (%s %s): session missing", sessionID, criterion)
 	}
-	if err != nil {
-		return false, fmt.Errorf("put online result (%s %s): %w", sessionID, criterion, err)
-	}
-	return inserted, nil
+	return false, false, fmt.Errorf("read authoritative online result (%s %s): %w", sessionID, criterion, err)
 }
 
 func (p *pgStore) ListOnlineResults(ctx context.Context, sessionID string) ([]OnlineResult, error) {

@@ -2,9 +2,12 @@ package memory
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
+	"time"
 
 	hrt "github.com/sausheong/harness/runtime"
 	hmem "github.com/sausheong/harness/tool/memory"
@@ -51,6 +54,12 @@ type KG struct {
 	getSummary     func(ctx context.Context, sessionID string) (string, bool, error)
 	onSummaryWrite func()
 	onEpisodeWrite func()
+
+	lifecycleMu sync.Mutex
+	lifecycle   context.Context
+	cancel      context.CancelFunc
+	workers     sync.WaitGroup
+	closed      bool
 }
 
 var _ hrt.KnowledgeGraph = (*KG)(nil)
@@ -121,6 +130,7 @@ func NewKG(st *Store, k int, floor float64, opts ...KGOption) *KG {
 	for _, o := range opts {
 		o(g)
 	}
+	g.initLifecycle()
 	// The summary-only path (WithStrategies without WithIngest) leaves sem nil;
 	// a nil-channel send in ingestWith always hits the drop branch, so every turn
 	// would be dropped ("ingest at capacity"). Default an inflight bound whenever
@@ -139,7 +149,9 @@ const defaultMaxInflight = 4
 
 // newKGWithSearch is the recall test seam: inject a fake embedder + search.
 func newKGWithSearch(emb Embedder, k int, floor float64, s searcher) *KG {
-	return &KG{embedder: emb, search: s, k: k, floor: floor}
+	g := &KG{embedder: emb, search: s, k: k, floor: floor}
+	g.initLifecycle()
+	return g
 }
 
 // newKGWithIngest is the ingest test seam: inject fakes for every dependency so
@@ -149,7 +161,7 @@ func newKGWithIngest(emb Embedder, ext Extractor, s searcher, sv saver, dedupFlo
 	if maxInflight < 1 {
 		maxInflight = 1
 	}
-	return &KG{
+	g := &KG{
 		embedder:   emb,
 		search:     s,
 		save:       sv,
@@ -159,6 +171,15 @@ func newKGWithIngest(emb Embedder, ext Extractor, s searcher, sv saver, dedupFlo
 		sem:        make(chan struct{}, maxInflight),
 		ingestDone: done,
 	}
+	g.initLifecycle()
+	return g
+}
+
+func (g *KG) initLifecycle() {
+	if g.lifecycle != nil {
+		return
+	}
+	g.lifecycle, g.cancel = context.WithCancel(context.Background())
 }
 
 // ForSession returns a KnowledgeGraph view bound to one session id, so summary
@@ -294,15 +315,29 @@ func (g *KG) ingestWith(sctx StrategyContext, thread []hrt.Message) {
 	if len(thread) < g.minMsgs {
 		return
 	}
+	g.lifecycleMu.Lock()
+	if g.lifecycle == nil {
+		g.lifecycle, g.cancel = context.WithCancel(context.Background())
+	}
+	if g.closed {
+		g.lifecycleMu.Unlock()
+		if g.ingestDone != nil {
+			g.ingestDone()
+		}
+		return
+	}
 	select {
 	case g.sem <- struct{}{}:
+		g.workers.Add(1)
 	default:
+		g.lifecycleMu.Unlock()
 		slog.Warn("memory: ingest at capacity, dropping turn")
 		if g.ingestDone != nil {
 			g.ingestDone()
 		}
 		return
 	}
+	g.lifecycleMu.Unlock()
 	go g.runIngest(sctx, thread)
 }
 
@@ -316,6 +351,7 @@ func (g *KG) runIngest(sctx StrategyContext, thread []hrt.Message) {
 			slog.Warn("memory: ingest goroutine panic recovered", "panic", r)
 		}
 		<-g.sem
+		g.workers.Done()
 		if g.ingestDone != nil {
 			g.ingestDone()
 		}
@@ -330,7 +366,7 @@ func (g *KG) runIngest(sctx StrategyContext, thread []hrt.Message) {
 	// timeout (30s) bounds how long a stuck extraction can hold its sem slot.
 	// Re-attach the actor (carried as data on sctx, since the background ctx has
 	// none) so isDuplicate's search + save are actor-scoped.
-	ctx := WithActor(context.Background(), sctx.Actor)
+	ctx := WithActor(g.lifecycle, sctx.Actor)
 	facts, err := g.extractor.Extract(ctx, thread)
 	if err != nil {
 		slog.Warn("memory: ingest extract failed", "err", err)
@@ -347,6 +383,50 @@ func (g *KG) runIngest(sctx StrategyContext, thread []hrt.Message) {
 		if err := g.save(ctx, hmem.Entry{Content: f, Origin: ingestOrigin, Tags: ingestTags}, KindFact); err != nil {
 			slog.Warn("memory: ingest save failed", "err", err)
 		}
+	}
+}
+
+// Close stops accepting ingestion, allows accepted workers up to timeout to
+// drain, then cancels their lifecycle context. It never waits indefinitely for
+// a dependency that ignores cancellation.
+func (g *KG) Close(timeout time.Duration) error {
+	if timeout <= 0 {
+		timeout = 10 * time.Second
+	}
+	g.lifecycleMu.Lock()
+	if g.lifecycle == nil {
+		g.lifecycle, g.cancel = context.WithCancel(context.Background())
+	}
+	g.closed = true
+	g.lifecycleMu.Unlock()
+
+	done := make(chan struct{})
+	go func() {
+		g.workers.Wait()
+		close(done)
+	}()
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case <-done:
+		g.cancel()
+		return nil
+	case <-timer.C:
+		g.cancel()
+	}
+
+	cancelWait := timeout / 10
+	if cancelWait > 100*time.Millisecond {
+		cancelWait = 100 * time.Millisecond
+	}
+	if cancelWait < time.Millisecond {
+		cancelWait = time.Millisecond
+	}
+	select {
+	case <-done:
+		return fmt.Errorf("memory ingestion graceful drain timed out: %w", context.DeadlineExceeded)
+	case <-time.After(cancelWait):
+		return errors.New("memory ingestion ignored cancellation; workers remain detached")
 	}
 }
 

@@ -38,6 +38,10 @@ type DockerConfig struct {
 	// ProxyHost is browserd's hostname as seen from Network (for example the
 	// Compose service name "runtimed").
 	ProxyHost string
+	// NoSandboxForTests disables Chromium's process sandbox only in live tests
+	// on Docker engines that block user namespaces. Production callers must
+	// leave it false and provide a sandbox-capable engine/runtime.
+	NoSandboxForTests bool
 }
 
 type dockerBackend struct {
@@ -129,6 +133,7 @@ func (d *dockerBackend) Create(ctx context.Context, tenant, proxyAddr string) (B
 	pids := int64(512)
 	port := network.MustParsePort(cdpPort + "/tcp")
 	cp := containerProxyAddrForHost(proxyAddr, d.cfg.ProxyHost)
+	proxyURL := "http://" + cp
 	hostConfig := &container.HostConfig{
 		ReadonlyRootfs: true,
 		ExtraHosts:     []string{"host.docker.internal:host-gateway"},
@@ -149,16 +154,20 @@ func (d *dockerBackend) Create(ctx context.Context, tenant, proxyAddr string) (B
 			port: []network.PortBinding{{HostIP: netip.MustParseAddr(cdpPublishHost())}},
 		}
 	}
+	env := []string{
+		"RUNTIME_CHROME_PROXY=" + proxyURL,
+		"HTTP_PROXY=" + proxyURL,
+		"HTTPS_PROXY=" + proxyURL,
+		"NO_PROXY=",
+	}
+	if d.cfg.NoSandboxForTests {
+		env = append(env, "RUNTIME_CHROME_NO_SANDBOX=1")
+	}
 	created, err := d.cli.ContainerCreate(ctx, client.ContainerCreateOptions{
 		Config: &container.Config{
-			Image: d.cfg.Image,
-			User:  strconv.Itoa(browserUID),
-			Env: []string{
-				"RUNTIME_CHROME_PROXY=http://" + cp,
-				"HTTP_PROXY=http://" + cp,
-				"HTTPS_PROXY=http://" + cp,
-				"NO_PROXY=",
-			},
+			Image:        d.cfg.Image,
+			User:         strconv.Itoa(browserUID),
+			Env:          env,
 			Labels:       map[string]string{browserLabel: "1", browserLabel + ".tenant": tenant},
 			ExposedPorts: network.PortSet{port: struct{}{}},
 		},
@@ -214,6 +223,10 @@ func cdpEndpointFromInspect(ctx context.Context, cli *client.Client, containerID
 	if insp.Container.NetworkSettings == nil {
 		return "", fmt.Errorf("no network settings yet")
 	}
+	if insp.Container.State != nil && !insp.Container.State.Running {
+		return "", fmt.Errorf("browser container stopped: status=%s exit=%d error=%s",
+			insp.Container.State.Status, insp.Container.State.ExitCode, insp.Container.State.Error)
+	}
 	dialHost, dialPort := "", cdpPort
 	if networkName != "" {
 		endpoint, ok := insp.Container.NetworkSettings.Networks[networkName]
@@ -222,9 +235,18 @@ func cdpEndpointFromInspect(ctx context.Context, cli *client.Client, containerID
 		}
 		dialHost = endpoint.IPAddress.String()
 	} else {
-		bindings := insp.Container.NetworkSettings.Ports[network.MustParsePort(cdpPort+"/tcp")]
+		var bindings []network.PortBinding
+		// Port contains an interned protocol handle in the current Moby API.
+		// Compare its stable string form rather than constructing a second map
+		// key, which does not round-trip reliably across API decoding.
+		for port, candidates := range insp.Container.NetworkSettings.Ports {
+			if port.String() == cdpPort+"/tcp" {
+				bindings = candidates
+				break
+			}
+		}
 		if len(bindings) == 0 || bindings[0].HostPort == "" {
-			return "", fmt.Errorf("no host port yet")
+			return "", fmt.Errorf("no host port yet (reported ports: %v)", insp.Container.NetworkSettings.Ports)
 		}
 		dialHost, dialPort = cdpDialHost(), bindings[0].HostPort
 	}

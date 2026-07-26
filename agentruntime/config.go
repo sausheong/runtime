@@ -3,6 +3,7 @@ package agentruntime
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/sausheong/harness/llm"
 	hrt "github.com/sausheong/harness/runtime"
@@ -35,6 +36,9 @@ type Config struct {
 	// episode) after AgentMetrics is built. Nil ⇒ metrics inert. Set by
 	// agentkind.wireMemory; invoked by Serve.
 	SetMemoryMetrics func(summary, episode func())
+	// DrainMemory stops admission, drains accepted asynchronous ingestion, and
+	// cancels overdue workers before the memory database closes.
+	DrainMemory func(timeout time.Duration) error
 	// EvalPolicy is this agent's standing online-scoring policy, or nil when no
 	// policy is configured (nil ⇒ no scoring). Set by agentd from the eval
 	// policy store.

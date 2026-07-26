@@ -50,10 +50,15 @@ type Strategy interface {
 
 // runStrategies runs every configured strategy over the thread and persists its
 // records per write mode. Best-effort throughout: any strategy failure is logged
-// and skipped, never surfaced (ingest must never break a turn). Uses a fresh
-// context.Background (the caller detaches from the request ctx before invoking).
+// and skipped, never surfaced (ingest must never break a turn). Uses the KG's
+// lifecycle context rather than the request context so accepted work can drain
+// and service shutdown can cancel it.
 func (g *KG) runStrategies(sctx StrategyContext, thread []hrt.Message) {
-	ctx := WithActor(context.Background(), sctx.Actor)
+	lifecycle := g.lifecycle
+	if lifecycle == nil {
+		lifecycle = context.Background()
+	}
+	ctx := WithActor(lifecycle, sctx.Actor)
 	for _, st := range g.strategies {
 		if !st.ShouldRun(thread) {
 			continue

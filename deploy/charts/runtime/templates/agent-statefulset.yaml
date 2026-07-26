@@ -42,7 +42,7 @@ spec:
         {{- toYaml $root.Values.podSecurityContext | nindent 8 }}
       containers:
         - name: agentd
-          image: "{{ $root.Values.image.repository }}:{{ $root.Values.image.tag | default $root.Chart.AppVersion }}"
+          image: {{ include "runtime.image" $root | quote }}
           imagePullPolicy: {{ $root.Values.image.pullPolicy }}
           # Ordinal-dependent env (RUNTIME_AGENT_REPLICA, DBOS__VMID) is derived
           # from the pod name ($HOSTNAME = <statefulset>-<ordinal>) at start; all

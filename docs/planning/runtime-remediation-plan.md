@@ -5,13 +5,11 @@ This plan implements
 ordered so that persistence and identity invariants land before routing,
 deployment, and operational refinements that depend on them.
 
-Status: local fifth-audit comprehensive invariant remediation is complete.
-Phases 1 through 10 record the earlier incremental remediation passes. Phase 11
-replaced symptom-focused closure with the frozen acceptance matrix in the issue
-register, and Phase 12 records the additional restore, test-isolation,
-evaluation-accounting, and supply-chain findings exposed by the complete run.
-The two-release RT-04/RT-14 live Kubernetes acceptance test remains an explicit
-external boundary because no target cluster or releases were supplied.
+Status: Phase 13 local remediation is complete. Phases 1 through 12 remain the
+historical record. The issue register is authoritative: RT-04 and RT-14 remain
+open for the two-release Kubernetes acceptance run, and G2 remains open because
+local `shellcheck` evidence is unavailable. These external gates prevent
+release-candidate status but do not reopen the completed local work.
 
 ## Phase 1: Persistence and routing correctness
 
@@ -605,3 +603,128 @@ Completed. Extends RT-13 and F1 through F3.
    and release retain it as a blocking gate.
 3. F6, RT-04, and RT-14 remain open only for the two-release live Kubernetes
    acceptance run.
+
+## Phase 13: Sixth-audit invariant remediation
+
+Changes in this phase are implemented and reviewed as small dependency-ordered
+units. Each issue closes only after its adversarial tests, broader affected
+suites, documentation, and a fresh source review pass.
+
+### 44. Secure the browser egress boundary
+
+Status: completed 2026-07-26.
+
+1. Add dial-seam tests that distinguish policy-time DNS from connect-time DNS.
+2. Replace the partial address classifier with the shared public-IP policy.
+3. Resolve on the dial path and connect only to a validated IP for HTTP and
+   CONNECT, rejecting mixed answer sets.
+4. Make the default listener private and require proxy authentication for an
+   explicitly non-loopback bind.
+5. Bound server headers, requests, CONNECT tunnels, upstream response bytes,
+   idle time, and absolute tunnel duration.
+6. Reconcile browser configuration and security documentation.
+
+Closes: RT-17 and the proxy portion of RT-11.
+
+### 45. Make restricted schema preflight authoritative
+
+Status: completed 2026-07-26.
+
+1. Pass the immutable expected migration set to the restricted startup path.
+2. Validate every version, name, and checksum without applying DDL.
+3. Check agent-required structural sentinels, RLS state, policies, triggers,
+   and foreign keys using read-only catalog queries.
+4. Add corrupt-ledger and missing-object PostgreSQL integration tests.
+
+Closes: RT-10 and B5.
+
+### 46. Make online-score replay one coherent durable event
+
+Status: completed 2026-07-26.
+
+1. Define the first persisted criterion result as immutable.
+2. Implement identical insert-only conflict behaviour in memory and
+   PostgreSQL.
+3. Keep classification refinement and result metrics conditional on that
+   authoritative first insert.
+4. Test opposite-verdict replay, concurrent writers, restart, and metric
+   accounting.
+
+Closes: RT-08, C3, and C5.
+
+### 47. Bound auxiliary responses and own ingestion shutdown
+
+Status: completed 2026-07-26.
+
+1. Add shared bounded-response decoding helpers and apply named limits to the
+   judge, registration, console, and evaluation-control clients.
+2. Add boundary and oversized-response regressions.
+3. Give memory ingestion a lifecycle context, cancellation, wait group, closed
+   gate, and bounded drain.
+4. Wire service shutdown to drain ingestion before closing its store.
+5. Test cooperative, blocked, non-cooperative, concurrent, and store-ordering
+   shutdown paths.
+
+Closes: the remaining RT-11 requirements and RT-18.
+
+### 48. Complete release artifact integrity
+
+Status: completed 2026-07-26.
+
+1. Pass release version and revision into image builds and inspect OCI labels.
+2. Add `image.digest` chart support and digest render tests.
+3. Define required and optional image inventory.
+4. Build and smoke-test every repository Dockerfile in CI.
+5. Scan, produce SBOMs for, and sign every published image.
+6. Constrain sidecar bases and Python dependencies and document their update
+   policy.
+
+Closes: RT-13 and F7 through F10.
+
+### 49. Comprehensive closure and deployment acceptance
+
+Status: local steps 1 through 4 completed 2026-07-26; step 5 remains open
+because no designated live Kubernetes environment is available. The local
+shell-analysis sub-gate in step 2 also remains open.
+
+1. Run focused tests for RT-08, RT-10, RT-11, RT-13, RT-17, and RT-18.
+2. Run formatting, vet, unit, race, PostgreSQL/end-to-end integration, Python,
+   Helm lint/render, Compose, documentation, vulnerability, container,
+   shellcheck, and diff gates from the final source state.
+3. Review every security and durability invariant, including request paths and
+   durable transitions outside the latest diff.
+4. Update the register with named current evidence and leave any failed or
+   unavailable gate open.
+5. Run the shared RT-04/RT-14 harness against two installed one-agent
+   Kubernetes releases only after the final images and chart are produced.
+
+Closes: G1 through G4 locally. F6, RT-04, and RT-14 close only with designated
+live-cluster evidence.
+
+### Phase 13 completion record
+
+1. Browser egress now uses validated-address dial pinning, complete
+   non-public-address rejection, authenticated non-loopback proxying through
+   Chromium's CDP authentication challenge, and bounded request/tunnel
+   resources. Focused unit, race, and real Docker/Chromium tests pass.
+2. Restricted startup now validates the exact migration ledger and all
+   required schema security sentinels without DDL. Corrupt-ledger and
+   missing-object PostgreSQL tests pass, as do fresh end-to-end startup and the
+   full tagged integration suite.
+3. Online evaluation uses immutable first-write authority across memory and
+   PostgreSQL. Opposite-verdict replay, concurrency, restart reconstruction,
+   classification, and metric accounting tests pass.
+4. Auxiliary clients use shared bounded response reads. Knowledge-graph
+   ingestion owns admission, cancellation, drain, and concurrent close; the
+   full concurrency-heavy package set passes under the race detector.
+5. Release validation builds, smoke-tests, and scans all seven repository
+   images. Runtime OCI labels are inspected, Helm accepts immutable digests,
+   bases and Python dependencies are constrained, and CI/release race gates
+   include the new browser and memory concurrency paths.
+6. `make check`, the complete integration target, Python tests, Helm
+   lint/render, all Compose renders, documentation checks, shell syntax,
+   container smoke/scans, race detection, and `git diff --check` pass from the
+   final source state.
+7. Local `shellcheck` and the two-release RT-04/RT-14 live Kubernetes harness
+   are deliberately not recorded as passing. They remain the only open
+   execution gates.

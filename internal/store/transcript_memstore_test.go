@@ -22,9 +22,9 @@ func TestMemStoreTranscriptAndResults(t *testing.T) {
 	if err := m.AppendTranscript(ctx, sessionID, 1, "t2", "mallory", []byte(`[]`), "", ""); err != nil {
 		t.Fatalf("transcript did not derive its tenant from the parent: %v", err)
 	}
-	// online results idempotent on (session, criterion)
+	// online results are immutable and idempotent on (session, criterion)
 	_ = m.PutOnlineResult(ctx, sessionID, "polite", "t1", "alice", "judge", true, "ok")
-	_ = m.PutOnlineResult(ctx, sessionID, "polite", "t1", "alice", "judge", false, "changed") // upsert
+	_ = m.PutOnlineResult(ctx, sessionID, "polite", "t1", "alice", "judge", false, "changed")
 	if err := m.PutOnlineResult(ctx, sessionID, "forged", "t2", "mallory", "judge", true, ""); err != nil {
 		t.Fatalf("online result did not derive its tenant from the parent: %v", err)
 	}
@@ -36,8 +36,8 @@ func TestMemStoreTranscriptAndResults(t *testing.T) {
 	for _, result := range res {
 		if result.Criterion == "polite" {
 			politeFound = true
-			if result.Passed || result.Detail != "changed" {
-				t.Fatalf("polite result upsert wrong: %+v", result)
+			if !result.Passed || result.Detail != "ok" {
+				t.Fatalf("polite result was not immutable: %+v", result)
 			}
 		}
 		if result.Tenant != "t1" {

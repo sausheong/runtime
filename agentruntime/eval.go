@@ -63,7 +63,7 @@ func finalAssistantText(entries []session.SessionEntry) string {
 }
 
 type resultPutter interface {
-	PutOnlineResultIfNew(ctx context.Context, sessionID, criterion, tenant, actor, scorer string, passed bool, detail string) (bool, error)
+	PutOnlineResultIfNew(ctx context.Context, sessionID, criterion, tenant, actor, scorer string, passed bool, detail string) (inserted, authoritativePassed bool, err error)
 }
 
 func (m *Manager) startScoring(workers, queue int, timeout time.Duration) {
@@ -168,7 +168,7 @@ func (m *Manager) scoreOnto(ctx context.Context, rs resultPutter, sessionID, ten
 					"session", sessionID, "criterion", c.Name, "err", scoreErr)
 				continue
 			}
-			inserted, err := rs.PutOnlineResultIfNew(
+			inserted, authoritativePassed, err := rs.PutOnlineResultIfNew(
 				ctx, sessionID, c.Name, tenant, actor, string(c.Scorer), passed, detail)
 			if err != nil {
 				allPersisted = false
@@ -177,12 +177,12 @@ func (m *Manager) scoreOnto(ctx context.Context, rs resultPutter, sessionID, ten
 				continue
 			}
 			anyNewResult = anyNewResult || inserted
-			if !passed {
+			if !authoritativePassed {
 				qualityFailed = true
 			}
 			if inserted {
 				result := "fail"
-				if passed {
+				if authoritativePassed {
 					result = "pass"
 				}
 				m.metrics.EvalCriterion(result)

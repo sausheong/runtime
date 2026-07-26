@@ -1,7 +1,7 @@
 # Bundled local embedder for runtime's turnkey compose.
 # OpenAI-compatible POST /embeddings backed by BAAI/bge-small-en-v1.5 (dim 384),
 # baked into the image at build time so the running container needs no network.
-FROM python:3.12-slim
+FROM python:3.13-slim@sha256:6771159cd4fa5d9bba1258caf0b82e6b73458c694d178ad97c5e925c2d0e1a91
 
 # Non-root user (matches deploy/ house pattern, e.g. sandbox.Dockerfile).
 RUN useradd --uid 1000 --create-home embedder

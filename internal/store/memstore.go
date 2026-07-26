@@ -288,26 +288,24 @@ func (m *memStore) AppendTranscript(_ context.Context, sessionID string, turn in
 }
 
 func (m *memStore) PutOnlineResult(_ context.Context, sessionID, criterion, tenant, actor, scorer string, passed bool, detail string) error {
-	_, err := m.putOnlineResultIfNew(sessionID, criterion, tenant, actor, scorer, passed, detail)
+	_, _, err := m.putOnlineResultIfNew(sessionID, criterion, tenant, actor, scorer, passed, detail)
 	return err
 }
 
-func (m *memStore) PutOnlineResultIfNew(_ context.Context, sessionID, criterion, tenant, actor, scorer string, passed bool, detail string) (bool, error) {
+func (m *memStore) PutOnlineResultIfNew(_ context.Context, sessionID, criterion, tenant, actor, scorer string, passed bool, detail string) (bool, bool, error) {
 	return m.putOnlineResultIfNew(sessionID, criterion, tenant, actor, scorer, passed, detail)
 }
 
-func (m *memStore) putOnlineResultIfNew(sessionID, criterion, tenant, actor, scorer string, passed bool, detail string) (bool, error) {
+func (m *memStore) putOnlineResultIfNew(sessionID, criterion, tenant, actor, scorer string, passed bool, detail string) (bool, bool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	parent, ok := m.sessions[sessionID]
 	if !ok {
-		return false, fmt.Errorf("%w: %q", ErrSessionNotFound, sessionID)
+		return false, false, fmt.Errorf("%w: %q", ErrSessionNotFound, sessionID)
 	}
 	key := sessionID + "\x00" + criterion
-	existing, existed := m.results[key]
-	created := time.Now()
-	if existed {
-		created = existing.CreatedAt
+	if existing, existed := m.results[key]; existed {
+		return false, existing.Passed, nil
 	}
 	m.results[key] = OnlineResult{
 		SessionID: sessionID,
@@ -317,9 +315,9 @@ func (m *memStore) putOnlineResultIfNew(sessionID, criterion, tenant, actor, sco
 		Scorer:    scorer,
 		Passed:    passed,
 		Detail:    detail,
-		CreatedAt: created,
+		CreatedAt: time.Now(),
 	}
-	return !existed, nil
+	return true, passed, nil
 }
 
 func (m *memStore) ListOnlineResults(_ context.Context, sessionID string) ([]OnlineResult, error) {

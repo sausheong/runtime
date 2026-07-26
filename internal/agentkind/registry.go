@@ -188,6 +188,7 @@ func wireMemory(cfg *agentruntime.Config, d Deps) error {
 		// Metric hooks are settable only after Serve builds AgentMetrics (post-KG);
 		// supply the seam here — the closure wires both summary + episode writes.
 		cfg.SetMemoryMetrics = func(summary, episode func()) { kg.SetMetrics(summary, episode) }
+		cfg.DrainMemory = kg.Close
 	}
 	return nil
 }

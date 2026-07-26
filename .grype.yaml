@@ -1,0 +1,7 @@
+ignore:
+  - vulnerability: CVE-2026-15308
+    reason: >-
+      CPython has not released a stable patched branch. Runtime services do
+      not pass untrusted data to html.parser.HTMLParser; the general-purpose
+      sandbox is separately CPU-, memory-, and lifetime-bounded. Remove this
+      exception when a stable patched Python image is available.

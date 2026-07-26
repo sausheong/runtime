@@ -162,15 +162,19 @@ func TestPGReplaySafeTerminalClassificationAndOnlineMetricsState(t *testing.T) {
 	if err != nil || refined {
 		t.Fatalf("replayed/wrong-source refinement changed=%v err=%v", refined, err)
 	}
-	inserted, err := st.PutOnlineResultIfNew(
+	inserted, authoritative, err := st.PutOnlineResultIfNew(
 		ctx, id, "quality", "alpha", "actor", "contains", true, "")
-	if err != nil || !inserted {
-		t.Fatalf("first result inserted=%v err=%v", inserted, err)
+	if err != nil || !inserted || !authoritative {
+		t.Fatalf("first result inserted=%v authoritative=%v err=%v", inserted, authoritative, err)
 	}
-	inserted, err = st.PutOnlineResultIfNew(
+	inserted, authoritative, err = st.PutOnlineResultIfNew(
 		ctx, id, "quality", "alpha", "actor", "contains", false, "changed")
-	if err != nil || inserted {
-		t.Fatalf("replayed result inserted=%v err=%v", inserted, err)
+	if err != nil || inserted || !authoritative {
+		t.Fatalf("replayed result inserted=%v authoritative=%v err=%v", inserted, authoritative, err)
+	}
+	results, err := st.ListOnlineResults(ctx, id)
+	if err != nil || len(results) != 1 || !results[0].Passed || results[0].Detail != "" {
+		t.Fatalf("immutable PostgreSQL result=%+v err=%v", results, err)
 	}
 }
 
@@ -398,6 +402,9 @@ func TestSchemaMigrationsOrderedIdempotentAndVersionChecked(t *testing.T) {
 	if err := CheckSchemaVersion(ctx, db, component, 1, 2); err != nil {
 		t.Fatal(err)
 	}
+	if err := CheckSchemaMigrations(ctx, db, component, 1, 2, migrations); err != nil {
+		t.Fatalf("complete migration preflight: %v", err)
+	}
 	var versions int
 	if err := db.QueryRow(`SELECT count(*) FROM runtime_schema_migrations WHERE component=$1`, component).Scan(&versions); err != nil {
 		t.Fatal(err)
@@ -405,11 +412,72 @@ func TestSchemaMigrationsOrderedIdempotentAndVersionChecked(t *testing.T) {
 	if versions != 2 {
 		t.Fatalf("ledger versions=%d, want 2", versions)
 	}
+	if _, err := db.Exec(`DELETE FROM runtime_schema_migrations WHERE component=$1 AND version=1`, component); err != nil {
+		t.Fatal(err)
+	}
+	if err := CheckSchemaMigrations(ctx, db, component, 1, 2, migrations); err == nil {
+		t.Fatal("migration ledger gap accepted")
+	}
+	if _, err := db.Exec(`
+		INSERT INTO runtime_schema_migrations(component,version,name,checksum)
+		VALUES ($1,1,$2,$3)`, component, migrations[0].Name, migrationChecksum(migrations[0])); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`UPDATE runtime_schema_migrations SET checksum='corrupt' WHERE component=$1 AND version=2`, component); err != nil {
+		t.Fatal(err)
+	}
+	if err := CheckSchemaMigrations(ctx, db, component, 1, 2, migrations); err == nil {
+		t.Fatal("migration checksum corruption accepted")
+	}
+	if _, err := db.Exec(`UPDATE runtime_schema_migrations SET checksum=$2 WHERE component=$1 AND version=2`, component, migrationChecksum(migrations[1])); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := db.Exec(`INSERT INTO runtime_schema_migrations(component,version,name,checksum) VALUES ($1,3,'future','future')`, component); err != nil {
 		t.Fatal(err)
 	}
 	if err := CheckSchemaVersion(ctx, db, component, 1, 2); err == nil {
 		t.Fatal("newer unsupported schema accepted")
+	}
+}
+
+func TestCoreSchemaRestrictedPreflightRejectsMissingSecurityObjects(t *testing.T) {
+	ctx := context.Background()
+	repair := func(t *testing.T) {
+		t.Helper()
+		st, err := NewPGStore(ctx, pgTestDSN)
+		if err != nil {
+			t.Fatalf("repair core schema: %v", err)
+		}
+		_ = st.Close()
+	}
+	repair(t)
+	db, err := sql.Open("pgx", pgTestDSN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	t.Cleanup(func() { repair(t) })
+
+	cases := []struct {
+		name   string
+		mutate string
+	}{
+		{"table", `DROP TABLE session_events CASCADE`},
+		{"row security", `ALTER TABLE sessions DISABLE ROW LEVEL SECURITY`},
+		{"policy", `DROP POLICY runtime_agent_tenant_sessions ON sessions`},
+		{"trigger", `DROP TRIGGER runtime_session_transcript_tenant ON session_transcripts`},
+		{"foreign key", `ALTER TABLE online_eval_results DROP CONSTRAINT online_eval_results_session_id_fkey`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			repair(t)
+			if _, err := db.ExecContext(ctx, tc.mutate); err != nil {
+				t.Fatal(err)
+			}
+			if err := CheckCoreSchema(ctx, db); err == nil {
+				t.Fatalf("preflight accepted missing %s", tc.name)
+			}
+		})
 	}
 }
 

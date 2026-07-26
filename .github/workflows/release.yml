@@ -58,7 +58,11 @@ jobs:
           RUNTIME_PG_DSN: postgres://runtime:runtime@localhost:5432/runtime?sslmode=disable
           RUNTIME_AGENT_PG_DSN: postgres://runtime_agent_test:runtime-agent-test@localhost:5432/runtime?sslmode=disable
       - name: Run race detector
-        run: go test -race ./controlplane ./agentruntime ./internal/gateway ./internal/identity ./internal/store ./internal/eval
+        run: >-
+          go test -race
+          ./controlplane ./agentruntime ./internal/browser ./internal/gateway
+          ./internal/identity ./internal/store ./internal/eval ./internal/memory
+          ./internal/httplimit ./cmd/runtimed
       - name: Run Python shim tests
         run: uv run --project contrib/shims/python --isolated pytest contrib/shims/python/tests
       - name: Run Helm lint and render matrix
@@ -106,10 +110,41 @@ jobs:
           FOOD_LABEL_GENERATION: 44444444-4444-4444-8444-444444444444
           OPENAI_API_KEY: release-openai-key
           ANTHROPIC_API_KEY: release-anthropic-key
+      - name: Build and smoke-test complete repository image inventory
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          version="${RELEASE_TAG#v}"
+          docker build --build-arg VERSION="$version" --build-arg REVISION="$GITHUB_SHA" -f deploy/Dockerfile -t runtime:release-validation .
+          test "$(docker image inspect runtime:release-validation --format '{{index .Config.Labels "org.opencontainers.image.version"}}')" = "$version"
+          test "$(docker image inspect runtime:release-validation --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')" = "$GITHUB_SHA"
+          docker run --rm --entrypoint /app/runtimectl runtime:release-validation --help
+          docker build -f deploy/sandbox.Dockerfile -t runtime-sandbox:release-validation deploy/
+          docker run --rm runtime-sandbox:release-validation python -c 'import numpy, pandas, matplotlib, requests'
+          docker build -f deploy/browser.Dockerfile -t runtime-browser:release-validation deploy/
+          docker run --rm --entrypoint chromium runtime-browser:release-validation --version
+          docker build -f deploy/compose/embedder/Dockerfile -t runtime-embedder:release-validation deploy/compose/embedder
+          docker run --rm --entrypoint python runtime-embedder:release-validation -c 'import app; assert len(next(app._model.embed(["health"]))) == 384'
+          docker build -f deploy/gcp/agent-python/Dockerfile -t nutrition-openai:release-validation .
+          docker build -f deploy/gcp/agent-claude/Dockerfile -t hello-claude:release-validation .
+          docker build -f deploy/gcp/agent-food-label/Dockerfile -t food-label-advisor:release-validation .
+          docker run --rm --entrypoint /app/examples/nutrition-label-openai/.venv/bin/python nutrition-openai:release-validation -c 'import runtime_contract, fastapi'
+          docker run --rm --entrypoint /app/examples/hello-claude/.venv/bin/python hello-claude:release-validation -c 'import runtime_contract, claude_agent_sdk'
+          docker run --rm --entrypoint /app/examples/food-label-advisor/.venv/bin/python food-label-advisor:release-validation -c 'import runtime_contract, claude_agent_sdk'
       - name: Install release integrity tools
         run: |
           go install github.com/anchore/syft/cmd/syft@v1.27.0
+          go install github.com/anchore/grype/cmd/grype@v0.116.0
           go install github.com/sigstore/cosign/v2/cmd/cosign@v2.5.0
+      - name: Scan complete image inventory before publication
+        run: |
+          grype runtime:release-validation --fail-on high --only-fixed
+          grype runtime-sandbox:release-validation --fail-on high --only-fixed
+          grype runtime-browser:release-validation --fail-on high --only-fixed
+          grype runtime-embedder:release-validation --fail-on high --only-fixed
+          grype nutrition-openai:release-validation --fail-on high --only-fixed
+          grype hello-claude:release-validation --fail-on high --only-fixed
+          grype food-label-advisor:release-validation --fail-on high --only-fixed
       - name: Authenticate to GHCR
         env:
           GH_TOKEN: ${{ github.token }}
@@ -119,12 +154,18 @@ jobs:
           RELEASE_TAG: ${{ github.ref_name }}
         run: |
           mkdir -p dist
+          version="${RELEASE_TAG#v}"
           image="ghcr.io/${GITHUB_REPOSITORY,,}:${RELEASE_TAG#v}"
-          docker build -f deploy/Dockerfile -t "$image" .
+          docker tag runtime:release-validation "$image"
+          test "$(docker image inspect "$image" --format '{{index .Config.Labels "org.opencontainers.image.version"}}')" = "$version"
+          test "$(docker image inspect "$image" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')" = "$GITHUB_SHA"
           docker push "$image"
           digest="$(docker inspect --format='{{index .RepoDigests 0}}' "$image")"
           echo "IMAGE_DIGEST=$digest" >> "$GITHUB_ENV"
           syft "$digest" -o spdx-json=dist/runtime-image.spdx.json
+          syft runtime-sandbox:release-validation -o spdx-json=dist/runtime-sandbox.spdx.json
+          syft runtime-browser:release-validation -o spdx-json=dist/runtime-browser.spdx.json
+          syft runtime-embedder:release-validation -o spdx-json=dist/runtime-embedder.spdx.json
       - name: Package and push chart
         env:
           RELEASE_TAG: ${{ github.ref_name }}
@@ -149,5 +190,8 @@ jobs:
           gh release create "${{ github.ref_name }}" --verify-tag --generate-notes \
             "$CHART_PATH" \
             dist/runtime-image.spdx.json \
+            dist/runtime-sandbox.spdx.json \
+            dist/runtime-browser.spdx.json \
+            dist/runtime-embedder.spdx.json \
             dist/runtime-chart.spdx.json \
             dist/runtime-chart.sigstore.json

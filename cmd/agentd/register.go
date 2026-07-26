@@ -3,13 +3,18 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 	"log"
 	"net/http"
 	"os"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/sausheong/runtime/internal/httplimit"
 )
+
+const maxRegistrationResponseBytes = 1 << 20
 
 // ordinalFromHostname extracts the StatefulSet ordinal from a pod name
 // ("<statefulset>-<ordinal>"). Returns 0 when there is no numeric suffix.
@@ -57,7 +62,7 @@ func fetchRegistration() {
 	var out struct {
 		Env map[string]string `json:"env"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+	if err := decodeRegistrationResponse(resp.Body, &out); err != nil {
 		log.Fatalf("agentd: decode registration response: %v", err)
 	}
 	for k, v := range out.Env {
@@ -91,6 +96,10 @@ func fetchRegistration() {
 			log.Fatalf("agentd: apply registration env %s: %v", k, err)
 		}
 	}
+}
+
+func decodeRegistrationResponse(r io.Reader, out any) error {
+	return httplimit.DecodeJSON(r, maxRegistrationResponseBytes, out)
 }
 
 // platformToggleKeys are control-plane-owned toggles emitted "always-explicit"

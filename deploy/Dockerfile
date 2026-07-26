@@ -1,28 +1,26 @@
 # Build context is the runtime repository root:
 #   docker build -f deploy/Dockerfile -t runtime:latest .
-FROM golang:1.25.12 AS build
+FROM golang:1.25.12@sha256:9006890ecba0a168034d99516084099ae3114d9f2b7d6572c77f2dde57ebc980 AS build
 WORKDIR /src/runtime
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . ./
-RUN go build -o /out/runtimed   ./cmd/runtimed \
- && go build -o /out/agentd     ./cmd/agentd \
- && go build -o /out/sandboxd   ./cmd/sandboxd \
- && go build -o /out/browserd   ./cmd/browserd \
- && go build -o /out/runtimectl ./cmd/runtimectl \
- && go build -o /out/v1-probe   ./cmd/v1-probe
+RUN CGO_ENABLED=0 go build -trimpath -o /out/runtimed   ./cmd/runtimed \
+ && CGO_ENABLED=0 go build -trimpath -o /out/agentd     ./cmd/agentd \
+ && CGO_ENABLED=0 go build -trimpath -o /out/sandboxd   ./cmd/sandboxd \
+ && CGO_ENABLED=0 go build -trimpath -o /out/browserd   ./cmd/browserd \
+ && CGO_ENABLED=0 go build -trimpath -o /out/runtimectl ./cmd/runtimectl \
+ && CGO_ENABLED=0 go build -trimpath -o /out/v1-probe   ./cmd/v1-probe
 
-FROM debian:bookworm-slim
+FROM scratch
 ARG VERSION=dev
 ARG REVISION=unknown
 LABEL org.opencontainers.image.title="runtime" \
       org.opencontainers.image.source="https://github.com/sausheong/runtime" \
       org.opencontainers.image.version="${VERSION}" \
       org.opencontainers.image.revision="${REVISION}"
-RUN apt-get update && apt-get install -y ca-certificates \
- && rm -rf /var/lib/apt/lists/* \
- && useradd --uid 10001 --user-group --no-create-home --shell /usr/sbin/nologin runtime
 WORKDIR /app
+COPY --from=build /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 COPY --from=build /out/runtimed   /app/runtimed
 COPY --from=build /out/agentd     /app/agentd
 COPY --from=build /out/sandboxd   /app/sandboxd

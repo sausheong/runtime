@@ -1,11 +1,11 @@
 # Runtime Remediation Issue Register
 
-Status: local comprehensive invariant remediation is complete. RT-01, RT-03,
-RT-05, RT-08, RT-09, RT-13, and RT-16 are closed again after implementation,
-focused regression, full-suite validation, documentation reconciliation, and
-final source review. RT-04 and RT-14 remain open only for the two-release live
-Kubernetes acceptance run. The unavailable local `shellcheck` execution is
-also recorded explicitly in G2; CI and release continue to enforce it.
+Status: sixth-audit local remediation is complete. RT-08, RT-10, RT-11,
+RT-13, RT-17, and RT-18 are implemented, tested, documented, and reviewed.
+RT-04 and RT-14 remain open only for the two-release live Kubernetes acceptance
+run. G2 also remains open because `shellcheck` is unavailable locally. No
+summary may describe the tree as a release candidate until those
+environment-dependent gates have current evidence.
 
 This register is the acceptance specification for the post-review remediation.
 An issue may be marked complete only when all of the following are true:
@@ -25,7 +25,7 @@ Legend:
 
 ## Frozen comprehensive acceptance matrix
 
-This matrix freezes the scope of the fifth-audit remediation. A focused test
+This matrix freezes the current comprehensive remediation scope. A focused test
 for the latest symptom is necessary but insufficient. Every affected invariant
 must be exercised across the applicable rows below, including negative,
 concurrent, restart, migration, and deployment cases. New findings discovered
@@ -70,7 +70,9 @@ the closure boundary.
   supported database trust domain is enforceable.
 - [x] B5. Fresh install, upgrade/migration, restart, recovery, and ordinary
   native execution work with restricted roles without granting schema-wide or
-  cross-agent authority.
+  cross-agent authority. Restricted startup validates a contiguous immutable
+  migration ledger, its checksums, and required tables, constraints, triggers,
+  and row-security policies without applying DDL.
 - [x] B6. Compose, secured, GCP, and Helm profiles render distinct credentials
   and cannot imply that separate role names in one shared database provide
   agent isolation when they do not.
@@ -153,6 +155,15 @@ the closure boundary.
   failures.
 - [ ] F6. The same RT-04/RT-14 harness passes against two installed one-agent
   Kubernetes releases with distinct agent identities and isolated databases.
+- [x] F7. Every published image embeds the release version and source revision,
+  and tests inspect the built image rather than trusting workflow arguments.
+- [x] F8. Helm can consume an immutable signed image digest; a mutable tag is
+  not the sole production identity of a published workload.
+- [x] F9. The release inventory explicitly names every required and optional
+  runtime image. Every published image is built, smoke-tested, scanned, given
+  an SBOM, and signed before the release is described as complete.
+- [x] F10. Sidecar and helper image dependencies are reproducibly constrained
+  and included in vulnerability and update policy.
 
 ### G. Closure gates
 
@@ -1155,6 +1166,39 @@ Required remediation:
   end-to-end failure-aggregate tests pass in memory and PostgreSQL. `evals.md`
   and `observability.md` define initial versus refined accounting explicitly.
 
+### Gap identified in sixth audit (closed 2026-07-26)
+
+`PutOnlineResultIfNew` reports whether a criterion was first persisted, but
+both stores still overwrite the authoritative result on conflict. A replay
+whose non-deterministic judge returns a different verdict can therefore change
+the stored score while the monotonic failure category and exactly-once metrics
+retain the first outcome. The durable result, classification, and metrics no
+longer describe one event.
+
+Required remediation:
+
+- make the first persisted `(session, criterion)` result immutable, or
+  introduce an explicitly versioned attempt model with one atomic authoritative
+  result;
+- apply identical conflict semantics in memory and PostgreSQL;
+- keep classification and metrics behind the same first-write decision; and
+- test fail-to-pass, pass-to-fail, replay, restart, and concurrent scoring.
+
+### Sixth-audit closure evidence
+
+- Memory and PostgreSQL stores now insert the first
+  `(session, criterion)` result and leave it immutable on every later conflict.
+  The store returns both whether it inserted and the authoritative first
+  verdict, so classification and metrics derive from the same durable event.
+- `TestOnlineScoringReplayUsesAuthoritativeFirstVerdict`,
+  `TestScoringMetricsDoNotDoubleCountReplay`,
+  `TestMemOnlineResultReportsFirstDurableWrite`,
+  `TestOnlineResultRoundTripImmutableAndByTenant`, and
+  `TestPGReplaySafeTerminalClassificationAndOnlineMetricsState` cover opposite
+  verdicts, replay, concurrency, and process/store reconstruction.
+- The final unit, race, end-to-end, and tagged PostgreSQL evaluation suites
+  pass. `evals.md` defines first-write authority and replay accounting.
+
 ## RT-09: Add session, event, and live-memory retention
 
 - [x] Implementation complete
@@ -1386,6 +1430,39 @@ repair could conceal orphaned durable rows.
   corrupt-ledger no-mutation, current-ledger missing tables, missing foreign
   keys, and orphan refusal in every affected store.
 
+### Restricted-preflight gap identified in sixth audit (closed 2026-07-26)
+
+The restricted-agent preflight checks only `max(version)`. It accepts a ledger
+with missing intermediate versions or modified migration contents, and it does
+not prove that required tables, constraints, ownership triggers, or RLS
+policies still exist. A restricted agent may therefore serve against a
+partially restored or tampered schema that the control plane would repair or
+reject.
+
+Required remediation:
+
+- validate every expected ledger version, name, and checksum without DDL;
+- reject gaps, duplicates, unknown versions, and incompatible ranges;
+- verify read-only structural sentinels for the core tables, foreign keys,
+  tenant-integrity triggers, row security, and named policies required by an
+  agent; and
+- add integration tests for missing ledger rows, corrupt checksums, dropped
+  tables, dropped triggers, disabled RLS, and missing policies.
+
+### Sixth-audit closure evidence
+
+- `NewPGStoreExisting` performs no repair or DDL. It validates the exact
+  expected migration versions, names, and checksums, rejects unknown or missing
+  rows, then verifies the agent-visible tables, cascading foreign keys,
+  tenant-integrity triggers, row-security flags, and named policies.
+- `TestCoreSchemaRestrictedPreflightRejectsMissingSecurityObjects` exercises
+  ledger gaps and corruption plus each missing or disabled structural
+  sentinel. Existing migration-ledger rollback and partial-restore tests
+  continue to pass.
+- Fresh end-to-end startup and the complete tagged PostgreSQL suite pass with
+  the restricted role. `RELEASING.md` now distinguishes applying migrations
+  from restricted read-only preflight.
+
 ## RT-11: Harden HTTP request and connection resource limits
 
 - [x] Implementation complete
@@ -1427,6 +1504,36 @@ values, and returns internal errors.
   `cmd/runtimed` tests cover control-plane request and stream limits.
 - `configuration.md`, `operator-guide.md`, and `observability.md` document
   controls and saturation/timeout metrics.
+
+### Auxiliary-client gap identified in sixth audit (closed 2026-07-26)
+
+Several outbound clients have timeouts but no response-size bound. The
+evaluation judge reads the complete response, while registration and console
+paths decode arbitrary JSON streams. A fast oversized peer can consume
+unbounded memory despite the HTTP timeout. Browser proxy connection and tunnel
+limits are tracked with RT-17.
+
+Required remediation:
+
+- define small, named response limits for judge, registration, console, and
+  evaluation-control responses;
+- reject an over-limit response before decoding or including it in an error;
+- cover successful boundary-sized and oversized responses; and
+- document that time and byte limits are separate controls.
+
+### Sixth-audit closure evidence
+
+- The shared `internal/httplimit` reader enforces a named byte ceiling before
+  JSON decoding or error construction. Judge, registration, console-agent, and
+  evaluation-control clients all use it in addition to their timeouts.
+- `TestHTTPJudgeRejectsOversizedResponse`,
+  `TestDecodeRegistrationResponseRejectsOversize`,
+  `TestHTTPAgentClientRejectsOversizedJSON`, and
+  `TestEvalInvokerRejectsOversizedCreateResponse` exercise the affected paths.
+  The browser-specific request and tunnel resource tests are recorded under
+  RT-17.
+- Unit, race, and end-to-end suites pass, and `configuration.md` states that
+  response time and response bytes are independent limits.
 
 ## RT-12: Treat transcript capture as sensitive data
 
@@ -1586,6 +1693,46 @@ Required remediation:
 - Integration resets now remove cross-component tenant children before tenant
   tables. This prevents order-dependent orphan creation and is covered by the
   focused autoscaling rerun and the complete end-to-end package.
+
+### Release-integrity gap identified in sixth audit (closed 2026-07-26)
+
+The release build does not pass the Dockerfile `VERSION` and `REVISION`
+arguments, so published signed images can retain `dev` and `unknown` OCI
+metadata. The chart consumes only a mutable repository/tag pair and cannot pin
+the signed digest. CI does not build the browser or sandbox sidecars, and the
+release contract does not define whether those runtime-adjacent images are
+published, scanned, signed, or operator-built. The sandbox image also installs
+unconstrained Python packages from a mutable base.
+
+Required remediation:
+
+- pass and inspect immutable release version/revision metadata;
+- add digest-aware Helm rendering with tag-only development compatibility;
+- define the complete image inventory and build/smoke-test/scan/SBOM/sign every
+  published member;
+- build every Dockerfile in CI even when an optional image is not published;
+  and
+- pin or hash sidecar base images and application dependencies according to
+  the documented update policy.
+
+### Sixth-audit closure evidence
+
+- CI and release build all seven repository images and run a real smoke path
+  for each. The runtime build receives version and revision arguments, and both
+  OCI labels are inspected before publication.
+- Helm renders `repository@digest` when `image.digest` is configured while
+  retaining tag-based local development. `RELEASING.md` defines the published
+  runtime image, optional operator-built images, example images, SBOM/signing
+  scope, and vulnerability-exception review policy.
+- Every external Docker base and external `COPY --from` image is digest-pinned.
+  Python dependencies are exact-version constrained; example images use
+  locked, multi-stage, non-root environments that do not resolve dependencies
+  at startup.
+- `TestReleaseWorkflowIsValidAndPinned`,
+  `TestReleaseImagesAreDigestDeployableAndOptionalImagesConstrained`, Helm
+  digest render tests, and workflow mutation tests enforce the contract. All
+  seven images build, smoke-test, and pass the actionable high-severity Grype
+  gate from the final source state.
 
 ## RT-14: Restrict management metrics ingress
 
@@ -1837,20 +1984,133 @@ Required remediation:
   render, stable-restart, endpoint-replacement, and old-token rejection tests
   pass.
 
+## RT-17: Make browser egress an enforceable network boundary
+
+- [x] Implementation complete
+- [x] Regression tests complete
+- [x] Documentation complete
+- [x] Final review complete
+
+### Problem
+
+Browser policy resolves a hostname during authorization but the HTTP client or
+CONNECT dial resolves it again. DNS can change between those operations,
+allowing a rebinding target to bypass the checked address. The
+`allow-all-public` classifier blocks only common private ranges and admits
+carrier-grade NAT, documentation, benchmark, multicast, reserved, and other
+non-public ranges. The proxy also defaults to an unauthenticated wildcard
+listener, has no explicit request concurrency or header bounds, and creates
+unbounded tunnels without idle or absolute lifetime limits.
+
+### Required implementation
+
+- resolve and validate every target immediately on the dial path and connect
+  only to an already-validated address;
+- reuse the repository-wide complete public-IP classification;
+- reject mixed public/private DNS answer sets and revalidate every new
+  connection;
+- bind privately by default and require an explicit shared secret whenever a
+  non-loopback listener is configured;
+- bound request concurrency, header reads, upstream response bytes, CONNECT
+  concurrency, idle duration, and absolute tunnel lifetime; and
+- preserve deny-all and allow-list hostname semantics without trusting caller
+  headers or environment proxy settings.
+
+### Required tests
+
+- authorization and dial cannot observe different DNS answers;
+- every private, local, CGNAT, documentation, benchmark, multicast, reserved,
+  IPv4-mapped, and mixed-answer target is rejected;
+- a non-loopback listener without authentication is rejected at startup;
+- missing or invalid proxy credentials are rejected;
+- request and tunnel saturation fail predictably; and
+- idle and absolute tunnel deadlines close both directions.
+
+### Completion evidence
+
+- HTTP and CONNECT dials resolve once, reject mixed or non-public answer sets,
+  and connect only to a validated numeric address. The shared public-IP policy
+  covers special-purpose IPv4, IPv4-mapped, and IPv6 ranges.
+- The listener defaults to loopback. A non-loopback bind requires a
+  sufficiently strong token, and Chromium supplies that credential only for a
+  CDP-reported proxy challenge. It is never attached to origin requests.
+- Independent semaphores and deadlines bound requests, tunnels, headers,
+  upstream response bytes, idle connections, and absolute tunnel lifetime.
+  Focused policy, dial-pinning, authentication, saturation, idle, and lifetime
+  tests pass under the race detector.
+- `TestLiveBrowseAndEgress` also passes with the real Docker/Chromium path,
+  proving authenticated public browsing succeeds and private destinations are
+  denied. `gateway-and-sandboxes.md` describes the boundary and remaining
+  deployment responsibility.
+
+## RT-18: Own asynchronous memory-ingestion lifecycle
+
+- [x] Implementation complete
+- [x] Regression tests complete
+- [x] Documentation complete
+- [x] Final review complete
+
+### Problem
+
+Memory ingestion launches detached goroutines on `context.Background()`.
+Although a semaphore bounds concurrency, the service cannot cancel, drain, or
+wait for the workers before closing their backing store. Shutdown can therefore
+race writes against store closure, lose accepted ingestion without an explicit
+outcome, or wait only on dependency-specific client timeouts.
+
+### Required implementation
+
+- give each process-shared knowledge graph a lifecycle context, cancel
+  function, wait group, and idempotent close/drain operation;
+- derive every extraction, embedding, search, summary, episode, and save call
+  from that lifecycle context;
+- reject new ingestion after closing starts;
+- bound graceful drain and cancellation waits and report dropped/timed-out
+  work; and
+- invoke the drain before closing the memory store.
+
+### Required tests
+
+- shutdown waits for a cooperative accepted worker;
+- cancellation reaches a blocked dependency;
+- a non-cooperative dependency cannot block shutdown forever;
+- ingestion after close is rejected without launching work;
+- the backing store is not closed before ingestion drains; and
+- concurrent close and ingest are race-free.
+
+### Completion evidence
+
+- Each process-shared knowledge graph owns a lifecycle context, cancel
+  function, admission lock, wait group, and closed gate. Accepted work derives
+  extraction, embedding, search, strategy, summary, episode, and save calls
+  from that lifecycle.
+- `Close` first stops admission, then allows a bounded cooperative drain,
+  cancels remaining dependencies, and returns after a second bounded wait.
+  `agentruntime.Serve` invokes this drain before returning; `agentd` owns the
+  memory database handle outside `Serve`, so its deferred close necessarily
+  occurs afterwards.
+- `TestKGCloseDrainsCooperativeWorker`,
+  `TestKGCloseCancelsBlockedWorkerAndIsBounded`,
+  `TestKGCloseDoesNotWaitForeverForNonCooperativeWorker`,
+  `TestKGRejectsIngestAfterClose`, and
+  `TestKGConcurrentCloseAndIngestIsRaceFree` cover the shutdown matrix. The
+  memory package and complete concurrency-heavy package set pass with the race
+  detector.
+
 ## Final acceptance review
 
-- [ ] Every RT-01 through RT-16 checkbox is complete. RT-01, RT-03, RT-05,
-  RT-08, RT-09, RT-13, and RT-16 are closed again. RT-04 and RT-14 still
-  require the live two-release Kubernetes acceptance run.
-- [x] Focused regression tests exist and pass for every fifth-audit gap.
+- [ ] Every RT-01 through RT-18 checkbox is complete. RT-04 and RT-14 remain
+  open only for their shared live-cluster acceptance evidence.
+- [x] Focused regression tests exist and pass for every sixth-audit local gap.
 - [x] Full Go unit tests pass.
 - [x] Race tests pass for concurrency-heavy packages.
 - [x] PostgreSQL integration tests pass.
 - [x] Python shim tests pass.
 - [x] Helm lint and render tests pass.
 - [x] Documentation checks pass.
-- [x] Vulnerability scans pass for every imported package and all six shipped
-  Go binaries; all four documented release images build.
+- [x] Dependency and shipped-binary security scans pass. All seven repository
+  images build, pass their smoke paths, and pass the actionable high-severity
+  image scan.
 - [x] Every supplied Compose topology renders with its documented required
   values.
 - [ ] Local `shellcheck` remains unavailable and the policy-approved container
@@ -1867,18 +2127,21 @@ Required remediation:
 Reviewed and executed on 2026-07-26:
 
 - `make check` passes under Go 1.25.12.
-- Race detection passes for control-plane, agent runtime, gateway, identity,
-  core store, evaluation, observability, and `runtimed` concurrency paths.
-- `make test-integration` passes the complete end-to-end package in 263.8
+- Race detection passes for control-plane, agent runtime, browser, gateway,
+  identity, core store, evaluation, memory, bounded HTTP reads, and `runtimed`
+  concurrency paths.
+- `make test-integration` passes the complete end-to-end package in 269.3
   seconds and then all tagged PostgreSQL store, evaluation, memory, identity,
   managed-agent, and gateway packages.
 - The Python shim reports 32 passing tests. Helm lint, the full chart render
   matrix, and the hermetic RT-04/RT-14 failure-discrimination harness pass.
 - Full, turnkey, secured, and distributed GCP Compose configurations render.
-  The runtime, OpenAI, Claude, and food-label release images build.
-- The hardened vulnerability gate reports no imported-package or reachable
-  binary vulnerabilities. One unused unmaintained subpackage remains elsewhere
-  in the module graph and is not imported or linked into a shipped binary.
+  Runtime, sandbox, browser, embedder, OpenAI, Claude, and food-label images
+  build and pass their documented smoke paths.
+- Package and shipped-binary scanning report no reachable vulnerabilities; one
+  advisory remains only in an uncalled transitive module path. All seven built
+  images pass the actionable high-severity Grype gate; the single no-fix
+  exception is scoped, justified, and removal-triggered in `.grype.yaml`.
 - The live two-release Kubernetes run and local `shellcheck` execution remain
   the only unexecuted gates and are not represented as passing evidence.
 

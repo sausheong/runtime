@@ -292,7 +292,8 @@ In addition:
 | Key | Default | Description |
 |---|---|---|
 | `image.repository` | `runtime` | Image repository. |
-| `image.tag` | `""` | Image tag; defaults to `.Chart.AppVersion` (`0.2.0`). |
+| `image.tag` | `""` | Development image tag; defaults to `.Chart.AppVersion` (`0.2.0`). |
+| `image.digest` | `""` | Immutable `sha256:...` image digest. When set, it overrides `image.tag`. |
 | `image.pullPolicy` | `IfNotPresent` | Pull policy (use `Never` for kind). |
 | `imagePullSecrets` | `[]` | Image pull secrets. |
 | `replicaCount` | `1` | Fixed at 1 — single-writer supervisor. |

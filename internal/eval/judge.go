@@ -5,11 +5,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"os"
 	"strings"
 	"time"
+
+	"github.com/sausheong/runtime/internal/httplimit"
 )
 
 // Judge grades an agent's output against a target (expected answer or rubric).
@@ -18,6 +19,7 @@ type Judge interface {
 }
 
 const evalJudgeSystemPrompt = "You are grading an AI agent's answer. Given the INPUT, the TARGET (expected answer or grading rubric), and the agent's ACTUAL output, decide whether the actual output satisfies the target. Return ONLY a JSON object {\"pass\": true|false, \"reason\": \"<one short sentence>\"}."
+const maxJudgeResponseBytes = 1 << 20
 
 // httpJudge grades via an OpenAI-compatible chat endpoint.
 type httpJudge struct {
@@ -85,7 +87,10 @@ func (h *httpJudge) Grade(ctx context.Context, input, target, output string) (bo
 		return false, "", err
 	}
 	defer resp.Body.Close()
-	body, _ := io.ReadAll(resp.Body)
+	body, readErr := httplimit.ReadAll(resp.Body, maxJudgeResponseBytes)
+	if readErr != nil {
+		return false, "", fmt.Errorf("judge response: %w", readErr)
+	}
 	if resp.StatusCode != http.StatusOK {
 		return false, "", fmt.Errorf("judge non-200: %d %s", resp.StatusCode, strings.TrimSpace(string(body)))
 	}

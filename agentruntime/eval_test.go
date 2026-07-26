@@ -75,9 +75,51 @@ func (erroringJudge) Grade(_ context.Context, _, _, _ string) (bool, string, err
 // fakeResultStore records the criteria persisted via PutOnlineResult.
 type fakeResultStore struct{ puts []string }
 
-func (f *fakeResultStore) PutOnlineResultIfNew(_ context.Context, s, c, t, a, sc string, p bool, d string) (bool, error) {
+func (f *fakeResultStore) PutOnlineResultIfNew(_ context.Context, s, c, t, a, sc string, p bool, d string) (bool, bool, error) {
 	f.puts = append(f.puts, c)
-	return true, nil
+	return true, p, nil
+}
+
+type immutableResultStore struct {
+	mu     sync.Mutex
+	set    bool
+	passed bool
+}
+
+func (s *immutableResultStore) PutOnlineResultIfNew(_ context.Context, _, _, _, _, _ string, passed bool, _ string) (bool, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.set {
+		return false, s.passed, nil
+	}
+	s.set = true
+	s.passed = passed
+	return true, passed, nil
+}
+
+func TestOnlineScoringReplayUsesAuthoritativeFirstVerdict(t *testing.T) {
+	m := newTestManagerForScoring(&eval.Policy{Criteria: []eval.Criterion{
+		{Name: "quality", Scorer: eval.ScorerContains, Pattern: "good"},
+	}}, nil)
+	m.metrics = obs.NewAgentMetrics("a", "t", "test")
+	m.st.(*fakeCatStore).setCat = CatNone
+	results := &immutableResultStore{}
+
+	m.scoreOnto(context.Background(), results, "s", "t", "actor", "completed", "completed", false,
+		[]session.SessionEntry{msgEntry("assistant", "good")})
+	m.scoreOnto(context.Background(), results, "s", "t", "actor", "completed", "completed", false,
+		[]session.SessionEntry{msgEntry("assistant", "bad")})
+
+	if got := m.st.(*fakeCatStore).setCat; got != CatNone {
+		t.Fatalf("opposite-verdict replay changed classification to %q", got)
+	}
+	body := scrapeAgentMetrics(t, m)
+	if strings.Count(body, `agent_eval_criteria_total{agent="a",result="pass",tenant="t"} 1`) != 1 {
+		t.Fatalf("first-write metric was not exactly once:\n%s", body)
+	}
+	if strings.Contains(body, `agent_eval_criteria_total{agent="a",result="fail",tenant="t"}`) {
+		t.Fatalf("replay verdict emitted a contradictory metric:\n%s", body)
+	}
 }
 
 // newTestManagerForScoring builds a Manager with just the scoring deps set: the
@@ -289,8 +331,8 @@ func TestScoringShutdownRemainsBoundedWhenWorkerIgnoresCancellation(t *testing.T
 
 type errorResultStore struct{ error }
 
-func (e errorResultStore) PutOnlineResultIfNew(context.Context, string, string, string, string, string, bool, string) (bool, error) {
-	return false, e.error
+func (e errorResultStore) PutOnlineResultIfNew(context.Context, string, string, string, string, string, bool, string) (bool, bool, error) {
+	return false, false, e.error
 }
 
 func TestScoringMetricsRequirePersistedResults(t *testing.T) {

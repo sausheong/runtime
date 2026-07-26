@@ -13,9 +13,11 @@
 
 Runtime records ordered component versions in
 `runtime_schema_migrations`. A control-plane binary applies supported pending
-migrations transactionally before serving. Restricted agent binaries only
-check the core schema version and fail if it is outside their supported range.
-A failed migration rolls back without advancing the ledger. Startup also
+migrations transactionally before serving. Restricted agent binaries validate
+the complete immutable core ledger, including names and checksums, and verify
+the required tables, cascading foreign keys, ownership triggers, row security,
+and policies without applying DDL. A failed migration rolls back without
+advancing the ledger. Startup also
 reconciles missing baseline tables and foreign keys after a partial restore,
 but fails closed without deleting orphan rows whose parentage cannot be
 proved.
@@ -26,10 +28,40 @@ proved.
 2. Update `CHANGELOG.md`, `deploy/charts/runtime/Chart.yaml`, and public
    documentation.
 3. Tag the exact reviewed commit as `vMAJOR.MINOR.PATCH`.
-4. The release workflow builds and pushes the immutable GHCR image and Helm
-   chart, generates SPDX SBOMs, signs image and chart digests with keyless
-   Sigstore, attaches attestations, and creates the GitHub release.
-5. Verify the published digests and signatures from a separate environment.
+4. The release workflow builds every repository Dockerfile and smoke-tests the
+   runtime, sandbox, and browser images before publication. The runtime image
+   embeds the tag version and exact source revision as OCI labels.
+5. The workflow publishes the runtime GHCR image and Helm chart, generates
+   SPDX SBOMs, signs the image and chart with keyless Sigstore, attaches
+   attestations, and creates the GitHub release.
+6. Verify the published digest and signatures from a separate environment,
+   then deploy with Helm `image.repository` plus `image.digest`. Tag-only
+   deployment is retained for local development, not release identity.
+
+### Image inventory
+
+- `deploy/Dockerfile` is the published runtime image containing all six Go
+  commands. It is scanned, given an SBOM, signed, and attested.
+- `deploy/sandbox.Dockerfile`, `deploy/browser.Dockerfile`, and
+  `deploy/compose/embedder/Dockerfile` are optional operator-built tool images.
+  CI and release validation build, smoke-test, and vulnerability-scan them and
+  the release records their SBOMs, but the workflow does not push or sign them.
+- The three `deploy/gcp/agent-*/Dockerfile` files are example application
+  images. They are built before publication but are not Runtime release
+  artefacts.
+
+Optional images pin their language or operating-system base and their Python
+application dependencies where applicable. Updating a base digest or pinned
+package is a reviewed dependency update and must pass the complete image build
+smoke-test, SBOM, and actionable high-severity vulnerability gate. The
+blocking Grype invocation uses `--only-fixed`: a high or critical finding with
+a published remediation blocks release, while no-fix findings remain visible
+for operator risk review instead of making the gate permanently
+non-actionable. Base digests must still be refreshed regularly; `--only-fixed`
+is not an assertion that no other advisory exists. A repository-level Grype
+exception is permitted only when it names one advisory, records the
+non-reachability or compensating control, and states when it must be removed.
+Review every exception during a base-image update and every release.
 
 ## Rollback
 

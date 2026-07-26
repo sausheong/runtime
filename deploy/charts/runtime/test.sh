@@ -27,6 +27,17 @@ grep -q 'name: metrics'               <<<"$out" || fail "no separate metrics ser
 grep -q 'checksum/config'             <<<"$out" || fail "no config checksum"
 ok "defaults"
 
+# 1b. A signed digest is the complete workload identity in production and wins
+# over any mutable tag.
+out=$(helm template r "$CHART" $DSN $AGENTS \
+  --set image.repository=ghcr.io/example/runtime \
+  --set image.tag=mutable \
+  --set image.digest=sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa)
+grep -q 'image: "ghcr.io/example/runtime@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"' <<<"$out" ||
+  fail "digest-pinned image not rendered"
+if grep -q 'ghcr.io/example/runtime:mutable' <<<"$out"; then fail "tag rendered despite image.digest"; fi
+ok "digest-pinned image"
+
 # 2. postgresql.enabled: DSN synthesized to the SUBCHART's service name
 #    (<release>-postgresql, derived from .Release.Name), subchart present, no DSN required.
 out=$(helm template r "$CHART" --set postgresql.enabled=true $AGENTS)

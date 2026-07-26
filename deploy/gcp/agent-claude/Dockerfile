@@ -15,14 +15,21 @@
 # The COPY layout below reproduces that relative position: from
 # /app/examples/hello-claude, "../../contrib/shims/python" resolves to
 # /app/contrib/shims/python.
-FROM python:3.12-slim
-COPY --from=ghcr.io/astral-sh/uv:0.11.16 /uv /uvx /bin/
+FROM python:3.13-slim@sha256:6771159cd4fa5d9bba1258caf0b82e6b73458c694d178ad97c5e925c2d0e1a91 AS build
+COPY --from=ghcr.io/astral-sh/uv:0.11.32@sha256:df4cae8f3a96d175e2e5f992e597550000edbe78fdc2594d5cd8de1a217f504c /uv /uvx /bin/
 WORKDIR /app
 COPY contrib/shims/python /app/contrib/shims/python
 COPY examples/hello-claude /app/examples/hello-claude
 WORKDIR /app/examples/hello-claude
 RUN uv sync --no-dev
+
+FROM python:3.13-slim@sha256:6771159cd4fa5d9bba1258caf0b82e6b73458c694d178ad97c5e925c2d0e1a91
+RUN useradd --uid 1000 --create-home agent
+WORKDIR /app
+COPY --from=build --chown=agent:agent /app /app
+WORKDIR /app/examples/hello-claude
+USER agent
 EXPOSE 8080
 # serve.py reads RUNTIME_LISTEN_ADDR / RUNTIME_AGENT_ID / RUNTIME_SHIM_DB and the
 # ANTHROPIC_* vars from the environment (injected by docker-compose.yml).
-CMD ["uv", "run", "python", "serve.py"]
+CMD [".venv/bin/python", "serve.py"]

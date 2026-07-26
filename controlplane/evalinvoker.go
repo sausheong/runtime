@@ -14,11 +14,13 @@ import (
 	"time"
 
 	"github.com/sausheong/runtime/internal/eval"
+	"github.com/sausheong/runtime/internal/httplimit"
 )
 
 // evalInvokeDefaultTimeout bounds one Invoke (submit + poll to a terminal
 // event). Overridable via RUNTIME_EVAL_INVOKE_TIMEOUT (a Go duration).
 const evalInvokeDefaultTimeout = 120 * time.Second
+const maxEvalSessionResponseBytes = 1 << 20
 
 // evalInvoker drives one agent input to completion over the common agent HTTP
 // contract (POST /sessions, then GET /sessions/{id}/stream). The registry lookup
@@ -86,7 +88,10 @@ func (e *evalInvoker) startSession(ctx context.Context, client *http.Client, bas
 		return "", err
 	}
 	defer resp.Body.Close()
-	rb, _ := io.ReadAll(resp.Body)
+	rb, readErr := httplimit.ReadAll(resp.Body, maxEvalSessionResponseBytes)
+	if readErr != nil {
+		return "", fmt.Errorf("eval invoke: create session response: %w", readErr)
+	}
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("eval invoke: create session non-200: %d %s", resp.StatusCode, strings.TrimSpace(string(rb)))
 	}

@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
+	"github.com/chromedp/cdproto/fetch"
 	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/chromedp"
 )
@@ -42,8 +44,34 @@ func ensureChrome(s *Session) error {
 	}
 	allocCtx, allocCancel := chromedp.NewRemoteAllocator(context.Background(), s.Endpoint)
 	taskCtx, taskCancel := chromedp.NewContext(allocCtx)
+	if s.proxyToken != "" {
+		chromedp.ListenTarget(taskCtx, func(ev any) {
+			switch e := ev.(type) {
+			case *fetch.EventRequestPaused:
+				go func() {
+					if err := chromedp.Run(taskCtx, fetch.ContinueRequest(e.RequestID)); err != nil &&
+						taskCtx.Err() == nil {
+						slog.Warn("browser: continuing authenticated proxy request failed", "err", err)
+					}
+				}()
+			case *fetch.EventAuthRequired:
+				response := proxyAuthResponse(e.AuthChallenge, s.proxyToken)
+				go func() {
+					if err := chromedp.Run(taskCtx, fetch.ContinueWithAuth(e.RequestID, response)); err != nil &&
+						taskCtx.Err() == nil {
+						slog.Warn("browser: proxy authentication response failed", "err", err)
+					}
+				}()
+			}
+		})
+	}
 	if err := chromedp.Run(taskCtx,
 		chromedp.ActionFunc(func(ctx context.Context) error {
+			if s.proxyToken != "" {
+				if err := fetch.Enable().WithHandleAuthRequests(true).Do(ctx); err != nil {
+					return err
+				}
+			}
 			if _, err := page.AddScriptToEvaluateOnNewDocument(stealthScript).Do(ctx); err != nil {
 				return err
 			}
@@ -57,6 +85,22 @@ func ensureChrome(s *Session) error {
 	s.taskCtx = taskCtx
 	s.cancel = func() { taskCancel(); allocCancel() }
 	return nil
+}
+
+// proxyAuthResponse provides the runtime proxy credential only for a proxy
+// challenge. A website's ordinary HTTP authentication challenge is cancelled,
+// so the internal credential can never be disclosed to a destination server.
+func proxyAuthResponse(challenge *fetch.AuthChallenge, token string) *fetch.AuthChallengeResponse {
+	if challenge != nil && challenge.Source == fetch.AuthChallengeSourceProxy {
+		return &fetch.AuthChallengeResponse{
+			Response: fetch.AuthChallengeResponseResponseProvideCredentials,
+			Username: "runtime",
+			Password: token,
+		}
+	}
+	return &fetch.AuthChallengeResponse{
+		Response: fetch.AuthChallengeResponseResponseCancelAuth,
+	}
 }
 
 // withAction runs fn against the session's chromedp ctx under a per-call

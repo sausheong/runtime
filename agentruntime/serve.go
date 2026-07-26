@@ -799,6 +799,13 @@ func Serve(ctx context.Context, cfg Config) error {
 	if cfg.SetMemoryMetrics != nil {
 		cfg.SetMemoryMetrics(m.metrics.SummaryWrite, m.metrics.EpisodeWrite)
 	}
+	if cfg.DrainMemory != nil {
+		defer func() {
+			if err := cfg.DrainMemory(10 * time.Second); err != nil {
+				slog.Error("memory ingestion did not drain cleanly", "err", err)
+			}
+		}()
+	}
 
 	// Register BEFORE Launch so recovery can find the workflow.
 	dbos.RegisterWorkflow(dctx, m.sessionWorkflow)

@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	hrt "github.com/sausheong/harness/runtime"
 	hmem "github.com/sausheong/harness/tool/memory"
@@ -92,6 +93,139 @@ type fakeExtractor struct {
 
 func (f *fakeExtractor) Extract(_ context.Context, _ []hrt.Message) ([]string, error) {
 	return f.facts, f.err
+}
+
+type blockingExtractor struct {
+	started chan struct{}
+	release <-chan struct{}
+	useCtx  bool
+}
+
+func (b *blockingExtractor) Extract(ctx context.Context, _ []hrt.Message) ([]string, error) {
+	close(b.started)
+	if b.useCtx {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+	<-b.release
+	return []string{"done"}, nil
+}
+
+func TestKGCloseDrainsCooperativeWorker(t *testing.T) {
+	release := make(chan struct{})
+	ext := &blockingExtractor{started: make(chan struct{}), release: release}
+	k := newKGWithIngest(&kgFakeEmbedder{}, ext, func(context.Context, []float32, int, float64, string) ([]hmem.Entry, error) {
+		return nil, nil
+	}, func(context.Context, hmem.Entry, string) error { return nil }, 0.85, 2, 1, nil)
+	k.Ingest(context.Background(), twoMsgThread())
+	<-ext.started
+	closed := make(chan error, 1)
+	go func() { closed <- k.Close(time.Second) }()
+	select {
+	case err := <-closed:
+		t.Fatalf("Close returned before accepted worker drained: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+	close(release)
+	if err := <-closed; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestKGCloseCancelsBlockedWorkerAndIsBounded(t *testing.T) {
+	ext := &blockingExtractor{started: make(chan struct{}), useCtx: true}
+	k := newKGWithIngest(&kgFakeEmbedder{}, ext, func(context.Context, []float32, int, float64, string) ([]hmem.Entry, error) {
+		return nil, nil
+	}, func(context.Context, hmem.Entry, string) error { return nil }, 0.85, 2, 1, nil)
+	k.Ingest(context.Background(), twoMsgThread())
+	<-ext.started
+	start := time.Now()
+	if err := k.Close(10 * time.Millisecond); err == nil {
+		t.Fatal("timed-out graceful drain was not reported")
+	}
+	if elapsed := time.Since(start); elapsed > 250*time.Millisecond {
+		t.Fatalf("cancellable worker shutdown took %s", elapsed)
+	}
+}
+
+func TestKGCloseDoesNotWaitForeverForNonCooperativeWorker(t *testing.T) {
+	release := make(chan struct{})
+	ext := &blockingExtractor{started: make(chan struct{}), release: release}
+	k := newKGWithIngest(&kgFakeEmbedder{}, ext, func(context.Context, []float32, int, float64, string) ([]hmem.Entry, error) {
+		return nil, nil
+	}, func(context.Context, hmem.Entry, string) error { return nil }, 0.85, 2, 1, nil)
+	k.Ingest(context.Background(), twoMsgThread())
+	<-ext.started
+	start := time.Now()
+	if err := k.Close(10 * time.Millisecond); err == nil {
+		t.Fatal("non-cooperative worker shutdown was not reported")
+	}
+	if elapsed := time.Since(start); elapsed > 250*time.Millisecond {
+		t.Fatalf("non-cooperative shutdown took %s", elapsed)
+	}
+	close(release)
+}
+
+func TestKGRejectsIngestAfterClose(t *testing.T) {
+	ext := &fakeExtractor{facts: []string{"must not run"}}
+	done := make(chan struct{}, 1)
+	k := newKGWithIngest(&kgFakeEmbedder{}, ext, func(context.Context, []float32, int, float64, string) ([]hmem.Entry, error) {
+		return nil, nil
+	}, func(context.Context, hmem.Entry, string) error {
+		t.Fatal("save called after Close")
+		return nil
+	}, 0.85, 2, 1, func() { done <- struct{}{} })
+	if err := k.Close(time.Second); err != nil {
+		t.Fatal(err)
+	}
+	k.Ingest(context.Background(), twoMsgThread())
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("closed-ingest rejection was not observable")
+	}
+}
+
+func TestKGConcurrentCloseAndIngestIsRaceFree(t *testing.T) {
+	const attempts = 64
+	k := newKGWithIngest(
+		&kgFakeEmbedder{},
+		&fakeExtractor{facts: []string{"accepted fact"}},
+		func(context.Context, []float32, int, float64, string) ([]hmem.Entry, error) {
+			return nil, nil
+		},
+		func(context.Context, hmem.Entry, string) error { return nil },
+		0.85,
+		2,
+		attempts,
+		nil,
+	)
+
+	start := make(chan struct{})
+	var callers sync.WaitGroup
+	callers.Add(attempts + 2)
+	for range attempts {
+		go func() {
+			defer callers.Done()
+			<-start
+			k.Ingest(context.Background(), twoMsgThread())
+		}()
+	}
+	for range 2 {
+		go func() {
+			defer callers.Done()
+			<-start
+			if err := k.Close(time.Second); err != nil {
+				t.Errorf("concurrent Close: %v", err)
+			}
+		}()
+	}
+	close(start)
+	callers.Wait()
+
+	if err := k.Close(time.Second); err != nil {
+		t.Fatalf("idempotent final Close: %v", err)
+	}
 }
 
 // recordingSaver records saved entries; optionally fails on the first call.

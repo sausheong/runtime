@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 )
 
@@ -14,6 +15,16 @@ func TestOrdinalFromHostname(t *testing.T) {
 		if got := ordinalFromHostname(host); got != want {
 			t.Fatalf("ordinalFromHostname(%q)=%d want %d", host, got, want)
 		}
+	}
+}
+
+func TestDecodeRegistrationResponseRejectsOversize(t *testing.T) {
+	var out struct {
+		Env map[string]string `json:"env"`
+	}
+	if err := decodeRegistrationResponse(
+		strings.NewReader(strings.Repeat("x", maxRegistrationResponseBytes+1)), &out); err == nil {
+		t.Fatal("oversized registration response accepted")
 	}
 }
 

@@ -246,27 +246,41 @@ sandboxes.
 | `RUNTIME_BROWSER_NETWORK` | Deployment network | Container network |
 | `RUNTIME_BROWSER_EGRESS_MODE` | `deny-all` | Network policy |
 | `RUNTIME_BROWSER_EGRESS_ALLOW` | Empty | Comma-separated host allowlist |
-| `RUNTIME_BROWSER_PROXY_ADDR` | `0.0.0.0:0` | Egress-proxy bind address |
+| `RUNTIME_BROWSER_PROXY_ADDR` | `127.0.0.1:0` | Egress-proxy bind address |
+| `RUNTIME_BROWSER_PROXY_TOKEN` | Empty | Minimum 32-character proxy credential, required for a non-loopback bind |
+| `RUNTIME_BROWSER_PROXY_MAX_REQUESTS` | `128` | Concurrent proxy requests |
+| `RUNTIME_BROWSER_PROXY_MAX_TUNNELS` | `64` | Concurrent CONNECT tunnels |
+| `RUNTIME_BROWSER_PROXY_RESPONSE_MB` | `32` | Maximum forwarded response bytes |
+| `RUNTIME_BROWSER_PROXY_TUNNEL_IDLE` | `2m` | Tunnel inactivity timeout |
+| `RUNTIME_BROWSER_PROXY_TUNNEL_LIFETIME` | `30m` | Absolute tunnel lifetime |
 | `RUNTIME_BROWSER_PROXY_HOST` | Empty | Proxy host as seen from a private Docker network |
 | `RUNTIME_BROWSER_CDP_DIAL_HOST` | `127.0.0.1` | Host used by `browserd` to dial a published CDP port |
 | `RUNTIME_BROWSER_CDP_PUBLISH_HOST` | `127.0.0.1` | Loopback-only CDP publish override for direct-host installs |
 
 Egress modes are `deny-all`, `allow-list`, and `allow-all-public`. The proxy
-rejects loopback, link-local, and private destinations in public mode and
-re-checks resolution to reduce DNS rebinding and redirect bypasses. An
-allowlist should contain only the hosts the workflow genuinely needs.
+rejects every non-public destination, including private, loopback, link-local,
+carrier-grade NAT, documentation, benchmark, multicast, unspecified, and
+reserved address space. Each connection resolves once at dial time, rejects a
+mixed public/private answer set, and connects only to an address from that
+validated set. Redirects and new connections are checked again. An allowlist
+should contain only the hosts the workflow genuinely needs.
 
 The browser container is still processing hostile web content. Keep it
 separate from control-plane credentials and internal networks, limit resources,
 use a hardened runtime where available, and avoid mounting host data. If the
 egress proxy fails, browsing fails closed.
 
-For containerised `browserd`, prefer a private Docker network and set
-`RUNTIME_BROWSER_PROXY_HOST` to the service name. In direct-host mode CDP is
-published only on loopback; non-loopback `RUNTIME_BROWSER_CDP_PUBLISH_HOST`
-values are ignored. `RUNTIME_BROWSER_CDP_DIAL_HOST=host.docker.internal` is
-useful when `browserd` runs in a container but Chrome publishes its CDP port on
-the host.
+For containerised `browserd`, prefer a private Docker network, set
+`RUNTIME_BROWSER_PROXY_HOST` to the service name, bind the proxy to the private
+interface, and set a strong `RUNTIME_BROWSER_PROXY_TOKEN`. Startup rejects
+every non-loopback proxy bind without that credential. Chromium does not honour
+credentials embedded in manual proxy URLs, so `browserd` supplies the token
+only in response to a CDP proxy-authentication challenge and cancels origin
+server authentication challenges; the token is not placed in the browser
+container's proxy URL. In direct-host mode CDP is published only on loopback;
+non-loopback `RUNTIME_BROWSER_CDP_PUBLISH_HOST` values are ignored.
+`RUNTIME_BROWSER_CDP_DIAL_HOST=host.docker.internal` is useful when `browserd`
+runs in a container but Chrome publishes its CDP port on the host.
 
 As with `sandboxd`, use `forward_tenant: true`; direct mode requires the
 deliberate `RUNTIME_BROWSER_ALLOW_DIRECT=1` setting. Fake backends

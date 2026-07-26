@@ -20,10 +20,10 @@ func requireLiveDocker(t *testing.T, ctx context.Context) {
 	if err != nil {
 		t.Skipf("docker client init failed: %v", err)
 	}
-	if _, err := probe.Ping(ctx); err != nil {
+	if _, err := probe.Ping(ctx, client.PingOptions{}); err != nil {
 		t.Skipf("docker daemon unreachable: %v", err)
 	}
-	if _, _, err := probe.ImageInspectWithRaw(ctx, "runtime-browser:latest"); err != nil {
+	if _, err := probe.ImageInspect(ctx, "runtime-browser:latest"); err != nil {
 		t.Skipf("image runtime-browser:latest missing (run `make browser-image`): %v", err)
 	}
 }
@@ -35,21 +35,29 @@ func requireLiveDocker(t *testing.T, ctx context.Context) {
 // The host-run egress proxy is reached from the container via host.docker.internal
 // (Docker Desktop, or Linux with the ExtraHosts host-gateway mapping the backend adds).
 func TestLiveBrowseAndEgress(t *testing.T) {
+	const proxyToken = "0123456789abcdef0123456789abcdef"
+	ctx := context.Background()
+	requireLiveDocker(t, ctx)
 	pol, err := NewPolicy(ModeAllowList, []string{"example.com", "www.example.com"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	proxy := NewProxy(pol)
+	proxy := NewProxyWithConfig(pol, ProxyConfig{AuthToken: proxyToken})
 	ps := httptest.NewServer(proxy)
 	defer ps.Close()
 	proxyAddr := strings.TrimPrefix(ps.URL, "http://")
 
-	be, err := NewDockerBackend(DockerConfig{})
+	be, err := NewDockerBackend(DockerConfig{
+		NoSandboxForTests: true,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	m := NewManager(be, Config{MaxPerTenant: 2, ProxyAddr: proxyAddr})
-	ctx := context.Background()
+	m := NewManager(be, Config{
+		MaxPerTenant: 2,
+		ProxyAddr:    proxyAddr,
+		ProxyToken:   proxyToken,
+	})
 	t.Cleanup(func() { _ = m.ReapStartup(ctx) })
 
 	s, err := m.Create(ctx, "acme", "")

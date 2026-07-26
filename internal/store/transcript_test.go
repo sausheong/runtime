@@ -79,7 +79,7 @@ func TestTranscriptRoundTripAndUpsert(t *testing.T) {
 	}
 }
 
-func TestOnlineResultRoundTripUpsertAndByTenant(t *testing.T) {
+func TestOnlineResultRoundTripImmutableAndByTenant(t *testing.T) {
 	st := newTranscriptTestStore(t)
 	ctx := context.Background()
 	const tenant = "online-result-test-tenant"
@@ -98,7 +98,7 @@ func TestOnlineResultRoundTripUpsertAndByTenant(t *testing.T) {
 		_, _ = p.db.ExecContext(context.Background(), `DELETE FROM sessions WHERE id IN ($1,$2)`, s1, s2)
 	})
 
-	// Round-trip + upsert on (session, criterion).
+	// Round-trip + immutable first write on (session, criterion).
 	if err := st.PutOnlineResult(ctx, s1, "polite", tenant, "alice", "judge", true, "ok"); err != nil {
 		t.Fatal(err)
 	}
@@ -109,8 +109,8 @@ func TestOnlineResultRoundTripUpsertAndByTenant(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(res) != 1 || res[0].Passed != false || res[0].Detail != "changed" {
-		t.Fatalf("upsert wrong: %+v", res)
+	if len(res) != 1 || !res[0].Passed || res[0].Detail != "ok" {
+		t.Fatalf("first result was not immutable: %+v", res)
 	}
 
 	// Second criterion → two rows, ordered by criterion_name.

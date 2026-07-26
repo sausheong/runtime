@@ -29,6 +29,13 @@ Online policy injection and failure classification are implemented by the
 native `agentd` runtime. A foreign-SDK or independently operated remote agent
 must implement equivalent capture and scoring if it needs that path.
 
+For each `(session, criterion)`, the first successfully persisted online result
+is authoritative and immutable. A retry may recompute a different verdict,
+but it cannot overwrite the durable result, change the corresponding
+classification from that new computation, or emit a second criterion metric.
+This keeps results, monotonic failure classification, and exactly-once metrics
+coherent across replay and non-deterministic judges.
+
 ## Golden sets
 
 A golden set is a named, tenant-scoped list of cases. Each case contains an

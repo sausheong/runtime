@@ -96,19 +96,19 @@ func TestMemOnlineResultReportsFirstDurableWrite(t *testing.T) {
 	ctx := context.Background()
 	s := NewMemStore()
 	id, _ := s.CreateSession(ctx, "agent-x", 0)
-	inserted, err := s.PutOnlineResultIfNew(
+	inserted, authoritative, err := s.PutOnlineResultIfNew(
 		ctx, id, "quality", "default", "actor", "contains", true, "")
-	if err != nil || !inserted {
-		t.Fatalf("first write inserted=%v err=%v", inserted, err)
+	if err != nil || !inserted || !authoritative {
+		t.Fatalf("first write inserted=%v authoritative=%v err=%v", inserted, authoritative, err)
 	}
-	inserted, err = s.PutOnlineResultIfNew(
+	inserted, authoritative, err = s.PutOnlineResultIfNew(
 		ctx, id, "quality", "default", "actor", "contains", false, "changed")
-	if err != nil || inserted {
-		t.Fatalf("replay write inserted=%v err=%v", inserted, err)
+	if err != nil || inserted || !authoritative {
+		t.Fatalf("replay write inserted=%v authoritative=%v err=%v", inserted, authoritative, err)
 	}
 	results, err := s.ListOnlineResults(ctx, id)
-	if err != nil || len(results) != 1 || results[0].Passed {
-		t.Fatalf("upsert result=%+v err=%v", results, err)
+	if err != nil || len(results) != 1 || !results[0].Passed || results[0].Detail != "" {
+		t.Fatalf("immutable result=%+v err=%v", results, err)
 	}
 }
 

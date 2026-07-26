@@ -311,7 +311,9 @@ the full control-plane environment.
 
 Runtime applies ordered, transactional component migrations under a database
 advisory lock and records them in `runtime_schema_migrations`. Restricted
-agents check the supported core schema version without applying control-plane
+agents validate the complete core ledger and its checksums plus required
+tables, foreign keys, tenant-integrity triggers, RLS state, and policies
+without applying control-plane
 DDL. The schema covers identity, service and registration keys, encrypted
 secrets, dynamic agents and upstreams, policies and quotas, control-plane
 session ownership, durable events, memory, DBOS workflow state, transcripts,

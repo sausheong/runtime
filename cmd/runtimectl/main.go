@@ -13,8 +13,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/sausheong/runtime/internal/httplimit"
+
 	"github.com/sausheong/runtime/conformance"
 )
+
+const maxControlResponseBytes = 4 << 20
 
 func main() {
 	if len(os.Args) < 2 {
@@ -142,7 +146,7 @@ func fetchAgents(base string) []agentInfo {
 	check(err)
 	defer resp.Body.Close()
 	var infos []agentInfo
-	_ = json.NewDecoder(resp.Body).Decode(&infos)
+	_ = httplimit.DecodeJSON(resp.Body, maxControlResponseBytes, &infos)
 	return infos
 }
 
@@ -162,7 +166,7 @@ func invoke(base, agent, msg string, verbose bool) {
 	var out struct {
 		SessionID string `json:"session_id"`
 	}
-	_ = json.NewDecoder(resp.Body).Decode(&out)
+	_ = httplimit.DecodeJSON(resp.Body, maxControlResponseBytes, &out)
 	resp.Body.Close()
 	if out.SessionID == "" {
 		fmt.Fprintln(os.Stderr, "error: no session id returned")
@@ -181,7 +185,7 @@ func listSessions(base, agent string) {
 		Status    string `json:"status"`
 		TurnCount int    `json:"turn_count"`
 	}
-	_ = json.NewDecoder(resp.Body).Decode(&rows)
+	_ = httplimit.DecodeJSON(resp.Body, maxControlResponseBytes, &rows)
 	for _, s := range rows {
 		fmt.Printf("%s\t%s\tturns=%d\n", s.ID, s.Status, s.TurnCount)
 	}
@@ -918,7 +922,10 @@ func adminPost(base, path string, body map[string]string) ([]byte, error) {
 		return nil, err
 	}
 	defer resp.Body.Close()
-	out, _ := io.ReadAll(resp.Body)
+	out, readErr := httplimit.ReadAll(resp.Body, maxControlResponseBytes)
+	if readErr != nil {
+		return nil, fmt.Errorf("admin %s response: %w", path, readErr)
+	}
 	if resp.StatusCode >= 300 {
 		return out, fmt.Errorf("admin %s: %s: %s", path, resp.Status, strings.TrimSpace(string(out)))
 	}
@@ -947,7 +954,11 @@ func mustAdminPostAny(base, path string, body map[string]any) []byte {
 		os.Exit(1)
 	}
 	defer resp.Body.Close()
-	out, _ := io.ReadAll(resp.Body)
+	out, err := httplimit.ReadAll(resp.Body, maxControlResponseBytes)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "admin %s response: %v\n", path, err)
+		os.Exit(1)
+	}
 	if resp.StatusCode >= 300 {
 		fmt.Fprintf(os.Stderr, "admin %s: %s: %s\n", path, resp.Status, strings.TrimSpace(string(out)))
 		os.Exit(1)
@@ -962,7 +973,11 @@ func mustAdminGet(base, path string) []byte {
 		os.Exit(1)
 	}
 	defer resp.Body.Close()
-	out, _ := io.ReadAll(resp.Body)
+	out, err := httplimit.ReadAll(resp.Body, maxControlResponseBytes)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "admin %s response: %v\n", path, err)
+		os.Exit(1)
+	}
 	if resp.StatusCode >= 300 {
 		fmt.Fprintf(os.Stderr, "admin %s: %s: %s\n", path, resp.Status, strings.TrimSpace(string(out)))
 		os.Exit(1)
@@ -980,7 +995,7 @@ func mustAdminDelete(base, path string) {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 300 {
-		out, _ := io.ReadAll(resp.Body)
+		out, _ := httplimit.ReadAll(resp.Body, maxControlResponseBytes)
 		fmt.Fprintf(os.Stderr, "admin %s: %s: %s\n", path, resp.Status, strings.TrimSpace(string(out)))
 		os.Exit(1)
 	}

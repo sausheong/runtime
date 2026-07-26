@@ -53,6 +53,14 @@ var publicationCommands = []string{
 	"gh release create",
 }
 
+var racePackages = []string{
+	"./internal/eval",
+	"./internal/browser",
+	"./internal/memory",
+	"./internal/httplimit",
+	"./cmd/runtimed",
+}
+
 func stepRuns(step workflowStep, command string) bool {
 	for _, line := range strings.Split(step.Run, "\n") {
 		line = strings.TrimSpace(line)
@@ -109,8 +117,12 @@ func validateReleasePublicationGates(data []byte) error {
 		}
 	}
 	for i, step := range publish.Steps[:firstPublication] {
-		if stepRuns(step, "go test -race") && !stepRuns(step, "./internal/eval") {
-			return fmt.Errorf("race gate at step %d omits ./internal/eval", i)
+		if stepRuns(step, "go test -race") {
+			for _, pkg := range racePackages {
+				if !stepRuns(step, pkg) {
+					return fmt.Errorf("race gate at step %d omits %s", i, pkg)
+				}
+			}
 		}
 	}
 	return nil
@@ -131,6 +143,29 @@ func validateCIHelmLint(data []byte) error {
 		}
 	}
 	return fmt.Errorf("CI helm job lacks blocking make helm-lint")
+}
+
+func validateCIRaceGate(data []byte) error {
+	var workflow workflowDocument
+	if err := yaml.Unmarshal(data, &workflow); err != nil {
+		return fmt.Errorf("parse CI workflow: %w", err)
+	}
+	job, ok := workflow.Jobs["unit"]
+	if !ok {
+		return fmt.Errorf("CI workflow has no unit job")
+	}
+	for i, step := range job.Steps {
+		if step.ContinueOnError || !stepRuns(step, "go test -race") {
+			continue
+		}
+		for _, pkg := range racePackages {
+			if !stepRuns(step, pkg) {
+				return fmt.Errorf("CI race gate at step %d omits %s", i, pkg)
+			}
+		}
+		return nil
+	}
+	return fmt.Errorf("CI unit job lacks blocking race gate")
 }
 
 func repositoryRoot(t *testing.T) string {
@@ -257,6 +292,15 @@ func TestReleaseWorkflowIsValidAndPinned(t *testing.T) {
 	}
 	for _, required := range []string{
 		"${{ github.ref_name }}",
+		"--build-arg VERSION=",
+		"--build-arg REVISION=",
+		"org.opencontainers.image.version",
+		"org.opencontainers.image.revision",
+		"deploy/sandbox.Dockerfile",
+		"deploy/browser.Dockerfile",
+		"deploy/compose/embedder/Dockerfile",
+		"grype runtime:release-validation --fail-on high",
+		"--only-fixed",
 		"docker push",
 		"syft ",
 		"cosign sign ",
@@ -274,6 +318,69 @@ func TestReleaseWorkflowIsValidAndPinned(t *testing.T) {
 	if err := validateCIHelmLint(ciData); err != nil {
 		t.Error(err)
 	}
+	if err := validateCIRaceGate(ciData); err != nil {
+		t.Error(err)
+	}
+	if !strings.Contains(string(ciData), "grype runtime:ci --fail-on high --only-fixed") {
+		t.Error("CI does not enforce the actionable high-severity image gate")
+	}
+}
+
+func TestReleaseImagesAreDigestDeployableAndOptionalImagesConstrained(t *testing.T) {
+	root := repositoryRoot(t)
+	values, err := os.ReadFile(filepath.Join(root, "deploy/charts/runtime/values.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	helpers, err := os.ReadFile(filepath.Join(root, "deploy/charts/runtime/templates/_helpers.tpl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(values), "digest:") ||
+		!strings.Contains(string(helpers), `printf "%s@%s" .Values.image.repository .Values.image.digest`) {
+		t.Fatal("Helm chart cannot consume an immutable image digest")
+	}
+	for _, path := range []string{
+		"deploy/Dockerfile",
+		"deploy/sandbox.Dockerfile",
+		"deploy/browser.Dockerfile",
+		"deploy/compose/embedder/Dockerfile",
+		"deploy/gcp/agent-python/Dockerfile",
+		"deploy/gcp/agent-claude/Dockerfile",
+		"deploy/gcp/agent-food-label/Dockerfile",
+	} {
+		data, err := os.ReadFile(filepath.Join(root, path))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for i, line := range strings.Split(string(data), "\n") {
+			fields := strings.Fields(line)
+			if len(fields) >= 2 && strings.EqualFold(fields[0], "FROM") &&
+				fields[1] != "scratch" && !strings.Contains(fields[1], "@sha256:") {
+				t.Errorf("%s line %d base image is not digest-pinned: %q", path, i+1, line)
+			}
+			if strings.Contains(line, "COPY --from=") {
+				from := strings.SplitN(strings.SplitN(line, "COPY --from=", 2)[1], " ", 2)[0]
+				if strings.Contains(from, "/") && !strings.Contains(from, "@sha256:") {
+					t.Errorf("%s line %d external copy image is not digest-pinned: %q", path, i+1, line)
+				}
+			}
+		}
+	}
+	for _, path := range []string{
+		"deploy/sandbox-requirements.txt",
+		"deploy/compose/embedder/requirements.txt",
+	} {
+		requirements, err := os.ReadFile(filepath.Join(root, path))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for i, line := range strings.Split(strings.TrimSpace(string(requirements)), "\n") {
+			if !strings.Contains(line, "==") {
+				t.Errorf("%s line %d is not exactly pinned: %q", path, i+1, line)
+			}
+		}
+	}
 }
 
 func TestReleaseWorkflowGateValidatorRejectsMutations(t *testing.T) {
@@ -287,7 +394,7 @@ func TestReleaseWorkflowGateValidatorRejectsMutations(t *testing.T) {
 	valid := "jobs:\n  publish:\n    steps:"
 	for _, command := range releaseValidationCommands {
 		if command == "go test -race" {
-			command += " ./controlplane ./internal/eval"
+			command += " ./controlplane " + strings.Join(racePackages, " ")
 		}
 		valid += step(command, false)
 	}

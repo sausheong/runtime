@@ -2,7 +2,6 @@ package console
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -15,7 +14,10 @@ import (
 	"github.com/prometheus/common/model"
 
 	"github.com/sausheong/runtime/controlplane"
+	"github.com/sausheong/runtime/internal/httplimit"
 )
+
+const maxAgentJSONResponseBytes = 4 << 20
 
 // sessionRow mirrors one element of the agent runtime's GET /sessions response.
 type sessionRow struct {
@@ -96,7 +98,7 @@ func (httpAgentClient) get(ctx context.Context, ap controlplane.AgentProcess, pa
 	if resp.StatusCode != 200 {
 		return fmt.Errorf("agent GET %s: status %d", path, resp.StatusCode)
 	}
-	return json.NewDecoder(resp.Body).Decode(out)
+	return httplimit.DecodeJSON(resp.Body, maxAgentJSONResponseBytes, out)
 }
 
 func (c httpAgentClient) ListSessions(ctx context.Context, ap controlplane.AgentProcess) ([]sessionRow, error) {

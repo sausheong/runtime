@@ -21,6 +21,7 @@ type Config struct {
 	IdleTTL      time.Duration // close after this long unused (default 10m)
 	MaxLifetime  time.Duration // close this long after create (default 1h)
 	ProxyAddr    string        // egress proxy address passed to Backend.Create
+	ProxyToken   string        // supplied only to proxy auth challenges over CDP
 
 	// SessionScoped keys browsers by (tenant, session, id) instead of
 	// (tenant, id): a handle minted in one agent session is invisible to
@@ -40,6 +41,7 @@ type Session struct {
 	LastUsed    time.Time
 	ExpiresAt   time.Time
 	CurrentURL  string
+	proxyToken  string
 
 	mu      sync.Mutex         // serializes chromedp actions (one tab)
 	taskCtx context.Context    // chromedp task ctx (later task)
@@ -85,12 +87,13 @@ func newBrowserID() string {
 func (m *Manager) Create(ctx context.Context, tenant, session string) (*Session, error) {
 	now := m.now()
 	s := &Session{
-		ID:        newBrowserID(),
-		Tenant:    tenant,
-		Session:   session,
-		CreatedAt: now,
-		LastUsed:  now,
-		ExpiresAt: now.Add(m.cfg.MaxLifetime),
+		ID:         newBrowserID(),
+		Tenant:     tenant,
+		Session:    session,
+		CreatedAt:  now,
+		LastUsed:   now,
+		ExpiresAt:  now.Add(m.cfg.MaxLifetime),
+		proxyToken: m.cfg.ProxyToken,
 	}
 	m.mu.Lock()
 	// Cap-counting is per-tenant across ALL sessions regardless of scope

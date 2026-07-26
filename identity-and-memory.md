@@ -244,7 +244,11 @@ RUNTIME_INGEST_DEDUP_FLOOR=0.85
 After a completed turn, the extractor can derive durable facts and deduplicate
 them by embedding similarity. It is best-effort: extraction failure must not
 fail the user turn. Ingestion requires embeddings. Cap in-flight extraction to
-protect the model provider and database during bursts.
+protect the model provider and database during bursts. Accepted ingestion is
+owned by the agent lifecycle. Shutdown stops new admission, gives cooperative
+workers a bounded drain period, cancels overdue extraction and storage calls,
+and returns without waiting forever for a dependency that ignores
+cancellation. The memory database remains open until that drain completes.
 
 ### Rolling summaries
 

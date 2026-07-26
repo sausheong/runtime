@@ -117,3 +117,15 @@ func TestEvalInvokerNoReplica(t *testing.T) {
 		t.Fatalf("want 'no replica for agent ghost' error, got %v", err)
 	}
 }
+
+func TestEvalInvokerRejectsOversizedCreateResponse(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(strings.Repeat("x", maxEvalSessionResponseBytes+1)))
+	}))
+	defer srv.Close()
+	inv := newFakeInvoker(srv.URL, "")
+	if _, err := inv.Invoke(context.Background(), "agent", "hi"); err == nil ||
+		!strings.Contains(err.Error(), "exceeds") {
+		t.Fatalf("oversized create response error=%v", err)
+	}
+}

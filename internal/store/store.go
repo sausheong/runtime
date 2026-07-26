@@ -102,12 +102,13 @@ type Store interface {
 	// (sessionID, turn): re-appending the same turn upserts (replay-safe).
 	// entries is raw JSON stored as JSONB.
 	AppendTranscript(ctx context.Context, sessionID string, turn int, tenant, actor string, entries []byte, stopReason, status string) error
-	// PutOnlineResult records one online-eval-criterion outcome. Idempotent on
-	// (sessionID, criterion): re-scoring the same criterion upserts.
+	// PutOnlineResult records the first online-eval-criterion outcome.
+	// Re-scoring the same criterion is immutable and idempotent.
 	PutOnlineResult(ctx context.Context, sessionID, criterion, tenant, actor, scorer string, passed bool, detail string) error
-	// PutOnlineResultIfNew performs the same upsert and reports whether the
-	// criterion was durably recorded for the first time.
-	PutOnlineResultIfNew(ctx context.Context, sessionID, criterion, tenant, actor, scorer string, passed bool, detail string) (bool, error)
+	// PutOnlineResultIfNew reports whether this call performed the first durable
+	// write and returns the authoritative persisted verdict. On replay the
+	// supplied verdict never overwrites that first outcome.
+	PutOnlineResultIfNew(ctx context.Context, sessionID, criterion, tenant, actor, scorer string, passed bool, detail string) (inserted, authoritativePassed bool, err error)
 	// ListOnlineResults returns all results for a session, ordered by criterion.
 	ListOnlineResults(ctx context.Context, sessionID string) ([]OnlineResult, error)
 	// ListOnlineResultsByTenant returns results for a tenant, newest first,

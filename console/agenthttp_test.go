@@ -63,6 +63,19 @@ func TestHTTPAgentClient_Non200IsError(t *testing.T) {
 	}
 }
 
+func TestHTTPAgentClientRejectsOversizedJSON(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(strings.Repeat("x", maxAgentJSONResponseBytes+1)))
+	}))
+	defer srv.Close()
+	c := &httpAgentClient{}
+	ap := controlplane.AgentProcess{Addr: srv.Listener.Addr().String()}
+	if _, err := c.ListSessions(context.Background(), ap); err == nil ||
+		!strings.Contains(err.Error(), "exceeds") {
+		t.Fatalf("oversized agent response error=%v", err)
+	}
+}
+
 func TestHTTPAgentClient_EnforcesRestrictedOutbound(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte(`[]`))

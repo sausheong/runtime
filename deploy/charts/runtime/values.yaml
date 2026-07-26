@@ -3,6 +3,7 @@
 image:
   repository: runtime
   tag: ""                 # defaults to .Chart.AppVersion
+  digest: ""              # production: sha256:...; overrides tag
   pullPolicy: IfNotPresent
 imagePullSecrets: []
 

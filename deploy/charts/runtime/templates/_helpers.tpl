@@ -21,6 +21,15 @@
 {{- printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
 
+{{/* Immutable digest wins over the development-compatible tag. */}}
+{{- define "runtime.image" -}}
+{{- if .Values.image.digest -}}
+{{- printf "%s@%s" .Values.image.repository .Values.image.digest -}}
+{{- else -}}
+{{- printf "%s:%s" .Values.image.repository (.Values.image.tag | default .Chart.AppVersion) -}}
+{{- end -}}
+{{- end -}}
+
 {{- define "runtime.labels" -}}
 helm.sh/chart: {{ include "runtime.chart" . }}
 {{ include "runtime.selectorLabels" . }}
