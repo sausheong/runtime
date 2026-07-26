@@ -368,6 +368,36 @@ generates SPDX SBOMs, signs/attests the image with keyless Sigstore, signs the
 chart archive, and creates a GitHub release. See the repository
 [`RELEASING.md`](../../../RELEASING.md).
 
+## Upgrading
+
+### Every agent now requires `registration_generation`
+
+`config.Validate` requires a `registration_generation` on **every** agent, not
+only `perAgentPods` ones. A release whose `config.agents` entries lack it now
+fails at `helm template`/`helm upgrade` time rather than rendering cleanly and
+leaving the pod to CrashLoop on a config `runtimed` refuses to load.
+
+Add one per agent before upgrading:
+
+```yaml
+config:
+  agents:
+    - id: support
+      name: Support
+      model: gpt-4o-mini
+      registration_generation: 11111111-1111-4111-8111-111111111111
+```
+
+Keep the value **stable across ordinary restarts** and rotate it only when you
+intentionally replace, recreate, or re-endpoint that agent — a registration
+token is bound to the exact tenant+generation, so rotating invalidates
+outstanding tokens on purpose. Any stable 16-128 character string works; a UUID
+is a convenient choice.
+
+Note that sessions are owned by the agent tenant and generation recorded when
+they were created, so pre-upgrade sessions belonging to an agent whose
+generation changes are no longer routable by design.
+
 ## Limitations / non-goals
 
 - **Single replica.** The control plane is not HA — `replicaCount` is fixed at 1.

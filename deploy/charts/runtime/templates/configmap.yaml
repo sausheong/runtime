@@ -45,6 +45,17 @@ data:
 {{- else }}
   # monolith: runtimed exec-spawns each agent. runtime.requireAgents (called from
   # the Deployment) guarantees a non-empty agents list at render time.
+  #
+  # config is emitted wholesale, so nothing here validates individual agents.
+  # registration_generation is required by config.Validate for EVERY agent, not
+  # only perAgentPods ones (whose gate lives in _helpers.tpl). Without this
+  # check a monolith release renders cleanly, `helm upgrade` reports success,
+  # and the pod then CrashLoops on a config runtimed refuses to load.
+  {{- range $a := .Values.config.agents }}
+  {{- if not $a.registration_generation }}
+  {{- fail (printf "runtime: agent %q requires registration_generation. Keep it stable across ordinary restarts and rotate it when replacing or recreating the agent; runtimed rejects a config without it." $a.id) }}
+  {{- end }}
+  {{- end }}
   runtime.yaml: |
     {{- toYaml .Values.config | nindent 4 }}
 {{- end }}

@@ -8,7 +8,11 @@ DSN='--set secrets.pgDsn=postgres://x:x@h:5432/d?sslmode=disable'
 # The loader requires a non-empty agents list (each with id/name/model/listen_addr),
 # and the chart enforces that at render time (runtime.requireAgents). Supply one
 # valid agent in every render that is expected to succeed.
-AGENTS='--set config.agents[0].id=a --set config.agents[0].name=A --set config.agents[0].model=test/scripted --set config.agents[0].listen_addr=127.0.0.1:8101'
+# registration_generation is required by config.Validate for EVERY agent, so a
+# render lacking it would produce a config runtimed refuses to load. The base
+# fixture carries one; PAP_GENERATION below is the perAgentPods variant, whose
+# agents must not set listen_addr.
+AGENTS='--set config.agents[0].id=a --set config.agents[0].name=A --set config.agents[0].model=test/scripted --set config.agents[0].listen_addr=127.0.0.1:8101 --set config.agents[0].registration_generation=11111111-1111-4111-8111-111111111111'
 PAP_GENERATION='--set config.agents[0].registration_generation=11111111-1111-4111-8111-111111111111'
 fail() { echo "FAIL: $1" >&2; exit 1; }
 ok()   { echo "ok: $1"; }
@@ -92,6 +96,7 @@ ok "toggles"
 a=$(helm template r "$CHART" $DSN $AGENTS | grep 'checksum/config:' | head -1)
 b=$(helm template r "$CHART" $DSN $AGENTS --set 'config.agents[1].id=x' --set 'config.agents[1].name=X' \
       --set 'config.agents[1].model=test/scripted' --set 'config.agents[1].listen_addr=127.0.0.1:8102' \
+      --set 'config.agents[1].registration_generation=33333333-3333-4333-8333-333333333333' \
       | grep 'checksum/config:' | head -1)
 [ "$a" != "$b" ] || fail "checksum did not change on config change"
 ok "config checksum"
@@ -129,7 +134,8 @@ ok "perAgentPods renders StatefulSet+headless+generated remote config"
 # 7b. perAgentPods single-replica agent → concrete ordinal-0 url, no {i}, no replicas key.
 out=$(helm template r "$CHART" $DSN $PAP \
   --set config.agents[0].id=solo --set config.agents[0].name=Solo \
-  --set config.agents[0].model=test/scripted)
+  --set config.agents[0].model=test/scripted \
+  --set config.agents[0].registration_generation=22222222-2222-4222-8222-222222222222)
 grep -q 'solo-0.r-agent-solo-hl'  <<<"$out" || fail "perAgentPods solo: url not concrete ordinal 0"
 if grep -A6 'id: solo' <<<"$out" | grep -q '{i}'; then fail "perAgentPods solo: url still has {i}"; fi
 ok "perAgentPods single-replica → concrete url"
@@ -285,5 +291,18 @@ out=$(helm template r "$CHART" $DSN --set scheduling.mode=perAgentPods \
 grep -A1 'name: RUNTIME_MEMORY_RETENTION_FACT' <<<"$out" | grep -q 'value: "720h"' ||
   fail "perAgentPods memory retention not rendered"
 ok "retention and concurrency configuration"
+
+# 22. A monolith agent without registration_generation must FAIL AT RENDER.
+# config.Validate requires it for every agent, not only perAgentPods ones, and
+# the monolith path emits config wholesale. Without this gate the chart renders
+# cleanly, `helm upgrade` reports success, and the pod then CrashLoops on a
+# config runtimed refuses to load.
+if helm template r "$CHART" $DSN \
+  --set config.agents[0].id=a --set config.agents[0].name=A \
+  --set config.agents[0].model=test/scripted \
+  --set config.agents[0].listen_addr=127.0.0.1:8101 >/dev/null 2>&1; then
+  fail "expected monolith registration_generation fail-closed"
+fi
+ok "monolith fail-closed (registration_generation absent)"
 
 echo "ALL CHART TESTS PASSED"
