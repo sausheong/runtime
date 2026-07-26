@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
 
 	"github.com/sausheong/runtime/controlplane"
@@ -111,7 +112,7 @@ func TestBuildAgentObs_TalliesAndHealth(t *testing.T) {
 			{ID: "s3", Status: "completed"}, {ID: "s4", Status: "error"}},
 	}}
 	info := controlplane.AgentInfo{ID: "a", Name: "AlphaAgent", Model: "m", Tenant: "acme"}
-	probe := func(ap controlplane.AgentProcess) bool { return true }
+	probe := func(_ context.Context, ap controlplane.AgentProcess) bool { return true }
 
 	obs := buildAgentObs(ctx, reg, client, probe, info)
 	if obs.Sessions.Created != 1 || obs.Sessions.Running != 1 || obs.Sessions.Completed != 1 || obs.Sessions.Error != 1 {
@@ -129,7 +130,7 @@ func TestBuildAgentObs_ClientErrorZeroTally(t *testing.T) {
 	reg := obsTestReg(t)
 	client := &fakeAgentClient{errAgents: map[string]bool{"a": true}}
 	info := controlplane.AgentInfo{ID: "a", Name: "AlphaAgent", Tenant: "acme"}
-	obs := buildAgentObs(context.Background(), reg, client, func(controlplane.AgentProcess) bool { return false }, info)
+	obs := buildAgentObs(context.Background(), reg, client, func(context.Context, controlplane.AgentProcess) bool { return false }, info)
 	if obs.Sessions.Total != 0 || obs.Healthy != 0 {
 		t.Fatalf("client error should give zero tally and unhealthy: %+v", obs)
 	}
@@ -142,7 +143,7 @@ func TestBuildFleetObs_AggregatesActiveAndHealthy(t *testing.T) {
 		"a": {{ID: "s1", Status: "running"}},
 	}}
 	infos := []controlplane.AgentInfo{{ID: "a", Name: "AlphaAgent", Tenant: "acme"}}
-	fleet := buildFleetObs(ctx, reg, client, func(controlplane.AgentProcess) bool { return true }, infos)
+	fleet := buildFleetObs(ctx, reg, client, func(context.Context, controlplane.AgentProcess) bool { return true }, infos)
 	if fleet.TotalAgents != 1 || fleet.HealthyAgents != 1 {
 		t.Fatalf("fleet agents: total=%d healthy=%d", fleet.TotalAgents, fleet.HealthyAgents)
 	}
@@ -296,5 +297,34 @@ func TestAgentPageHasMetricsPanel(t *testing.T) {
 	// The Tool use & tokens metrics panel still renders its tiles.
 	if !strings.Contains(body, `<div class="stat-label">Tokens in</div>`) {
 		t.Fatal("agent page missing Tool use & tokens panel")
+	}
+}
+
+// TestHTTPProbeHonoursCancellation pins the reason probeFunc takes a context.
+// buildFleetObs bounds how many probes run concurrently, but without
+// cancellation each in-flight probe still runs to its one-second client
+// timeout after the browser request that triggered it has gone. A cancelled
+// probe must return promptly instead.
+func TestHTTPProbeHonoursCancellation(t *testing.T) {
+	blocked := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done() // never answers; only cancellation ends this
+	}))
+	defer srv.Close()
+	defer close(blocked)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(20 * time.Millisecond)
+		cancel()
+	}()
+
+	ap := controlplane.AgentProcess{BaseURL: srv.URL}
+	start := time.Now()
+	if httpProbe(ctx, ap) {
+		t.Fatal("probe reported healthy against a server that never answered")
+	}
+	if elapsed := time.Since(start); elapsed > 500*time.Millisecond {
+		t.Fatalf("probe took %v; cancellation was not honoured (client timeout is 1s)", elapsed)
 	}
 }

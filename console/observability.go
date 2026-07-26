@@ -34,13 +34,17 @@ type FleetObs struct {
 }
 
 // probeFunc reports whether a replica is healthy. Injected for testability.
-type probeFunc func(controlplane.AgentProcess) bool
+// It takes a context so a probe stops when the browser request that triggered
+// it goes away: buildFleetObs bounds how many probes run at once, but without
+// cancellation each survivor still runs to its client timeout after the caller
+// has gone.
+type probeFunc func(context.Context, controlplane.AgentProcess) bool
 
 // httpProbe is the production probe: a replica is healthy if GET <base>/healthz
 // returns 200 (bearer attached when set). Mirrors the /agents API health check.
-func httpProbe(ap controlplane.AgentProcess) bool {
+func httpProbe(ctx context.Context, ap controlplane.AgentProcess) bool {
 	client := controlplane.NewAgentHTTPClient(ap, time.Second)
-	req, err := http.NewRequest("GET", ap.DialBase()+"/healthz", nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", ap.DialBase()+"/healthz", nil)
 	if err != nil {
 		return false
 	}
@@ -84,7 +88,7 @@ func buildAgentObs(ctx context.Context, reg *controlplane.Registry, client agent
 	replicas, _ := reg.Replicas(info.ID)
 	o.Replicas = len(replicas)
 	for _, ap := range replicas {
-		if probe(ap) {
+		if probe(ctx, ap) {
 			o.Healthy++
 		}
 	}
