@@ -54,7 +54,7 @@ test: ## Run hermetic unit tests (no network, no DB)
 	go test $(GOFLAGS) ./...
 
 .PHONY: test-integration
-test-integration: ## Run integration tests (requires Postgres at PG_DSN; see pg-up)
+test-integration: ## Run integration tests (DESTRUCTIVE: DROPs tables at RUNTIME_TEST_PG_DSN/RUNTIME_PG_DSN/PG_DSN; see pg-up)
 	RUNTIME_PG_DSN="$${RUNTIME_PG_DSN:-$(PG_DSN)}" \
 	RUNTIME_AGENT_PG_DSN="$${RUNTIME_AGENT_PG_DSN:-postgres://runtime_agent_test:runtime-agent-test@localhost:5432/runtime?sslmode=disable}" \
 	RUNTIME_TEST_ALLOW_AGENT_ROLE_REBIND=1 \
@@ -134,7 +134,7 @@ pg-up: ## Start a local Postgres (pgvector) for tests/dev
 		-c 'CREATE EXTENSION IF NOT EXISTS vector'
 
 .PHONY: pg-down
-pg-down: ## Stop the local Postgres
+pg-down: ## Stop the local Postgres (DESTRUCTIVE: this dev DB has no volume, so data is discarded)
 	$(COMPOSE) down
 
 # ---- Container image (all binaries) ----

@@ -43,6 +43,17 @@ a release is tagged, while the current default branch remains pre-release.
 
 ### Changed
 
+- `RUNTIME_IDENTITY_SIGNING_PUBLIC_KEY` is now optional. An Ed25519 public key
+  is a function of its private key, so requiring an operator to supply both
+  could only ever produce a mismatch; `runtimed` derives it at startup. Set the
+  variable, or `secrets.identitySigningPublicKey`, only to pin the value.
+- The integration suite's database is now resolved in one place from
+  `RUNTIME_TEST_PG_DSN`, then `RUNTIME_PG_DSN`, then the local default. Eight
+  packages previously hardcoded the DSN as a const, so the documented override
+  silently did nothing and the destructive tests DROPped tables in whatever was
+  at that address. README, CONTRIBUTING, and `make` help now say the suite is
+  destructive, as does `make pg-down`, whose dev database has no volume.
+
 - The browser egress proxy now binds an address reachable from the private
   browser network, where it previously bound loopback and was therefore
   unreachable from the browser container (and, being loopback, unauthenticated).

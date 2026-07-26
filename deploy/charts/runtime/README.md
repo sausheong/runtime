@@ -398,6 +398,22 @@ Note that sessions are owned by the agent tenant and generation recorded when
 they were created, so pre-upgrade sessions belonging to an agent whose
 generation changes are no longer routable by design.
 
+### Other gates that can stop an upgrade
+
+These fail at render time rather than silently, but each will halt a
+`helm upgrade` of a release that installed cleanly under an earlier chart:
+
+| Gate | Trigger | What to supply |
+|---|---|---|
+| `runtime.requireAgentPg` | `identity.enabled` or `scheduling.mode: perAgentPods` | `secrets.agentPgDsn` — a restricted agent role distinct from the control-plane role |
+| per-agent auth | `scheduling.mode: perAgentPods` | one `secrets.agentAuthTokens.<agentId>` per agent |
+| signing keys | `identity.subjectForwarding` | `secrets.identitySigningPrivateKey` (the public key is derived at startup) |
+| `networkPolicy.enabled` | on by default | nothing, unless your monitoring stack lives in another namespace — then add a `namespaceSelector` under `networkPolicy.metricsIngress`, or the private metrics listener is not scrapable |
+
+`networkPolicy.enabled` defaulting to `true` is the one that changes behaviour
+rather than blocking the render: a cross-namespace Prometheus that scraped the
+management listener before will be denied until it is named as a peer.
+
 ## Limitations / non-goals
 
 - **Single replica.** The control plane is not HA — `replicaCount` is fixed at 1.

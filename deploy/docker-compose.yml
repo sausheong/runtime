@@ -8,6 +8,11 @@ services:
       POSTGRES_USER: runtime
       POSTGRES_PASSWORD: runtime
       POSTGRES_DB: runtime
+    # No named volume on purpose: this is the throwaway dev/test database that
+    # `make pg-up` provisions and the destructive integration suite DROPs tables
+    # in. `make pg-down` therefore discards its contents. Use
+    # deploy/compose/docker-compose.yml (which has a pgdata volume) for anything
+    # you expect to keep.
     volumes:
       - ./compose/initdb:/docker-entrypoint-initdb.d:ro
     ports:
