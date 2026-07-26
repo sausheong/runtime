@@ -5,8 +5,14 @@ runs the control plane (`runtimed` + `agentd`) from a single all-binaries image,
 secure-by-default, with optional bundled or BYO Postgres.
 
 - **Chart version:** 0.2.0 &nbsp;·&nbsp; **App version:** 0.2.0 &nbsp;·&nbsp; **Helm:** v4
+- **Kubernetes:** 1.28+ (`kubeVersion` in `Chart.yaml`). `perAgentPods` reads each
+  agent's replica ordinal from the `apps.kubernetes.io/pod-index` label, which the
+  kubelet sets only from 1.28; on an older cluster every replica would claim
+  ordinal 0, so the chart refuses to install rather than deploy that quietly.
 - **Image:** one image bundling `runtimed`, `agentd`, `sandboxd`, `browserd`, and
-  `runtimectl`, running as non-root uid `10001`.
+  `runtimectl`, running as non-root uid `10001`. Built `FROM scratch` — it has
+  **no shell**, so anything invoking these binaries must exec them directly
+  rather than wrapping them in `sh -c`.
 
 ## Quick start (kind)
 
