@@ -65,6 +65,19 @@ func decodePublicKey(encoded string) (ed25519.PublicKey, error) {
 	return ed25519.PublicKey(raw), nil
 }
 
+// PublicKeyFor derives the verification key an agent needs from the control
+// plane's private key. Ed25519 public keys are a function of the private key,
+// so requiring an operator to supply both is busywork whose only possible
+// outcome is a mismatch. Configure the public key explicitly only to pin it.
+func PublicKeyFor(privateEncoded string) (string, error) {
+	privateKey, err := decodePrivateKey(privateEncoded)
+	if err != nil {
+		return "", err
+	}
+	pub := privateKey.Public().(ed25519.PublicKey)
+	return base64.RawURLEncoding.EncodeToString(pub), nil
+}
+
 // ValidateKeyPair proves that the configured public key corresponds to the
 // control plane's private key without exposing either value.
 func ValidateKeyPair(privateEncoded, publicEncoded string) error {

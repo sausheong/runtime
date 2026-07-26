@@ -188,9 +188,20 @@ func main() {
 				os.Exit(1)
 			}
 			slog.Warn("using an ephemeral forwarded-identity signing key; configure a stable key pair for independently started remote agents")
-		} else if signingPrivate == "" || signingPublic == "" {
-			slog.Error("both RUNTIME_IDENTITY_SIGNING_PRIVATE_KEY and RUNTIME_IDENTITY_SIGNING_PUBLIC_KEY are required when either is configured")
+		} else if signingPrivate == "" {
+			slog.Error("RUNTIME_IDENTITY_SIGNING_PUBLIC_KEY was configured without RUNTIME_IDENTITY_SIGNING_PRIVATE_KEY")
 			os.Exit(1)
+		} else if signingPublic == "" {
+			// An Ed25519 public key is a function of the private key, so
+			// requiring the operator to supply both can only ever produce a
+			// mismatch. Derive it; the variable stays available to pin a value.
+			derived, derr := rheader.PublicKeyFor(signingPrivate)
+			if derr != nil {
+				slog.Error("cannot derive the forwarded-identity public key", "err", derr)
+				os.Exit(1)
+			}
+			signingPublic = derived
+			slog.Info("derived the forwarded-identity public key from the configured private key")
 		}
 		if err := rheader.ValidateKeyPair(signingPrivate, signingPublic); err != nil {
 			slog.Error("subject forwarding requires a valid Ed25519 signing key pair", "err", err)

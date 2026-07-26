@@ -50,7 +50,8 @@ secrets:
   secretsPrimary: ""      # RUNTIME_SECRETS_PRIMARY
   adminBootstrap: ""      # RUNTIME_ADMIN_BOOTSTRAP
   identitySigningPrivateKey: "" # Ed25519 private key; control plane only
-  identitySigningPublicKey: ""  # matching Ed25519 public key; agents verify
+  identitySigningPublicKey: ""  # derived from the private key at startup; set
+                                # only to pin the value agents verify with
   agentAuthTokens: {}     # per-agent map, e.g. {support: "...", research: "..."}
   registrationToken: ""   # RUNTIME_REGISTRATION_TOKEN — per-agent handshake bearer
                           # (perAgentPods). When set, agent pods pull DSN + brokered

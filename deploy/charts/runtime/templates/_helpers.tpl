@@ -124,8 +124,8 @@ keys; operators must provide RUNTIME_AGENT_PG_DSN there.
 {{/* Subject forwarding requires a stable asymmetric key pair in Kubernetes. */}}
 {{- define "runtime.requireIdentitySigning" -}}
 {{- if .Values.identity.subjectForwarding -}}
-{{- if and (not .Values.secrets.existingSecret) (or (not .Values.secrets.identitySigningPrivateKey) (not .Values.secrets.identitySigningPublicKey)) -}}
-{{- fail "runtime: identity.subjectForwarding requires secrets.identitySigningPrivateKey and secrets.identitySigningPublicKey, or an existingSecret carrying both signing keys" -}}
+{{- if and (not .Values.secrets.existingSecret) (not .Values.secrets.identitySigningPrivateKey) -}}
+{{- fail "runtime: identity.subjectForwarding requires secrets.identitySigningPrivateKey, or an existingSecret carrying it. The matching public key is derived from it at startup; set secrets.identitySigningPublicKey only to pin the value." -}}
 {{- end -}}
 {{- end -}}
 {{- end -}}
