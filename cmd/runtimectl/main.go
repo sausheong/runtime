@@ -56,13 +56,22 @@ func main() {
 		runAdmin(base, os.Args[2:])
 	case "register":
 		runRegister(base, os.Args[2:])
+	case "-h", "--help", "help":
+		// An explicit help request is a successful invocation: it goes to
+		// stdout and exits 0. Only an unrecognized or missing command is a
+		// usage error. Without this case `--help` fell through to default and
+		// exited 2, so `runtimectl --help` — the image smoke test in ci.yml,
+		// and the first thing anyone runs — reported failure.
+		fmt.Println(usageLine)
 	default:
 		usage()
 	}
 }
 
+const usageLine = "usage: runtimectl <agents|invoke [-v]|sessions|logs|conformance|admin|register> [--agent <id>] [args]"
+
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: runtimectl <agents|invoke [-v]|sessions|logs|conformance|admin|register> [--agent <id>] [args]")
+	fmt.Fprintln(os.Stderr, usageLine)
 	os.Exit(2)
 }
 
