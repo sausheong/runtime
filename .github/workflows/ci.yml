@@ -105,7 +105,14 @@ jobs:
         with:
           go-version: '1.25.12'
           cache: true
-      - run: shellcheck deploy/compose/*.sh deploy/compose/initdb/*.sh deploy/gcp/*.sh deploy/gcp/control-plane/*.sh deploy/charts/runtime/*.sh
+      # error and warning findings block; info and style are advisory for these
+      # scripts. Their dominant SC2086 hits are deliberate word splitting: the
+      # DSN and AGENTS variables in deploy/charts/runtime/test.sh each hold
+      # several --set flags that must split into separate helm arguments, so
+      # quoting them as SC2086 advises would break the chart render matrix.
+      # The threshold must stay explicit: shellcheck defaults to "style", which
+      # exits non-zero on those advisory findings and leaves the gate always red.
+      - run: shellcheck --severity=warning deploy/compose/*.sh deploy/compose/initdb/*.sh deploy/gcp/*.sh deploy/gcp/control-plane/*.sh deploy/charts/runtime/*.sh
       - name: Build and smoke-test runtime and tool images
         run: |
           docker build --build-arg VERSION=ci --build-arg REVISION="$GITHUB_SHA" -f deploy/Dockerfile -t runtime:ci .

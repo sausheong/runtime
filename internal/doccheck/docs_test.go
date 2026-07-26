@@ -271,6 +271,62 @@ func validateCIRaceGate(data []byte) error {
 	return fmt.Errorf("CI unit job lacks blocking race gate")
 }
 
+// validateShellcheckSeverity reports whether every shellcheck invocation in a
+// workflow pins an explicit --severity= threshold, and that the workflow still
+// has at least one such invocation to pin.
+func validateShellcheckSeverity(data []byte, label string) error {
+	var workflow workflowDocument
+	if err := yaml.Unmarshal(data, &workflow); err != nil {
+		return fmt.Errorf("parse %s workflow: %w", label, err)
+	}
+	invocations := 0
+	for jobName, job := range workflow.Jobs {
+		for i, step := range job.Steps {
+			for _, line := range strings.Split(step.Run, "\n") {
+				line = strings.TrimSpace(line)
+				if line == "" || strings.HasPrefix(line, "#") {
+					continue
+				}
+				if !strings.Contains(line, "shellcheck ") {
+					continue
+				}
+				invocations++
+				if !strings.Contains(line, "--severity=") {
+					return fmt.Errorf(
+						"%s workflow job %q step %d runs shellcheck without an explicit --severity= threshold: %s",
+						label, jobName, i, line)
+				}
+			}
+		}
+	}
+	if invocations == 0 {
+		return fmt.Errorf("%s workflow has no shellcheck invocation to gate on", label)
+	}
+	return nil
+}
+
+// TestShellGateCarriesExplicitSeverity fails if a shellcheck step omits an
+// explicit threshold. shellcheck's default severity is "style", which exits
+// non-zero on advisory findings and would leave the gate permanently red. The
+// deployment scripts carry deliberate info/style findings — the DSN and AGENTS
+// variables in deploy/charts/runtime/test.sh hold multiple --set flags that must
+// word-split into separate helm arguments — so the threshold is load-bearing.
+func TestShellGateCarriesExplicitSeverity(t *testing.T) {
+	root := repositoryRoot(t)
+	for _, workflow := range []struct{ label, path string }{
+		{"CI", ".github/workflows/ci.yml"},
+		{"release", ".github/workflows/release.yml"},
+	} {
+		data, err := os.ReadFile(filepath.Join(root, workflow.path))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := validateShellcheckSeverity(data, workflow.label); err != nil {
+			t.Error(err)
+		}
+	}
+}
+
 func repositoryRoot(t *testing.T) string {
 	t.Helper()
 	_, file, _, ok := runtime.Caller(0)
