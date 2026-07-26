@@ -199,7 +199,7 @@ COMPOSE_DIR ?= deploy/compose
 FORCE       ?=
 
 .PHONY: compose-init
-compose-init: ## Generate deploy/compose/.env with fresh secrets (FORCE=--force to regenerate)
+compose-init: ## Generate deploy/compose/.env with fresh secrets (FORCE=--force regenerates: DESTRUCTIVE, invalidates sealed secrets)
 	$(COMPOSE_DIR)/init.sh $(FORCE)
 
 .PHONY: compose-build

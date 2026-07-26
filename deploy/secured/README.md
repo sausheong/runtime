@@ -106,5 +106,10 @@ curl -k -o /dev/null -w "%{http_code}\n" -H "Authorization: Bearer $BK" $HOST/ag
 - **Observability:** this overlay is intentionally minimal (Caddy + runtimed +
   Postgres). Add Prometheus/Grafana/OTel/Jaeger services from
   `deploy/gcp/control-plane/docker-compose.yml` if you want them.
-- `init.sh` refuses to overwrite an existing `.env`; pass `--force` to rotate
-  (this regenerates the bootstrap key and secrets).
+- `init.sh` refuses to overwrite an existing `.env`. `--force` overrides that,
+  but it is **destructive, not rotation**: it regenerates
+  `RUNTIME_SECRETS_KEYS` under the same `primary` key id, so every secret
+  already sealed with the old key becomes undecryptable, and it mints a new
+  bootstrap key. Use it only where no stored data matters. To rotate safely,
+  add a new key id and re-encrypt — see "Key rotation" in
+  `identity-and-memory.md`.

@@ -4,7 +4,13 @@
 #
 #   ./init.sh                      # IP/self-signed (no domain): https on :443
 #   ./init.sh runtime.example.com  # real domain: automatic Let's Encrypt cert
-#   ./init.sh <domain> --force     # regenerate over an existing .env
+#   ./init.sh <domain> --force     # DESTRUCTIVE: see the warning below
+#
+# --force is not key rotation. It regenerates RUNTIME_SECRETS_KEYS under the
+# same "primary" key id, so every secret already sealed with the old key becomes
+# undecryptable, and it mints a new bootstrap key. Use it only on a deployment
+# with no data worth keeping. Safe rotation adds a NEW key id and re-encrypts;
+# see "Key rotation" in identity-and-memory.md.
 #
 # Turning identity ON requires only RUNTIME_ADMIN_BOOTSTRAP (+ a secrets key);
 # OIDC is optional and added by editing .env afterwards (see README).
@@ -23,8 +29,15 @@ for arg in "$@"; do
 done
 
 if [[ -f "$ENV_FILE" && "$FORCE" != "--force" ]]; then
-  echo "refusing to overwrite existing $ENV_FILE (pass --force to regenerate)" >&2
+  echo "refusing to overwrite existing $ENV_FILE" >&2
+  echo "  --force regenerates the secrets key under the SAME 'primary' key id," >&2
+  echo "  which leaves already-sealed secrets undecryptable. It is not rotation." >&2
+  echo "  To rotate safely, add a new key id: see identity-and-memory.md." >&2
   exit 1
+fi
+if [[ -f "$ENV_FILE" ]]; then
+  echo "WARNING: regenerating $ENV_FILE — secrets sealed with the current key" >&2
+  echo "         will become undecryptable." >&2
 fi
 
 BOOTSTRAP="$(openssl rand -hex 32)"
