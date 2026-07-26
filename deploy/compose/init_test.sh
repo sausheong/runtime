@@ -27,12 +27,6 @@ key_b64="${keys#*:}"
 n="$(printf '%s' "$key_b64" | base64 -d 2>/dev/null | wc -c | tr -d ' ')"
 [[ "$n" == "32" ]] || { echo "FAIL: AES key not 32 bytes (got $n)"; exit 1; }
 
-# Browser egress-proxy token: 64 hex chars, comfortably over browserd's
-# 32-character minimum for a non-loopback proxy bind.
-btok="$(grep '^RUNTIME_BROWSER_PROXY_TOKEN=' "$ENV" | cut -d= -f2)"
-[[ "$btok" =~ ^[0-9a-f]{64}$ ]] || { echo "FAIL: bad browser proxy token"; exit 1; }
-[[ "${#btok}" -ge 32 ]] || { echo "FAIL: browser proxy token under 32 chars"; exit 1; }
-
 grafana="$(grep '^GRAFANA_ADMIN_PASSWORD=' "$ENV" | cut -d= -f2)"
 [[ "$grafana" =~ ^[0-9a-f]{48}$ ]] || { echo "FAIL: bad Grafana password"; exit 1; }
 

@@ -41,6 +41,8 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"log/slog"
 	"net"
 	"net/http"
@@ -53,6 +55,17 @@ import (
 
 	"github.com/sausheong/runtime/internal/browser"
 )
+
+// randomProxyToken mints an ephemeral egress-proxy credential. 32 bytes of
+// crypto/rand rendered as 64 hex characters, comfortably past
+// ValidateProxyListener's 32-character floor.
+func randomProxyToken() (string, error) {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b), nil
+}
 
 func envInt(key string, def int) int {
 	v := os.Getenv(key)
@@ -131,8 +144,7 @@ func main() {
 	//
 	// The wildcard bind is safe in the private-network shape precisely because
 	// it is not unauthenticated: ValidateProxyListener below rejects any
-	// non-loopback bind without a >=32-character RUNTIME_BROWSER_PROXY_TOKEN,
-	// so a private-network deployment MUST supply one. The credential reaches
+	// non-loopback bind without a >=32-character token. The credential reaches
 	// Chromium over CDP (Fetch.authChallenge), never via container env.
 	browserNetwork := os.Getenv("RUNTIME_BROWSER_NETWORK")
 	proxyAddr := os.Getenv("RUNTIME_BROWSER_PROXY_ADDR")
@@ -142,7 +154,27 @@ func main() {
 			proxyAddr = "0.0.0.0:0"
 		}
 	}
+	// This token is process-internal: browserd serves the proxy that demands it
+	// and answers that demand itself over CDP. Nothing outside this process ever
+	// needs the value, so requiring an operator to supply one would be busywork
+	// with an upgrade hazard attached. Generate one per start when the bind
+	// needs it and none was given; a fresh token per process is also strictly
+	// better than a static one on disk. RUNTIME_BROWSER_PROXY_TOKEN remains an
+	// override for deployments that want to pin the value.
 	proxyToken := os.Getenv("RUNTIME_BROWSER_PROXY_TOKEN")
+	if proxyToken == "" {
+		if err := browser.ValidateProxyListener(proxyAddr, proxyToken); err != nil {
+			generated, genErr := randomProxyToken()
+			if genErr != nil {
+				slog.Error("browserd: cannot generate egress proxy token", "err", genErr)
+				os.Exit(1)
+			}
+			proxyToken = generated
+			slog.Info("browserd: generated an ephemeral egress proxy token",
+				"addr", proxyAddr,
+				"reason", "non-loopback bind requires authentication and none was configured")
+		}
+	}
 	if err := browser.ValidateProxyListener(proxyAddr, proxyToken); err != nil {
 		slog.Error("browserd: insecure egress proxy listener", "addr", proxyAddr, "err", err)
 		os.Exit(1)

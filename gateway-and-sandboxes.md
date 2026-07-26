@@ -247,7 +247,7 @@ sandboxes.
 | `RUNTIME_BROWSER_EGRESS_MODE` | `deny-all` | Network policy |
 | `RUNTIME_BROWSER_EGRESS_ALLOW` | Empty | Comma-separated host allowlist |
 | `RUNTIME_BROWSER_PROXY_ADDR` | `127.0.0.1:0`, or `0.0.0.0:0` when `RUNTIME_BROWSER_NETWORK` is set | Egress-proxy bind address |
-| `RUNTIME_BROWSER_PROXY_TOKEN` | Empty | Minimum 32-character proxy credential, required for a non-loopback bind |
+| `RUNTIME_BROWSER_PROXY_TOKEN` | Generated per start | Minimum 32-character proxy credential for a non-loopback bind. Set only to pin a fixed value |
 | `RUNTIME_BROWSER_PROXY_MAX_REQUESTS` | `128` | Concurrent proxy requests |
 | `RUNTIME_BROWSER_PROXY_MAX_TUNNELS` | `64` | Concurrent CONNECT tunnels |
 | `RUNTIME_BROWSER_PROXY_RESPONSE_MB` | `32` | Maximum forwarded response bytes |
@@ -281,10 +281,15 @@ is enforced in code, not merely recommended. The turnkey Compose profile ships
 this shape by default.
 
 Reaching the proxy from that network means the proxy cannot bind loopback, so
-it binds all interfaces, and a non-loopback bind requires a
-`RUNTIME_BROWSER_PROXY_TOKEN` of at least 32 characters. That is not optional:
-startup rejects the combination without it, so **every private-network
-deployment must provision a token** (`make compose-init` generates one). Set
+it binds all interfaces, and a non-loopback bind requires a proxy credential of
+at least 32 characters. That is not optional — startup rejects an
+unauthenticated non-loopback bind — but it is not operator work either:
+`browserd` mints an ephemeral token per start when none is configured. The
+credential is process-internal (browserd serves the proxy that demands it and
+answers the demand itself), so nothing outside the process needs the value, and
+a fresh token per start is stronger than a static one on disk. Set
+`RUNTIME_BROWSER_PROXY_TOKEN` only to pin a fixed value; a configured token
+that is too weak is still rejected rather than silently replaced. Set
 `RUNTIME_BROWSER_PROXY_HOST` to the name by which browser containers reach
 `browserd` (the Compose service name). Chromium does not honour credentials
 embedded in manual proxy URLs, so `browserd` supplies the token only in

@@ -109,8 +109,7 @@ make compose-up
 ```
 
 `compose-init` generates `deploy/compose/.env` with a bootstrap key, secrets
-keyring, browser egress-proxy token, and Grafana administrator password. The
-stack exposes the console on
+keyring, and Grafana administrator password. The stack exposes the console on
 `http://localhost:8080/ui`; management interfaces bind to host loopback. Read
 the [quickstart](quickstart.md) and [operator guide](operator-guide.md) before
 exposing it.

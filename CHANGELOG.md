@@ -27,19 +27,19 @@ a release is tagged, while the current default branch remains pre-release.
   declared `internal`, so a browser process that ignores `--proxy-server` has
   no route off the segment.
 
-### Changed (breaking)
+### Changed
 
-- The turnkey Compose profile now requires `RUNTIME_BROWSER_PROXY_TOKEN`. The
-  egress proxy must bind an address reachable from the private browser network,
-  and a non-loopback bind has always required a token — previously the profile
-  silently bound loopback instead, leaving the proxy both unreachable from the
-  browser container and unauthenticated.
+- The browser egress proxy now binds an address reachable from the private
+  browser network, where it previously bound loopback and was therefore
+  unreachable from the browser container (and, being loopback, unauthenticated).
+  A non-loopback bind requires a token, and `browserd` mints an ephemeral one
+  per start when none is configured, so **no deployment change is required**.
+  `RUNTIME_BROWSER_PROXY_TOKEN` remains available to pin a fixed value.
 
-  New installs: `make compose-init` generates it. **Upgrades: append
-  `RUNTIME_BROWSER_PROXY_TOKEN=$(openssl rand -hex 32)` to
-  `deploy/compose/.env`.** Do not run `make compose-init FORCE=--force` on an
-  existing deployment — it regenerates `RUNTIME_SECRETS_KEYS` under the same
-  `primary` key id, which leaves already-sealed secrets undecryptable.
+  The credential is process-internal: `browserd` serves the proxy that demands
+  it and answers the demand itself over CDP, so nothing outside that process
+  ever needs the value. A fresh token per start is also stronger than a static
+  one on disk.
 
 ## v0.2.0
 
