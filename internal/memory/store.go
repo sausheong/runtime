@@ -185,6 +185,29 @@ func scanEntry(rows *sql.Rows) (hmem.Entry, error) {
 	return e, nil
 }
 
+// storeNow is the timestamp every memory row is written with. It is truncated
+// to microseconds because that is PostgreSQL's TIMESTAMPTZ resolution: a
+// nanosecond-precision time.Now() does not survive the round trip, so a value
+// returned to the caller in-memory would not equal the same value read back.
+//
+// That mismatch was a real, platform-dependent bug rather than a cosmetic one.
+// Update carries the birth CreatedAt forward by reading the live row, so on
+// Linux (nanosecond clock) the entry Save returned and the entry Update
+// returned disagreed in their sub-microsecond digits, while on macOS
+// (microsecond clock) they always agreed. Truncating at the single point of
+// origin makes the returned value identical to the persisted one everywhere.
+func storeNow() time.Time {
+	return truncateForStore(time.Now().UTC())
+}
+
+// truncateForStore applies the TIMESTAMPTZ resolution rule to t. It is separate
+// from storeNow so a test can exercise the rule against a known
+// nanosecond-precision instant: asserting on storeNow()'s output alone proves
+// nothing on a host whose clock is already microsecond-granular.
+func truncateForStore(t time.Time) time.Time {
+	return t.Truncate(time.Microsecond)
+}
+
 // Save appends a create row for a fact (the harness MemoryStore contract; the
 // MemoryTool sets Origin before calling). Content validation is the tool's job.
 func (s *Store) Save(ctx context.Context, e hmem.Entry) (hmem.Entry, error) {
@@ -195,7 +218,7 @@ func (s *Store) Save(ctx context.Context, e hmem.Entry) (hmem.Entry, error) {
 // The strategy pipeline uses this so each accumulate-strategy stamps its own
 // kind; Save delegates here with KindFact for the tool path.
 func (s *Store) SaveKind(ctx context.Context, e hmem.Entry, kind string) (hmem.Entry, error) {
-	now := time.Now().UTC()
+	now := storeNow()
 	if e.ID == "" {
 		e.ID = generateID(now)
 	}
@@ -230,7 +253,7 @@ func (s *Store) Update(ctx context.Context, id, content string) (hmem.Entry, err
 	if !ok {
 		return hmem.Entry{}, hmem.ErrNotFound
 	}
-	now := time.Now().UTC()
+	now := storeNow()
 	newID := generateID(now)
 	actor := actorFrom(ctx)
 	if s.embedder == nil {
@@ -260,7 +283,7 @@ func (s *Store) Update(ctx context.Context, id, content string) (hmem.Entry, err
 // Remove appends a delete tombstone. Idempotent: unknown ids still tombstone and
 // return nil.
 func (s *Store) Remove(ctx context.Context, id string) error {
-	now := time.Now().UTC()
+	now := storeNow()
 	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO memory_events (tenant_id, op, entry_id, created_at)
 		 VALUES ($1,'delete',$2,$3)`,
@@ -336,7 +359,7 @@ func (s *Store) PutSessionSummary(ctx context.Context, sessionID, content string
 	defer lock.Unlock()
 
 	actor := actorFrom(ctx)
-	now := time.Now().UTC()
+	now := storeNow()
 	// Find the current live summary row's entry_id + birth time (if any).
 	var prevID string
 	var prevOriginal sql.NullTime
