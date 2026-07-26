@@ -10,7 +10,14 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/sausheong/runtime/internal/httplimit"
 )
+
+// maxMemoryResponseBytes bounds a provider response body. A client timeout
+// limits duration; this independently limits allocation from a fast oversized
+// peer. Generous enough for a large embedding vector or a long completion.
+const maxMemoryResponseBytes = 4 << 20
 
 // Embedder turns text into a fixed-length embedding vector. Implementations are
 // safe for concurrent use. An Embedder is optional on the Store; when absent the
@@ -69,7 +76,7 @@ func (e *httpEmbedder) Embed(ctx context.Context, text string) ([]float32, error
 		return nil, fmt.Errorf("memory: embed status %d", resp.StatusCode)
 	}
 	var er embedResponse
-	if err := json.NewDecoder(resp.Body).Decode(&er); err != nil {
+	if err := httplimit.DecodeJSON(resp.Body, maxMemoryResponseBytes, &er); err != nil {
 		return nil, fmt.Errorf("memory: embed decode: %w", err)
 	}
 	if len(er.Data) == 0 {

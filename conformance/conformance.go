@@ -10,12 +10,17 @@
 package conformance
 
 import (
-	"encoding/json"
 	"io"
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/sausheong/runtime/internal/httplimit"
 )
+
+// maxConformanceResponseBytes bounds each JSON response the conformance
+// harness decodes. The suite already bounds its stream read at 64 KiB.
+const maxConformanceResponseBytes = 4 << 20
 
 // TestingT is the minimal subset of *testing.T the suite needs, so the same
 // checks run under `go test` and from the runtimectl CLI.
@@ -67,7 +72,7 @@ func checkMeta(t TestingT, c *http.Client, base string) {
 		return
 	}
 	var m map[string]string
-	if err := json.NewDecoder(resp.Body).Decode(&m); err != nil {
+	if err := httplimit.DecodeJSON(resp.Body, maxConformanceResponseBytes, &m); err != nil {
 		t.Errorf("meta: decode: %v", err)
 		return
 	}
@@ -96,7 +101,7 @@ func checkCreateSession(t TestingT, c *http.Client, base string) string {
 	var out struct {
 		SessionID string `json:"session_id"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+	if err := httplimit.DecodeJSON(resp.Body, maxConformanceResponseBytes, &out); err != nil {
 		t.Errorf("create session: decode: %v", err)
 		return ""
 	}
@@ -145,7 +150,7 @@ func checkGetSession(t TestingT, c *http.Client, base, sid string) {
 		Status    string `json:"status"`
 		TurnCount *int   `json:"turn_count"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&row); err != nil {
+	if err := httplimit.DecodeJSON(resp.Body, maxConformanceResponseBytes, &row); err != nil {
 		t.Errorf("get session: decode: %v", err)
 		return
 	}
@@ -176,7 +181,7 @@ func checkListSessions(t TestingT, c *http.Client, base string) {
 		Status    string `json:"status"`
 		TurnCount *int   `json:"turn_count"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&rows); err != nil {
+	if err := httplimit.DecodeJSON(resp.Body, maxConformanceResponseBytes, &rows); err != nil {
 		t.Errorf("list sessions: decode: %v", err)
 		return
 	}

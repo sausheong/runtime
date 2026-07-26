@@ -2,8 +2,10 @@ package conformance
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -52,11 +54,42 @@ func TestRun_RejectsIncompleteSessionShape(t *testing.T) {
 	}
 }
 
-type recorder struct{ fails int }
+// TestRun_RejectsOversizedMeta proves the harness bounds allocation: a /meta
+// body one byte past the ceiling is rejected rather than buffered whole.
+func TestRun_RejectsOversizedMeta(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(200) })
+	mux.HandleFunc("GET /meta", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"agent_id":"a","contract_version":"v1","pad":"` +
+			strings.Repeat("x", maxConformanceResponseBytes) + `"}`))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	rec := &recorder{}
+	checkMeta(rec, srv.Client(), srv.URL)
+	if rec.fails == 0 {
+		t.Fatal("oversized meta response was accepted")
+	}
+	if !strings.Contains(rec.last, "exceeds") {
+		t.Fatalf("expected a byte-ceiling error, got %q", rec.last)
+	}
+}
 
-func (r *recorder) Errorf(string, ...any) { r.fails++ }
-func (r *recorder) Fatalf(string, ...any) { r.fails++ }
-func (r *recorder) Logf(string, ...any)   {}
+type recorder struct {
+	fails int
+	last  string
+}
+
+func (r *recorder) Errorf(format string, args ...any) {
+	r.fails++
+	r.last = fmt.Sprintf(format, args...)
+}
+
+func (r *recorder) Fatalf(format string, args ...any) {
+	r.fails++
+	r.last = fmt.Sprintf(format, args...)
+}
+func (r *recorder) Logf(string, ...any) {}
 
 func TestRun_GoodAgentPasses(t *testing.T) {
 	srv := httptest.NewServer(goodAgent())

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	hrt "github.com/sausheong/harness/runtime"
+	"github.com/sausheong/runtime/internal/httplimit"
 )
 
 // summarySystemPrompt instructs the model to emit a concise running digest.
@@ -67,7 +68,7 @@ func (s *httpSummarizer) Summarize(ctx context.Context, thread []hrt.Message) (s
 		return "", fmt.Errorf("memory: summarize status %d", resp.StatusCode)
 	}
 	var cr chatResponse
-	if err := json.NewDecoder(resp.Body).Decode(&cr); err != nil {
+	if err := httplimit.DecodeJSON(resp.Body, maxMemoryResponseBytes, &cr); err != nil {
 		return "", fmt.Errorf("memory: summarize decode: %w", err)
 	}
 	if len(cr.Choices) == 0 {
