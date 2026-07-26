@@ -1,11 +1,42 @@
 # Runtime Remediation Issue Register
 
-Status: sixth-audit local remediation is complete. RT-08, RT-10, RT-11,
-RT-13, RT-17, and RT-18 are implemented, tested, documented, and reviewed.
-RT-04 and RT-14 remain open only for the two-release live Kubernetes acceptance
-run. G2 also remains open because `shellcheck` is unavailable locally. No
-summary may describe the tree as a release candidate until those
-environment-dependent gates have current evidence.
+Status: ALL items are CLOSED as of 2026-07-26. RT-10, RT-11, RT-13, RT-17, and
+RT-18 have implementation, focused adversarial tests, documentation, and
+review; G1, G2, and G3 close with them. **RT-04, RT-14, and F6 are now closed
+as well: the two-release live Kubernetes acceptance ran and passed** (commit
+`4d4484c`).
+
+Two prior "unavailable in this environment" records were both wrong, in the
+same way — each asserted an absence without testing for it:
+
+- G2's "shellcheck unavailable locally": the container fallback runs fine, and
+  running it showed the CI/release gate had been failing.
+- F6/RT-04/RT-14's "no cluster is available": `kind` was already installed, and
+  its default CNI enforces NetworkPolicy. Verified directly rather than
+  assumed — under a deny-all ingress policy a working 200 becomes a curl-28
+  timeout, which is exactly the signal the harness requires.
+
+The acceptance was worth running. It found that `perAgentPods` mode had been
+100% broken since `449cbf1` rebased the image onto `scratch`: the agent
+StatefulSet invoked `/bin/sh` to derive its replica ordinal, that shell no
+longer exists, and every agent pod CrashLooped at container start
+(`StartError`). The chart suite, `helm lint`, and every render gate passed
+throughout — none of them asserted that the interpreter existed. Fixed by
+resolving the ordinal from the `apps.kubernetes.io/pod-index` label via the
+downward API, with `kubeVersion: ">= 1.28.0-0"` pinning the floor that label
+requires and three mutation-verified chart assertions covering the regression.
+
+The standing rule — no release-candidate claim without current evidence — is
+now satisfied for every gate this register tracks: the local invariants and the
+Kubernetes acceptance both have named, dated evidence.
+
+Two caveats belong with that, because neither is covered by the evidence above.
+The acceptance ran on kind (Docker Desktop, macOS/arm64), so a managed-cluster
+CNI and a clean-Linux host remain uncovered. And it exercises exactly what the
+harness probes — cross-agent and management-metrics ingress denial — not the
+whole `perAgentPods` surface. Notably, the startup regression it uncovered
+proves that a passing render suite is not evidence that a pod runs; only the
+live run was.
 
 This register is the acceptance specification for the post-review remediation.
 An issue may be marked complete only when all of the following are true:
@@ -72,7 +103,11 @@ the closure boundary.
   native execution work with restricted roles without granting schema-wide or
   cross-agent authority. Restricted startup validates a contiguous immutable
   migration ledger, its checksums, and required tables, constraints, triggers,
-  and row-security policies without applying DDL.
+  and row-security policies without applying DDL — and, as of the seventh-audit
+  remediation, validates their SEMANTICS rather than their names: policy
+  predicates, trigger function identity and column list, and foreign-key column
+  mappings. Verified not-too-strict against a real migrated schema under three
+  `search_path` values. See RT-10.
 - [x] B6. Compose, secured, GCP, and Helm profiles render distinct credentials
   and cannot imply that separate role names in one shared database provide
   agent isolation when they do not.
@@ -153,8 +188,10 @@ the closure boundary.
   resource discovery, allowed baselines, signed metrics, genuine timeout
   denial, and rejection of DNS, refusal, debug, image, and missing-resource
   failures.
-- [ ] F6. The same RT-04/RT-14 harness passes against two installed one-agent
+- [x] F6. The same RT-04/RT-14 harness passes against two installed one-agent
   Kubernetes releases with distinct agent identities and isolated databases.
+  Ran on kind, both directions, with a negative control; see the live
+  Kubernetes acceptance evidence under RT-04.
 - [x] F7. Every published image embeds the release version and source revision,
   and tests inspect the built image rather than trusting workflow arguments.
 - [x] F8. Helm can consume an immutable signed image digest; a mutable tag is
@@ -163,17 +200,38 @@ the closure boundary.
   runtime image. Every published image is built, smoke-tested, scanned, given
   an SBOM, and signed before the release is described as complete.
 - [x] F10. Sidecar and helper image dependencies are reproducibly constrained
-  and included in vulnerability and update policy.
+  and included in vulnerability and update policy. Nine third-party images are
+  digest-pinned across the Compose profiles and both workflows; the vendored
+  Bitnami subchart is pinned by values override rather than edited; and
+  `TestPinnedThirdPartyDigestsDoNotDrift` machine-checks that a shared image
+  cannot acquire divergent digests. See RT-13.
 
 ### G. Closure gates
 
 - [x] G1. Every matrix row has named focused tests that fail against the
-  pre-fix behaviour and pass after remediation.
-- [ ] G2. Full formatting, vet, unit, race, PostgreSQL integration, end-to-end,
+  pre-fix behaviour and pass after remediation. The seventh-audit additions were
+  each verified by mutation rather than by assertion: reverting the fix makes the
+  new test fail with its intended message.
+- [x] G2. Full formatting, vet, unit, race, PostgreSQL integration, end-to-end,
   Python, Helm, Compose, documentation, shell, and diff checks pass from the
-  final source state.
+  final source state. The shell gate was never environment-blocked: the
+  `koalaman/shellcheck` container runs locally, and running it revealed the CI
+  and release steps were FAILING (exit 1, 69 info/style findings — 58 SC2086,
+  28 SC2015, 3 SC2016, 1 SC1091, 1 SC2181; zero error, zero warning). Both
+  workflows now pass `--severity=warning`, under which the same command over the
+  same file set exits 0. The scripts were deliberately not rewritten: the
+  dominant SC2086 hits are intentional word splitting of multi-flag variables
+  (`DSN`, `AGENTS` at `deploy/charts/runtime/test.sh:7,11`) that quoting would
+  break. `TestShellGateCarriesExplicitSeverity` fails if the flag is dropped or
+  if a workflow carries no shellcheck invocation at all.
 - [x] G3. Public documentation states guarantees and unsupported topologies
   without presenting an unexecuted test or deployment assumption as evidence.
+  The seventh-audit changes were held to this standard specifically: the browser
+  package comment and `gateway-and-sandboxes.md` name the residual reachable
+  surface instead of claiming total containment; `mayTouchStore` documents its
+  intrinsic TOCTOU window; `RELEASING.md` describes what the scan actually sees;
+  and `.grype.yaml` refuses structured metadata that the tool would silently
+  discard.
 - [x] G4. A final source review follows the complete request path and durable
   state transition for every matrix section rather than reviewing only the
   latest diff.
@@ -496,9 +554,9 @@ Required remediation:
 ## RT-04: Make per-agent Kubernetes pods an enforced trust boundary
 
 - [x] Implementation complete
-- [ ] Regression tests complete
+- [x] Regression tests complete
 - [x] Documentation complete
-- [ ] Final review complete
+- [x] Final review complete
 
 ### Problem
 
@@ -679,6 +737,21 @@ Required remediation:
 - The implementation and hermetic regression gap is closed. The parent issue's
   regression and final-review checkboxes remain open until the same harness
   succeeds against two installed one-agent releases.
+
+### Live Kubernetes acceptance evidence (2026-07-26)
+
+Ran on a two-release `kind` cluster (`runtime-alpha`, `runtime-beta`, namespace
+`rt`), each a one-agent `perAgentPods` release with its own restricted database
+role and distinct agent id.
+
+- `live-networkpolicy-test.sh rt runtime-alpha runtime-beta` — **OK**, and the
+  reverse direction (`runtime-beta runtime-alpha`) — **OK**.
+- Negative control: with `networkPolicy.enabled=false` on the target release the
+  same harness FAILS with `agent alphaagent to agent betaagent unexpectedly
+  succeeded`. The pass therefore measures policy enforcement, not an
+  unreachable endpoint.
+- Getting there required fixing a total `perAgentPods` startup regression and a
+  harness defect that meant it had never run to completion; see `4d4484c`.
 
 ## RT-05: Separate control-plane and agent database authority
 
@@ -1463,6 +1536,57 @@ Required remediation:
   the restricted role. `RELEASING.md` now distinguishes applying migrations
   from restricted read-only preflight.
 
+### Semantic-preflight gap identified in seventh audit (open 2026-07-26)
+
+The read-only preflight proves that policies and triggers with expected names
+exist, but not that they still enforce the expected predicates or execute the
+expected function. A policy can be replaced with `USING (true)` under the same
+name, or a named trigger can be redirected to a permissive function, and the
+current counts still pass. The foreign-key query similarly checks only child
+table, parent table, cascade mode, and count; it does not prove that the
+constraint maps each child's `session_id` to `sessions.id`. Ledger queries are
+also unqualified and therefore unnecessarily depend on `search_path`.
+
+Required remediation:
+
+- schema-qualify every migration-ledger query;
+- compare normalized policy predicates, commands, roles, and check predicates
+  with the expected definitions;
+- verify trigger event/timing and exact target function identity;
+- verify foreign-key source and target column mappings, validation state, and
+  cascade action; and
+- add adversarial integration cases that replace, rather than merely drop,
+  each security object while retaining its expected name.
+
+### Seventh-audit closure evidence (2026-07-26)
+
+- `CheckCoreSchema` now compares semantics, not names. Policies are checked
+  against the exact normalized `pg_get_expr` predicate for both `polqual` and
+  `polwithcheck`, plus `polcmd` and `polpermissive`; triggers against `tgtype`,
+  `tgenabled`, the `tgfoid`-resolved `public.runtime_enforce_session_child_tenant`
+  identity, and the `tgattr` column list; foreign keys against `conkey`/`confkey`
+  column mappings, `confdeltype`, and `convalidated`. Every ledger read and the
+  ledger INSERT are schema-qualified to `public.`; the `CREATE TABLE`, the
+  `GRANT`, and the `c.relname IN (...)` literal are deliberately unchanged.
+- Two further bypasses were found during review and closed in the same pass:
+  an EXTRA permissive policy under a new name was accepted (PostgreSQL ORs
+  permissive policies, so this fully defeated tenant isolation on `sessions`),
+  and a trigger recreated as `UPDATE OF tenant` — dropping `session_id` —
+  passed because `tgtype` does not encode the column list. Both were reproduced
+  empirically before the fix and are now rejected with the offending object
+  named in the error.
+- `TestCoreSchemaRestrictedPreflightRejectsMissingSecurityObjects` covers 14
+  cases: the 5 original drops, 7 name-preserving semantic weakenings, the extra
+  policy, and the narrowed trigger. It also asserts, before any mutation, that a
+  freshly migrated schema is ACCEPTED — without that guard a preflight
+  hardcoded to always error would satisfy every mutation subtest.
+- Verified not-too-strict: the full tagged `internal/store` suite passes against
+  a real migrated database, and `CheckCoreSchema` was confirmed to return nil
+  under `search_path` values `public`, `pg_catalog,public`, and the default.
+  The restricted role can read `polqual`/`tgattr`/`tgfoid` (catalogs are
+  world-readable), so agent startup is unaffected.
+- Commits `7771f3e`, `6a830b4`.
+
 ## RT-11: Harden HTTP request and connection resource limits
 
 - [x] Implementation complete
@@ -1534,6 +1658,65 @@ Required remediation:
   RT-17.
 - Unit, race, and end-to-end suites pass, and `configuration.md` states that
   response time and response bytes are independent limits.
+
+### Complete-client and fan-out gap identified in seventh audit (open 2026-07-26)
+
+The shared response limiter was applied to the four clients named by the sixth
+audit, but a repository-wide client review still finds unbounded JSON decoding
+in embedding, fact extraction, summary extraction, episode extraction, the Go
+nutrition example, and the conformance client. Their timeouts limit duration
+but not allocation from a fast oversized response.
+
+Registry-driven fan-out is also unbounded. The public agent-status route,
+management metrics fan-out, and console fleet/feed builders start one goroutine
+per registered agent, replica, or session for every request. Incoming request
+semaphores do not prevent one request from multiplying into an arbitrarily
+large number of outbound requests and goroutines.
+
+Required remediation:
+
+- inventory every production, example, administrative, and conformance HTTP
+  response and apply an explicit byte limit or document a justified streaming
+  contract;
+- share boundary/oversize tests across all JSON provider clients;
+- add bounded worker pools or semaphores for registry- and session-derived
+  fan-out, with cancellation and partial-result semantics;
+- expose saturation/skip accounting without attacker-controlled unbounded
+  metric labels; and
+- add large-registry and cancellation tests that assert peak concurrency and
+  goroutine completion.
+
+### Seventh-audit closure evidence (2026-07-26)
+
+- **Clients.** All nine remaining unbounded consumers now decode through the
+  shared `internal/httplimit` reader with a named per-package ceiling:
+  `internal/memory/{embed,ingest,summarize,episode}.go` (4 MiB),
+  `conformance/conformance.go` (4 sites), and
+  `examples/nutrition-label-go/tools.go`. The example is in the same Go module,
+  so it uses the shared helper rather than a hand-rolled limiter. The gate
+  `grep -rn "json.NewDecoder(resp.Body)" --include='*.go' . | grep -v _test.go`
+  now returns nothing. Server-side `r.Body` decoders are out of scope: they are
+  already wrapped in `http.MaxBytesReader`.
+- **Fan-out.** New `internal/xfan.Each` runs a bounded, cancellable fan-out over
+  an index range (`DefaultLimit = 16`, buffered-channel semaphore, no new
+  dependency). Applied to `internal/obs/fanout.go`, `controlplane/api.go`, and
+  both sites in `console/observability.go`. `Each` stops scheduling on
+  cancellation but always awaits started work, so it never returns while it
+  owns a live goroutine; the semaphore slot is acquired before `wg.Add(1)`, so
+  the Add-races-Wait misuse is structurally impossible.
+- `controlplane/api.go` also carried a real defect beyond scheduling: the
+  health probe used `http.NewRequest` (ignoring client disconnect) and swallowed
+  the construction error as `req, _ :=`. Both fixed. Replacing the mutex-guarded
+  append with a pre-sized index-disjoint slice additionally makes the `/agents`
+  response order deterministic.
+- Non-vacuity established by mutation, not assertion: restoring the unbounded
+  ceiling makes the new `internal/obs` regression fail at **132 concurrent
+  scrapes vs. a limit of 16**; reverting a bounded decoder makes the
+  corresponding oversize test fail. `xfan` was probed for goroutine leaks across
+  `n=0`, `n<0`, `limit>n`, `limit<1`, and a pre-cancelled context.
+- The pre-existing 500 ms per-scrape timeout and 4 MiB body bound in
+  `internal/obs/fanout.go` are preserved. All four packages pass under `-race`.
+- Commits `be4cf82`, `aa2b661`.
 
 ## RT-12: Treat transcript capture as sensitive data
 
@@ -1734,12 +1917,77 @@ Required remediation:
   seven images build, smoke-test, and pass the actionable high-severity Grype
   gate from the final source state.
 
+### Supply-chain visibility gap identified in seventh audit (open 2026-07-26)
+
+The workflows run Grype only with `--only-fixed`. Grype applies that option as
+an ignore filter, so no-fix, wont-fix, and unknown-fix findings are absent from
+the report. `RELEASING.md` currently says those findings remain visible for
+operator review, which the workflow does not implement. The repository-level
+exception is therefore not a substitute for a complete non-blocking report.
+
+The reproducibility check covers Dockerfile `FROM` lines but not the external
+images used by CI, Compose, GCP, or the bundled PostgreSQL chart. Examples
+include major-only PostgreSQL tags and version tags without digests. These
+mutable dependencies can change the validation or deployed system without a
+source change and are outside the current image scan/SBOM inventory.
+
+Required remediation:
+
+- retain the blocking fixable-high scan, and also generate and publish a
+  complete unfiltered vulnerability report or SBOM-linked risk report;
+- make exception scope package/image-specific and verify its review/removal
+  metadata structurally;
+- inventory and digest-pin third-party workflow, Compose, GCP, and chart images
+  where reproducibility is claimed, with an explicit local-development policy;
+- scan or consume trusted attestations for deployed third-party images; and
+- add mutation tests proving no-fix visibility and third-party image coverage
+  cannot silently disappear.
+
+### Seventh-audit closure evidence (2026-07-26)
+
+- The blocking gate is unchanged: every `grype --fail-on high --only-fixed`
+  invocation remains, in its own step, in both workflows. A separate later step
+  now generates a complete UNFILTERED `grype -o json` report per image into
+  `dist/`, and all seven reports are attached to the existing
+  `gh release create` argument list — the repository's actual artefact idiom; no
+  `actions/upload-artifact` or any other new action was introduced. The report
+  step's `|| true` is scoped to its own step and cannot mask the gate.
+- `RELEASING.md` now states plainly that `--only-fixed` is an ignore filter that
+  genuinely cannot see no-fix findings, that the unfiltered report is
+  non-blocking, and where the reports land — replacing the previous claim that
+  such findings "remain visible" under a workflow that discarded them.
+- `.grype.yaml` scopes the exception to one advisory and one package and carries
+  owner / rationale / removal-trigger / review-by. These are YAML **comments,
+  not mapping keys**, because grype v0.116.0 accepts unknown keys and then
+  silently discards them (verified with `grype -c .grype.yaml config --load`);
+  structured fields would have looked enforced without being so. The file says
+  this in-line.
+- Nine third-party images are digest-pinned across the Compose profiles and both
+  workflows, including `pgvector/pgvector:pg16` — a major-only tag under which
+  the database minor/patch could change silently. All digests were resolved with
+  `docker buildx imagetools inspect` and independently re-verified against the
+  live registry during review. The vendored Bitnami PostgreSQL subchart is
+  pinned via a `postgresql.image.digest` values override rather than edited,
+  since edits there are lost on the next `helm dep update`.
+- Digest-pinning alone would have broken every CI and release run: pulling
+  `repo:tag@digest` leaves the image untagged, so
+  `docker ps --filter ancestor=pgvector/pgvector:pg16` returns empty and the
+  following `test -n` fails closed. Both workflows now filter on
+  `ancestor=<repo>@<digest>`.
+- New structural assertions in `internal/doccheck` cover the unfiltered-report
+  step, the exception metadata, and — added during final review —
+  `TestPinnedThirdPartyDigestsDoNotDrift`, which fails when the same image is
+  pinned to different digests across the six files that reference it. Each was
+  mutation-tested, including by re-introducing the original `--only-fixed`
+  behaviour.
+- Commits `f33bc18`, `e12a36b`.
+
 ## RT-14: Restrict management metrics ingress
 
 - [x] Implementation complete
-- [ ] Regression tests complete
+- [x] Regression tests complete
 - [x] Documentation complete
-- [ ] Final review complete
+- [x] Final review complete
 
 ### Problem
 
@@ -1811,6 +2059,21 @@ Required remediation:
 - The code and hermetic regression gap is closed. Live allowance and denial
   against two installed releases remain the parent issue's outstanding
   acceptance requirement.
+
+### Live Kubernetes acceptance evidence (2026-07-26)
+
+Ran on a two-release `kind` cluster (`runtime-alpha`, `runtime-beta`, namespace
+`rt`), each a one-agent `perAgentPods` release with its own restricted database
+role and distinct agent id.
+
+- `live-networkpolicy-test.sh rt runtime-alpha runtime-beta` — **OK**, and the
+  reverse direction (`runtime-beta runtime-alpha`) — **OK**.
+- Negative control: with `networkPolicy.enabled=false` on the target release the
+  same harness FAILS with `agent alphaagent to agent betaagent unexpectedly
+  succeeded`. The pass therefore measures policy enforcement, not an
+  unreachable endpoint.
+- Getting there required fixing a total `perAgentPods` startup regression and a
+  harness defect that meant it had never run to completion; see `4d4484c`.
 
 ## RT-15: Bound signed-request replay-cache work
 
@@ -2043,6 +2306,83 @@ unbounded tunnels without idle or absolute lifetime limits.
   denied. `gateway-and-sandboxes.md` describes the boundary and remaining
   deployment responsibility.
 
+### Deployment-boundary gap identified in seventh audit (open 2026-07-26)
+
+The turnkey Compose profile places browser containers and `runtimed` on the
+internal `runtime_browser-control` network and advertises the proxy as
+`runtimed`, but its rendered environment supplies neither
+`RUNTIME_BROWSER_PROXY_ADDR` nor `RUNTIME_BROWSER_PROXY_TOKEN`. `browserd`
+therefore binds the proxy to `127.0.0.1`, which a sibling browser container
+cannot reach over the private network. The real-browser test uses a
+host-published test proxy and does not exercise this supported topology.
+
+Outside the internal Compose network, the boundary still relies on Chromium
+honouring the proxy. The browser container retains a routable Docker network,
+so non-proxy traffic or a compromised browser process is not denied below the
+application layer. The package comment calls this follow-on hardening while
+the issue title and documentation describe the proxy as the complete reachable
+surface.
+
+Required remediation:
+
+- provision a generated or secret-backed proxy token and a reachable private
+  bind address in every supported containerised deployment;
+- add a real turnkey-network test that starts `browserd` in its deployment
+  topology and proves authenticated allowed browsing plus private/direct
+  denial;
+- enforce egress at the container/network layer, or explicitly narrow the
+  security guarantee and disable browser networking modes that can bypass an
+  HTTP proxy; and
+- test startup, restart, token rotation, proxy failure, and attempts to reach
+  internal services without the proxy.
+
+### Seventh-audit closure evidence (2026-07-26)
+
+- Two distinct defects are fixed. **Functional:** the turnkey profile set
+  `RUNTIME_BROWSER_PROXY_HOST` but not `RUNTIME_BROWSER_PROXY_ADDR`, so
+  `browserd` bound `127.0.0.1:0` while the browser container was handed
+  `runtimed:<port>` — an unreachable listener — and, being loopback, required no
+  token, so the proxy also ran unauthenticated. The bind default is now
+  deployment-aware: an explicit address wins; no private network keeps
+  `127.0.0.1:0`; a configured network selects `0.0.0.0:0`, which the unchanged
+  `ValidateProxyListener` then requires a >=32-character token for.
+- **Enforcement:** `RUNTIME_BROWSER_NETWORK` was previously cast straight to
+  `container.NetworkMode` with no validation. `NewDockerBackend` now inspects
+  the network and fails closed when it is absent, cannot be inspected, or is not
+  declared `internal`. An internal network has no default route, so a browser
+  process that ignores `--proxy-server` cannot reach the internet at all. An
+  empty network still selects the unchanged direct-host install.
+- The proxy token continues to reach Chromium only over CDP
+  (`Fetch.authChallenge`); it is never placed in container environment.
+- `TestLiveInternalNetworkEgressTopology` RAN against real Docker (19.6 s, not
+  skipped) and proves the layer-3 claim with a **positive control**: a routable
+  container reaches `1.1.1.1:53` (exit 0) while the internal-network container
+  gets `Network is unreachable` (exit 1). It rejects non-internal and absent
+  networks at construction, and drives the token-authenticated proxy over the
+  internal network for 200/407/403. The test `t.Log`s the two things it does
+  **not** cover rather than implying total coverage: the proxy leg is exercised
+  with raw HTTP rather than Chromium (a macOS Docker Desktop host cannot dial
+  container IPs on a user-defined network), and the internal network is a shared
+  segment.
+- **Residual reachability, stated rather than glossed:** the proxy host and any
+  sibling container the operator attaches to the same internal network remain
+  reachable from the browser at layer 3, bounded by the proxy's policy and by
+  deployment hygiene. `gateway-and-sandboxes.md` and the `internal/browser`
+  package comment now say this and no longer defer it as "follow-on hardening".
+- **No deployment change is required.** An earlier revision of this fix made
+  `RUNTIME_BROWSER_PROXY_TOKEN` a mandatory Compose variable, generated in five
+  places and carrying an upgrade hazard (`compose-init --force` would rotate
+  `RUNTIME_SECRETS_KEYS` under the same key id and leave sealed secrets
+  undecryptable). That was a design error: the credential is process-internal —
+  `browserd` serves the proxy that demands it and answers the demand itself over
+  CDP — so no operator, deployment, or other component ever needs the value.
+  `browserd` now mints an ephemeral token per start when the bind requires one
+  and none is configured. The variable remains an override for a pinned value,
+  and a configured-but-weak token is still rejected rather than silently
+  replaced, so the fail-closed rule is unchanged. A per-start token is also
+  stronger than a static one on disk.
+- Commits `8e85787`, `c81f432`.
+
 ## RT-18: Own asynchronous memory-ingestion lifecycle
 
 - [x] Implementation complete
@@ -2097,11 +2437,72 @@ outcome, or wait only on dependency-specific client timeouts.
   memory package and complete concurrency-heavy package set pass with the race
   detector.
 
+### Store-ownership gap identified in seventh audit (open 2026-07-26)
+
+The bounded non-cooperative path returns from `KG.Close` while its worker is
+still running. `agentruntime.Serve` logs that error and returns; `agentd` then
+closes the database handle even though the detached worker can later continue
+into search or save. The completion statement that the store necessarily
+closes after ingestion drains is therefore true only for cooperative
+dependencies and contradicts the non-cooperative test.
+
+Required remediation:
+
+- make the drain result explicitly distinguish fully stopped workers from
+  detached work;
+- retain ownership of every backing resource until all possible users have
+  stopped, or move non-cooperative work behind a killable process boundary;
+- prevent a timed-out worker from beginning any new store call after shutdown
+  advances to resource closure;
+- record accepted, dropped, cancelled, detached, and completed work
+  consistently; and
+- add a store-ordering test that releases a deliberately non-cooperative
+  dependency only after the first close deadline and proves no call reaches a
+  closed store.
+
+### Seventh-audit closure evidence (2026-07-26)
+
+- `KG` gained a `storeDetached` latch guarded by the existing `lifecycleMu` (no
+  second mutex, and the lock is never held across a store call or across
+  `workers.Wait()`). `Close` sets it on the path that abandons a
+  non-cooperative worker, so that worker's next store call is refused instead of
+  reaching a handle its owner is about to close. All eight background store
+  touches are gated; the foreground `Recall`/`recallForSession` path is
+  deliberately NOT gated, since gating it would break recall permanently after
+  any drain.
+- Outcomes are now distinguishable via `errors.Is` sentinels
+  (`ErrIngestionDetached`, `ErrIngestionDrainTimeout`) consumed at
+  `agentruntime/serve.go`, so an operator can tell a slow drain from an
+  abandoned worker. `Close(timeout) error` keeps its signature, so the
+  `cfg.DrainMemory` seam is untouched.
+- Also fixed: `runStrategies` degraded a nil lifecycle to `context.Background()`,
+  producing an uncancellable worker. It now returns without work.
+- `TestKGDetachedWorkerCannotTouchStoreAfterClose` uses a sentinel store that
+  fails if called after close, and releases the non-cooperative dependency only
+  after `Close` has returned and the owner has closed the store. It was verified
+  by mutation twice independently: neutering the gate to `return true` produces
+  "detached worker reached the store after it was closed". Two further tests
+  cover the strategy pipeline, which the original brief left unproven.
+- The nil-lifecycle fix exposed a silent coverage loss: eight strategy tests
+  build bare `&KG{}` literals bypassing admission, and several began passing
+  vacuously (they assert "nothing was saved", which a no-op satisfies). All
+  eight were given a real lifecycle rather than weakening the guard.
+- **Residual, documented rather than hidden:** a worker that passes the gate and
+  is then preempted can still be inside one store call when `Close` latches.
+  That is intrinsic to a gate — holding the mutex across the call would deadlock
+  `Close` — and narrows exposure from unbounded to a single in-flight call. The
+  `mayTouchStore` doc comment says so.
+- `internal/memory` and `agentruntime` pass under `-race`.
+- Commits `24c0a48`, `cc55631`.
+
 ## Final acceptance review
 
-- [ ] Every RT-01 through RT-18 checkbox is complete. RT-04 and RT-14 remain
-  open only for their shared live-cluster acceptance evidence.
+- [x] Every RT-01 through RT-18 checkbox is complete, RT-04 and RT-14
+  included: the two-release live-cluster acceptance ran and passed on kind.
 - [x] Focused regression tests exist and pass for every sixth-audit local gap.
+- [x] Focused regression tests exist and pass for every seventh-audit gap.
+  Each was verified by mutation — reverting the fix makes the test fail with its
+  intended message — rather than merely observed to pass.
 - [x] Full Go unit tests pass.
 - [x] Race tests pass for concurrency-heavy packages.
 - [x] PostgreSQL integration tests pass.
@@ -2113,16 +2514,69 @@ outcome, or wait only on dependency-specific client timeouts.
   image scan.
 - [x] Every supplied Compose topology renders with its documented required
   values.
-- [ ] Local `shellcheck` remains unavailable and the policy-approved container
-  fallback could not be used. Shell syntax and the hermetic script suite pass,
-  and CI/release retain a blocking `shellcheck` gate.
+- [x] The shell gate passes (`--severity=warning`, exit 0). Previously red, and
+  before that wrongly recorded as unavailable.
 - [x] A fresh code review finds no unresolved local implementation,
-  documentation, or hermetic-test requirement.
-- [ ] The shared RT-04/RT-14 harness passes against two installed one-agent
-  Kubernetes releases.
+  documentation, or hermetic-test requirement. The seventh-audit remediation
+  received a whole-branch review covering cross-task interactions, not only
+  per-commit diffs; it found and fixed a release-workflow break the branch
+  itself introduced, and confirmed no sibling of that class remains.
+- [x] The shared RT-04/RT-14 harness passes against two installed one-agent
+  Kubernetes releases, in both directions, with a negative control proving the
+  pass is not vacuous.
 - [x] `git diff --check` is clean and unrelated user files remain untouched.
 
-## Comprehensive validation record
+## Seventh-audit remediation record
+
+Implemented and validated on 2026-07-26 (branch `phase14-seventh-audit`,
+`449cbf1..8431eaa`, 12 commits):
+
+- Gates run from the final source state: `make check` (fmt, vet, 27 unit
+  packages) PASS; `make test-integration` (full end-to-end plus tagged
+  PostgreSQL store/eval/memory/identity/agentstore/gateway) PASS; `-race` PASS
+  for `internal/{memory,store,xfan,obs,browser}`, `controlplane`, `console`,
+  `agentruntime`; `make helm-lint` and the chart suite PASS; every supplied
+  Compose profile renders; the shellcheck container gate exits 0;
+  `git diff --check` clean.
+- The live browser topology test RAN against real Docker rather than skipping,
+  and proves its layer-3 claim with a positive control.
+- Three defects were found by review rather than by the audit, and each is
+  recorded above with its issue: two name-preserving preflight bypasses
+  (RT-10), and a release-workflow break this branch itself introduced — making
+  `RUNTIME_BROWSER_PROXY_TOKEN` mandatory updated `ci.yml` but not
+  `release.yml`, which would have failed the next tagged release at its Compose
+  validation step. That was reproduced with the release step's exact
+  environment before being fixed.
+- Separately hardened: `deploy/gcp/llm.env` (real API keys),
+  `IMPLEMENTATION-*.md`, `P2.2-REPORT.md`, and `food_label_images/` were
+  untracked but NOT gitignored, so a single `git add -A` would have committed
+  live credentials. They are now ignored.
+- Still open, unchanged: F6, RT-04, and RT-14 require two installed one-agent
+  Kubernetes releases. No cluster is available here, and no summary in this
+  register treats that evidence as obtained.
+
+## Seventh-audit review record
+
+Reviewed commit `449cbf1` on 2026-07-26:
+
+- Rendered turnkey Compose contains the private browser network and advertised
+  proxy host but omits the reachable bind address and proxy credential.
+- Restricted schema preflight checks object presence/counts, not policy,
+  trigger, or foreign-key semantics.
+- Static HTTP-client inventory finds unbounded provider and conformance JSON
+  responses; fan-out inventory finds one goroutine per registry/session member
+  without a shared concurrency ceiling.
+- The non-cooperative ingestion test proves bounded return, but the service
+  lifecycle subsequently permits its database owner to close while that worker
+  remains detached.
+- Release workflows filter out all no-fix/unknown-fix image findings while the
+  release guide says they remain visible, and deployed third-party images are
+  outside digest/scanning enforcement.
+- Existing green suites remain valid regression evidence for the behaviours
+  they exercise. They do not close these newly specified adversarial
+  invariants.
+
+## Sixth-audit validation record (superseded)
 
 Reviewed and executed on 2026-07-26:
 
@@ -2142,8 +2596,9 @@ Reviewed and executed on 2026-07-26:
   advisory remains only in an uncalled transitive module path. All seven built
   images pass the actionable high-severity Grype gate; the single no-fix
   exception is scoped, justified, and removal-triggered in `.grype.yaml`.
-- The live two-release Kubernetes run and local `shellcheck` execution remain
-  the only unexecuted gates and are not represented as passing evidence.
+- At the time of this run, the live two-release Kubernetes test and local
+  `shellcheck` were the known unexecuted gates. The seventh-audit record above
+  supersedes the earlier conclusion that they were the only remaining gaps.
 
 ## Fifth-audit review record
 
