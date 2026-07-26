@@ -43,7 +43,7 @@ func TestReplicaPoolsAffinity(t *testing.T) {
 		t.Fatalf("ping postgres (is it running at %s?): %v", dsn, err)
 	}
 	mustExec(t, db, `DROP TABLE IF EXISTS markers`)
-	mustExec(t, db, `DROP TABLE IF EXISTS session_events, sessions, agents CASCADE`)
+	mustExec(t, db, `DROP TABLE IF EXISTS online_eval_results, session_transcripts, session_events, sessions, agents CASCADE`)
 	mustExec(t, db, `DROP SCHEMA IF EXISTS dbos CASCADE`) // DBOS recreates it on Launch
 	mustExec(t, db, `CREATE TABLE markers (id BIGSERIAL PRIMARY KEY, ran_at TIMESTAMPTZ)`)
 
@@ -61,7 +61,7 @@ func TestReplicaPoolsAffinity(t *testing.T) {
 	// ---- Step 3: one agent, replicas: 2 (replica 0 → :8701, 1 → :8702) --
 	cfgPath := filepath.Join(tmp, "runtime.yaml")
 	cfg := "agents:\n" +
-		"  - {id: pool, name: Pool, model: test/scripted, listen_addr: 127.0.0.1:8701, replicas: 2}\n"
+		"  - {id: pool, name: Pool, model: test/scripted, listen_addr: 127.0.0.1:8701, registration_generation: test-generation-pool, replicas: 2}\n"
 	if err := os.WriteFile(cfgPath, []byte(cfg), 0o644); err != nil {
 		t.Fatal(err)
 	}

@@ -219,7 +219,7 @@ func TestEvalRunTenantIsolation(t *testing.T) {
 	mux, es := evalMux(t)
 	// A t1 run exists.
 	_ = es.CreateRun(context.Background(), eval.Run{
-		RunID: "r-t1", Tenant: "t1", SetName: "greet", AgentID: "a1", Status: eval.StatusCompleted,
+		RunID: "r-t1", Tenant: "t1", SetName: "greet", AgentID: "a1", Status: eval.StatusPending,
 	})
 	t2 := identity.Principal{Role: identity.RoleAdmin, TenantID: "t2"}
 

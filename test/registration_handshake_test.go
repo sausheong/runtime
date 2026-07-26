@@ -53,16 +53,16 @@ func TestRegistrationHandshake(t *testing.T) {
 	}
 	// Self-clean: session/dbos state plus the identity tables runtimed's identity
 	// store creates on boot (so reruns start from a clean slate).
-	mustExec(t, db, `DROP TABLE IF EXISTS session_events, sessions, agents CASCADE`)
+	mustExec(t, db, `DROP TABLE IF EXISTS online_eval_results, session_transcripts, session_events, sessions, agents CASCADE`)
 	mustExec(t, db, `DROP SCHEMA IF EXISTS dbos CASCADE`)
-	mustExec(t, db, `DROP TABLE IF EXISTS registration_tokens, secrets, service_keys, identity_users, tenants CASCADE`)
+	mustExec(t, db, `DROP TABLE IF EXISTS registration_tokens, secrets, service_keys, identity_users, managed_agents, gateway_upstreams, tenants CASCADE`)
 	// This is the ONLY integration test that enables identity (it needs the admin
 	// API for secrets + register tokens). runtimed turns identity ON whenever the
 	// tenants/service_keys tables are non-empty (idStore.AnyConfigured). Sibling
 	// remote tests run OPEN and break if those rows linger, so drop the identity
 	// tables again on the way out — top-of-test cleanup covers reruns; this defer
 	// protects siblings in the same `go test` invocation.
-	defer mustExec(t, db, `DROP TABLE IF EXISTS registration_tokens, secrets, service_keys, identity_users, tenants CASCADE`)
+	defer mustExec(t, db, `DROP TABLE IF EXISTS registration_tokens, secrets, service_keys, identity_users, managed_agents, gateway_upstreams, tenants CASCADE`)
 
 	tmp := t.TempDir()
 	agentd := filepath.Join(tmp, "agentd")
@@ -91,7 +91,7 @@ func TestRegistrationHandshake(t *testing.T) {
 	// ⇒ "default" (also the secret's tenant). auth_token inlined as a literal.
 	cfgPath := filepath.Join(tmp, "runtime.yaml")
 	cfg := "agents:\n" +
-		fmt.Sprintf("  - {id: research, name: Research, model: test/scripted, url: \"http://%s\", auth_token: \"%s\"}\n",
+		fmt.Sprintf("  - {id: research, name: Research, model: test/scripted, url: \"http://%s\", auth_token: \"%s\", registration_generation: test-generation-research}\n",
 			agentAddr, agentBearer)
 	if err := os.WriteFile(cfgPath, []byte(cfg), 0o644); err != nil {
 		t.Fatal(err)
@@ -109,6 +109,7 @@ func TestRegistrationHandshake(t *testing.T) {
 		"RUNTIME_SECRETS_KEYS="+keys,
 		"RUNTIME_SECRETS_PRIMARY=k1",
 		"RUNTIME_ADMIN_BOOTSTRAP="+bootstrap,
+		"RUNTIME_PROVISION_REMOTE_AGENT_ROLE=1",
 	)
 	rt.Stdout, rt.Stderr = os.Stdout, os.Stderr
 	rt.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}

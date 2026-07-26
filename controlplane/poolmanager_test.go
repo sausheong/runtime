@@ -6,6 +6,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/sausheong/runtime/internal/config"
 	"github.com/sausheong/runtime/internal/store"
@@ -76,6 +77,54 @@ func TestPoolManagerDrainAndReap(t *testing.T) {
 	pm.reapDrained(map[int]int{0: 1, 1: 1})
 	if len(pm.Replicas()) != 2 {
 		t.Fatalf("reap did not truncate: k=%d", len(pm.Replicas()))
+	}
+}
+
+func TestPoolManagerReplicaLeaseBlocksReapAndRejectsDrainingNewSession(t *testing.T) {
+	pm, _ := newTestPM(t, 1, 3, 2)
+	ctx := context.Background()
+	_ = pm.grow(ctx)
+	_ = pm.grow(ctx)
+	top, ok := pm.Replica(1)
+	if !ok {
+		t.Fatal("top replica missing")
+	}
+	release, ok := pm.leaseReplica(top, false)
+	if !ok {
+		t.Fatal("failed to lease active replica")
+	}
+	reapDone := make(chan struct{})
+	go func() {
+		pm.drainTop()
+		pm.reapDrained(map[int]int{0: 0, 1: 0})
+		close(reapDone)
+	}()
+	select {
+	case <-reapDone:
+		t.Fatal("scale-down completed while request held replica lease")
+	case <-time.After(20 * time.Millisecond):
+	}
+	release()
+	select {
+	case <-reapDone:
+	case <-time.After(time.Second):
+		t.Fatal("scale-down did not resume after lease release")
+	}
+
+	_ = pm.grow(ctx)
+	pm.drainTop()
+	draining, ok := pm.Replica(1)
+	if !ok {
+		t.Fatal("replacement top replica missing")
+	}
+	if releaseNew, ok := pm.leaseReplica(draining, true); ok {
+		releaseNew()
+		t.Fatal("new session leased a draining replica")
+	}
+	if releaseExisting, ok := pm.leaseReplica(draining, false); !ok {
+		t.Fatal("existing session could not lease its draining owner")
+	} else {
+		releaseExisting()
 	}
 }
 

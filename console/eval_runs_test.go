@@ -83,7 +83,7 @@ func TestEvalRuns_SectionRenders(t *testing.T) {
 	h, es, _ := consoleWithEvalRuns(t)
 	seedSet(t, es, "t1", "greetings")
 	_ = es.CreateRun(context.Background(), eval.Run{
-		RunID: "run-abc", Tenant: "t1", SetName: "greetings", AgentID: "support", Status: eval.StatusCompleted,
+		RunID: "run-abc", Tenant: "t1", SetName: "greetings", AgentID: "support", Status: eval.StatusPending,
 	})
 	r := adminReq("GET", "/ui/observability", nil)
 	w := httptest.NewRecorder()
@@ -239,7 +239,9 @@ func TestEvalRuns_ResultsView(t *testing.T) {
 	_, _ = es.PutResultClaimed(ctx, "run-res", "seed", eval.Result{
 		CaseIndex: 0, Input: "hi", Output: "hello there", Scorer: "contains", Passed: true, Detail: "",
 	})
-	_ = es.FinishRun(ctx, "run-res", eval.StatusCompleted, 1, 1, 0, 1, "")
+	if ok, err := es.FinishRunClaimed(ctx, "run-res", "seed", eval.StatusCompleted, 1, 1, 0, 1, ""); err != nil || !ok {
+		t.Fatalf("finish claimed run: ok=%v err=%v", ok, err)
+	}
 	r := adminReq("GET", "/ui/observability/eval-runs/run-res", nil)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, r)
@@ -259,7 +261,7 @@ func TestEvalRuns_ResultsCrossTenant404(t *testing.T) {
 	h, es, _ := consoleWithEvalRuns(t)
 	// Run owned by t2 ⇒ a t1 caller must get a 404 (no oracle).
 	_ = es.CreateRun(context.Background(), eval.Run{
-		RunID: "run-foreign", Tenant: "t2", SetName: "greetings", AgentID: "t2agent", Status: eval.StatusCompleted,
+		RunID: "run-foreign", Tenant: "t2", SetName: "greetings", AgentID: "t2agent", Status: eval.StatusPending,
 	})
 	r := adminReq("GET", "/ui/observability/eval-runs/run-foreign", nil)
 	w := httptest.NewRecorder()

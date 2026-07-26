@@ -44,37 +44,47 @@ func databaseRole(dsn string) (string, error) {
 	return cfg.User, nil
 }
 
-func grantAgentStoreAccess(ctx context.Context, db *sql.DB, agentDSN, tenant string, allowRebind bool) error {
+func grantAgentStoreAccess(ctx context.Context, db *sql.DB, agentDSN, tenant, agentID string, allowRebind bool) error {
 	role, err := databaseRole(agentDSN)
 	if err != nil {
 		return fmt.Errorf("RUNTIME_AGENT_PG_DSN must contain a database role")
 	}
-	return store.ProvisionAgentRole(ctx, db, role, tenant, allowRebind)
+	return store.ProvisionAgentRole(ctx, db, role, tenant, agentID, allowRebind)
 }
 
-func localAgentTenant(cfg *config.Config, allowSharedRole bool) (string, error) {
+func localAgentIdentity(cfg *config.Config, allowSharedRole, provisionRemote bool) (tenant, agentID string, err error) {
+	tenants := map[string]struct{}{}
+	var agents []string
+	for _, agent := range cfg.Agents {
+		// Attach-only agents run outside this process and never receive
+		// RUNTIME_AGENT_PG_DSN. Including them here rejects legitimate
+		// control-plane-only registries and attempts to provision an unused role.
+		if agent.URL != "" && !provisionRemote {
+			continue
+		}
+		agents = append(agents, agent.ID)
+		tenants[agent.Tenant] = struct{}{}
+	}
+	if len(agents) == 0 {
+		return "", "", nil
+	}
 	if allowSharedRole {
 		// Integration tests intentionally run several Runtime processes against
 		// one disposable restricted role. A wildcard mapping is test-only and
 		// avoids cross-test tenant rebind races; production never sets this flag.
-		return "*", nil
-	}
-	tenants := map[string]struct{}{}
-	agents := len(cfg.Agents)
-	for _, agent := range cfg.Agents {
-		tenants[agent.Tenant] = struct{}{}
+		return "*", "*", nil
 	}
 	if len(tenants) == 0 {
-		return "default", nil
+		return "default", agents[0], nil
 	}
 	if len(tenants) > 1 {
-		return "", errors.New("agents from multiple tenants require separate Runtime deployments with distinct RUNTIME_AGENT_PG_DSN roles")
+		return "", "", errors.New("agents from multiple tenants require separate Runtime deployments with distinct RUNTIME_AGENT_PG_DSN roles")
 	}
-	if agents > 1 {
-		return "", errors.New("multiple agents cannot share one restricted RUNTIME_AGENT_PG_DSN role; provision one Runtime deployment and database role per agent")
+	if len(agents) > 1 {
+		return "", "", errors.New("multiple agents cannot share one restricted RUNTIME_AGENT_PG_DSN role; provision one Runtime deployment and database role per agent")
 	}
 	for tenant := range tenants {
-		return tenant, nil
+		return tenant, agents[0], nil
 	}
 	panic("unreachable")
 }
@@ -135,6 +145,15 @@ func main() {
 		slog.Error("config load failed", "err", err)
 		os.Exit(1)
 	}
+	agentTenant, agentID, err := localAgentIdentity(
+		cfg,
+		integrationSharedAgentRoleAllowed(),
+		envBool("RUNTIME_PROVISION_REMOTE_AGENT_ROLE"),
+	)
+	if err != nil {
+		slog.Error("restricted agent database role configuration failed", "err", err)
+		os.Exit(1)
+	}
 
 	// Control-plane metrics registry: created early so the gateway, edge
 	// middleware, supervisors, and proxy hooks below all share the one registry.
@@ -151,6 +170,13 @@ func main() {
 	sessionRetentionDryRun := envBool("RUNTIME_SESSION_RETENTION_DRY_RUN")
 
 	reg := controlplane.NewRegistry(cfg, agentBin, agentDSN)
+	if agentTenant == "*" && agentID == "*" {
+		// Disposable integration binaries may deliberately run several agents
+		// through one wildcard role. Keep that explicit concession internally
+		// consistent by routing DBOS to the one schema provisioned for the
+		// wildcard identity. Ordinary binaries cannot reach this branch.
+		reg.SetDBOSSchemaForAll("dbos")
+	}
 	if envBool("RUNTIME_SUBJECT_FORWARDING") {
 		signingPrivate := os.Getenv("RUNTIME_IDENTITY_SIGNING_PRIVATE_KEY")
 		signingPublic := os.Getenv("RUNTIME_IDENTITY_SIGNING_PUBLIC_KEY")
@@ -267,15 +293,12 @@ func main() {
 	}
 	defer ctlStore.Close()
 	if !sharedDBRole {
-		agentTenant, terr := localAgentTenant(cfg, integrationSharedAgentRoleAllowed())
-		if terr != nil {
-			slog.Error("restricted agent database role configuration failed", "err", terr)
-			os.Exit(1)
-		}
-		if err := grantAgentStoreAccess(ctx, identityDB, agentDSN, agentTenant,
-			integrationAgentRoleRebindAllowed()); err != nil {
-			slog.Error("restricted agent database role provisioning failed", "err", err)
-			os.Exit(1)
+		if agentTenant != "" {
+			if err := grantAgentStoreAccess(ctx, identityDB, agentDSN, agentTenant, agentID,
+				integrationAgentRoleRebindAllowed()); err != nil {
+				slog.Error("restricted agent database role provisioning failed", "err", err)
+				os.Exit(1)
+			}
 		}
 	}
 
@@ -469,7 +492,7 @@ func main() {
 		os.Exit(1)
 	}
 	identityOn := configured || oidcIssuer != "" || bootstrapKey != "" || len(legacyTokens) > 0
-	if identityOn && sharedDBRole {
+	if identityOn && sharedDBRole && agentTenant != "" {
 		slog.Error("identity-enabled runtime requires a distinct RUNTIME_AGENT_PG_DSN role without access to identity and secrets tables")
 		os.Exit(1)
 	}
@@ -1111,6 +1134,74 @@ func retentionDurationFromEnv(getenv func(string) string, key string, fallback t
 	return d, nil
 }
 
+type sessionRetentionReaper func(context.Context, time.Time, int, bool) (int64, error)
+type evalRetentionReaper func(context.Context, time.Time, int) (int64, error)
+type retentionRecorder func(string, int64)
+
+func runSessionRetentionSweep(
+	ctx context.Context,
+	before time.Time,
+	batch int,
+	dryRun bool,
+	reap sessionRetentionReaper,
+	record retentionRecorder,
+) (int64, error) {
+	var total int64
+	for pass := 0; pass < 20; pass++ {
+		n, err := reap(ctx, before, batch, dryRun)
+		if err != nil {
+			return total, err
+		}
+		total += n
+		if !dryRun && n > 0 {
+			record("session", n)
+		}
+		if dryRun || n < int64(batch) {
+			break
+		}
+	}
+	return total, nil
+}
+
+func runEvalRetentionSweep(
+	ctx context.Context,
+	before time.Time,
+	batch int,
+	reapCapture evalRetentionReaper,
+	reapRuns evalRetentionReaper,
+	record retentionRecorder,
+) (captured, runs int64, err error) {
+	for pass := 0; pass < 20; pass++ {
+		n, captureErr := reapCapture(ctx, before, batch)
+		if captureErr != nil {
+			return captured, runs, captureErr
+		}
+		captured += n
+		if n > 0 {
+			record("evaluation_capture", n)
+		}
+		// The store batches each child table independently, so a total below
+		// 2*batch does not prove that the non-empty table is exhausted.
+		if n == 0 {
+			break
+		}
+	}
+	for pass := 0; pass < 20; pass++ {
+		n, runErr := reapRuns(ctx, before, batch)
+		if runErr != nil {
+			return captured, runs, runErr
+		}
+		runs += n
+		if n > 0 {
+			record("evaluation_run", n)
+		}
+		if n < int64(batch) {
+			break
+		}
+	}
+	return captured, runs, nil
+}
+
 func startSessionRetention(ctx context.Context, ctl store.Store, metrics *obs.ControlMetrics, retention time.Duration, batch int, dryRun bool) {
 	if retention == 0 {
 		slog.Warn("session retention disabled; sessions and events will accumulate")
@@ -1119,23 +1210,19 @@ func startSessionRetention(ctx context.Context, ctl store.Store, metrics *obs.Co
 	reap := func() {
 		reapCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		defer cancel()
-		var total int64
-		for pass := 0; pass < 20; pass++ {
-			n, err := ctl.ReapSessions(reapCtx, time.Now().UTC().Add(-retention), batch, dryRun)
-			if err != nil {
-				slog.Warn("session retention sweep failed", "err", err)
-				return
-			}
-			total += n
-			if dryRun || n < int64(batch) {
-				break
-			}
-		}
+		total, err := runSessionRetentionSweep(
+			reapCtx,
+			time.Now().UTC().Add(-retention),
+			batch,
+			dryRun,
+			ctl.ReapSessions,
+			metrics.RetentionReaped,
+		)
 		if total > 0 {
 			slog.Info("session retention sweep", "sessions", total, "dry_run", dryRun)
-			if !dryRun {
-				metrics.RetentionReaped("session", total)
-			}
+		}
+		if err != nil {
+			slog.Warn("session retention sweep failed", "deleted_before_failure", total, "err", err)
 		}
 	}
 	reap()
@@ -1163,37 +1250,22 @@ func startEvalRetention(ctx context.Context, ctl store.Store, es eval.EvalStore,
 		defer cancel()
 		before := time.Now().Add(-retention)
 		const batch = 1000
-		var captured, runs int64
-		for pass := 0; pass < 20; pass++ {
-			n, captureErr := ctl.ReapEvaluationData(reapCtx, before, batch)
-			if captureErr != nil {
-				slog.Warn("eval capture retention sweep failed", "err", captureErr)
-				return
-			}
-			captured += n
-			// The store batches each child table independently, so a total below
-			// 2*batch does not prove that the non-empty table is exhausted.
-			// Stop only on an empty pass; the 20-pass/30-second sweep budget is
-			// the hard bound for a persistent backlog.
-			if n == 0 {
-				break
-			}
-		}
-		for pass := 0; pass < 20; pass++ {
-			n, runErr := es.ReapBefore(reapCtx, before, batch)
-			if runErr != nil {
-				slog.Warn("eval run retention sweep failed", "err", runErr)
-				return
-			}
-			runs += n
-			if n < batch {
-				break
-			}
-		}
+		captured, runs, err := runEvalRetentionSweep(
+			reapCtx,
+			before,
+			batch,
+			ctl.ReapEvaluationData,
+			es.ReapBefore,
+			metrics.RetentionReaped,
+		)
 		if captured+runs > 0 {
 			slog.Info("eval retention sweep", "captured_rows", captured, "runs", runs)
-			metrics.RetentionReaped("evaluation_capture", captured)
-			metrics.RetentionReaped("evaluation_run", runs)
+		}
+		if err != nil {
+			slog.Warn("eval retention sweep failed",
+				"captured_before_failure", captured,
+				"runs_before_failure", runs,
+				"err", err)
 		}
 	}
 	reap()

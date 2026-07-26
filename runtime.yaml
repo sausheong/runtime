@@ -4,11 +4,13 @@ agents:
     name: Support Agent
     model: test/scripted
     listen_addr: 127.0.0.1:8101
+    registration_generation: 89ef9a06-e752-49e2-a8bc-a9b14983dc6f
     memory: true        # durable per-tenant memory
   - id: research
     name: Research Agent
     model: test/scripted
     listen_addr: 127.0.0.1:8102
+    registration_generation: 8d837cda-61b2-4d64-aa23-c2459d162cad
 
   # Replica pool (Spine A1): run N agentd processes for one agent. Replica i
   # listens on base_port+i (so listen_addr is the base). New sessions round-robin
@@ -27,8 +29,9 @@ agents:
   # Tuning env: RUNTIME_AUTOSCALE_POLL_SECONDS / _UP_COOLDOWN_SECONDS / _DOWN_COOLDOWN_SECONDS.
   # - id: support
   #   name: Support
-  #   model: claude-opus-4-8
-  #   listen_addr: 127.0.0.1:8101
+#   model: claude-opus-4-8
+#   listen_addr: 127.0.0.1:8101
+#   registration_generation: <persisted-uuid>
   #   autoscale:
   #     min: 1
   #     max: 4
@@ -68,6 +71,7 @@ agents:
 #    model: test/scripted
 #    url: https://agent-1.internal:8443
 #    auth_token: ${REMOTE_1_TOKEN}
+#    registration_generation: ${REMOTE_1_GENERATION}
 
 # ── Kubernetes per-agent-pod scheduling (C2 M2) ───────────────────────────────
 # This file is the MONOLITH (single-host) agent registry. To run each agent as

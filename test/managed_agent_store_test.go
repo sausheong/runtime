@@ -40,6 +40,7 @@ func TestManagedAgentStoreCRUD(t *testing.T) {
 	row := agentstore.AgentRow{
 		ID: "ma-1", TenantID: "mat", Name: "Hello", Model: "claude-sonnet-4-6",
 		URL: "http://10.0.0.4:8080", AuthSecret: "",
+		RegistrationGeneration: "test-generation",
 	}
 	if err := st.Insert(ctx, row); err != nil {
 		t.Fatal(err)

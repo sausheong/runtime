@@ -34,6 +34,9 @@ scheduling:
 # Rendered into a ConfigMap and mounted at /etc/runtime/runtime.yaml.
 config:
   agents: []
+  # Every perAgentPods agent requires registration_generation: a persisted
+  # opaque instance ID (for example a UUID). Keep it stable across ordinary
+  # restarts/upgrades and rotate it when replacing or recreating the agent.
   # gateway:
   #   servers: []
 
@@ -91,9 +94,39 @@ ingress:
 
 networkPolicy:
   enabled: true
+  # Additional NetworkPolicyPeer entries allowed to scrape the private
+  # management listener. The default admits only same-namespace Prometheus
+  # pods carrying the standard app label. Add a namespaceSelector for a
+  # monitoring stack installed in another namespace.
+  metricsIngress:
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: prometheus
 
 obs:
   enabled: false          # ServiceMonitor + Grafana dashboard ConfigMap
+
+# Control-plane lifecycle and HTTP bounds. These render to the documented
+# RUNTIME_* environment variables rather than requiring manifest edits.
+runtime:
+  sessionRetention: 720h
+  sessionRetentionBatch: 500
+  sessionRetentionDryRun: false
+  evalRetention: 720h
+  maxRequests: 512
+  maxStreams: 128
+
+# Agent HTTP bounds and opt-in live-memory retention. In monolith mode these
+# are inherited only by supervised agent children; in perAgentPods they are
+# rendered directly into every agent StatefulSet.
+agent:
+  maxRequests: 256
+  maxStreams: 64
+  memoryRetention:
+    dryRun: false
+    episode: ""
+    fact: ""
+    summary: ""
 
 postgresql:
   enabled: false

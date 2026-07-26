@@ -27,15 +27,22 @@ type AdminStore interface {
 	RevokeKey(ctx context.Context, tenantID, id string) error
 	ListKeys(ctx context.Context, tenantID string) ([]identity.KeyRow, error)
 	ListTenants(ctx context.Context) ([]identity.TenantRow, error)
-	InsertRegistrationToken(ctx context.Context, tokenID, agentID, hash string) error
+	InsertRegistrationToken(ctx context.Context, tokenID, agentID, tenantID, agentGeneration, hash string) error
 	ListRegistrationTokens(ctx context.Context) ([]identity.RegTokenRow, error)
 	RevokeRegistrationToken(ctx context.Context, tokenID string) error
+	RevokeRegistrationTokensForAgent(ctx context.Context, tenantID, agentID, agentGeneration string) error
+}
+
+// AgentRegistrationLookup resolves the current immutable token-binding identity
+// for an agent. *Registry implements it with a concurrency-safe live lookup.
+type AgentRegistrationLookup interface {
+	RegistrationIdentity(id string) (tenant, generation string, ok bool)
 }
 
 // RegisterAdmin mounts the /admin/* routes on mux. Every handler requires an
 // admin Principal (set by the identity middleware) and scopes writes to that
 // principal's tenant; tenant creation additionally requires a superuser.
-func RegisterAdmin(mux *http.ServeMux, s AdminStore, agentTenants map[string]string) {
+func RegisterAdmin(mux *http.ServeMux, s AdminStore, agents AgentRegistrationLookup) {
 	mux.HandleFunc("POST /admin/tenants", func(w http.ResponseWriter, r *http.Request) {
 		p, ok := requireAdmin(w, r)
 		if !ok {
@@ -174,7 +181,7 @@ func RegisterAdmin(mux *http.ServeMux, s AdminStore, agentTenants map[string]str
 			http.Error(w, "agent required", http.StatusBadRequest)
 			return
 		}
-		tenant, known := agentTenants[body.Agent]
+		tenant, generation, known := agents.RegistrationIdentity(body.Agent)
 		if !known {
 			http.Error(w, "unknown agent", http.StatusBadRequest)
 			return
@@ -190,7 +197,8 @@ func RegisterAdmin(mux *http.ServeMux, s AdminStore, agentTenants map[string]str
 			serverError(w, "mint registration token", err)
 			return
 		}
-		if err := s.InsertRegistrationToken(r.Context(), mk.ID, body.Agent, mk.Hash); err != nil {
+		if err := s.InsertRegistrationToken(r.Context(), mk.ID, body.Agent,
+			tenant, generation, mk.Hash); err != nil {
 			serverError(w, "insert registration token", err)
 			return
 		}
@@ -207,11 +215,12 @@ func RegisterAdmin(mux *http.ServeMux, s AdminStore, agentTenants map[string]str
 			serverError(w, "list registration tokens", err)
 			return
 		}
-		// Non-superusers see only tokens for agents in their tenant.
+		// Tenant ownership is stored with the token. Resolving the agent's current
+		// tenant here would let an ID reassignment change credential ownership.
 		if !p.Superuser {
 			filtered := rows[:0]
 			for _, rw := range rows {
-				if agentTenants[rw.AgentID] == p.TenantID {
+				if rw.TenantID == p.TenantID {
 					filtered = append(filtered, rw)
 				}
 			}
@@ -241,7 +250,7 @@ func RegisterAdmin(mux *http.ServeMux, s AdminStore, agentTenants map[string]str
 			}
 			owned := false
 			for _, rw := range rows {
-				if rw.TokenID == id && agentTenants[rw.AgentID] == p.TenantID {
+				if rw.TokenID == id && rw.TenantID == p.TenantID {
 					owned = true
 					break
 				}

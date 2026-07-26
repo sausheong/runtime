@@ -21,6 +21,7 @@ agents:
     listen_addr: 127.0.0.1:8101
     kind: testagent
     tenant: default
+    registration_generation: 89ef9a06-e752-49e2-a8bc-a9b14983dc6f
     replicas: 2
     memory: true
     gateway: search
@@ -34,6 +35,13 @@ agents:
 `id`, `name`, and `model` are required. Exactly one of `listen_addr` or `url`
 is required. Identifiers are 1–64 characters and may contain letters, digits,
 `.`, `_`, and `-`; the first character must be alphanumeric.
+
+`registration_generation` is also required for every agent. Use an opaque
+persisted value such as a UUID. Keep it unchanged for ordinary process,
+control-plane, and host restarts. Rotate it when deleting/recreating an agent,
+replacing its endpoint or database trust domain, or intentionally retiring its
+sessions and registration credentials. Runtime never derives this lifecycle
+identity from a reusable tenant/agent ID.
 
 Local-agent fields:
 
@@ -57,6 +65,7 @@ agents:
     model: vendor/model
     url: https://agent.internal:8443
     auth_token: ${REMOTE_AGENT_TOKEN}
+    registration_generation: ${REMOTE_AGENT_GENERATION}
     tenant: acme
 ```
 
@@ -73,6 +82,7 @@ A fixed remote pool uses an ordinal URL:
     model: vendor/model
     url: http://agent-{i}.runtime.internal:8080
     replicas: 3
+    registration_generation: ${REMOTE_POOL_GENERATION}
 ```
 
 The `{i}` placeholder is required when a remote has more than one replica and
@@ -84,6 +94,12 @@ New sessions are assigned to a reachable, non-draining replica. Once created,
 a session remains bound to its owner. Session status, stream, event, and
 message requests return `503` while that owner is unavailable; they are not
 sent to a replica that cannot safely resume the work.
+
+The durable binding contains tenant, agent ID, generation, and replica.
+Generation-less legacy bindings and unknown sessions fail closed with `404`,
+including single-replica remote and command agents. The control plane pins the
+exact selected lifecycle snapshot while forwarding, so replacement,
+disablement, and autoscale reaping cannot invalidate an in-flight target.
 
 Local replica identity is stable across restart. Replica `i` receives:
 
@@ -104,6 +120,7 @@ agents:
     name: Elastic Agent
     model: test/scripted
     listen_addr: 127.0.0.1:8200
+    registration_generation: 89ef9a06-e752-49e2-a8bc-a9b14983dc6f
     autoscale:
       min: 1
       max: 8
@@ -202,7 +219,8 @@ sandboxes](gateway-and-sandboxes.md) for trust and credential behaviour.
 |---|---|
 | `RUNTIME_CONFIG` | `runtime.yaml` |
 | `RUNTIME_PG_DSN` | Control-plane Postgres DSN |
-| `RUNTIME_AGENT_PG_DSN` | Restricted DSN injected into managed agents; required with identity and bound to one agent trust domain. Use a distinct Runtime deployment and database role per agent |
+| `RUNTIME_AGENT_PG_DSN` | Restricted DSN injected into locally managed agents; required with identity and bound to one local-agent trust domain. Attach-only remote agents do not receive it or participate in role provisioning |
+| `RUNTIME_PROVISION_REMOTE_AGENT_ROLE` | Set to `1` only when one configured remote agent receives `RUNTIME_AGENT_PG_DSN` through registration or an independently managed pod; the Helm `perAgentPods` mode sets this automatically |
 | `RUNTIME_IDENTITY_SIGNING_PRIVATE_KEY` | URL-safe base64 Ed25519 seed/private key used only by the control plane when subject forwarding is enabled |
 | `RUNTIME_IDENTITY_SIGNING_PUBLIC_KEY` | Matching URL-safe base64 Ed25519 public key injected into agents for verification |
 | `RUNTIME_CTL_ADDR` | Public API listener, default `:8080` |
@@ -245,9 +263,18 @@ documented in their corresponding topic guides. Variables beginning
 variables may be injected into child agents; operators should not put them in
 `RUNTIME_AGENT_ENV_PASSTHROUGH`.
 
-The memory maintenance variables above are explicitly included in the safe
-environment inherited by locally managed agents. Remote agents must receive
-them through their own deployment environment.
+The memory maintenance and agent HTTP-limit variables above are explicitly
+included in the safe environment inherited by locally managed agents. Remote
+agents must receive them through their own deployment environment. The supplied
+Compose profiles expose these as `${VARIABLE:-default}` settings. The Helm chart
+maps them through `runtime.*` and `agent.*` values, including live-memory
+retention and dry-run, so operators do not need to edit manifests.
+
+When signed subject forwarding is enabled, an agent keeps at most 131,072
+recent request nonces in two rotating validity buckets. Replay lookup is
+constant-time. Duplicate nonces and new signed requests received while the
+cache is at capacity fail closed with `401`; health and readiness probes remain
+exempt.
 
 ## Runtime-injected agent environment
 
@@ -258,7 +285,9 @@ Managed agents receive a minimal environment plus explicit safe passthrough:
 | `RUNTIME_AGENT_ID` | Configured agent ID |
 | `RUNTIME_AGENT_KIND` | Bundled Go builder |
 | `RUNTIME_AGENT_TENANT` | Owning tenant |
+| `RUNTIME_AGENT_GENERATION` | Immutable configured agent lifecycle generation |
 | `RUNTIME_AGENT_REPLICA` | Stable zero-based replica ordinal |
+| `RUNTIME_DBOS_SCHEMA` | Tenant/agent-isolated durable workflow schema |
 | `RUNTIME_LISTEN_ADDR` | Concrete bind address |
 | `RUNTIME_AGENT_PG_DSN`/`RUNTIME_PG_DSN` | Agent database credential |
 | `RUNTIME_AGENT_MEMORY` | Memory opt-in |
@@ -287,6 +316,12 @@ DDL. The schema covers identity, service and registration keys, encrypted
 secrets, dynamic agents and upstreams, policies and quotas, control-plane
 session ownership, durable events, memory, DBOS workflow state, transcripts,
 golden sets, and evaluation results.
+
+Registration-token schema upgrades fail closed: legacy tokens that recorded
+only an agent ID are not inferred from the agent's current tenant. Mint
+replacement tokens after upgrading. New tokens bind tenant plus a persisted
+agent-instance generation; deleting and recreating a managed agent invalidates
+the former generation even when its ID is reused.
 
 Back up the complete database, not selected tables. Schema changes and binary
 rollbacks should be treated as an operator-controlled deployment event. See the

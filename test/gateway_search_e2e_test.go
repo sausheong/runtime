@@ -76,7 +76,7 @@ func TestGatewaySearchE2E(t *testing.T) {
 	}
 	mustExec(t, db, `DROP TABLE IF EXISTS markers`)
 	mustExec(t, db, `CREATE TABLE markers (id BIGSERIAL PRIMARY KEY, ran_at TIMESTAMPTZ)`)
-	mustExec(t, db, `DROP TABLE IF EXISTS session_events, sessions, agents CASCADE`)
+	mustExec(t, db, `DROP TABLE IF EXISTS online_eval_results, session_transcripts, session_events, sessions, agents CASCADE`)
 	mustExec(t, db, `DROP SCHEMA IF EXISTS dbos CASCADE`)
 
 	upstream := sdk.NewServer(&sdk.Implementation{Name: "fake-upstream", Version: "v0"}, nil)
@@ -111,7 +111,7 @@ func TestGatewaySearchE2E(t *testing.T) {
 
 	cfgPath := filepath.Join(tmp, "runtime.yaml")
 	cfg := "agents:\n" +
-		"  - {id: s-agent, name: S, model: test/scripted, listen_addr: 127.0.0.1:8141, gateway: search}\n" +
+		"  - {id: s-agent, name: S, model: test/scripted, listen_addr: 127.0.0.1:8141, registration_generation: test-generation-s-agent, gateway: search}\n" +
 		"gateway:\n" +
 		"  servers:\n" +
 		"    - {name: fake, url: " + upSrv.URL + "}\n"

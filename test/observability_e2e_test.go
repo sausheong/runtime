@@ -48,11 +48,13 @@ func TestObservabilityE2E(t *testing.T) {
 	// sure no leftover identity rows flip phase A into enforced mode.
 	mustExec(t, db, `DROP TABLE IF EXISTS markers`)
 	mustExec(t, db, `CREATE TABLE markers (id BIGSERIAL PRIMARY KEY, ran_at TIMESTAMPTZ)`)
-	mustExec(t, db, `DROP TABLE IF EXISTS session_events, sessions, agents CASCADE`)
+	mustExec(t, db, `DROP TABLE IF EXISTS online_eval_results, session_transcripts, session_events, sessions, agents CASCADE`)
 	mustExec(t, db, `DROP SCHEMA IF EXISTS dbos CASCADE`)
 	for _, q := range []string{
 		`DROP TABLE IF EXISTS service_keys CASCADE`,
 		`DROP TABLE IF EXISTS identity_users CASCADE`,
+		`DROP TABLE IF EXISTS managed_agents CASCADE`,
+		`DROP TABLE IF EXISTS gateway_upstreams CASCADE`,
 		`DROP TABLE IF EXISTS tenants CASCADE`,
 	} {
 		mustExec(t, db, q)
@@ -71,6 +73,8 @@ func TestObservabilityE2E(t *testing.T) {
 		for _, q := range []string{
 			`DROP TABLE IF EXISTS service_keys CASCADE`,
 			`DROP TABLE IF EXISTS identity_users CASCADE`,
+			`DROP TABLE IF EXISTS managed_agents CASCADE`,
+			`DROP TABLE IF EXISTS gateway_upstreams CASCADE`,
 			`DROP TABLE IF EXISTS tenants CASCADE`,
 		} {
 			_, _ = cdb.Exec(q)
@@ -130,8 +134,8 @@ func TestObservabilityE2E(t *testing.T) {
 	ctlA := "127.0.0.1:8160"
 	baseA := "http://" + ctlA
 	cfgA := "agents:\n" +
-		"  - {id: support, name: Support, model: test/scripted, listen_addr: 127.0.0.1:8161}\n" +
-		"  - {id: research, name: Research, model: test/scripted, listen_addr: 127.0.0.1:8162}\n"
+		"  - {id: support, name: Support, model: test/scripted, listen_addr: 127.0.0.1:8161, registration_generation: test-generation-support}\n" +
+		"  - {id: research, name: Research, model: test/scripted, listen_addr: 127.0.0.1:8162, registration_generation: test-generation-research}\n"
 	killA := startRT("runtime-a.yaml", cfgA, ctlA)
 
 	waitURL(t, baseA+"/healthz", 15*time.Second)
@@ -209,7 +213,7 @@ func TestObservabilityE2E(t *testing.T) {
 	ctlB := "127.0.0.1:8163"
 	baseB := "http://" + ctlB
 	cfgB := "agents:\n" +
-		"  - {id: support, name: Support, model: test/scripted, listen_addr: 127.0.0.1:8161, tenant: alpha}\n"
+		"  - {id: support, name: Support, model: test/scripted, listen_addr: 127.0.0.1:8161, tenant: alpha, registration_generation: test-generation-support}\n"
 	startRT("runtime-b.yaml", cfgB, ctlB)
 
 	// /healthz is exempt from identity, so the plain waiter works even in

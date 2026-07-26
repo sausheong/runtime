@@ -10,28 +10,32 @@ import (
 func TestStore_TenantOwnershipAndExternalBinding(t *testing.T) {
 	ctx := context.Background()
 	s := NewMemStore()
-	alpha, err := s.CreateSessionForTenant(ctx, "alpha", "shared", 2)
+	alpha, err := s.CreateSessionForIdentity(
+		ctx, "alpha", "shared", "generation-1", 2)
 	if err != nil {
 		t.Fatal(err)
 	}
 	row, err := s.GetSession(ctx, alpha)
-	if err != nil || row.TenantID != "alpha" || row.AgentID != "shared" || row.Replica != 2 {
+	if err != nil || row.TenantID != "alpha" || row.AgentID != "shared" ||
+		row.AgentGeneration != "generation-1" || row.Replica != 2 {
 		t.Fatalf("tenant session round-trip: row=%+v err=%v", row, err)
 	}
 	if rows, _ := s.ListSessionsForTenant(ctx, "beta", "shared"); len(rows) != 0 {
 		t.Fatalf("cross-tenant list returned %+v", rows)
 	}
-	if err := s.BindSession(ctx, "external-1", "alpha", "shared", 1); err != nil {
+	if err := s.BindSession(ctx, "external-1", "alpha", "shared", "generation-1", 1); err != nil {
 		t.Fatal(err)
 	}
 	bound, err := s.GetSession(ctx, "external-1")
-	if err != nil || bound.TenantID != "alpha" || bound.Replica != 1 || bound.Status != "external" {
+	if err != nil || bound.TenantID != "alpha" ||
+		bound.AgentGeneration != "generation-1" ||
+		bound.Replica != 1 || bound.Status != "external" {
 		t.Fatalf("external binding: row=%+v err=%v", bound, err)
 	}
-	if err := s.BindSession(ctx, "external-1", "alpha", "shared", 1); err != nil {
+	if err := s.BindSession(ctx, "external-1", "alpha", "shared", "generation-1", 1); err != nil {
 		t.Fatalf("idempotent bind: %v", err)
 	}
-	if err := s.BindSession(ctx, "external-1", "beta", "shared", 1); err == nil {
+	if err := s.BindSession(ctx, "external-1", "beta", "shared", "generation-1", 1); err == nil {
 		t.Fatal("conflicting binding accepted")
 	}
 }
@@ -87,7 +91,7 @@ func TestStore_ReapSessionsRetainsActiveAndCascades(t *testing.T) {
 func TestExternalBindingsAreTouchedExcludedFromLoadAndExpired(t *testing.T) {
 	ctx := context.Background()
 	st := NewMemStore()
-	if err := st.BindSession(ctx, "external", "t", "a", 2); err != nil {
+	if err := st.BindSession(ctx, "external", "t", "a", "generation-1", 2); err != nil {
 		t.Fatal(err)
 	}
 	if active, err := st.ActiveSessionsByReplica(ctx, "t", "a"); err != nil {

@@ -332,20 +332,24 @@ func TestAgentEvalMetricsNilSafe(t *testing.T) {
 	var a *AgentMetrics
 	a.EvalSessionScored() // must not panic
 	a.EvalCriterion("pass")
+	a.EvalScoringFailure("scorer")
 	real := NewAgentMetrics("a1", "t1", "m")
 	real.EvalSessionScored()
 	real.EvalCriterion("pass")
 	real.EvalCriterion("fail")
+	real.EvalScoringFailure("result_store")
 }
 
 func TestFailureClassifiedNilSafe(t *testing.T) {
 	var a *AgentMetrics
 	a.FailureClassified("none") // must not panic
+	a.FailureRefined("none", "quality_fail")
 
 	real := NewAgentMetrics("agent-x", "tenant-y", "model-z")
 	real.FailureClassified("tool_error")
 	real.FailureClassified("tool_error")
 	real.FailureClassified("none")
+	real.FailureRefined("none", "quality_fail")
 
 	// Scrape and assert the counter is present with the category label.
 	body := scrapeHandler(t, real.Handler())
@@ -354,6 +358,10 @@ func TestFailureClassifiedNilSafe(t *testing.T) {
 	}
 	if !strings.Contains(body, `category="tool_error"`) {
 		t.Fatalf("category label missing:\n%s", body)
+	}
+	if !strings.Contains(body,
+		`agent_eval_failure_refinements_total{agent="agent-x",from="none",tenant="tenant-y",to="quality_fail"} 1`) {
+		t.Fatalf("refinement metric missing:\n%s", body)
 	}
 }
 

@@ -3,7 +3,9 @@ package controlplane
 import (
 	"context"
 	"strconv"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/sausheong/runtime/internal/config"
 )
@@ -186,8 +188,8 @@ func TestRegistry_FromConfig(t *testing.T) {
 func TestRegistryThreadsGateway(t *testing.T) {
 	cfg := &config.Config{
 		Agents: []config.AgentConfig{
-			{ID: "g", Name: "G", Model: "m", ListenAddr: "127.0.0.1:1", Tenant: "acme", Gateway: config.GatewayFull},
-			{ID: "p", Name: "P", Model: "m", ListenAddr: "127.0.0.1:2"},
+			{ID: "g", Name: "G", Model: "m", ListenAddr: "127.0.0.1:1", Tenant: "acme", Gateway: config.GatewayFull, RegistrationGeneration: "test-generation-g"},
+			{ID: "p", Name: "P", Model: "m", ListenAddr: "127.0.0.1:2", RegistrationGeneration: "test-generation-p"},
 		},
 		Gateway: config.GatewayConfig{
 			Servers:   []config.GatewayServer{{Name: "fs", Command: "x"}},
@@ -244,8 +246,8 @@ func TestRegistry_GetInjectsBroker(t *testing.T) {
 func TestRegistryThreadsGatewaySearch(t *testing.T) {
 	cfg := &config.Config{
 		Agents: []config.AgentConfig{
-			{ID: "s", Name: "S", Model: "m", ListenAddr: "127.0.0.1:1", Gateway: config.GatewaySearch},
-			{ID: "f", Name: "F", Model: "m", ListenAddr: "127.0.0.1:2", Gateway: config.GatewayFull},
+			{ID: "s", Name: "S", Model: "m", ListenAddr: "127.0.0.1:1", Gateway: config.GatewaySearch, RegistrationGeneration: "test-generation-s"},
+			{ID: "f", Name: "F", Model: "m", ListenAddr: "127.0.0.1:2", Gateway: config.GatewayFull, RegistrationGeneration: "test-generation-f"},
 		},
 		Gateway: config.GatewayConfig{Servers: []config.GatewayServer{{Name: "fs", Command: "x"}}},
 	}
@@ -266,8 +268,10 @@ func TestRegistryThreadsGatewaySearch(t *testing.T) {
 func TestRegistryDelegatesAutoscaledAgent(t *testing.T) {
 	cfg := &config.Config{Agents: []config.AgentConfig{
 		{ID: "as", Name: "AS", Model: "m", ListenAddr: "127.0.0.1:9300",
-			Autoscale: &config.AutoscaleConfig{Min: 1, Max: 3, TargetSessionsPerReplica: 2}},
-		{ID: "st", Name: "ST", Model: "m", ListenAddr: "127.0.0.1:9400", Replicas: 2},
+			RegistrationGeneration: "test-generation-as",
+			Autoscale:              &config.AutoscaleConfig{Min: 1, Max: 3, TargetSessionsPerReplica: 2}},
+		{ID: "st", Name: "ST", Model: "m", ListenAddr: "127.0.0.1:9400", Replicas: 2,
+			RegistrationGeneration: "test-generation-st"},
 	}}
 	if err := cfg.Validate(); err != nil {
 		t.Fatal(err)
@@ -357,8 +361,10 @@ func TestRegistrySetPolicyResolverStampsLocalReadPath(t *testing.T) {
 
 func TestRegistry_RemoteAgentDialIdentity(t *testing.T) {
 	cfg := &config.Config{Agents: []config.AgentConfig{
-		{ID: "local", Name: "L", Model: "m", ListenAddr: "127.0.0.1:8101"},
-		{ID: "remote", Name: "R", Model: "m", URL: "https://h:8443", AuthToken: "tok"},
+		{ID: "local", Name: "L", Model: "m", ListenAddr: "127.0.0.1:8101",
+			RegistrationGeneration: "local-dial-generation"},
+		{ID: "remote", Name: "R", Model: "m", URL: "https://h:8443", AuthToken: "tok",
+			RegistrationGeneration: "remote-dial-generation"},
 	}}
 	if err := cfg.Validate(); err != nil {
 		t.Fatal(err)
@@ -395,7 +401,8 @@ func TestRegistry_AddRemoveDynamic(t *testing.T) {
 	}
 	r.AddRemote(
 		AgentInfo{ID: "dyn", Name: "Dyn", Model: "m", Tenant: "acme"},
-		AgentProcess{AgentID: "dyn", BaseURL: "http://127.0.0.1:9", Tenant: "acme"},
+		AgentProcess{AgentID: "dyn", BaseURL: "http://127.0.0.1:9", Tenant: "acme",
+			RegistrationGeneration: "generation-1"},
 		true,
 	)
 	ap, ok := r.Get("dyn")
@@ -408,6 +415,11 @@ func TestRegistry_AddRemoveDynamic(t *testing.T) {
 	if got := r.AgentTenants()["dyn"]; got != "acme" {
 		t.Fatalf("tenant=%q want acme", got)
 	}
+	if tenant, generation, ok := r.RegistrationIdentity("dyn"); !ok ||
+		tenant != "acme" || generation != "generation-1" {
+		t.Fatalf("registration identity tenant=%q generation=%q ok=%v",
+			tenant, generation, ok)
+	}
 	r.RemoveAgent("dyn")
 	if _, ok := r.Get("dyn"); ok {
 		t.Fatal("dyn should be gone after RemoveAgent")
@@ -415,6 +427,101 @@ func TestRegistry_AddRemoveDynamic(t *testing.T) {
 	if r.IsManaged("dyn") {
 		t.Fatal("dyn should no longer be managed")
 	}
+	if _, _, ok := r.RegistrationIdentity("dyn"); ok {
+		t.Fatal("removed agent retained a registration identity")
+	}
+}
+
+func TestRegistrySetDBOSSchemaForAllCoversStaticAndPools(t *testing.T) {
+	cfg := &config.Config{Agents: []config.AgentConfig{
+		{ID: "static", Name: "Static", Model: "m", Tenant: "alpha"},
+		{ID: "pooled", Name: "Pooled", Model: "m", Tenant: "alpha",
+			Autoscale: &config.AutoscaleConfig{Min: 1, Max: 2, TargetSessionsPerReplica: 1}},
+	}}
+	reg := NewRegistry(cfg, "/bin/agentd", "dsn")
+	reg.SetDBOSSchemaForAll("test_shared_dbos")
+	ap, ok := reg.Get("static")
+	if !ok || ap.DBOSSchema != "test_shared_dbos" {
+		t.Fatalf("static schema=%q ok=%v, want test_shared_dbos", ap.DBOSSchema, ok)
+	}
+	pm, ok := reg.pools["pooled"]
+	if !ok || pm.base.DBOSSchema != "test_shared_dbos" {
+		t.Fatalf("pool schema missing or not overridden")
+	}
+}
+
+func TestRegistryReplicaLeasePinsLifecycleAgainstReplacement(t *testing.T) {
+	reg := NewRegistry(&config.Config{Agents: []config.AgentConfig{{
+		ID: "a", Name: "A", Model: "m", Tenant: "alpha",
+		ListenAddr:             "127.0.0.1:9001",
+		RegistrationGeneration: "generation-original",
+	}}}, "/bin/agentd", "dsn")
+	original, ok := reg.Replica("a", 0)
+	if !ok {
+		t.Fatal("original replica missing")
+	}
+	release, ok := reg.LeaseReplica(original, false)
+	if !ok {
+		t.Fatal("failed to lease current replica")
+	}
+	replaced := make(chan struct{})
+	go func() {
+		reg.AddRemote(
+			AgentInfo{ID: "a", Name: "Replacement", Model: "m", Tenant: "beta"},
+			AgentProcess{
+				AgentID: "a", Tenant: "beta", BaseURL: "http://replacement",
+				RegistrationGeneration: "generation-replacement",
+			},
+			true,
+		)
+		close(replaced)
+	}()
+	select {
+	case <-replaced:
+		t.Fatal("replacement completed while the original request held a lease")
+	case <-time.After(20 * time.Millisecond):
+	}
+	release()
+	select {
+	case <-replaced:
+	case <-time.After(time.Second):
+		t.Fatal("replacement did not resume after lease release")
+	}
+	if releaseStale, ok := reg.LeaseReplica(original, false); ok {
+		releaseStale()
+		t.Fatal("stale lifecycle snapshot was leased after replacement")
+	}
+}
+
+func TestRegistry_RegistrationIdentityConcurrentMutation(t *testing.T) {
+	r := NewRegistry(&config.Config{}, "/bin/agentd", "dsn")
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 500; i++ {
+			r.AddRemote(
+				AgentInfo{ID: "dynamic", Tenant: "tenant"},
+				AgentProcess{AgentID: "dynamic", Tenant: "tenant",
+					BaseURL:                "https://example.com",
+					RegistrationGeneration: "generation-" + strconv.Itoa(i)},
+				true,
+			)
+			r.RemoveAgent("dynamic")
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 1000; i++ {
+			tenant, generation, ok := r.RegistrationIdentity("dynamic")
+			if ok && (tenant != "tenant" || generation == "") {
+				t.Errorf("partial registration identity tenant=%q generation=%q",
+					tenant, generation)
+				return
+			}
+		}
+	}()
+	wg.Wait()
 }
 
 func TestRegistry_EnableDisable(t *testing.T) {

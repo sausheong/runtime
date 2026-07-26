@@ -57,7 +57,7 @@ func TestMeteringLifecycle(t *testing.T) {
 		"      input: 1000000\n" +
 		"      output: 1000000\n" +
 		"agents:\n" +
-		"  - {id: met1, name: Met1, model: test/scripted, listen_addr: 127.0.0.1:8991, tenant: acme, limits: {max_turns: 3}}\n"
+		"  - {id: met1, name: Met1, model: test/scripted, listen_addr: 127.0.0.1:8991, tenant: acme, registration_generation: test-generation-met1, limits: {max_turns: 3}}\n"
 	base := lmBoot(t, db, cfg, "127.0.0.1:8990", "TESTAGENT_MODE=loop")
 	waitURL(t, base+"/agents/met1/healthz", 30*time.Second)
 

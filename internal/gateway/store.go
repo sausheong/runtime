@@ -16,6 +16,9 @@ import (
 //go:embed upstream_schema.sql
 var upstreamSchemaSQL string
 
+//go:embed upstream_referential_integrity.sql
+var upstreamReferentialIntegritySQL string
+
 // UpstreamRow is one tenant-registered gateway upstream (http/openapi only).
 type UpstreamRow struct {
 	ID         string
@@ -81,7 +84,14 @@ type UpstreamStore struct{ db *sql.DB }
 // NewUpstreamStore applies the gateway_upstreams DDL (under the shared lock) and
 // returns a store. The tenants table (identity schema) must already exist (FK).
 func NewUpstreamStore(ctx context.Context, db *sql.DB) (*UpstreamStore, error) {
-	if err := store.ApplySchemaMigrations(ctx, db, "gateway", 1, upstreamSchemaSQL); err != nil {
+	if err := store.ApplyMigrationsLocked(ctx, db, "gateway", 1, 2, []store.Migration{
+		{Version: 1, Name: "baseline", SQL: upstreamSchemaSQL},
+		{Version: 2, Name: "repair-referential-integrity", SQL: upstreamReferentialIntegritySQL},
+	}); err != nil {
+		return nil, err
+	}
+	if err := store.ApplyDDLLocked(ctx, db,
+		upstreamSchemaSQL+"\n"+upstreamReferentialIntegritySQL); err != nil {
 		return nil, err
 	}
 	return &UpstreamStore{db: db}, nil

@@ -53,12 +53,12 @@ func TestAutoscaleGrowDrain(t *testing.T) {
 	if err := db.Ping(); err != nil {
 		t.Fatalf("ping postgres (running at %s?): %v", dsn, err)
 	}
-	mustExec(t, db, `DROP TABLE IF EXISTS session_events, sessions, agents CASCADE`)
+	mustExec(t, db, `DROP TABLE IF EXISTS online_eval_results, session_transcripts, session_events, sessions, agents CASCADE`)
 	mustExec(t, db, `DROP SCHEMA IF EXISTS dbos CASCADE`)
 	// This test runs open-mode. Remove identity rows left by an interrupted or
 	// previously failed identity integration test so unauthenticated load is
 	// not silently rejected with 401.
-	mustExec(t, db, `DROP TABLE IF EXISTS registration_tokens, secrets, service_keys, identity_users, tenants CASCADE`)
+	mustExec(t, db, `DROP TABLE IF EXISTS registration_tokens, secrets, service_keys, identity_users, managed_agents, gateway_upstreams, tenants CASCADE`)
 
 	tmp := t.TempDir()
 	agentd := filepath.Join(tmp, "agentd")
@@ -74,8 +74,8 @@ func TestAutoscaleGrowDrain(t *testing.T) {
 	// (replica_pools uses 87xx, multiagent 81xx, resume 80xx).
 	cfgPath := filepath.Join(tmp, "runtime.yaml")
 	cfg := "agents:\n" +
-		"  - {id: pool, name: Pool, model: test/scripted, listen_addr: 127.0.0.1:8810, autoscale: {min: 1, max: 3, target_sessions_per_replica: 2}}\n" +
-		"  - {id: fixed, name: Fixed, model: test/scripted, listen_addr: 127.0.0.1:8820, replicas: 2}\n"
+		"  - {id: pool, name: Pool, model: test/scripted, listen_addr: 127.0.0.1:8810, registration_generation: test-generation-pool, autoscale: {min: 1, max: 3, target_sessions_per_replica: 2}}\n" +
+		"  - {id: fixed, name: Fixed, model: test/scripted, listen_addr: 127.0.0.1:8820, registration_generation: test-generation-fixed, replicas: 2}\n"
 	if err := os.WriteFile(cfgPath, []byte(cfg), 0o644); err != nil {
 		t.Fatal(err)
 	}

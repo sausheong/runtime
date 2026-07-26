@@ -143,6 +143,7 @@ agents:
     name: My SDK Agent
     model: openai/gpt-5.4            # display only; OPENAI_MODEL is authoritative
     listen_addr: 127.0.0.1:8302
+    registration_generation: 9e6943ce-eae1-4fc1-bcfa-10603c4fd18e
     workdir: ./examples/my-sdk-agent
     command: ["uv", "run", "python", "serve.py"]
 ```
@@ -255,7 +256,7 @@ sudo docker compose up -d
 ### c. Attach it from the control plane
 
 Add the agent to the control plane's registry as a **remote** entry — only
-`id/name/model/tenant/url/auth_token`.
+`id/name/model/tenant/url/auth_token/registration_generation`.
 Spawn-time fields (`kind/command/workdir`) are rejected on a remote entry. From
 [`deploy/gcp/control-plane/runtime.remote.yaml`](deploy/gcp/control-plane/runtime.remote.yaml):
 
@@ -267,6 +268,7 @@ agents:
     tenant: acme                       # MUST match your console users' tenant
     url: http://10.10.0.AGENT_IP:8080
     auth_token: ${HELLO_CLAUDE_TOKEN}
+    registration_generation: ${HELLO_CLAUDE_GENERATION}
 ```
 
 > **`tenant` matters.** With identity ON, the console only shows agents in the

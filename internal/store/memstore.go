@@ -33,35 +33,45 @@ func NewMemStore() Store {
 func (m *memStore) Ping(context.Context) error { return nil }
 
 func (m *memStore) CreateSession(_ context.Context, agentID string, replica int) (string, error) {
-	return m.createSession("default", agentID, replica)
+	return m.createSession("default", agentID, "", replica)
 }
 
 func (m *memStore) CreateSessionForTenant(_ context.Context, tenantID, agentID string, replica int) (string, error) {
-	return m.createSession(tenantID, agentID, replica)
+	return m.createSession(tenantID, agentID, "", replica)
 }
 
-func (m *memStore) createSession(tenantID, agentID string, replica int) (string, error) {
+func (m *memStore) CreateSessionForIdentity(_ context.Context, tenantID, agentID, agentGeneration string, replica int) (string, error) {
+	return m.createSession(tenantID, agentID, agentGeneration, replica)
+}
+
+func (m *memStore) createSession(tenantID, agentID, agentGeneration string, replica int) (string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.seq++
 	id := fmt.Sprintf("ses-%d", m.seq)
 	now := time.Now().UTC()
-	m.sessions[id] = &SessionRow{ID: id, TenantID: tenantID, AgentID: agentID, WorkflowID: id, Status: "created", Replica: replica, CreatedAt: now, LastActiveAt: now}
+	m.sessions[id] = &SessionRow{
+		ID: id, TenantID: tenantID, AgentID: agentID,
+		AgentGeneration: agentGeneration, WorkflowID: id,
+		Status: "created", Replica: replica, CreatedAt: now, LastActiveAt: now,
+	}
 	return id, nil
 }
 
-func (m *memStore) BindSession(_ context.Context, id, tenantID, agentID string, replica int) error {
+func (m *memStore) BindSession(_ context.Context, id, tenantID, agentID, agentGeneration string, replica int) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if existing, exists := m.sessions[id]; exists {
-		if existing.TenantID == tenantID && existing.AgentID == agentID && existing.Replica == replica {
+		if existing.TenantID == tenantID && existing.AgentID == agentID &&
+			existing.AgentGeneration == agentGeneration && existing.Replica == replica {
 			return nil
 		}
 		return fmt.Errorf("bind session %q: conflicts with existing owner", id)
 	}
 	m.sessions[id] = &SessionRow{
 		ID: id, TenantID: tenantID, AgentID: agentID, WorkflowID: id,
-		Status: "external", Replica: replica, CreatedAt: time.Now().UTC(), LastActiveAt: time.Now().UTC(),
+		AgentGeneration: agentGeneration, Status: "external", Replica: replica,
+		CreatedAt: time.Now().UTC(), LastActiveAt: time.Now().UTC(),
 	}
 	return nil
 }
@@ -147,6 +157,36 @@ func (m *memStore) SetFailureCategory(_ context.Context, id, category string) er
 	s.FailureCategory = category
 	s.LastActiveAt = time.Now().UTC()
 	return nil
+}
+
+func (m *memStore) SetInitialFailureCategory(_ context.Context, id, category string) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	s, ok := m.sessions[id]
+	if !ok {
+		return false, fmt.Errorf("%w: %q", ErrSessionNotFound, id)
+	}
+	if s.FailureCategory != "" {
+		return false, nil
+	}
+	s.FailureCategory = category
+	s.LastActiveAt = time.Now().UTC()
+	return true, nil
+}
+
+func (m *memStore) RefineFailureCategory(_ context.Context, id, from, to string) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	s, ok := m.sessions[id]
+	if !ok {
+		return false, fmt.Errorf("%w: %q", ErrSessionNotFound, id)
+	}
+	if s.FailureCategory != from {
+		return false, nil
+	}
+	s.FailureCategory = to
+	s.LastActiveAt = time.Now().UTC()
+	return true, nil
 }
 
 func (m *memStore) FailureBreakdownByAgent(_ context.Context, tenantID, agentID string, since time.Time) (map[string]int, error) {
@@ -248,16 +288,25 @@ func (m *memStore) AppendTranscript(_ context.Context, sessionID string, turn in
 }
 
 func (m *memStore) PutOnlineResult(_ context.Context, sessionID, criterion, tenant, actor, scorer string, passed bool, detail string) error {
+	_, err := m.putOnlineResultIfNew(sessionID, criterion, tenant, actor, scorer, passed, detail)
+	return err
+}
+
+func (m *memStore) PutOnlineResultIfNew(_ context.Context, sessionID, criterion, tenant, actor, scorer string, passed bool, detail string) (bool, error) {
+	return m.putOnlineResultIfNew(sessionID, criterion, tenant, actor, scorer, passed, detail)
+}
+
+func (m *memStore) putOnlineResultIfNew(sessionID, criterion, tenant, actor, scorer string, passed bool, detail string) (bool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	parent, ok := m.sessions[sessionID]
 	if !ok {
-		return fmt.Errorf("%w: %q", ErrSessionNotFound, sessionID)
+		return false, fmt.Errorf("%w: %q", ErrSessionNotFound, sessionID)
 	}
 	key := sessionID + "\x00" + criterion
-	existing, ok := m.results[key]
+	existing, existed := m.results[key]
 	created := time.Now()
-	if ok {
+	if existed {
 		created = existing.CreatedAt
 	}
 	m.results[key] = OnlineResult{
@@ -270,7 +319,7 @@ func (m *memStore) PutOnlineResult(_ context.Context, sessionID, criterion, tena
 		Detail:    detail,
 		CreatedAt: created,
 	}
-	return nil
+	return !existed, nil
 }
 
 func (m *memStore) ListOnlineResults(_ context.Context, sessionID string) ([]OnlineResult, error) {

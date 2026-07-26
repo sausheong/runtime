@@ -12,10 +12,10 @@ import (
 	"github.com/sausheong/runtime/internal/identity"
 )
 
-// RegTokenVerifier resolves a registration token id to its agent_id + bcrypt
-// hash, or identity.ErrNoRegToken when absent/revoked. *identity.Store implements it.
+// RegTokenVerifier resolves a registration token to its immutable agent binding
+// and bcrypt hash. *identity.Store implements it.
 type RegTokenVerifier interface {
-	ActiveRegTokenByID(ctx context.Context, tokenID string) (agentID, hash string, err error)
+	ActiveRegTokenByID(ctx context.Context, tokenID string) (identity.RegTokenCredential, error)
 }
 
 // RegisterRequest is the agent's handshake body.
@@ -31,8 +31,8 @@ type RegisterResponse struct {
 // RegisterHandshake mounts POST /register. It authenticates with the agent's OWN
 // per-agent registration token (NOT the identity middleware), so it is mounted
 // OUTSIDE the identity chain (like /metrics). The token's binding to an agent_id
-// is authoritative — the response is that agent's env delta for the claimed
-// ordinal, validated fail-closed against the agent's configured replica count.
+// is authoritative only together with its tenant and instance generation. The
+// response is that exact agent identity's env delta for the claimed ordinal.
 func RegisterHandshake(mux *http.ServeMux, tokens RegTokenVerifier, reg *Registry) {
 	mux.HandleFunc("POST /register", func(w http.ResponseWriter, r *http.Request) {
 		raw := extractToken(r) // existing helper in controlplane/auth.go
@@ -41,8 +41,8 @@ func RegisterHandshake(mux *http.ServeMux, tokens RegTokenVerifier, reg *Registr
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
-		agentID, hash, err := tokens.ActiveRegTokenByID(r.Context(), id)
-		if err != nil || !identity.VerifyKey(hash, secret) {
+		credential, err := tokens.ActiveRegTokenByID(r.Context(), id)
+		if err != nil || !identity.VerifyKey(credential.Hash, secret) {
 			// Uniform 401: no oracle distinguishing "no token" from "wrong secret".
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
@@ -55,17 +55,24 @@ func RegisterHandshake(mux *http.ServeMux, tokens RegTokenVerifier, reg *Registr
 			http.Error(w, "bad request body", http.StatusBadRequest)
 			return
 		}
-		ap, ok := reg.Replica(agentID, body.Ordinal)
+		ap, ok := reg.Replica(credential.AgentID, body.Ordinal)
 		if !ok {
-			// Unknown agent OR ordinal out of [0, replicaCount). Fail closed.
 			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
+		if !ap.RegistrationEnabled ||
+			credential.TenantID != ap.Tenant ||
+			credential.AgentGeneration != ap.RegistrationGeneration {
+			// Uniform 401: a removed/reassigned agent identity must not reveal
+			// whether the same id currently exists in another trust domain.
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
 		delta, err := ap.envDelta(r.Context())
 		if err != nil {
 			// Broker error (e.g. undecryptable secret): deliberately treated as
 			// fail-closed-unavailable (503, no partial env) rather than 500.
-			slog.Error("register: envDelta failed", "agent", agentID, "tenant", ap.Tenant, "ordinal", body.Ordinal, "err", err)
+			slog.Error("register: envDelta failed", "agent", credential.AgentID, "tenant", ap.Tenant, "ordinal", body.Ordinal, "err", err)
 			http.Error(w, "registration unavailable", http.StatusServiceUnavailable)
 			return
 		}
@@ -79,9 +86,9 @@ func RegisterHandshake(mux *http.ServeMux, tokens RegTokenVerifier, reg *Registr
 		// that this ordinal is restarting. Clear a stale "down" observation to
 		// unknown so it may become routable as soon as its HTTP listener is
 		// healthy, without waiting a full monitor interval.
-		reg.ResetReplicaReachable(agentID, body.Ordinal)
+		reg.ResetReplicaReachable(credential.AgentID, body.Ordinal)
 		// Access log: identifiers only — NEVER an env value or secret name.
-		slog.Info("register", "agent", agentID, "tenant", ap.Tenant, "ordinal", body.Ordinal, "token_id", id, "vars", len(env))
+		slog.Info("register", "agent", credential.AgentID, "tenant", ap.Tenant, "ordinal", body.Ordinal, "token_id", id, "vars", len(env))
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		_ = json.NewEncoder(w).Encode(RegisterResponse{Env: env})

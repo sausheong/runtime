@@ -145,6 +145,12 @@ Per-agent StatefulSet name: "<release>-agent-<id>". Takes a dict {root, id}.
 {{- printf "%s-agent-%s-hl" .root.Release.Name .id | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
 
+{{/* Stable DBOS schema for one tenant/agent trust domain. dict {tenant, id}. */}}
+{{- define "runtime.agentDBOSSchema" -}}
+{{- $tenant := .tenant | default "default" -}}
+{{- printf "dbos_agent_%s" (printf "%s/%s" $tenant .id | sha256sum | trunc 24) -}}
+{{- end -}}
+
 {{/*
 runtimed's dial url template for an agent's remote pool, with the literal {i}
 ordinal placeholder config.RemoteReplicaURL expands. Pod DNS in a StatefulSet is
@@ -170,6 +176,9 @@ listen_addr or url (the chart generates the url) and must have id/name/model.
 {{- end -}}
 {{- if or $a.listen_addr $a.url -}}
 {{- fail (printf "runtime: perAgentPods agent %q must NOT set listen_addr or url (the chart generates the per-ordinal url)" $a.id) -}}
+{{- end -}}
+{{- if not $a.registration_generation -}}
+{{- fail (printf "runtime: perAgentPods agent %q requires registration_generation; persist it across restarts and rotate it on replacement" $a.id) -}}
 {{- end -}}
 {{- $_ := set $tenants ($a.tenant | default "default") true -}}
 {{- end -}}

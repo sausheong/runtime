@@ -12,6 +12,12 @@ import (
 //go:embed schema.sql
 var schemaSQL string
 
+//go:embed registration_token_binding.sql
+var registrationTokenBindingSQL string
+
+//go:embed referential_integrity.sql
+var referentialIntegritySQL string
+
 // ErrNoUser / ErrNoKey signal a missing row during authentication resolution.
 var (
 	ErrNoUser     = errors.New("identity: no such user")
@@ -39,9 +45,19 @@ type KeyRow struct {
 
 // RegTokenRow is the listing read model for a registration token (never the secret).
 type RegTokenRow struct {
-	TokenID string
-	AgentID string
-	Revoked bool
+	TokenID         string
+	AgentID         string
+	TenantID        string `json:"tenant_id"`
+	AgentGeneration string `json:"-"`
+	Revoked         bool
+}
+
+// RegTokenCredential is the authenticated registration-token binding.
+type RegTokenCredential struct {
+	AgentID         string
+	TenantID        string
+	AgentGeneration string
+	Hash            string
 }
 
 // Store is the identity persistence layer over Postgres.
@@ -50,7 +66,15 @@ type Store struct{ db *sql.DB }
 // NewStore creates the identity tables (under the shared DDL lock) and returns a
 // Store. db must already be open and reachable.
 func NewStore(ctx context.Context, db *sql.DB) (*Store, error) {
-	if err := store.ApplySchemaMigrations(ctx, db, "identity", 1, schemaSQL); err != nil {
+	if err := store.ApplyMigrationsLocked(ctx, db, "identity", 1, 3, []store.Migration{
+		{Version: 1, Name: "baseline", SQL: schemaSQL},
+		{Version: 2, Name: "bind-registration-tokens", SQL: registrationTokenBindingSQL},
+		{Version: 3, Name: "repair-referential-integrity", SQL: referentialIntegritySQL},
+	}); err != nil {
+		return nil, err
+	}
+	if err := store.ApplyDDLLocked(ctx, db, schemaSQL+"\n"+registrationTokenBindingSQL+
+		"\n"+referentialIntegritySQL); err != nil {
 		return nil, err
 	}
 	return &Store{db: db}, nil
@@ -211,23 +235,34 @@ func (s *Store) ListKeys(ctx context.Context, tenantID string) ([]KeyRow, error)
 	return out, rows.Err()
 }
 
-// InsertRegistrationToken stores a minted registration token's hash, bound to an agent.
-func (s *Store) InsertRegistrationToken(ctx context.Context, tokenID, agentID, hash string) error {
+// InsertRegistrationToken binds a token to one immutable agent identity.
+func (s *Store) InsertRegistrationToken(ctx context.Context, tokenID, agentID, tenantID, agentGeneration, hash string) error {
+	if tenantID == "" || agentGeneration == "" {
+		return errors.New("identity: registration token requires tenant and agent generation")
+	}
 	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO registration_tokens (token_id, agent_id, hash) VALUES ($1,$2,$3)`,
-		tokenID, agentID, hash)
+		`INSERT INTO registration_tokens
+		    (token_id, agent_id, tenant_id, agent_generation, hash)
+		 VALUES ($1,$2,$3,$4,$5)`,
+		tokenID, agentID, tenantID, agentGeneration, hash)
 	return err
 }
 
-// ActiveRegTokenByID returns a non-revoked token's agent_id + hash, or ErrNoRegToken.
-func (s *Store) ActiveRegTokenByID(ctx context.Context, tokenID string) (agentID, hash string, err error) {
-	err = s.db.QueryRowContext(ctx,
-		`SELECT agent_id, hash FROM registration_tokens WHERE token_id=$1 AND revoked_at IS NULL`, tokenID).
-		Scan(&agentID, &hash)
+// ActiveRegTokenByID returns a non-revoked, fully bound credential. Legacy
+// version-1 rows have empty bindings and deliberately fail closed.
+func (s *Store) ActiveRegTokenByID(ctx context.Context, tokenID string) (RegTokenCredential, error) {
+	var credential RegTokenCredential
+	err := s.db.QueryRowContext(ctx,
+		`SELECT agent_id, tenant_id, agent_generation, hash
+		   FROM registration_tokens
+		  WHERE token_id=$1 AND revoked_at IS NULL
+		    AND tenant_id <> '' AND agent_generation <> ''`, tokenID).
+		Scan(&credential.AgentID, &credential.TenantID,
+			&credential.AgentGeneration, &credential.Hash)
 	if errors.Is(err, sql.ErrNoRows) {
-		return "", "", ErrNoRegToken
+		return RegTokenCredential{}, ErrNoRegToken
 	}
-	return agentID, hash, err
+	return credential, err
 }
 
 // RevokeRegistrationToken marks a token revoked. No-op if already revoked/absent.
@@ -237,10 +272,23 @@ func (s *Store) RevokeRegistrationToken(ctx context.Context, tokenID string) err
 	return err
 }
 
+// RevokeRegistrationTokensForAgent invalidates one managed-agent generation.
+func (s *Store) RevokeRegistrationTokensForAgent(ctx context.Context, tenantID, agentID, agentGeneration string) error {
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE registration_tokens
+		    SET revoked_at=now()
+		  WHERE tenant_id=$1 AND agent_id=$2 AND agent_generation=$3
+		    AND revoked_at IS NULL`,
+		tenantID, agentID, agentGeneration)
+	return err
+}
+
 // ListRegistrationTokens returns all tokens (secrets never included).
 func (s *Store) ListRegistrationTokens(ctx context.Context) ([]RegTokenRow, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT token_id, agent_id, (revoked_at IS NOT NULL) FROM registration_tokens ORDER BY created_at`)
+		`SELECT token_id, agent_id, tenant_id, agent_generation,
+		        (revoked_at IS NOT NULL)
+		   FROM registration_tokens ORDER BY created_at`)
 	if err != nil {
 		return nil, err
 	}
@@ -248,7 +296,8 @@ func (s *Store) ListRegistrationTokens(ctx context.Context) ([]RegTokenRow, erro
 	var out []RegTokenRow
 	for rows.Next() {
 		var r RegTokenRow
-		if err := rows.Scan(&r.TokenID, &r.AgentID, &r.Revoked); err != nil {
+		if err := rows.Scan(&r.TokenID, &r.AgentID, &r.TenantID,
+			&r.AgentGeneration, &r.Revoked); err != nil {
 			return nil, err
 		}
 		out = append(out, r)

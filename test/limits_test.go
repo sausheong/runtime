@@ -55,7 +55,7 @@ func lmBoot(t *testing.T, db *sql.DB, cfgYAML, ctlAddr string, extraEnv ...strin
 	// bootstrap DDL, so the restricted agent role only receives DML grants.
 	mustExec(t, db, `DROP TABLE IF EXISTS markers`)
 	mustExec(t, db, `CREATE TABLE markers (id BIGSERIAL PRIMARY KEY, ran_at TIMESTAMPTZ)`)
-	mustExec(t, db, `DROP TABLE IF EXISTS session_events, sessions, agents CASCADE`)
+	mustExec(t, db, `DROP TABLE IF EXISTS online_eval_results, session_transcripts, session_events, sessions, agents CASCADE`)
 	mustExec(t, db, `DROP SCHEMA IF EXISTS dbos CASCADE`)
 	resetIdentityTables(t, db)
 
@@ -239,7 +239,7 @@ func lmTerminal(s string) bool {
 func TestLimitMaxTurns(t *testing.T) {
 	db := lmOpenDB(t)
 	cfg := "agents:\n" +
-		"  - {id: lim, name: Lim, model: test/scripted, listen_addr: 127.0.0.1:8910, limits: {max_turns: 3}}\n"
+		"  - {id: lim, name: Lim, model: test/scripted, listen_addr: 127.0.0.1:8910, registration_generation: test-generation-lim, limits: {max_turns: 3}}\n"
 	base := lmBoot(t, db, cfg, "127.0.0.1:8900", "TESTAGENT_MODE=loop")
 	waitURL(t, base+"/agents/lim/healthz", 30*time.Second)
 
@@ -305,7 +305,7 @@ func TestLimitMaxTurns(t *testing.T) {
 func TestLimitTurnTimeout(t *testing.T) {
 	db := lmOpenDB(t)
 	cfg := "agents:\n" +
-		"  - {id: lim2, name: Lim2, model: test/scripted, listen_addr: 127.0.0.1:8920, limits: {turn_timeout: 2s}}\n"
+		"  - {id: lim2, name: Lim2, model: test/scripted, listen_addr: 127.0.0.1:8920, registration_generation: test-generation-lim2, limits: {turn_timeout: 2s}}\n"
 	base := lmBoot(t, db, cfg, "127.0.0.1:8901",
 		"TESTAGENT_MODE=sleep", "TESTAGENT_SLEEP_MS=60000")
 	waitURL(t, base+"/agents/lim2/healthz", 30*time.Second)
@@ -369,7 +369,7 @@ func TestLimitTurnTimeout(t *testing.T) {
 func TestLimitTokenBudgetSurvivesRecovery(t *testing.T) {
 	db := lmOpenDB(t)
 	cfg := "agents:\n" +
-		"  - {id: lim3, name: Lim3, model: test/scripted, listen_addr: 127.0.0.1:8930, limits: {max_tokens: 450}}\n"
+		"  - {id: lim3, name: Lim3, model: test/scripted, listen_addr: 127.0.0.1:8930, registration_generation: test-generation-lim3, limits: {max_tokens: 450}}\n"
 	base := lmBoot(t, db, cfg, "127.0.0.1:8902",
 		"TESTAGENT_MODE=loop", "TESTAGENT_LOOP_TURN_MS=1500")
 	waitURL(t, base+"/agents/lim3/healthz", 30*time.Second)
@@ -448,7 +448,7 @@ func TestLimitTokenBudgetSurvivesRecovery(t *testing.T) {
 func TestLimitSessionTimeout(t *testing.T) {
 	db := lmOpenDB(t)
 	cfg := "agents:\n" +
-		"  - {id: lim4, name: Lim4, model: test/scripted, listen_addr: 127.0.0.1:8940, limits: {session_timeout: 3s}}\n"
+		"  - {id: lim4, name: Lim4, model: test/scripted, listen_addr: 127.0.0.1:8940, registration_generation: test-generation-lim4, limits: {session_timeout: 3s}}\n"
 	base := lmBoot(t, db, cfg, "127.0.0.1:8903",
 		"TESTAGENT_MODE=loop", "TESTAGENT_LOOP_TURN_MS=500")
 	waitURL(t, base+"/agents/lim4/healthz", 30*time.Second)

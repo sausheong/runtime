@@ -69,10 +69,12 @@ HTTP is Compose-internal. Postgres is also not published to the host.
   They share the Runtime host user. Identity-enabled Runtime refuses to start
   unless `RUNTIME_AGENT_PG_DSN` is distinct from the control-plane DSN.
   Supplied deployment profiles create/use a restricted role with access to
-  core session/event/evaluation tables and DBOS, but not identity, service-key,
+  only its own tenant/agent core session/event/evaluation rows and its isolated
+  DBOS schema, but not identity, service-key,
   tenant-secret, policy, quota, global agent metadata, or managed-agent tables.
   It has no `CREATE` authority on `public`. Runtime binds the login to one agent
-  trust domain and PostgreSQL row-level policies protect core session data. Run
+  trust domain; PostgreSQL row-level policies protect core session data and a
+  stable hashed schema isolates the agent's DBOS objects. Run
   separate Runtime deployments and databases with distinct restricted roles
   for each agent.
 - Upgrades quarantine pre-tenant-ownership sessions as
@@ -174,6 +176,7 @@ Override any field for one agent with its `limits:` block in `runtime.yaml`:
 agents:
   - id: support
     listen_addr: ":9101"
+    registration_generation: 89ef9a06-e752-49e2-a8bc-a9b14983dc6f
     limits:
       turn_timeout: 120s    # one model+tool turn
       session_timeout: 30m  # whole session, wall clock from start
@@ -199,6 +202,40 @@ when the control plane sends an empty value (the registration handshake skips
 empty entries).
 The Python contract shim does not enforce these native limits, so bound
 foreign SDK agents in their framework or process supervisor.
+
+## Registration-token lifecycle
+
+Registration tokens are credentials for one immutable agent instance, not for
+an agent ID in perpetuity. Each token stores the agent tenant and a stable
+instance generation. The `/register` handshake returns a DSN or brokered
+secrets only when both values still match the live registry entry.
+
+Every file-configured local or remote agent must also set
+`registration_generation`. Preserve it across ordinary restarts and upgrades.
+Rotate it together with the endpoint/database identity during intentional
+replacement. Rotation makes retained sessions from the earlier generation
+unroutable and invalidates its registration-token binding; it is therefore a
+deliberate lifecycle operation, not a routine restart setting.
+
+Deleting a dynamically managed agent revokes the tokens for that generation.
+Recreating the same ID, even in the same tenant, creates a new generation and
+requires a new token. Moving or reusing an ID in another tenant never transfers
+an old credential. Token mint, list, and revoke authorization uses the token's
+stored tenant and a live registry lookup, so dynamic changes take effect
+without restarting `runtimed`.
+
+Upgrading from the earlier agent-ID-only token schema deliberately leaves
+existing tokens inactive because their original tenant cannot be established
+safely after the fact. After upgrading, mint and deploy replacement tokens:
+
+```bash
+runtimectl register mint --agent <id>
+runtimectl register revoke <old-token-id>
+```
+
+Restart the affected scheduled agent after updating its Secret. A failed
+handshake remains fail closed and the agent does not start with a partial
+environment.
 
 ## Policy engine (Cedar)
 
@@ -451,8 +488,9 @@ RUNTIME_SESSION_RETENTION_DRY_RUN=1
 
 Use dry-run before shortening a production cutoff. Each sweep runs at most 20
 batches within 30 seconds. `0` disables session retention and logs an
-accumulation warning. Memory live-row retention is separate and disabled by
-default:
+accumulation warning. Deletion counters advance after each successful batch,
+so an error in a later batch does not hide rows already removed. Memory
+live-row retention is separate and disabled by default:
 
 ```bash
 RUNTIME_MEMORY_RETENTION_FACT=2160h
@@ -462,6 +500,9 @@ RUNTIME_MEMORY_RETENTION_EPISODE=720h
 
 Retention is not an archive. Export required records before the cutoff and
 maintain encrypted, tested database backups. See [RELEASING.md](RELEASING.md).
+The shipped Compose profiles pass these settings through from `.env`; Helm
+users configure the equivalent `runtime.*` and `agent.memoryRetention.*`
+values.
 
 ## Cost metering
 

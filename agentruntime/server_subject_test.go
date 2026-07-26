@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -79,6 +80,69 @@ func TestRequireSignedIdentityRejectsForgery(t *testing.T) {
 	h.ServeHTTP(second, req)
 	if first.Code != http.StatusNoContent || second.Code != http.StatusUnauthorized {
 		t.Fatalf("replay statuses=(%d,%d), want (204,401)", first.Code, second.Code)
+	}
+}
+
+func TestNonceReplayCacheRotatesAndRemainsBounded(t *testing.T) {
+	cache := newNonceReplayCache(3)
+	start := time.Unix(1_000, 0)
+	window := 30 * time.Second
+
+	if !cache.accept("current", start, window) {
+		t.Fatal("first nonce rejected")
+	}
+	if cache.accept("current", start.Add(time.Second), window) {
+		t.Fatal("current-bucket replay accepted")
+	}
+	if cache.accept("current", start.Add(-time.Second), window) {
+		t.Fatal("backward clock adjustment cleared replay protection")
+	}
+	if !cache.accept("next", start.Add(window), window) {
+		t.Fatal("nonce rejected after rotation")
+	}
+	if cache.accept("current", start.Add(window+time.Second), window) {
+		t.Fatal("previous-bucket replay accepted")
+	}
+	if !cache.accept("third", start.Add(window+time.Second), window) {
+		t.Fatal("third nonce rejected before capacity")
+	}
+	if cache.accept("overflow", start.Add(window+time.Second), window) {
+		t.Fatal("cache accepted a nonce beyond its fail-closed capacity")
+	}
+	if !cache.accept("current", start.Add(2*window), window) {
+		t.Fatal("expired nonce was not evicted by bucket rotation")
+	}
+}
+
+func TestNonceReplayCacheConcurrentDuplicate(t *testing.T) {
+	cache := newNonceReplayCache(64)
+	now := time.Now()
+	results := make(chan bool, 32)
+	for range 32 {
+		go func() {
+			results <- cache.accept("one-nonce", now, 30*time.Second)
+		}()
+	}
+	accepted := 0
+	for range 32 {
+		if <-results {
+			accepted++
+		}
+	}
+	if accepted != 1 {
+		t.Fatalf("accepted=%d, want exactly one concurrent nonce", accepted)
+	}
+}
+
+func BenchmarkNonceReplayCachePopulated(b *testing.B) {
+	cache := newNonceReplayCache(b.N + 10001)
+	now := time.Unix(1_000, 0)
+	for i := 0; i < 10000; i++ {
+		cache.accept("seed-"+strconv.Itoa(i), now, 30*time.Second)
+	}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		cache.accept("bench-"+strconv.Itoa(i), now, 30*time.Second)
 	}
 }
 

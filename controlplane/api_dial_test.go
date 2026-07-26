@@ -30,7 +30,8 @@ func TestAPI_RemoteAgentHealthAndProxyUseBearer(t *testing.T) {
 	defer backend.Close()
 
 	cfg := &config.Config{Agents: []config.AgentConfig{
-		{ID: "r", Name: "R", Model: "m", URL: backend.URL, AuthToken: token},
+		{ID: "r", Name: "R", Model: "m", URL: backend.URL, AuthToken: token,
+			RegistrationGeneration: "remote-health-generation"},
 	}}
 	if err := cfg.Validate(); err != nil {
 		t.Fatal(err)

@@ -23,6 +23,14 @@ The turnkey Compose stack keeps this listener internal. Prometheus scrapes it
 and Grafana reads Prometheus; operators normally do not expose the listener
 directly.
 
+The Helm chart's NetworkPolicy keeps port `9091` out of the unrestricted API
+ingress rule. By default only the release's own control-plane pod and
+same-namespace pods labelled `app.kubernetes.io/name: prometheus` can connect.
+Set `networkPolicy.metricsIngress` to explicit Kubernetes
+`NetworkPolicyPeer` entries when Prometheus runs in another namespace. Avoid an
+empty `namespaceSelector`, which would admit matching pods from every
+namespace.
+
 ## How fleet collection works
 
 Each native agent has a private Prometheus registry. On a management scrape,
@@ -113,8 +121,10 @@ Memory and online evaluation:
 | `agent_memory_episode_writes_total` | `agent,tenant` | Episodic records written |
 | `agent_eval_sessions_scored_total` | `agent,tenant` | Sampled online sessions |
 | `agent_eval_criteria_total` | `agent,tenant,result` | Online criteria results |
-| `agent_eval_failures_total` | `agent,tenant,category` | Terminal failure taxonomy |
+| `agent_eval_failures_total` | `agent,tenant,category` | Initial deterministic terminal failure taxonomy |
+| `agent_eval_failure_refinements_total` | `agent,tenant,from,to` | Successful durable online-scoring classification refinements |
 | `agent_eval_queue_dropped_total` | `agent,tenant,reason` | Sampled scoring jobs dropped on full/shutdown queue, or workers abandoned after the bounded cancellation grace |
+| `agent_eval_scoring_failures_total` | `agent,tenant,reason` | Online scores left incomplete by scorer, result-store, or classification-store failure |
 | `agent_http_rejected_total` | `agent,reason` | Requests rejected by request/stream concurrency caps |
 
 Counters reset when the process that owns them restarts. Prometheus provides

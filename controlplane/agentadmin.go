@@ -8,9 +8,11 @@ import (
 	"net/url"
 	"strings"
 
+	"github.com/google/uuid"
 	"github.com/sausheong/runtime/internal/agentstore"
 	"github.com/sausheong/runtime/internal/config"
 	"github.com/sausheong/runtime/internal/netpolicy"
+	"github.com/sausheong/runtime/internal/store"
 )
 
 var errFileAgentConflict = errors.New("persisted managed agent conflicts with operator file")
@@ -27,6 +29,12 @@ type AgentStore interface {
 	Get(ctx context.Context, id string) (agentstore.AgentRow, bool, error)
 	Delete(ctx context.Context, tenant, id string) (bool, error)
 	SetEnabled(ctx context.Context, tenant, id string, enabled bool) (bool, error)
+}
+
+// RegistrationTokenRevoker invalidates tokens for a deleted managed-agent
+// generation. *identity.Store implements it.
+type RegistrationTokenRevoker interface {
+	RevokeRegistrationTokensForAgent(ctx context.Context, tenantID, agentID, agentGeneration string) error
 }
 
 // AgentManager applies a stored managed-agent row to the live registry + health
@@ -59,7 +67,10 @@ func (m *AgentManager) process(ctx context.Context, row agentstore.AgentRow) (Ag
 	info := AgentInfo{ID: row.ID, Name: row.Name, Model: row.Model, Tenant: row.TenantID}
 	ap := AgentProcess{
 		AgentID: row.ID, BaseURL: row.URL, AuthToken: token, Tenant: row.TenantID,
-		RestrictOutbound: true,
+		RegistrationGeneration: row.RegistrationGeneration,
+		RegistrationEnabled:    true,
+		DBOSSchema:             store.AgentDBOSSchema(row.TenantID, row.ID),
+		RestrictOutbound:       true,
 	}
 	return info, ap, nil
 }
@@ -142,6 +153,7 @@ func RegisterAgentShared(ctx context.Context, store AgentStore, mgr *AgentManage
 	row := agentstore.AgentRow{
 		ID: id, TenantID: tenant, Name: p.Name, Model: p.Model,
 		URL: strings.TrimSpace(p.URL), AuthSecret: p.AuthSecret, Enabled: true,
+		RegistrationGeneration: uuid.NewString(),
 	}
 	if err := store.Insert(ctx, row); err != nil {
 		if strings.Contains(err.Error(), "duplicate key") {
@@ -159,13 +171,22 @@ func RegisterAgentShared(ctx context.Context, store AgentStore, mgr *AgentManage
 
 // DeregisterAgentShared removes a managed agent (scoped to tenant) from the DB
 // and the live registry. Rejects file-config agents (not managed). Idempotent.
-func DeregisterAgentShared(ctx context.Context, store AgentStore, mgr *AgentManager, tenant, id string) error {
+func DeregisterAgentShared(ctx context.Context, store AgentStore, tokens RegistrationTokenRevoker, mgr *AgentManager, tenant, id string) error {
 	row, ok, err := store.Get(ctx, id)
 	if err != nil {
 		return err
 	}
 	if !ok || row.TenantID != tenant {
 		return fmt.Errorf("agent not found")
+	}
+	if tokens != nil {
+		if row.RegistrationGeneration == "" {
+			return fmt.Errorf("agent registration generation is missing")
+		}
+		if err := tokens.RevokeRegistrationTokensForAgent(ctx, row.TenantID,
+			row.ID, row.RegistrationGeneration); err != nil {
+			return fmt.Errorf("revoke agent registration tokens: %w", err)
+		}
 	}
 	removed, err := store.Delete(ctx, tenant, id)
 	if err != nil {
@@ -222,7 +243,7 @@ func RegisterAgentAdmin(mux *http.ServeMux, s AgentStore, adminStore AdminStore,
 		if !ok {
 			return
 		}
-		if err := DeregisterAgentShared(r.Context(), s, mgr, tenant, r.PathValue("id")); err != nil {
+		if err := DeregisterAgentShared(r.Context(), s, adminStore, mgr, tenant, r.PathValue("id")); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}

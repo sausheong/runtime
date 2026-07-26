@@ -26,6 +26,8 @@ func freshStore(t *testing.T) (*Store, *sql.DB) {
 		`DROP TABLE IF EXISTS secrets CASCADE`,
 		`DROP TABLE IF EXISTS service_keys CASCADE`,
 		`DROP TABLE IF EXISTS identity_users CASCADE`,
+		`DROP TABLE IF EXISTS managed_agents CASCADE`,
+		`DROP TABLE IF EXISTS gateway_upstreams CASCADE`,
 		`DROP TABLE IF EXISTS tenants CASCADE`,
 	} {
 		if _, err := db.Exec(q); err != nil {
@@ -126,6 +128,34 @@ func TestStore_AnyCredentialConfigured(t *testing.T) {
 	}
 	if any, err := s.AnyCredentialConfigured(ctx); err != nil || !any {
 		t.Fatalf("user credential check = %v, %v", any, err)
+	}
+}
+
+func TestStoreRecoversTenantTableAndForeignKeysAtCurrentLedger(t *testing.T) {
+	_, db := freshStore(t)
+	defer db.Close()
+	ctx := context.Background()
+	for _, table := range []string{"identity_users", "service_keys", "secrets"} {
+		if _, err := db.ExecContext(ctx, `DROP TABLE `+table+` CASCADE`); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := NewStore(ctx, db); err != nil {
+		t.Fatalf("recover identity schema with current ledger: %v", err)
+	}
+	for _, child := range []string{"identity_users", "service_keys", "secrets"} {
+		var validFK bool
+		if err := db.QueryRowContext(ctx, `
+			SELECT EXISTS (
+				SELECT 1 FROM pg_constraint
+				 WHERE conrelid=$1::regclass AND confrelid='tenants'::regclass
+				   AND contype='f' AND confdeltype='c'
+			)`, child).Scan(&validFK); err != nil {
+			t.Fatal(err)
+		}
+		if !validFK {
+			t.Errorf("recovered table %s lacks cascading tenant foreign key", child)
+		}
 	}
 }
 

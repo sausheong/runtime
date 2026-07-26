@@ -48,7 +48,7 @@ type rootOptions struct {
 func buildRoot(o rootOptions) http.Handler {
 	apiMux := controlplane.NewAPI(o.Registry, o.Metrics, o.ControlStore, o.SubjectForwarding)
 	if o.AdminStore != nil {
-		controlplane.RegisterAdmin(apiMux, o.AdminStore, o.Registry.AgentTenants())
+		controlplane.RegisterAdmin(apiMux, o.AdminStore, o.Registry)
 		controlplane.RegisterSecretAdmin(apiMux, o.AdminStore, o.SecretAdmin)
 		if o.UpstreamStore != nil && o.GatewayMutator != nil {
 			controlplane.RegisterUpstreamAdmin(apiMux, o.AdminStore, o.UpstreamStore, o.GatewayMutator, o.CredType)

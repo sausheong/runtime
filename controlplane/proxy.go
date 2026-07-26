@@ -43,7 +43,17 @@ type AgentProcess struct {
 	Command []string // when non-empty, exec this instead of BinPath (foreign-process agents)
 	WorkDir string   // optional working directory for Command
 	Tenant  string   // tenant that owns this agent (from runtime.yaml; "default" if unset)
-	Memory  bool     // opt-in: when true, the spawn env carries RUNTIME_AGENT_MEMORY=1 so agentd wires the memory tool.
+	// RegistrationGeneration binds registration tokens to this specific agent
+	// identity. It is stable across restarts and changes on managed delete/recreate.
+	RegistrationGeneration string
+	// RegistrationEnabled is true only when the instance generation is
+	// explicitly lifecycle-managed. Local file agents receive a routing
+	// generation but cannot mint registration tokens accidentally.
+	RegistrationEnabled bool
+	// DBOSSchema is the isolated durable-workflow schema for this tenant/agent
+	// trust domain.
+	DBOSSchema string
+	Memory     bool // opt-in: when true, the spawn env carries RUNTIME_AGENT_MEMORY=1 so agentd wires the memory tool.
 
 	SubjectForwarding bool // opt-in: when true, spawn env carries RUNTIME_SUBJECT_FORWARDING=1 so agentd consumes the forwarded caller subject.
 
@@ -107,6 +117,8 @@ func (a AgentProcess) envDelta(ctx context.Context) ([]string, error) {
 		"RUNTIME_AGENT_ID=" + a.AgentID,
 		"RUNTIME_AGENT_KIND=" + a.Kind,
 		"RUNTIME_AGENT_TENANT=" + a.Tenant,
+		"RUNTIME_AGENT_GENERATION=" + a.RegistrationGeneration,
+		"RUNTIME_DBOS_SCHEMA=" + a.DBOSSchema,
 		// Per-replica identity (Spine A1): RUNTIME_AGENT_REPLICA tells agentd its
 		// index (stamped on sessions); DBOS__VMID is the stable executor id so a
 		// restarted replica recovers exactly its own in-flight workflows.
@@ -220,6 +232,8 @@ func childBaseEnv() []string {
 		"TZ":                               {},
 		"OTEL_EXPORTER_OTLP_ENDPOINT":      {},
 		"RUNTIME_LOG_FORMAT":               {},
+		"RUNTIME_AGENT_MAX_REQUESTS":       {},
+		"RUNTIME_AGENT_MAX_STREAMS":        {},
 		"RUNTIME_MEMORY_GC_BATCH":          {},
 		"RUNTIME_MEMORY_GC_ENABLED":        {},
 		"RUNTIME_MEMORY_GC_GRACE":          {},

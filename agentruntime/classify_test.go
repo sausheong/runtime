@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/sausheong/harness/session"
@@ -96,15 +97,54 @@ func (f *fakeCatStore) SetFailureCategory(_ context.Context, id, cat string) err
 	return f.err
 }
 
+func (f *fakeCatStore) SetInitialFailureCategory(_ context.Context, id, cat string) (bool, error) {
+	if f.err != nil {
+		return false, f.err
+	}
+	if f.setCat != "" {
+		return false, nil
+	}
+	f.setID, f.setCat = id, cat
+	return true, nil
+}
+
+func (f *fakeCatStore) RefineFailureCategory(_ context.Context, id, from, to string) (bool, error) {
+	if f.err != nil {
+		return false, f.err
+	}
+	if f.setCat != from {
+		return false, nil
+	}
+	f.setID, f.setCat = id, to
+	return true, nil
+}
+
 func TestClassifyAndPersist(t *testing.T) {
 	fs := &fakeCatStore{}
 	m := &Manager{st: fs, metrics: obs.NewAgentMetrics("a", "t", "m")}
-	m.classifyAndPersist("sess-1", "completed", "completed", true, false)
+	if err := m.classifyAndPersist("sess-1", "completed", "completed", true, false); err != nil {
+		t.Fatal(err)
+	}
 	if fs.setID != "sess-1" || fs.setCat != CatToolError {
 		t.Fatalf("persisted (%q,%q), want (sess-1,%s)", fs.setID, fs.setCat, CatToolError)
 	}
+	if err := m.classifyAndPersist("sess-1", "completed", "completed", false, false); err != nil {
+		t.Fatal(err)
+	}
+	if fs.setCat != CatToolError {
+		t.Fatalf("replay downgraded terminal category to %q", fs.setCat)
+	}
+	body := scrapeAgentMetrics(t, m)
+	if !strings.Contains(body,
+		`agent_eval_failures_total{agent="a",category="tool_error",tenant="t"} 1`) {
+		t.Fatalf("terminal classification metric was not replay-safe:\n%s", body)
+	}
 
-	// A store error is non-fatal (no panic, no propagation — void method).
+	// A store error is returned so a terminal workflow cannot silently complete
+	// with an unclassified durable session.
+	fs.setCat = ""
 	fs.err = errors.New("db down")
-	m.classifyAndPersist("sess-2", "completed", "completed", false, false) // must not panic
+	if err := m.classifyAndPersist("sess-2", "completed", "completed", false, false); err == nil {
+		t.Fatal("classification persistence error was swallowed")
+	}
 }

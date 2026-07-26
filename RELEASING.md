@@ -15,7 +15,10 @@ Runtime records ordered component versions in
 `runtime_schema_migrations`. A control-plane binary applies supported pending
 migrations transactionally before serving. Restricted agent binaries only
 check the core schema version and fail if it is outside their supported range.
-A failed migration rolls back without advancing the ledger.
+A failed migration rolls back without advancing the ledger. Startup also
+reconciles missing baseline tables and foreign keys after a partial restore,
+but fails closed without deleting orphan rows whose parentage cannot be
+proved.
 
 ## Release procedure
 

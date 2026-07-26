@@ -18,7 +18,7 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
         with:
-          go-version: '1.25.1'
+          go-version: '1.25.12'
           cache: true
       - run: go mod verify
       - run: make check
@@ -31,9 +31,9 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
         with:
-          go-version: '1.25.1'
+          go-version: '1.25.12'
           cache: true
-      - run: go run golang.org/x/vuln/cmd/govulncheck@v1.1.4 ./...
+      - run: make security-scan
 
   integration:
     runs-on: ubuntu-latest
@@ -55,7 +55,7 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
         with:
-          go-version: '1.25.1'
+          go-version: '1.25.12'
           cache: true
       - name: Enable pgvector
         run: |
@@ -84,6 +84,7 @@ jobs:
       # helm-deps also unpacks the dependency: Helm 4 does not render a
       # dependency left only as charts/postgresql-*.tgz.
       - run: make helm-deps
+      - run: make helm-lint
       - run: bash deploy/charts/runtime/test.sh
 
   container:
@@ -125,8 +126,12 @@ jobs:
           RUNTIME_AGENT_DB_PASSWORD: ci-agent-db-password
           GRAFANA_ADMIN_PASSWORD: ci-only-password
           NUTRITION_GO_TOKEN: ci-go-token
+          NUTRITION_GO_GENERATION: 11111111-1111-4111-8111-111111111111
           NUTRITION_OPENAI_TOKEN: ci-python-token
+          NUTRITION_OPENAI_GENERATION: 22222222-2222-4222-8222-222222222222
           HELLO_CLAUDE_TOKEN: ci-claude-token
+          HELLO_CLAUDE_GENERATION: 33333333-3333-4333-8333-333333333333
           FOOD_LABEL_TOKEN: ci-food-token
+          FOOD_LABEL_GENERATION: 44444444-4444-4444-8444-444444444444
           OPENAI_API_KEY: ci-openai-key
           ANTHROPIC_API_KEY: ci-anthropic-key

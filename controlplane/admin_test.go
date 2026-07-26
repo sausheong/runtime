@@ -78,8 +78,11 @@ func (f *fakeAdminStore) ListKeys(_ context.Context, tid string) ([]identity.Key
 	}
 	return out, nil
 }
-func (f *fakeAdminStore) InsertRegistrationToken(_ context.Context, tokenID, agentID, hash string) error {
-	f.regTokens[tokenID] = identity.RegTokenRow{TokenID: tokenID, AgentID: agentID}
+func (f *fakeAdminStore) InsertRegistrationToken(_ context.Context, tokenID, agentID, tenantID, agentGeneration, hash string) error {
+	f.regTokens[tokenID] = identity.RegTokenRow{
+		TokenID: tokenID, AgentID: agentID, TenantID: tenantID,
+		AgentGeneration: agentGeneration,
+	}
 	return nil
 }
 func (f *fakeAdminStore) ListRegistrationTokens(_ context.Context) ([]identity.RegTokenRow, error) {
@@ -96,6 +99,16 @@ func (f *fakeAdminStore) RevokeRegistrationToken(_ context.Context, tokenID stri
 	}
 	return nil
 }
+func (f *fakeAdminStore) RevokeRegistrationTokensForAgent(_ context.Context, tenantID, agentID, agentGeneration string) error {
+	for id, token := range f.regTokens {
+		if token.TenantID == tenantID && token.AgentID == agentID &&
+			token.AgentGeneration == agentGeneration {
+			token.Revoked = true
+			f.regTokens[id] = token
+		}
+	}
+	return nil
+}
 func (f *fakeAdminStore) ListTenants(_ context.Context) ([]identity.TenantRow, error) {
 	var out []identity.TenantRow
 	for id, name := range f.tenants {
@@ -108,9 +121,26 @@ func withPrincipal(r *http.Request, p identity.Principal) *http.Request {
 	return r.WithContext(context.WithValue(r.Context(), principalKey, p))
 }
 
+type fakeAgentRegistrationLookup struct {
+	identities map[string][2]string
+}
+
+func (f *fakeAgentRegistrationLookup) RegistrationIdentity(id string) (string, string, bool) {
+	identity, ok := f.identities[id]
+	return identity[0], identity[1], ok
+}
+
+func registrationLookup(tenants map[string]string) *fakeAgentRegistrationLookup {
+	lookup := &fakeAgentRegistrationLookup{identities: map[string][2]string{}}
+	for id, tenant := range tenants {
+		lookup.identities[id] = [2]string{tenant, "test:" + tenant + ":" + id}
+	}
+	return lookup
+}
+
 func adminMux(s AdminStore) http.Handler {
 	mux := http.NewServeMux()
-	RegisterAdmin(mux, s, map[string]string{"support": "acme"})
+	RegisterAdmin(mux, s, registrationLookup(map[string]string{"support": "acme"}))
 	return mux
 }
 
@@ -318,6 +348,10 @@ func TestAdminRegisterTokens(t *testing.T) {
 	if resp.ID == "" || resp.Plaintext == "" {
 		t.Fatalf("mint response missing id/plaintext: %+v", resp)
 	}
+	if token := s.regTokens[resp.ID]; token.TenantID != "acme" ||
+		token.AgentGeneration != "test:acme:support" {
+		t.Fatalf("token lacks immutable agent binding: %+v", token)
+	}
 
 	// 2) Non-superuser admin in another tenant minting for "support" → 403.
 	or := withPrincipal(httptest.NewRequest("POST", "/admin/register-tokens", strings.NewReader(`{"agent":"support"}`)),
@@ -412,6 +446,64 @@ func TestAdminRegisterTokens(t *testing.T) {
 	}
 	if !s.regTokens[resp2.ID].Revoked {
 		t.Fatal("superuser revoke should revoke the token")
+	}
+}
+
+func TestAdminRegisterTokensUsesLiveIdentityAndImmutableTokenTenant(t *testing.T) {
+	s := newFakeAdminStore()
+	lookup := registrationLookup(map[string]string{"support": "acme"})
+	mux := http.NewServeMux()
+	RegisterAdmin(mux, s, lookup)
+
+	mint := func(tenant string) *httptest.ResponseRecorder {
+		rec := httptest.NewRecorder()
+		req := withPrincipal(httptest.NewRequest("POST", "/admin/register-tokens",
+			strings.NewReader(`{"agent":"support"}`)),
+			identity.Principal{TenantID: tenant, Role: identity.RoleAdmin})
+		mux.ServeHTTP(rec, req)
+		return rec
+	}
+	old := mint("acme")
+	if old.Code != http.StatusCreated {
+		t.Fatalf("old tenant mint code=%d body=%s", old.Code, old.Body.String())
+	}
+
+	// Model a live delete/recreate under another tenant without rebuilding the
+	// HTTP handler. Authorization must follow the live registry lookup.
+	lookup.identities["support"] = [2]string{"beta", "new-generation"}
+	if rec := mint("acme"); rec.Code != http.StatusForbidden {
+		t.Fatalf("former tenant mint code=%d want 403", rec.Code)
+	}
+	current := mint("beta")
+	if current.Code != http.StatusCreated {
+		t.Fatalf("replacement tenant mint code=%d body=%s", current.Code, current.Body.String())
+	}
+
+	var currentResponse struct {
+		ID string `json:"id"`
+	}
+	_ = json.Unmarshal(current.Body.Bytes(), &currentResponse)
+	if token := s.regTokens[currentResponse.ID]; token.TenantID != "beta" ||
+		token.AgentGeneration != "new-generation" {
+		t.Fatalf("replacement token binding=%+v", token)
+	}
+
+	// Listing remains based on each token's immutable tenant, not the agent's
+	// newly assigned tenant.
+	list := func(tenant string) []identity.RegTokenRow {
+		rec := httptest.NewRecorder()
+		req := withPrincipal(httptest.NewRequest("GET", "/admin/register-tokens", nil),
+			identity.Principal{TenantID: tenant, Role: identity.RoleAdmin})
+		mux.ServeHTTP(rec, req)
+		var rows []identity.RegTokenRow
+		_ = json.Unmarshal(rec.Body.Bytes(), &rows)
+		return rows
+	}
+	if rows := list("acme"); len(rows) != 1 || rows[0].TenantID != "acme" {
+		t.Fatalf("former tenant rows=%+v", rows)
+	}
+	if rows := list("beta"); len(rows) != 1 || rows[0].TenantID != "beta" {
+		t.Fatalf("replacement tenant rows=%+v", rows)
 	}
 }
 
@@ -577,7 +669,7 @@ func TestSecretAdmin_OBOBadConfig400(t *testing.T) {
 // adminMuxWithSecrets wires both the store and the secret admin.
 func adminMuxWithSecrets(s AdminStore, sa SecretAdmin) http.Handler {
 	mux := http.NewServeMux()
-	RegisterAdmin(mux, s, map[string]string{"support": "acme"})
+	RegisterAdmin(mux, s, registrationLookup(map[string]string{"support": "acme"}))
 	RegisterSecretAdmin(mux, s, sa)
 	return mux
 }
@@ -630,7 +722,7 @@ func TestSecretAdmin_DisabledIs503(t *testing.T) {
 	s := newFakeAdminStore()
 	s.CreateTenant(context.Background(), "alpha", "A")
 	mux := http.NewServeMux()
-	RegisterAdmin(mux, s, map[string]string{"support": "acme"})
+	RegisterAdmin(mux, s, registrationLookup(map[string]string{"support": "acme"}))
 	RegisterSecretAdmin(mux, s, nil) // nil broker ⇒ feature disabled
 	r := withPrincipal(httptest.NewRequest("POST", "/admin/secrets", strings.NewReader(`{"name":"K","value":"v"}`)),
 		identity.Principal{TenantID: "alpha", Role: identity.RoleAdmin})
@@ -731,7 +823,7 @@ func TestSecretAdmin_RotateNonAdminForbidden(t *testing.T) {
 func TestSecretAdmin_RotateDisabledIs503(t *testing.T) {
 	s := newFakeAdminStore()
 	mux := http.NewServeMux()
-	RegisterAdmin(mux, s, map[string]string{"support": "acme"})
+	RegisterAdmin(mux, s, registrationLookup(map[string]string{"support": "acme"}))
 	RegisterSecretAdmin(mux, s, nil)
 	r := withPrincipal(httptest.NewRequest("POST", "/admin/secrets/rotate", strings.NewReader(`{}`)),
 		identity.Principal{TenantID: "alpha", Role: identity.RoleAdmin})

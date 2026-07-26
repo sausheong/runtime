@@ -77,12 +77,14 @@ func evalFailuresResetDB(t *testing.T, db *sql.DB) {
 		`DROP TABLE IF EXISTS markers`,
 		`DROP TABLE IF EXISTS online_eval_results CASCADE`,
 		`DROP TABLE IF EXISTS session_transcripts CASCADE`,
-		`DROP TABLE IF EXISTS session_events, sessions, agents CASCADE`,
+		`DROP TABLE IF EXISTS online_eval_results, session_transcripts, session_events, sessions, agents CASCADE`,
 		`DROP SCHEMA IF EXISTS dbos CASCADE`,
 		`DROP TABLE IF EXISTS eval_results, eval_runs, eval_sets CASCADE`,
 		`DROP TABLE IF EXISTS eval_policies CASCADE`,
 		`DROP TABLE IF EXISTS service_keys CASCADE`,
 		`DROP TABLE IF EXISTS identity_users CASCADE`,
+		`DROP TABLE IF EXISTS managed_agents CASCADE`,
+		`DROP TABLE IF EXISTS gateway_upstreams CASCADE`,
 		`DROP TABLE IF EXISTS tenants CASCADE`,
 	} {
 		mustExec(t, db, q)
@@ -118,6 +120,8 @@ func TestFailureClassificationLifecycle(t *testing.T) {
 			`DROP TABLE IF EXISTS eval_results, eval_runs, eval_sets CASCADE`,
 			`DROP TABLE IF EXISTS service_keys CASCADE`,
 			`DROP TABLE IF EXISTS identity_users CASCADE`,
+			`DROP TABLE IF EXISTS managed_agents CASCADE`,
+			`DROP TABLE IF EXISTS gateway_upstreams CASCADE`,
 			`DROP TABLE IF EXISTS tenants CASCADE`,
 		} {
 			_, _ = cdb.Exec(q)
@@ -169,8 +173,8 @@ func TestFailureClassificationLifecycle(t *testing.T) {
 
 	cfgPath := filepath.Join(tmp, "runtime.yaml")
 	cfg := "agents:\n" +
-		"  - {id: fn1, name: Fn1, model: test/scripted, listen_addr: 127.0.0.1:8523, tenant: acme}\n" +
-		"  - {id: fn2, name: Fn2, model: test/scripted, listen_addr: 127.0.0.1:8524, tenant: acme}\n"
+		"  - {id: fn1, name: Fn1, model: test/scripted, listen_addr: 127.0.0.1:8523, tenant: acme, registration_generation: test-generation-fn1}\n" +
+		"  - {id: fn2, name: Fn2, model: test/scripted, listen_addr: 127.0.0.1:8524, tenant: acme, registration_generation: test-generation-fn2}\n"
 	if err := os.WriteFile(cfgPath, []byte(cfg), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -238,28 +242,30 @@ func TestFailureClassificationLifecycle(t *testing.T) {
 	}
 	t.Logf("(b) OK: fn2 (must-fail policy) classified quality_fail at scorer tail: %+v", b2)
 
-	// (c) METRIC: agent_eval_failures_total must carry the agent= label and survive
-	// the fan-out — category="none" for fn1, category="quality_fail" for fn2,
-	// both tenant=acme and strictly positive on the management listener.
+	// (c) METRIC: initial deterministic classifications and the durable
+	// none→quality_fail refinement must each carry agent/tenant labels and
+	// survive fan-out.
 	if !asEventually(t, 20*time.Second, func() bool {
 		body := getBody(t, integrationMetricsURL(), nil, 200)
 		return evalHasPositiveSeries(body, "agent_eval_failures_total", "acme", `agent="fn1"`) &&
 			evalHasPositiveSeries(body, "agent_eval_failures_total", "acme", `category="none"`) &&
 			evalHasPositiveSeries(body, "agent_eval_failures_total", "acme", `agent="fn2"`) &&
-			evalHasPositiveSeries(body, "agent_eval_failures_total", "acme", `category="quality_fail"`)
+			evalHasPositiveSeries(body, "agent_eval_failure_refinements_total", "acme", `agent="fn2"`) &&
+			evalHasPositiveSeries(body, "agent_eval_failure_refinements_total", "acme", `from="none"`) &&
+			evalHasPositiveSeries(body, "agent_eval_failure_refinements_total", "acme", `to="quality_fail"`)
 	}) {
 		body := getBody(t, integrationMetricsURL(), nil, 200)
 		var got []string
 		for _, line := range strings.Split(body, "\n") {
-			if strings.HasPrefix(line, "agent_eval_failures_total") {
+			if strings.HasPrefix(line, "agent_eval_failures_total") ||
+				strings.HasPrefix(line, "agent_eval_failure_refinements_total") {
 				got = append(got, line)
 			}
 		}
-		t.Fatalf("/metrics missing agent_eval_failures_total{agent=fn1,category=none} / "+
-			"{agent=fn2,category=quality_fail} for tenant acme; lines present:\n%s",
+		t.Fatalf("/metrics missing initial classifications or fn2 none→quality_fail refinement for tenant acme; lines present:\n%s",
 			strings.Join(got, "\n"))
 	}
-	t.Log("(c) OK: agent_eval_failures_total{agent=fn1,category=none} + {agent=fn2,category=quality_fail} survived fan-out")
+	t.Log("(c) OK: initial classifications and fn2 none→quality_fail refinement survived fan-out")
 
 	// (d) RBAC: the globex admin reading acme's agent fn1 is rejected 400 (the
 	// agent is invisible cross-tenant). Sanity: the acme owner still sees its

@@ -12,6 +12,7 @@ type SessionRow struct {
 	ID              string
 	TenantID        string
 	AgentID         string
+	AgentGeneration string
 	WorkflowID      string
 	Status          string // created | running | completed | error | limit_exceeded
 	TurnCount       int
@@ -48,9 +49,13 @@ type Store interface {
 	// CreateSession is the legacy/default-tenant compatibility entry point.
 	CreateSession(ctx context.Context, agentID string, replica int) (string, error)
 	CreateSessionForTenant(ctx context.Context, tenantID, agentID string, replica int) (string, error)
+	// CreateSessionForIdentity records the immutable agent generation that owns
+	// the native session. Routing must reject a session whose generation no
+	// longer matches the selected live agent.
+	CreateSessionForIdentity(ctx context.Context, tenantID, agentID, agentGeneration string, replica int) (string, error)
 	// BindSession records an externally-created session ID at the proxy boundary.
 	// It must never overwrite an existing binding.
-	BindSession(ctx context.Context, id, tenantID, agentID string, replica int) error
+	BindSession(ctx context.Context, id, tenantID, agentID, agentGeneration string, replica int) error
 	GetSession(ctx context.Context, id string) (SessionRow, error)
 	// TouchSession refreshes last_active_at for an externally owned binding
 	// after a successfully authorized route lookup.
@@ -75,6 +80,14 @@ type Store interface {
 	// ABSOLUTE set (idempotent, replay-safe, mirrors SetSessionUsage). Category
 	// is a fixed-taxonomy scalar; '' means unclassified.
 	SetFailureCategory(ctx context.Context, sessionID, category string) error
+	// SetInitialFailureCategory classifies only an unclassified terminal
+	// session. It reports whether this call performed the durable transition, so
+	// replay cannot downgrade a later quality refinement or double-count it.
+	SetInitialFailureCategory(ctx context.Context, sessionID, category string) (bool, error)
+	// RefineFailureCategory atomically changes one expected durable category to
+	// another. It reports whether this call performed the transition, so
+	// replays and unexpected source states cannot double-count refinement.
+	RefineFailureCategory(ctx context.Context, sessionID, from, to string) (bool, error)
 	// FailureBreakdownByAgent returns per-category session counts for one
 	// tenant-owned agent, optionally since a cutoff (since.IsZero() ⇒ no cutoff).
 	// Unclassified ('') rows are omitted.
@@ -92,6 +105,9 @@ type Store interface {
 	// PutOnlineResult records one online-eval-criterion outcome. Idempotent on
 	// (sessionID, criterion): re-scoring the same criterion upserts.
 	PutOnlineResult(ctx context.Context, sessionID, criterion, tenant, actor, scorer string, passed bool, detail string) error
+	// PutOnlineResultIfNew performs the same upsert and reports whether the
+	// criterion was durably recorded for the first time.
+	PutOnlineResultIfNew(ctx context.Context, sessionID, criterion, tenant, actor, scorer string, passed bool, detail string) (bool, error)
 	// ListOnlineResults returns all results for a session, ordered by criterion.
 	ListOnlineResults(ctx context.Context, sessionID string) ([]OnlineResult, error)
 	// ListOnlineResultsByTenant returns results for a tenant, newest first,

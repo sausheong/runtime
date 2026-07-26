@@ -8,6 +8,7 @@ import (
 	"sync/atomic"
 
 	"github.com/sausheong/runtime/internal/config"
+	"github.com/sausheong/runtime/internal/store"
 )
 
 // subjectForwardingEnabled reports whether RUNTIME_SUBJECT_FORWARDING is truthy
@@ -90,10 +91,21 @@ func NewRegistry(cfg *config.Config, binPath, dsn string) *Registry {
 		if mp, ok := cfg.Pricing.PriceFor(a.Model); ok {
 			pricingJSON = mp.JSON()
 		}
+		generation := a.RegistrationGeneration
+		registrationEnabled := generation != ""
+		if generation == "" {
+			// Local file agents need a stable routing/DBOS identity but are not
+			// registration-capable until the operator supplies an explicit
+			// lifecycle generation.
+			generation = "local-config:" + a.Tenant + ":" + a.ID
+		}
 		base := AgentProcess{
 			AgentID: a.ID, BinPath: binPath, PGDSN: dsn,
 			Kind: a.Kind, Command: a.Command, WorkDir: a.WorkDir, Tenant: a.Tenant,
-			Memory: a.Memory, GatewayOn: a.Gateway.Enabled(),
+			RegistrationGeneration: generation,
+			RegistrationEnabled:    registrationEnabled,
+			DBOSSchema:             store.AgentDBOSSchema(a.Tenant, a.ID),
+			Memory:                 a.Memory, GatewayOn: a.Gateway.Enabled(),
 			GatewaySearch:     a.Gateway == config.GatewaySearch,
 			LimitsJSON:        a.Limits.JSON(),
 			PricingJSON:       pricingJSON,
@@ -192,6 +204,23 @@ func (r *Registry) SetIdentitySigningKeys(privateKey, publicKey string) {
 	}
 }
 
+// SetDBOSSchemaForAll overrides the per-agent workflow schema. It exists for
+// the runtime_integration shared-role concession only: production agents must
+// retain their tenant/agent-specific schema from NewRegistry or AddRemote.
+func (r *Registry) SetDBOSSchemaForAll(schema string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for id, set := range r.sets {
+		for i := range set {
+			set[i].DBOSSchema = schema
+		}
+		r.sets[id] = set
+	}
+	for _, pm := range r.pools {
+		pm.base.DBOSSchema = schema
+	}
+}
+
 // SetGateway records the gateway endpoint URL and per-tenant agent keys, stamped
 // onto every gateway-enabled replica. Like SetBroker, must complete before the
 // server and supervisor goroutines start.
@@ -223,6 +252,27 @@ func (r *Registry) AgentTenants() map[string]string {
 		m[id] = r.infos[id].Tenant
 	}
 	return m
+}
+
+// RegistrationIdentity returns the immutable registration-token binding for a
+// live agent. Unlike AgentTenants, this is a concurrency-safe live lookup and
+// therefore follows dynamic add/delete operations without a server restart.
+func (r *Registry) RegistrationIdentity(id string) (tenant, generation string, ok bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	set, ok := r.sets[id]
+	if !ok || len(set) == 0 {
+		if pm, poolOK := r.pools[id]; poolOK {
+			return pm.base.Tenant, pm.base.RegistrationGeneration,
+				pm.base.Tenant != "" && pm.base.RegistrationGeneration != ""
+		}
+		return "", "", false
+	}
+	ap := set[0]
+	if ap.Tenant == "" || ap.RegistrationGeneration == "" || !ap.RegistrationEnabled {
+		return "", "", false
+	}
+	return ap.Tenant, ap.RegistrationGeneration, true
 }
 
 // withBroker returns a copy of ap with the registry's broker AND policy resolver
@@ -296,6 +346,47 @@ func (r *Registry) Replica(id string, i int) (AgentProcess, bool) {
 		return AgentProcess{}, false
 	}
 	return r.withBroker(set[i]), true
+}
+
+func sameAgentProcessLifecycle(a, b AgentProcess) bool {
+	return a.AgentID == b.AgentID &&
+		a.Tenant == b.Tenant &&
+		a.RegistrationGeneration == b.RegistrationGeneration &&
+		a.ReplicaIndex == b.ReplicaIndex &&
+		a.BaseURL == b.BaseURL &&
+		a.Addr == b.Addr &&
+		a.Remote == b.Remote &&
+		strings.Join(a.Command, "\x00") == strings.Join(b.Command, "\x00")
+}
+
+// LeaseReplica pins the exact selected lifecycle snapshot until release.
+// Dynamic delete/recreate, disable, endpoint replacement, and autoscale reap
+// all require a write lock and therefore cannot invalidate an in-flight target.
+// Callers must always invoke the returned release function.
+func (r *Registry) LeaseReplica(ap AgentProcess, newSession bool) (func(), bool) {
+	r.mu.RLock()
+	if r.disabled[ap.AgentID] {
+		r.mu.RUnlock()
+		return nil, false
+	}
+	if pm, ok := r.pools[ap.AgentID]; ok {
+		releasePool, leased := pm.leaseReplica(ap, newSession)
+		if !leased {
+			r.mu.RUnlock()
+			return nil, false
+		}
+		return func() {
+			releasePool()
+			r.mu.RUnlock()
+		}, true
+	}
+	set, ok := r.sets[ap.AgentID]
+	if !ok || ap.ReplicaIndex < 0 || ap.ReplicaIndex >= len(set) ||
+		!sameAgentProcessLifecycle(set[ap.ReplicaIndex], ap) {
+		r.mu.RUnlock()
+		return nil, false
+	}
+	return r.mu.RUnlock, true
 }
 
 // ResetReachable clears all recorded reachability for id, returning it to the
@@ -406,6 +497,11 @@ func (r *Registry) AddRemote(info AgentInfo, ap AgentProcess, managed bool) {
 	}
 	ap.Remote = true
 	ap.ReplicaIndex = 0
+	// Dynamically managed agents are registration-capable only when their
+	// immutable lifecycle identity is complete. Derive the capability here so
+	// every administrative attach path has the same behaviour instead of
+	// relying on callers to remember an internal flag.
+	ap.RegistrationEnabled = managed && ap.Tenant != "" && ap.RegistrationGeneration != ""
 	r.sets[info.ID] = []AgentProcess{ap}
 	r.managed[info.ID] = managed
 	delete(r.disabled, info.ID)

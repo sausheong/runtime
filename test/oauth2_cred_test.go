@@ -54,6 +54,8 @@ var oauth2DropQueries = []string{
 	`DROP TABLE IF EXISTS gateway_policies CASCADE`,
 	`DROP TABLE IF EXISTS service_keys CASCADE`,
 	`DROP TABLE IF EXISTS identity_users CASCADE`,
+	`DROP TABLE IF EXISTS managed_agents CASCADE`,
+	`DROP TABLE IF EXISTS gateway_upstreams CASCADE`,
 	`DROP TABLE IF EXISTS tenants CASCADE`,
 }
 
@@ -63,7 +65,7 @@ func oauth2ResetDB(t *testing.T, db *sql.DB) {
 	t.Helper()
 	mustExec(t, db, `DROP TABLE IF EXISTS markers`)
 	mustExec(t, db, `CREATE TABLE markers (id BIGSERIAL PRIMARY KEY, ran_at TIMESTAMPTZ)`)
-	mustExec(t, db, `DROP TABLE IF EXISTS session_events, sessions, agents CASCADE`)
+	mustExec(t, db, `DROP TABLE IF EXISTS online_eval_results, session_transcripts, session_events, sessions, agents CASCADE`)
 	mustExec(t, db, `DROP SCHEMA IF EXISTS dbos CASCADE`)
 	for _, q := range oauth2DropQueries {
 		mustExec(t, db, q)
@@ -273,7 +275,7 @@ func TestOAuth2CredentialEndToEnd(t *testing.T) {
 	tmp := t.TempDir()
 	cfgPath := filepath.Join(tmp, "runtime.yaml")
 	cfg := "agents:\n" +
-		"  - {id: a1, name: A1, model: test/scripted, listen_addr: 127.0.0.1:8481, tenant: acme}\n" +
+		"  - {id: a1, name: A1, model: test/scripted, listen_addr: 127.0.0.1:8481, tenant: acme, registration_generation: test-generation-a1}\n" +
 		"gateway:\n" +
 		"  servers:\n" +
 		"    - name: orders\n" +
@@ -405,7 +407,7 @@ func TestOAuth2CredentialFailClosed(t *testing.T) {
 	tmp := t.TempDir()
 	cfgPath := filepath.Join(tmp, "runtime.yaml")
 	cfg := "agents:\n" +
-		"  - {id: a1, name: A1, model: test/scripted, listen_addr: 127.0.0.1:8483, tenant: acme}\n" +
+		"  - {id: a1, name: A1, model: test/scripted, listen_addr: 127.0.0.1:8483, tenant: acme, registration_generation: test-generation-a1}\n" +
 		"gateway:\n" +
 		"  servers:\n" +
 		"    - name: orders\n" +
@@ -511,7 +513,7 @@ func TestOAuth2CredentialOpenAPIOnly(t *testing.T) {
 	tmp := t.TempDir()
 	cfgPath := filepath.Join(tmp, "runtime.yaml")
 	cfg := "agents:\n" +
-		"  - {id: a1, name: A1, model: test/scripted, listen_addr: 127.0.0.1:8485, tenant: acme}\n"
+		"  - {id: a1, name: A1, model: test/scripted, listen_addr: 127.0.0.1:8485, tenant: acme, registration_generation: test-generation-a1}\n"
 	if err := os.WriteFile(cfgPath, []byte(cfg), 0o644); err != nil {
 		t.Fatal(err)
 	}

@@ -5,10 +5,13 @@ This plan implements
 ordered so that persistence and identity invariants land before routing,
 deployment, and operational refinements that depend on them.
 
-Status: second-audit code remediation complete. Phases 1 through 7 record the
-first two remediation passes. Phase 8 closes every second-audit code gap; the
-RT-04 live Kubernetes acceptance check remains pending because this workspace
-has no configured cluster or designated release.
+Status: local fifth-audit comprehensive invariant remediation is complete.
+Phases 1 through 10 record the earlier incremental remediation passes. Phase 11
+replaced symptom-focused closure with the frozen acceptance matrix in the issue
+register, and Phase 12 records the additional restore, test-isolation,
+evaluation-accounting, and supply-chain findings exposed by the complete run.
+The two-release RT-04/RT-14 live Kubernetes acceptance test remains an explicit
+external boundary because no target cluster or releases were supplied.
 
 ## Phase 1: Persistence and routing correctness
 
@@ -31,8 +34,8 @@ Closes: RT-01, RT-06, and the persistence foundation of RT-03/RT-09/RT-10.
 1. Capture the chosen replica for a new remote or command-agent session.
 2. Bind the returned external session ID to tenant, agent, and replica.
 3. Route follow-up requests through the binding.
-4. Preserve existing single-replica behaviour and return an explicit error
-   where an old unbound pooled session cannot be routed safely.
+4. Fail generation-less legacy bindings closed, including old single-replica
+   rows, wherever immutable ownership cannot be proved.
 5. Add independent-store remote and command-pool tests, including restart.
 
 Closes: RT-03.
@@ -258,6 +261,77 @@ password, and fixed evaluation-capture sweep termination for a backlog in only
 one child table. The issue register contains the per-issue evidence and final
 validation results.
 
+## Phase 9: Third-audit remediation
+
+### 20. Restore remote-only production startup
+
+1. Classify configured agents by whether runtimed spawns them with the
+   restricted DSN.
+2. Provision a role only for local agents and skip provisioning for an
+   attach-only registry.
+3. Preserve the one-role-per-local-agent and one-tenant fail-closed checks.
+4. Add remote-only, mixed, and production-profile boot regressions.
+
+Reopens: RT-05.
+
+### 21. Correct Kubernetes trust-boundary acceptance
+
+1. Change the live test to accept source and target one-agent releases.
+2. Assert distinct agent identities before attempting cross-agent access.
+3. Test denied source-agent access, allowed target-control-plane access, and
+   signed target metrics.
+4. Update Helm documentation and shell/render validation.
+
+Reopens: RT-04.
+
+### 22. Remove unfenced evaluation transitions
+
+1. Remove unconditional status/finalization methods from `EvalStore`,
+   PostgreSQL, and memory implementations.
+2. Convert tests and UI fixtures to claim and finalize through a live lease.
+3. Add a source-contract regression for the persistence interface.
+
+Reopens: RT-07.
+
+### 23. Make retention accounting failure-safe and deployable
+
+1. Extract bounded single-sweep helpers with injected deletion operations.
+2. Record each successful destructive batch immediately.
+3. Add partial-success and dry-run tests.
+4. Expose typed retention and concurrency values in Helm.
+5. Add Compose pass-through for control-plane and agent settings.
+6. Update configuration and deployment documentation.
+
+Reopens: RT-09.
+
+### 24. Protect management metrics
+
+1. Separate port `8080` and `9091` NetworkPolicy ingress.
+2. Allow `9091` from the control-plane pod and configured Prometheus peers
+   only.
+3. Add secure defaults, Helm render assertions, and live denial coverage.
+4. Document same- and cross-namespace monitoring.
+
+Closes: RT-14.
+
+### 25. Replace replay-cache full scans
+
+1. Add a rotating two-bucket nonce cache with constant-time lookup.
+2. Enforce a fixed maximum entry count and fail closed at capacity.
+3. Add rotation, replay, capacity, concurrency, and benchmark coverage.
+4. Document the security and overload behaviour.
+
+Closes: RT-15.
+
+### 26. Third-audit verification
+
+1. Run focused Go, Helm, shell, Compose, and documentation tests.
+2. Run `make check`, integration, race, Python, Helm, and deployment gates.
+3. Re-read RT-04, RT-05, RT-07, RT-09, RT-14, and RT-15 against the final
+   implementation and tests.
+4. Close only evidence-backed checkboxes; leave live-cluster execution open if
+   no designated Kubernetes release is available.
+
 ## Phase 8: Second-audit gap remediation
 
 ### 20. Complete tenant-scoped aggregates and monitor fencing
@@ -306,3 +380,228 @@ Closes the second-audit gaps in RT-07 and RT-09.
 4. Close RT-01, RT-02, RT-05, RT-07, and RT-09.
 5. Keep RT-04's regression/final-review checkboxes open until the live
    Kubernetes acceptance test runs successfully.
+
+## Phase 10: Fourth-audit gap remediation
+
+### 27. Bind registration credentials to live immutable identities
+
+1. Add tenant and agent-generation bindings to registration tokens and persist
+   a generation for every managed agent.
+2. Make registration verification compare the token binding with the live
+   registry before returning environment data.
+3. Replace the startup tenant snapshot with a concurrency-safe live identity
+   lookup and authorize token list/revoke operations by immutable token tenant.
+4. Revoke exact-generation tokens on managed-agent deletion and fail legacy
+   unbound tokens closed through versioned migrations.
+5. Add cross-tenant reuse, deletion/recreation, live-admin, race, exact-binding,
+   and legacy-migration tests.
+
+Closes: RT-16.
+
+### 28. Enforce the evaluation persistence state machine
+
+1. Require new runs to be pending, unleased, unfinished, and unique in both
+   stores.
+2. Reject empty owners, invalid lease deadlines, and non-terminal claimed
+   finalization while preserving live-owner/live-lease fencing.
+3. Add durable PostgreSQL status and state-coherence constraints with safe
+   normalization of legacy malformed rows.
+4. Add matching memory and PostgreSQL contract and migration tests.
+
+Closes: RT-07.
+
+### 29. Make NetworkPolicy acceptance evidence truthful
+
+1. Discover only Running and Ready source-agent, target-agent, and target
+   control-plane pods and require every probed Service.
+2. Prove source-side debug, DNS, and allowed connectivity before denial probes.
+3. Record curl exit markers and accept only timeout exit 28 as policy denial;
+   reject setup, DNS, refusal, image-pull, and protocol failures.
+4. Prove target control-plane agent access and signed fleet metrics before
+   checking cross-release agent and metrics denial.
+5. Add a fake-`kubectl` regression matrix to the normal chart test suite.
+
+Closes the fourth-audit code gaps in RT-04 and RT-14. Their regression and
+final-review checkboxes remain open until the corrected harness passes against
+two installed one-agent releases.
+
+### 30. Verify and reconcile the fourth-audit changes
+
+1. Run focused registration, evaluation, registry-race, migration, and
+   NetworkPolicy-harness regressions.
+2. Run `make check`, the complete tagged PostgreSQL/end-to-end integration
+   suite, race-sensitive packages, chart tests, Helm lint, documentation
+   checks, and diff hygiene.
+3. Re-read the implementations, tests, public documentation, and issue
+   requirements.
+4. Close RT-07 and RT-16; keep only the environment-specific RT-04/RT-14 live
+   acceptance boundary open.
+
+## Phase 11: Frozen comprehensive invariant remediation
+
+### 31. Freeze the cross-cutting acceptance contract
+
+1. Use sections A through G of the issue register as the immutable fifth-audit
+   scope.
+2. Map every reopened issue to all applicable agent origins, storage backends,
+   tenant arrangements, lifecycle transitions, concurrency boundaries,
+   deployment profiles, and failure paths.
+3. Name the regression test that proves each matrix row. Do not infer complete
+   coverage from a nearby test.
+4. Keep unsupported topologies fail closed and document them as unsupported;
+   do not substitute documentation for enforcement.
+
+### 32. Make identity selection and affinity generation-atomic
+
+1. Introduce an immutable selected-agent snapshot containing tenant,
+   generation, mode, and replica set.
+2. Authorize and sign forwarding against that exact snapshot immediately
+   before proxying.
+3. Persist generation in external bindings and reject missing or stale
+   generations.
+4. Cover new-session and session-route replacement races, same- and
+   cross-tenant reuse, endpoint replacement, restart, health, and scaling for
+   native and external stores.
+
+Closes the comprehensive A matrix and reopened RT-01/RT-03 requirements.
+
+### 33. Enforce real per-agent database trust domains
+
+1. Bind core RLS authorization to tenant and immutable agent identity.
+2. Give each supported agent an isolated DBOS database/schema trust domain, or
+   reject shared-database multi-agent configurations before startup.
+3. Remove residual schema-wide grants and keep all elevated/test concessions
+   unreachable from production binaries.
+4. Test two same-tenant roles and two cross-tenant roles against core children,
+   evaluation, identity, memory, secrets, and DBOS state through fresh install,
+   recovery, migration, and restart.
+5. Make Compose, GCP, Helm, and operator guidance render only enforceable
+   topologies.
+
+Closes the comprehensive B matrix and reopened RT-05 requirements.
+
+### 34. Decouple deterministic classification from optional scoring
+
+1. Persist deterministic terminal classification on every native terminal path
+   before optional score admission.
+2. Let a persisted completed quality score refine the category to
+   `quality_fail`; never let queue or scorer failure imply a clean result.
+3. Make queue-full, shutdown, timeout, provider, judge, and store outcomes
+   observable and counted exactly once.
+4. Exercise all terminal states and failure paths in memory and PostgreSQL,
+   while retaining the RT-07 lease/state-machine matrix.
+
+Closes the comprehensive C matrix and reopened RT-08 requirements.
+
+### 35. Make retention transactional and completion-aged
+
+1. Select and lock one bounded session candidate set, then delete its dependent
+   records and parents in the same transaction.
+2. Serialize touch/status/child-write races against retention and test both
+   orderings in PostgreSQL.
+3. Age terminal evaluation runs from `finished_at`, define legacy fallback, and
+   retain newly completed long-running/recovered work.
+4. Revalidate bounded work, partial-success accounting, dry-run, tenant scope,
+   disabled defaults, and deployment configuration across every retention
+   surface.
+
+Closes the comprehensive D matrix and reopened RT-09 requirements.
+
+### 36. Give every registration-capable agent a lifecycle generation
+
+1. Replace deterministic file-agent generations with explicit persisted
+   instance generations.
+2. Render generation material for Helm registration-managed agents and require
+   explicit rotation on replacement while preserving ordinary restart.
+3. Apply exact tenant/generation checks to mint, verify, register, list, revoke,
+   deletion, and concurrent administration.
+4. Test dynamic, persisted, file, Helm, legacy, restart, replacement,
+   cross-tenant, same-tenant, memory, and PostgreSQL cases.
+
+Closes the comprehensive E matrix and reopened RT-16 requirements.
+
+### 37. Make release evidence structural
+
+1. Run `make helm-lint` in CI and before release publication.
+2. Parse workflow jobs and steps to prove the entire blocking validation matrix
+   occurs before the first publish operation in the publishing job.
+3. Add mutation fixtures for omitted, reordered, unrelated, commented, and
+   non-blocking gates.
+4. Re-run every deployment render and hermetic NetworkPolicy topology.
+
+Closes F1 through F5 and reopened RT-13 requirements. F6 remains open until a
+designated two-release Kubernetes environment is available.
+
+### 38. Complete final matrix validation and independent re-audit
+
+1. Run every named matrix regression from the final source state.
+2. Run formatting, vet, unit, race, tagged PostgreSQL, end-to-end, Python,
+   Helm lint/render, Compose, documentation, shell, and diff gates.
+3. Trace every request and durable transition in matrix sections A through F,
+   including non-diff code and deployment modes.
+4. Update every issue and matrix checkbox with current evidence only.
+5. Keep F6, RT-04, RT-14, and overall final acceptance open if the live
+   Kubernetes evidence is unavailable.
+
+## Phase 12: Comprehensive follow-through discovered by final validation
+
+### 39. Repair partial-restore referential integrity
+
+1. Validate migration ledger versions and checksums before changing schema.
+2. Reconcile the immutable baseline before dependent migrations and again at
+   the current version.
+3. Add versioned foreign-key repair for core, evaluation, identity,
+   managed-agent, and gateway state.
+4. Restore missing constraints only for consistent data and fail closed,
+   without deleting or inventing parents, when orphan rows exist.
+5. Cover partial restore, current-ledger missing tables, corrupt ledgers,
+   missing constraints, and retained orphans in PostgreSQL integration tests.
+
+Completed. Extends RT-10 and the B/D durability matrix.
+
+### 40. Make evaluation refinement and retention accounting replay-safe
+
+1. Persist initial deterministic classification before optional scoring.
+2. Refine `none` to `quality_fail` with one atomic expected-state transition
+   after a completed score is durable.
+3. Separate initial-classification and refinement metrics, and emit each
+   exactly once across replay and retry.
+4. Count successful destructive batches before any later retention failure.
+
+Completed. Extends RT-08/RT-09 and the C/D matrix.
+
+### 41. Remove cross-component integration contamination
+
+1. Drop dependent session/evaluation tables before session parents.
+2. Drop managed-agent and gateway tenant children before identity tenant
+   tables.
+3. Give independently started remote agents isolated DBOS schemas and matching
+   lifecycle generations.
+4. Re-run the previously order-dependent autoscaling and remote attachment
+   cases, then the entire integration package from one clean sequence.
+
+Completed. Extends RT-05/RT-13 and G1/G2.
+
+### 42. Replace the ineffective vulnerability gate
+
+1. Upgrade all development, CI, release, and container build surfaces to Go
+   1.25.12 and upgrade reachable vulnerable dependencies.
+2. Replace the deprecated Docker root SDK with supported Moby API/client
+   modules.
+3. Use package-level scanning to cover every imported package without the
+   crashing source-symbol analyser.
+4. Build and binary-symbol scan all six shipped Go commands.
+5. Require the same blocking security target in CI and before release
+   publication, and include it in structural workflow mutation tests.
+
+Completed. Extends RT-13 and F1 through F3.
+
+### 43. Final validation disposition
+
+1. Unit, vet, race, complete end-to-end/PostgreSQL integration, Python, Helm,
+   hermetic NetworkPolicy, Compose, vulnerability, image-build, documentation,
+   and diff gates pass from the final source state.
+2. Local `shellcheck` could not be executed in the available environment; CI
+   and release retain it as a blocking gate.
+3. F6, RT-04, and RT-14 remain open only for the two-release live Kubernetes
+   acceptance run.

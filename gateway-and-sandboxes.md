@@ -62,6 +62,7 @@ agents:
     name: Support
     model: vendor/model
     listen_addr: 127.0.0.1:8101
+    registration_generation: 89ef9a06-e752-49e2-a8bc-a9b14983dc6f
     gateway: true
 ```
 

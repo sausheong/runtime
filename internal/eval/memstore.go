@@ -2,6 +2,7 @@ package eval
 
 import (
 	"context"
+	"fmt"
 	"sort"
 	"sync"
 	"time"
@@ -90,8 +91,14 @@ func (m *MemStore) DeleteSet(_ context.Context, tenant, name string) (bool, erro
 }
 
 func (m *MemStore) CreateRun(_ context.Context, r Run) error {
+	if err := validateNewRun(r); err != nil {
+		return err
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if _, exists := m.runs[r.RunID]; exists {
+		return fmt.Errorf("%w: %s", ErrRunExists, r.RunID)
+	}
 	if r.CreatedAt.IsZero() {
 		r.CreatedAt = time.Now().UTC()
 	}
@@ -154,42 +161,10 @@ func (m *MemStore) ListIncompleteRuns(_ context.Context, limit int) ([]Run, erro
 	return out, nil
 }
 
-func (m *MemStore) SetRunStatus(_ context.Context, runID, status string) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	r, ok := m.runs[runID]
-	if !ok {
-		return nil
-	}
-	r.Status = status
-	m.runs[runID] = r
-	m.gen++
-	return nil
-}
-
-func (m *MemStore) FinishRun(_ context.Context, runID, status string, total, passed, failed int, score float64, errMsg string) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	r, ok := m.runs[runID]
-	if !ok {
-		return nil
-	}
-	now := time.Now().UTC()
-	r.Status = status
-	r.Total = total
-	r.Passed = passed
-	r.Failed = failed
-	r.Score = score
-	r.Error = errMsg
-	r.LeaseOwner = ""
-	r.LeaseUntil = nil
-	r.FinishedAt = &now
-	m.runs[runID] = r
-	m.gen++
-	return nil
-}
-
 func (m *MemStore) ClaimRun(_ context.Context, runID, owner string, now, until time.Time) (bool, error) {
+	if err := validateClaim(owner, now, until); err != nil {
+		return false, err
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	r, ok := m.runs[runID]
@@ -224,6 +199,9 @@ func (m *MemStore) FailPendingRun(_ context.Context, runID, errMsg string) (bool
 }
 
 func (m *MemStore) FinishRunClaimed(_ context.Context, runID, owner, status string, total, passed, failed int, score float64, errMsg string) (bool, error) {
+	if err := validateFinalization(owner, status); err != nil {
+		return false, err
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	r, ok := m.runs[runID]
@@ -247,6 +225,9 @@ func (m *MemStore) FinishRunClaimed(_ context.Context, runID, owner, status stri
 }
 
 func (m *MemStore) PutResultClaimed(_ context.Context, runID, owner string, res Result) (bool, error) {
+	if owner == "" {
+		return false, fmt.Errorf("%w: result owner is required", ErrInvalidRunTransition)
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	r, ok := m.runs[runID]
@@ -291,7 +272,8 @@ func (m *MemStore) ReapBefore(_ context.Context, before time.Time, batch int) (i
 		if n >= int64(batch) {
 			break
 		}
-		if !run.CreatedAt.Before(before) || (run.Status != StatusCompleted && run.Status != StatusError) {
+		if run.FinishedAt == nil || !run.FinishedAt.Before(before) ||
+			(run.Status != StatusCompleted && run.Status != StatusError) {
 			continue
 		}
 		delete(m.runs, id)

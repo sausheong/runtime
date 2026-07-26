@@ -6,14 +6,16 @@ tenant-boundary effects, migration needs, and compatibility impact.
 
 ## Development
 
-Use Go 1.25.1 or later. Keep changes focused, preserve public agent-contract
+Use Go 1.25.12 or later. Keep changes focused, preserve public agent-contract
 compatibility, and add regression tests for every corrected failure mode.
 
 ```bash
 make fmt-check
 make vet
 make test
+make security-scan
 make test-integration
+make helm-lint
 bash deploy/charts/runtime/test.sh
 ```
 

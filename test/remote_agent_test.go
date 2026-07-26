@@ -34,7 +34,7 @@ func TestRemoteAgentAttach(t *testing.T) {
 	}
 	mustExec(t, db, `DROP TABLE IF EXISTS markers`)
 	mustExec(t, db, `CREATE TABLE markers (id BIGSERIAL PRIMARY KEY, ran_at TIMESTAMPTZ)`)
-	mustExec(t, db, `DROP TABLE IF EXISTS session_events, sessions, agents CASCADE`)
+	mustExec(t, db, `DROP TABLE IF EXISTS online_eval_results, session_transcripts, session_events, sessions, agents CASCADE`)
 	mustExec(t, db, `DROP SCHEMA IF EXISTS dbos CASCADE`)
 
 	tmp := t.TempDir()
@@ -58,7 +58,13 @@ func TestRemoteAgentAttach(t *testing.T) {
 		"RUNTIME_LISTEN_ADDR="+remoteAddr,
 		"RUNTIME_AGENT_ID=remote",
 		"RUNTIME_AGENT_TENANT=default",
+		"RUNTIME_AGENT_GENERATION=test-generation-remote",
 		"RUNTIME_AGENT_AUTH_TOKEN="+token,
+		// A separately deployed agent owns a separate durable workflow trust
+		// domain and executor identity. Sharing the local agent's integration
+		// schema/VMID can make one process recover or block the other's work.
+		"RUNTIME_DBOS_SCHEMA=dbos_remote_attach",
+		"DBOS__VMID=remote#0",
 	)
 	remote.Stdout, remote.Stderr = os.Stdout, os.Stderr
 	remote.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
@@ -81,8 +87,8 @@ func TestRemoteAgentAttach(t *testing.T) {
 	// 2. Config: one LOCAL spawned agent + one REMOTE attached agent.
 	cfgPath := filepath.Join(tmp, "runtime.yaml")
 	cfg := "agents:\n" +
-		"  - {id: local, name: Local, model: test/scripted, listen_addr: 127.0.0.1:8212}\n" +
-		fmt.Sprintf("  - {id: remote, name: Remote, model: test/scripted, url: \"http://%s\", auth_token: \"${REMOTE_TOK}\"}\n", remoteAddr)
+		"  - {id: local, name: Local, model: test/scripted, listen_addr: 127.0.0.1:8212, registration_generation: test-generation-local}\n" +
+		fmt.Sprintf("  - {id: remote, name: Remote, model: test/scripted, url: \"http://%s\", auth_token: \"${REMOTE_TOK}\", registration_generation: test-generation-remote}\n", remoteAddr)
 	if err := os.WriteFile(cfgPath, []byte(cfg), 0o644); err != nil {
 		t.Fatal(err)
 	}

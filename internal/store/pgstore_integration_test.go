@@ -127,6 +127,53 @@ func TestPGFailureCategory(t *testing.T) {
 	}
 }
 
+func TestPGReplaySafeTerminalClassificationAndOnlineMetricsState(t *testing.T) {
+	st := newPGTestStore(t)
+	ctx := context.Background()
+	id, err := st.CreateSessionForIdentity(
+		ctx, "alpha", "pg-replay-safe", "generation-a", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := st.(*pgStore)
+	t.Cleanup(func() {
+		_, _ = p.db.ExecContext(context.Background(), `DELETE FROM sessions WHERE id=$1`, id)
+	})
+	changed, err := st.SetInitialFailureCategory(ctx, id, "none")
+	if err != nil || !changed {
+		t.Fatalf("initial category changed=%v err=%v", changed, err)
+	}
+	if err := st.SetFailureCategory(ctx, id, "quality_fail"); err != nil {
+		t.Fatal(err)
+	}
+	changed, err = st.SetInitialFailureCategory(ctx, id, "none")
+	if err != nil || changed {
+		t.Fatalf("replay category changed=%v err=%v", changed, err)
+	}
+	row, err := st.GetSession(ctx, id)
+	if err != nil || row.FailureCategory != "quality_fail" {
+		t.Fatalf("replay category=%q err=%v", row.FailureCategory, err)
+	}
+	refined, err := st.RefineFailureCategory(ctx, id, "quality_fail", "tool_error")
+	if err != nil || !refined {
+		t.Fatalf("refine category changed=%v err=%v", refined, err)
+	}
+	refined, err = st.RefineFailureCategory(ctx, id, "quality_fail", "none")
+	if err != nil || refined {
+		t.Fatalf("replayed/wrong-source refinement changed=%v err=%v", refined, err)
+	}
+	inserted, err := st.PutOnlineResultIfNew(
+		ctx, id, "quality", "alpha", "actor", "contains", true, "")
+	if err != nil || !inserted {
+		t.Fatalf("first result inserted=%v err=%v", inserted, err)
+	}
+	inserted, err = st.PutOnlineResultIfNew(
+		ctx, id, "quality", "alpha", "actor", "contains", false, "changed")
+	if err != nil || inserted {
+		t.Fatalf("replayed result inserted=%v err=%v", inserted, err)
+	}
+}
+
 func TestPGTenantOwnershipAndSessionRetention(t *testing.T) {
 	st := newPGTestStore(t)
 	ctx := context.Background()
@@ -216,6 +263,115 @@ func TestPGTenantOwnershipAndSessionRetention(t *testing.T) {
 	}
 }
 
+func TestPGSessionRetentionSerializesConcurrentTouchWithoutPartialHistory(t *testing.T) {
+	st := newPGTestStore(t)
+	ctx := context.Background()
+	p := st.(*pgStore)
+	sid, err := st.CreateSessionForIdentity(
+		ctx, "alpha", "retention-race", "generation-a", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetSessionStatus(ctx, sid, "completed"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.AppendEvent(ctx, sid, "done", []byte(`{}`)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.db.ExecContext(ctx,
+		`UPDATE sessions SET last_active_at=now()-interval '2 hours' WHERE id=$1`,
+		sid); err != nil {
+		t.Fatal(err)
+	}
+
+	const advisoryKey int64 = 7626031401
+	if _, err := p.db.ExecContext(ctx, `
+		CREATE OR REPLACE FUNCTION runtime_test_pause_reap()
+		RETURNS trigger LANGUAGE plpgsql AS $$
+		BEGIN
+			PERFORM pg_advisory_xact_lock(7626031401);
+			RETURN OLD;
+		END $$;
+		DROP TRIGGER IF EXISTS runtime_test_pause_reap ON session_events;
+		CREATE TRIGGER runtime_test_pause_reap
+		BEFORE DELETE ON session_events
+		FOR EACH ROW EXECUTE FUNCTION runtime_test_pause_reap()`); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = p.db.Exec(`
+			DROP TRIGGER IF EXISTS runtime_test_pause_reap ON session_events;
+			DROP FUNCTION IF EXISTS runtime_test_pause_reap();
+			DELETE FROM sessions WHERE id=$1`, sid)
+	})
+
+	lockConn, err := p.db.Conn(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lockConn.Close()
+	if _, err := lockConn.ExecContext(ctx, `SELECT pg_advisory_lock($1)`, advisoryKey); err != nil {
+		t.Fatal(err)
+	}
+
+	reapDone := make(chan error, 1)
+	go func() {
+		_, reapErr := st.ReapSessions(
+			context.Background(), time.Now().Add(-time.Hour), 1, false)
+		reapDone <- reapErr
+	}()
+
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		var waiting bool
+		if err := p.db.QueryRowContext(ctx, `
+			SELECT EXISTS (
+				SELECT 1 FROM pg_stat_activity
+				 WHERE wait_event='advisory'
+				   AND query ILIKE '%DELETE FROM session_events%'
+			)`).Scan(&waiting); err != nil {
+			t.Fatal(err)
+		}
+		if waiting {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("retention did not reach the locked child-delete trigger")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	touchDone := make(chan error, 1)
+	go func() {
+		touchDone <- st.TouchSession(context.Background(), sid)
+	}()
+	select {
+	case err := <-touchDone:
+		t.Fatalf("touch did not serialize behind retention lock: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	if _, err := lockConn.ExecContext(ctx, `SELECT pg_advisory_unlock($1)`, advisoryKey); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-reapDone; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-touchDone; !errors.Is(err, ErrSessionNotFound) {
+		t.Fatalf("serialized touch after retention = %v, want ErrSessionNotFound", err)
+	}
+	if _, err := st.GetSession(ctx, sid); !errors.Is(err, ErrSessionNotFound) {
+		t.Fatalf("parent survived retention after child deletion: %v", err)
+	}
+	var events int
+	if err := p.db.QueryRowContext(ctx,
+		`SELECT count(*) FROM session_events WHERE session_id=$1`, sid).Scan(&events); err != nil {
+		t.Fatal(err)
+	}
+	if events != 0 {
+		t.Fatalf("orphaned session events=%d", events)
+	}
+}
+
 func TestSchemaMigrationsOrderedIdempotentAndVersionChecked(t *testing.T) {
 	db, err := sql.Open("pgx", pgTestDSN)
 	if err != nil {
@@ -254,6 +410,142 @@ func TestSchemaMigrationsOrderedIdempotentAndVersionChecked(t *testing.T) {
 	}
 	if err := CheckSchemaVersion(ctx, db, component, 1, 2); err == nil {
 		t.Fatal("newer unsupported schema accepted")
+	}
+}
+
+func TestSchemaMigrationsRepairBaselineBeforeDependentMigration(t *testing.T) {
+	db, err := sql.Open("pgx", pgTestDSN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	ctx := context.Background()
+	component := fmt.Sprintf("test-partial-restore-%d", time.Now().UnixNano())
+	table := fmt.Sprintf("migration_restore_%d", time.Now().UnixNano())
+	t.Cleanup(func() {
+		_, _ = db.Exec(`DELETE FROM runtime_schema_migrations WHERE component=$1`, component)
+		_, _ = db.Exec(`DROP TABLE IF EXISTS ` + table)
+	})
+	migrations := []Migration{
+		{Version: 1, Name: "baseline", SQL: `CREATE TABLE IF NOT EXISTS ` + table + ` (id INT PRIMARY KEY)`},
+		{Version: 2, Name: "dependent", SQL: `ALTER TABLE ` + table + ` ADD COLUMN durable TEXT`},
+	}
+	if err := ApplyMigrationsLocked(ctx, db, component, 1, 1, migrations); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`DROP TABLE ` + table); err != nil {
+		t.Fatal(err)
+	}
+	if err := ApplyMigrationsLocked(ctx, db, component, 1, 2, migrations); err != nil {
+		t.Fatalf("partial restore was not repaired before dependent migration: %v", err)
+	}
+	var durableColumn bool
+	if err := db.QueryRow(`
+		SELECT EXISTS (
+			SELECT 1 FROM information_schema.columns
+			 WHERE table_schema=current_schema() AND table_name=$1
+			   AND column_name='durable'
+		)`, table).Scan(&durableColumn); err != nil {
+		t.Fatal(err)
+	}
+	if !durableColumn {
+		t.Fatal("repaired table is missing the dependent migration column")
+	}
+}
+
+func TestSchemaMigrationsDoNotRepairBeforeLedgerValidation(t *testing.T) {
+	db, err := sql.Open("pgx", pgTestDSN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	ctx := context.Background()
+	component := fmt.Sprintf("test-fail-closed-restore-%d", time.Now().UnixNano())
+	table := fmt.Sprintf("migration_fail_closed_%d", time.Now().UnixNano())
+	t.Cleanup(func() {
+		_, _ = db.Exec(`DELETE FROM runtime_schema_migrations WHERE component=$1`, component)
+		_, _ = db.Exec(`DROP TABLE IF EXISTS ` + table)
+	})
+	migrations := []Migration{
+		{Version: 1, Name: "baseline", SQL: `CREATE TABLE IF NOT EXISTS ` + table + ` (id INT PRIMARY KEY)`},
+		{Version: 2, Name: "dependent", SQL: `ALTER TABLE ` + table + ` ADD COLUMN durable TEXT`},
+	}
+	if err := ApplyMigrationsLocked(ctx, db, component, 1, 1, migrations); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`DROP TABLE ` + table); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`
+		UPDATE runtime_schema_migrations SET checksum='corrupt'
+		 WHERE component=$1 AND version=1`, component); err != nil {
+		t.Fatal(err)
+	}
+	if err := ApplyMigrationsLocked(ctx, db, component, 1, 2, migrations); err == nil {
+		t.Fatal("corrupt migration ledger was accepted")
+	}
+	var exists bool
+	if err := db.QueryRow(`SELECT to_regclass($1) IS NOT NULL`, table).Scan(&exists); err != nil {
+		t.Fatal(err)
+	}
+	if exists {
+		t.Fatal("baseline was repaired before the corrupt ledger failed closed")
+	}
+}
+
+func TestCoreSchemaRecoversMissingBaselineAtCurrentLedger(t *testing.T) {
+	ctx := context.Background()
+	st := newPGTestStore(t)
+	p := st.(*pgStore)
+	for _, table := range []string{
+		"online_eval_results", "session_transcripts", "session_events", "sessions",
+	} {
+		if _, err := p.db.ExecContext(ctx, `DROP TABLE IF EXISTS `+table+` CASCADE`); err != nil {
+			t.Fatal(err)
+		}
+	}
+	recovered, err := NewPGStore(ctx, pgTestDSN)
+	if err != nil {
+		t.Fatalf("recover core schema with current ledger: %v", err)
+	}
+	defer recovered.Close()
+	db := recovered.(*pgStore).db
+	for _, table := range []string{
+		"sessions", "session_events", "session_transcripts", "online_eval_results",
+	} {
+		var exists bool
+		if err := db.QueryRowContext(ctx, `SELECT to_regclass($1) IS NOT NULL`, table).Scan(&exists); err != nil {
+			t.Fatal(err)
+		}
+		if !exists {
+			t.Errorf("baseline table %s was not recovered", table)
+		}
+	}
+	var generationColumn bool
+	if err := db.QueryRowContext(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM information_schema.columns
+			 WHERE table_schema=current_schema() AND table_name='sessions'
+			   AND column_name='agent_generation'
+		)`).Scan(&generationColumn); err != nil {
+		t.Fatal(err)
+	}
+	if !generationColumn {
+		t.Fatal("recovered sessions table is missing agent_generation")
+	}
+	for _, child := range []string{"session_events", "session_transcripts", "online_eval_results"} {
+		var validFK bool
+		if err := db.QueryRowContext(ctx, `
+			SELECT EXISTS (
+				SELECT 1 FROM pg_constraint
+				 WHERE conrelid=$1::regclass AND confrelid='sessions'::regclass
+				   AND contype='f' AND confdeltype='c'
+			)`, child).Scan(&validFK); err != nil {
+			t.Fatal(err)
+		}
+		if !validFK {
+			t.Errorf("recovered table %s lacks cascading session foreign key", child)
+		}
 	}
 }
 

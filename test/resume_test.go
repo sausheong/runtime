@@ -76,7 +76,7 @@ func TestResumeAfterKill(t *testing.T) {
 	// the crash. That persistence is exactly what we are testing.
 	// ----------------------------------------------------------------------
 	mustExec(t, db, `DROP TABLE IF EXISTS markers`)
-	mustExec(t, db, `DROP TABLE IF EXISTS session_events, sessions, agents CASCADE`)
+	mustExec(t, db, `DROP TABLE IF EXISTS online_eval_results, session_transcripts, session_events, sessions, agents CASCADE`)
 	mustExec(t, db, `DROP SCHEMA IF EXISTS dbos CASCADE`) // DBOS recreates it on Launch
 	// Recreate markers up front (agentd also creates it IF NOT EXISTS).
 	mustExec(t, db, `CREATE TABLE markers (id BIGSERIAL PRIMARY KEY, ran_at TIMESTAMPTZ)`)
@@ -184,6 +184,8 @@ func resetIdentityTables(t *testing.T, db *sql.DB) {
 	for _, q := range []string{
 		`DROP TABLE IF EXISTS service_keys CASCADE`,
 		`DROP TABLE IF EXISTS identity_users CASCADE`,
+		`DROP TABLE IF EXISTS managed_agents CASCADE`,
+		`DROP TABLE IF EXISTS gateway_upstreams CASCADE`,
 		`DROP TABLE IF EXISTS tenants CASCADE`,
 	} {
 		mustExec(t, db, q)

@@ -32,11 +32,20 @@ var childTenantIntegritySQL string
 //go:embed test_role_wildcard.sql
 var testRoleWildcardSQL string
 
+//go:embed session_agent_generation.sql
+var sessionAgentGenerationSQL string
+
+//go:embed agent_role_scope.sql
+var agentRoleScopeSQL string
+
+//go:embed referential_integrity.sql
+var referentialIntegritySQL string
+
 type pgStore struct{ db *sql.DB }
 
 const (
 	coreSchemaComponent = "core"
-	coreSchemaVersion   = 6
+	coreSchemaVersion   = 9
 )
 
 type Migration struct {
@@ -75,13 +84,21 @@ func newPGStore(ctx context.Context, dsn string, applyDDL bool) (Store, error) {
 			{Version: 4, Name: "quarantine-legacy-unowned-sessions", SQL: quarantineLegacySessionsSQL},
 			{Version: 5, Name: "enforce-child-tenant-integrity", SQL: childTenantIntegritySQL},
 			{Version: 6, Name: "test-role-wildcard-support", SQL: testRoleWildcardSQL},
+			{Version: 7, Name: "bind-sessions-to-agent-generation", SQL: sessionAgentGenerationSQL},
+			{Version: 8, Name: "scope-agent-roles-to-agent-identity", SQL: agentRoleScopeSQL},
+			{Version: 9, Name: "repair-referential-integrity", SQL: referentialIntegritySQL},
 		}); err != nil {
 			db.Close()
 			return nil, err
 		}
 		if err := ApplyDDLLocked(ctx, db, schemaSQL+"\n"+tenantRLSSQL+"\n"+
 			tenantRLSSessionUserSQL+"\n"+quarantineLegacySessionsSQL+"\n"+
-			childTenantIntegritySQL+"\n"+testRoleWildcardSQL); err != nil {
+			childTenantIntegritySQL+"\n"+testRoleWildcardSQL+"\n"+
+			sessionAgentGenerationSQL+"\n"+agentRoleScopeSQL); err != nil {
+			db.Close()
+			return nil, err
+		}
+		if err := ApplyDDLLocked(ctx, db, referentialIntegritySQL); err != nil {
 			db.Close()
 			return nil, err
 		}
@@ -92,30 +109,32 @@ func newPGStore(ctx context.Context, dsn string, applyDDL bool) (Store, error) {
 	return &pgStore{db: db}, nil
 }
 
-// ConfigureAgentTenantRole binds a restricted login role to exactly one tenant
-// for the row-level policies installed by the core schema. The mapping table is
-// deliberately not readable by agent roles; the SECURITY DEFINER policy
-// helpers expose only the current role's tenant decision.
-func ConfigureAgentTenantRole(ctx context.Context, db *sql.DB, role, tenant string, allowRebind bool) error {
-	if role == "" || tenant == "" {
-		return errors.New("agent database role and tenant are required")
+// ConfigureAgentRole binds a restricted login to exactly one tenant/agent trust
+// domain for the row-level policies installed by the core schema.
+func ConfigureAgentRole(ctx context.Context, db *sql.DB, role, tenant, agentID string, allowRebind bool) error {
+	if role == "" || tenant == "" || agentID == "" {
+		return errors.New("agent database role, tenant, and agent id are required")
 	}
-	var current string
+	var currentTenant, currentAgent string
 	err := db.QueryRowContext(ctx,
-		`SELECT tenant_id FROM runtime_agent_tenant_roles WHERE role_name=$1`, role).Scan(&current)
-	if err == nil && current != tenant && !allowRebind {
-		return fmt.Errorf("agent database role %q is already bound to tenant %q, not %q; provision a distinct role",
-			role, current, tenant)
+		`SELECT tenant_id, agent_id FROM runtime_agent_tenant_roles WHERE role_name=$1`,
+		role).Scan(&currentTenant, &currentAgent)
+	if err == nil && (currentTenant != tenant || currentAgent != agentID) && !allowRebind {
+		return fmt.Errorf(
+			"agent database role %q is already bound to %q/%q, not %q/%q; provision a distinct role",
+			role, currentTenant, currentAgent, tenant, agentID)
 	}
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return fmt.Errorf("read agent database role %q tenant mapping: %w", role, err)
 	}
 	if _, err := db.ExecContext(ctx, `
-			INSERT INTO runtime_agent_tenant_roles (role_name, tenant_id)
-			VALUES ($1, $2)
-			ON CONFLICT (role_name) DO UPDATE SET tenant_id = EXCLUDED.tenant_id`,
-		role, tenant); err != nil {
-		return fmt.Errorf("bind agent database role %q to tenant %q: %w", role, tenant, err)
+			INSERT INTO runtime_agent_tenant_roles (role_name, tenant_id, agent_id)
+			VALUES ($1, $2, $3)
+			ON CONFLICT (role_name) DO UPDATE
+			    SET tenant_id = EXCLUDED.tenant_id,
+			        agent_id = EXCLUDED.agent_id`,
+		role, tenant, agentID); err != nil {
+		return fmt.Errorf("bind agent database role %q to %q/%q: %w", role, tenant, agentID, err)
 	}
 	return nil
 }
@@ -124,7 +143,7 @@ func ConfigureAgentTenantRole(ctx context.Context, db *sql.DB, role, tenant stri
 // agent process and binds that login to tenant-scoped session row policies. The
 // login itself must be created by database bootstrap with no elevated
 // attributes.
-func ProvisionAgentRole(ctx context.Context, db *sql.DB, role, tenant string, allowRebind bool) error {
+func ProvisionAgentRole(ctx context.Context, db *sql.DB, role, tenant, agentID string, allowRebind bool) error {
 	for _, r := range role {
 		if !(r == '_' || r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9') {
 			return fmt.Errorf("agent database role %q is not a safe SQL identifier", role)
@@ -187,61 +206,31 @@ func ProvisionAgentRole(ctx context.Context, db *sql.DB, role, tenant string, al
 		return fmt.Errorf("agent database role %q owns a protected table and could bypass its row policy", role)
 	}
 	quotedRole := `"` + strings.ReplaceAll(role, `"`, `""`) + `"`
+	dbosSchema := AgentDBOSSchema(tenant, agentID)
+	if agentID == "*" {
+		// Test-only integration binaries deliberately share one disposable role
+		// and legacy DBOS schema. Production identity selection never returns
+		// the wildcard agent.
+		dbosSchema = "dbos"
+	}
+	quotedDBOSSchema := `"` + strings.ReplaceAll(dbosSchema, `"`, `""`) + `"`
 	statements := []string{
-		`CREATE SCHEMA IF NOT EXISTS dbos`,
+		`CREATE SCHEMA IF NOT EXISTS ` + quotedDBOSSchema,
+		`REVOKE ALL ON SCHEMA ` + quotedDBOSSchema + ` FROM PUBLIC`,
 		`REVOKE CREATE ON SCHEMA public FROM ` + quotedRole,
 		`GRANT USAGE ON SCHEMA public TO ` + quotedRole,
-		`GRANT USAGE, CREATE ON SCHEMA dbos TO ` + quotedRole,
+		`GRANT USAGE, CREATE ON SCHEMA ` + quotedDBOSSchema + ` TO ` + quotedRole,
 		`GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE
 			sessions, session_events, session_transcripts, online_eval_results TO ` + quotedRole,
 		`REVOKE ALL PRIVILEGES ON TABLE agents FROM ` + quotedRole,
 		`GRANT SELECT ON TABLE runtime_schema_migrations TO ` + quotedRole,
 		`GRANT EXECUTE ON FUNCTION runtime_agent_tenant() TO ` + quotedRole,
+		`GRANT EXECUTE ON FUNCTION runtime_agent_id() TO ` + quotedRole,
 		`GRANT EXECUTE ON FUNCTION runtime_agent_can_access_session(TEXT) TO ` + quotedRole,
 	}
 	for _, statement := range statements {
 		if _, err := db.ExecContext(ctx, statement); err != nil {
 			return fmt.Errorf("grant agent role %q: %w", role, err)
-		}
-	}
-	// Upgrade compatibility: grant access to DBOS objects owned by the current
-	// control-plane role. Objects already created by the restricted role need no
-	// grant, and attempting GRANT on them would fail because the control-plane
-	// role is not their owner.
-	for _, catalog := range []struct {
-		query string
-		kind  string
-	}{
-		{`SELECT tablename FROM pg_tables WHERE schemaname='dbos' AND tableowner=current_user`, "TABLE"},
-		{`SELECT sequencename FROM pg_sequences WHERE schemaname='dbos' AND sequenceowner=current_user`, "SEQUENCE"},
-	} {
-		rows, err := db.QueryContext(ctx, catalog.query)
-		if err != nil {
-			return fmt.Errorf("list owned DBOS %s objects: %w", strings.ToLower(catalog.kind), err)
-		}
-		var names []string
-		for rows.Next() {
-			var name string
-			if err := rows.Scan(&name); err != nil {
-				rows.Close()
-				return err
-			}
-			names = append(names, name)
-		}
-		if err := rows.Close(); err != nil {
-			return err
-		}
-		for _, name := range names {
-			quotedName := `"` + strings.ReplaceAll(name, `"`, `""`) + `"`
-			privileges := "SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER"
-			if catalog.kind == "SEQUENCE" {
-				privileges = "USAGE, SELECT, UPDATE"
-			}
-			if _, err := db.ExecContext(ctx,
-				`GRANT `+privileges+` ON `+catalog.kind+` dbos.`+quotedName+` TO `+quotedRole); err != nil {
-				return fmt.Errorf("grant agent role %q access to DBOS %s %q: %w",
-					role, strings.ToLower(catalog.kind), name, err)
-			}
 		}
 	}
 	for _, table := range []string{"identity_users", "service_keys", "secrets"} {
@@ -269,7 +258,7 @@ func ProvisionAgentRole(ctx context.Context, db *sql.DB, role, tenant string, al
 			return fmt.Errorf("grant test marker access to agent role %q: %w", role, err)
 		}
 	}
-	return ConfigureAgentTenantRole(ctx, db, role, tenant, allowRebind)
+	return ConfigureAgentRole(ctx, db, role, tenant, agentID, allowRebind)
 }
 
 // ApplySchemaMigrations records a component's immutable baseline migration.
@@ -281,9 +270,8 @@ func ApplySchemaMigrations(ctx context.Context, db *sql.DB, component string, cu
 	}); err != nil {
 		return err
 	}
-	// The embedded baseline is deliberately idempotent. Reconcile it after
-	// ledger validation so a partial restore (and integration tests that drop
-	// component tables) recreates missing objects without advancing history.
+	// Single-version component baselines are idempotent and act as their own
+	// current-schema reconciler after the ledger has been validated.
 	return ApplyDDLLocked(ctx, db, baseline)
 }
 
@@ -355,6 +343,16 @@ func ApplyMigrationsLocked(ctx context.Context, db *sql.DB, component string, mi
 	}
 	if applied > 0 && applied < minSupported {
 		return fmt.Errorf("component %q schema version %d is older than supported %d", component, applied, minSupported)
+	}
+	// A partial restore can retain the ledger but lose a baseline relation.
+	// Reconcile the immutable, idempotent baseline inside this same locked
+	// transaction after validating checksums and compatibility, and before any
+	// dependent migration runs. On a fresh database migration 1 below performs
+	// the initial baseline apply.
+	if applied > 0 && applied < current {
+		if _, err := tx.ExecContext(ctx, migrations[0].SQL); err != nil {
+			return fmt.Errorf("reconcile %s baseline: %w", component, err)
+		}
 	}
 	for _, migration := range migrations[applied:current] {
 		if _, err := tx.ExecContext(ctx, migration.SQL); err != nil {
@@ -428,20 +426,26 @@ func (p *pgStore) CreateSession(ctx context.Context, agentID string, replica int
 }
 
 func (p *pgStore) CreateSessionForTenant(ctx context.Context, tenantID, agentID string, replica int) (string, error) {
+	return p.CreateSessionForIdentity(ctx, tenantID, agentID, "", replica)
+}
+
+func (p *pgStore) CreateSessionForIdentity(ctx context.Context, tenantID, agentID, agentGeneration string, replica int) (string, error) {
 	id := "ses-" + uuid.NewString()
 	_, err := p.db.ExecContext(ctx,
-		`INSERT INTO sessions (id, tenant_id, agent_id, workflow_id, status, replica)
-		 VALUES ($1,$2,$3,$1,'created',$4)`,
-		id, tenantID, agentID, replica)
+		`INSERT INTO sessions
+		    (id, tenant_id, agent_id, agent_generation, workflow_id, status, replica)
+		 VALUES ($1,$2,$3,$4,$1,'created',$5)`,
+		id, tenantID, agentID, agentGeneration, replica)
 	return id, err
 }
 
-func (p *pgStore) BindSession(ctx context.Context, id, tenantID, agentID string, replica int) error {
+func (p *pgStore) BindSession(ctx context.Context, id, tenantID, agentID, agentGeneration string, replica int) error {
 	res, err := p.db.ExecContext(ctx,
-		`INSERT INTO sessions (id, tenant_id, agent_id, workflow_id, status, replica)
-		 VALUES ($1,$2,$3,$1,'external',$4)
+		`INSERT INTO sessions
+		    (id, tenant_id, agent_id, agent_generation, workflow_id, status, replica)
+		 VALUES ($1,$2,$3,$4,$1,'external',$5)
 		 ON CONFLICT (id) DO NOTHING`,
-		id, tenantID, agentID, replica)
+		id, tenantID, agentID, agentGeneration, replica)
 	if err != nil {
 		return err
 	}
@@ -451,7 +455,10 @@ func (p *pgStore) BindSession(ctx context.Context, id, tenantID, agentID string,
 	}
 	if n != 1 {
 		existing, getErr := p.GetSession(ctx, id)
-		if getErr == nil && existing.TenantID == tenantID && existing.AgentID == agentID && existing.Replica == replica {
+		if getErr == nil && existing.TenantID == tenantID &&
+			existing.AgentID == agentID &&
+			existing.AgentGeneration == agentGeneration &&
+			existing.Replica == replica {
 			return nil
 		}
 		return fmt.Errorf("bind session %q: conflicts with existing owner", id)
@@ -495,7 +502,7 @@ func (p *pgStore) ListSessions(ctx context.Context, agentID string) ([]SessionRo
 
 func (p *pgStore) ListSessionsForTenant(ctx context.Context, tenantID, agentID string) ([]SessionRow, error) {
 	rows, err := p.db.QueryContext(ctx,
-		`SELECT id, tenant_id, agent_id, workflow_id, status, turn_count, replica,
+		`SELECT id, tenant_id, agent_id, agent_generation, workflow_id, status, turn_count, replica,
 		        tokens_total, cost_usd, failure_category, created_at, last_active_at
 		   FROM sessions WHERE tenant_id=$1 AND agent_id=$2 ORDER BY created_at DESC`,
 		tenantID, agentID)
@@ -506,7 +513,8 @@ func (p *pgStore) ListSessionsForTenant(ctx context.Context, tenantID, agentID s
 	var out []SessionRow
 	for rows.Next() {
 		var s SessionRow
-		if err := rows.Scan(&s.ID, &s.TenantID, &s.AgentID, &s.WorkflowID, &s.Status,
+		if err := rows.Scan(&s.ID, &s.TenantID, &s.AgentID, &s.AgentGeneration,
+			&s.WorkflowID, &s.Status,
 			&s.TurnCount, &s.Replica, &s.TokensTotal, &s.CostUSD, &s.FailureCategory,
 			&s.CreatedAt, &s.LastActiveAt); err != nil {
 			return nil, err
@@ -534,6 +542,60 @@ func (p *pgStore) SetFailureCategory(ctx context.Context, id, category string) e
 		`UPDATE sessions SET failure_category = $2, last_active_at = now() WHERE id=$1`,
 		id, category)
 	return err
+}
+
+func (p *pgStore) SetInitialFailureCategory(ctx context.Context, id, category string) (bool, error) {
+	res, err := p.db.ExecContext(ctx,
+		`UPDATE sessions
+		    SET failure_category = $2, last_active_at = now()
+		  WHERE id=$1 AND failure_category=''`,
+		id, category)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	if n == 1 {
+		return true, nil
+	}
+	var exists bool
+	if err := p.db.QueryRowContext(ctx,
+		`SELECT EXISTS (SELECT 1 FROM sessions WHERE id=$1)`, id).Scan(&exists); err != nil {
+		return false, err
+	}
+	if !exists {
+		return false, fmt.Errorf("%w: %q", ErrSessionNotFound, id)
+	}
+	return false, nil
+}
+
+func (p *pgStore) RefineFailureCategory(ctx context.Context, id, from, to string) (bool, error) {
+	res, err := p.db.ExecContext(ctx,
+		`UPDATE sessions
+		    SET failure_category=$3, last_active_at=now()
+		  WHERE id=$1 AND failure_category=$2`,
+		id, from, to)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	if n == 1 {
+		return true, nil
+	}
+	var exists bool
+	if err := p.db.QueryRowContext(ctx,
+		`SELECT EXISTS (SELECT 1 FROM sessions WHERE id=$1)`, id).Scan(&exists); err != nil {
+		return false, err
+	}
+	if !exists {
+		return false, fmt.Errorf("%w: %q", ErrSessionNotFound, id)
+	}
+	return false, nil
 }
 
 func (p *pgStore) FailureBreakdownByAgent(ctx context.Context, tenantID, agentID string, since time.Time) (map[string]int, error) {
@@ -567,10 +629,11 @@ func (p *pgStore) FailureBreakdownByAgent(ctx context.Context, tenantID, agentID
 func (p *pgStore) GetSession(ctx context.Context, id string) (SessionRow, error) {
 	var s SessionRow
 	err := p.db.QueryRowContext(ctx,
-		`SELECT id, tenant_id, agent_id, workflow_id, status, turn_count, replica,
+		`SELECT id, tenant_id, agent_id, agent_generation, workflow_id, status, turn_count, replica,
 		        tokens_total, cost_usd, failure_category, created_at, last_active_at
 		   FROM sessions WHERE id=$1`, id).
-		Scan(&s.ID, &s.TenantID, &s.AgentID, &s.WorkflowID, &s.Status, &s.TurnCount,
+		Scan(&s.ID, &s.TenantID, &s.AgentID, &s.AgentGeneration,
+			&s.WorkflowID, &s.Status, &s.TurnCount,
 			&s.Replica, &s.TokensTotal, &s.CostUSD, &s.FailureCategory,
 			&s.CreatedAt, &s.LastActiveAt)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -700,24 +763,30 @@ func (p *pgStore) AppendTranscript(ctx context.Context, sessionID string, turn i
 }
 
 func (p *pgStore) PutOnlineResult(ctx context.Context, sessionID, criterion, tenant, actor, scorer string, passed bool, detail string) error {
-	res, err := p.db.ExecContext(ctx,
+	_, err := p.PutOnlineResultIfNew(
+		ctx, sessionID, criterion, tenant, actor, scorer, passed, detail)
+	return err
+}
+
+func (p *pgStore) PutOnlineResultIfNew(ctx context.Context, sessionID, criterion, tenant, actor, scorer string, passed bool, detail string) (bool, error) {
+	var inserted bool
+	err := p.db.QueryRowContext(ctx,
 		`INSERT INTO online_eval_results (session_id, criterion_name, tenant, actor_id, scorer, passed, detail)
 		 SELECT s.id,$2,s.tenant_id,$3,$4,$5,$6
 		   FROM sessions s
 		  WHERE s.id=$1
 		 ON CONFLICT (session_id, criterion_name) DO UPDATE SET
 		   passed=EXCLUDED.passed, detail=EXCLUDED.detail, scorer=EXCLUDED.scorer,
-		   tenant=EXCLUDED.tenant, actor_id=EXCLUDED.actor_id`,
-		sessionID, criterion, actor, scorer, passed, detail)
+		   tenant=EXCLUDED.tenant, actor_id=EXCLUDED.actor_id
+		 RETURNING (xmax = 0)`,
+		sessionID, criterion, actor, scorer, passed, detail).Scan(&inserted)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, fmt.Errorf("put online result (%s %s): session missing", sessionID, criterion)
+	}
 	if err != nil {
-		return fmt.Errorf("put online result (%s %s): %w", sessionID, criterion, err)
+		return false, fmt.Errorf("put online result (%s %s): %w", sessionID, criterion, err)
 	}
-	if n, rowsErr := res.RowsAffected(); rowsErr != nil {
-		return rowsErr
-	} else if n == 0 {
-		return fmt.Errorf("put online result (%s %s): session missing", sessionID, criterion)
-	}
-	return nil
+	return inserted, nil
 }
 
 func (p *pgStore) ListOnlineResults(ctx context.Context, sessionID string) ([]OnlineResult, error) {
@@ -798,18 +867,44 @@ func (p *pgStore) ReapSessions(ctx context.Context, before time.Time, batch int,
 		return 0, err
 	}
 	defer tx.Rollback()
+	// Freeze one exact candidate set and lock every parent row before touching
+	// any child. Concurrent activity updates and child inserts then serialize
+	// behind this transaction instead of causing each DELETE statement to
+	// re-evaluate a different READ COMMITTED snapshot.
+	if _, err := tx.ExecContext(ctx, `
+		CREATE TEMP TABLE runtime_session_reap_candidates (
+			id TEXT PRIMARY KEY
+		) ON COMMIT DROP`); err != nil {
+		return 0, err
+	}
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO runtime_session_reap_candidates (id)
+		SELECT id FROM sessions
+		 WHERE last_active_at < $1
+		   AND status IN ('external','completed','error','limit_exceeded')
+		 ORDER BY last_active_at, id
+		 FOR UPDATE SKIP LOCKED
+		 LIMIT $2`, before, batch); err != nil {
+		return 0, err
+	}
 	// Child deletes are explicit as well as cascade-backed so upgrades remain
-	// safe if a legacy database has not yet replaced its foreign key.
+	// safe if a legacy database has not yet replaced its foreign key. Every
+	// statement consumes the same locked temp-table set.
 	for _, query := range []string{
-		`DELETE FROM online_eval_results WHERE session_id IN (` + candidates + `)`,
-		`DELETE FROM session_transcripts WHERE session_id IN (` + candidates + `)`,
-		`DELETE FROM session_events WHERE session_id IN (` + candidates + `)`,
+		`DELETE FROM online_eval_results
+		  WHERE session_id IN (SELECT id FROM runtime_session_reap_candidates)`,
+		`DELETE FROM session_transcripts
+		  WHERE session_id IN (SELECT id FROM runtime_session_reap_candidates)`,
+		`DELETE FROM session_events
+		  WHERE session_id IN (SELECT id FROM runtime_session_reap_candidates)`,
 	} {
-		if _, err := tx.ExecContext(ctx, query, before, batch); err != nil {
+		if _, err := tx.ExecContext(ctx, query); err != nil {
 			return 0, err
 		}
 	}
-	res, err := tx.ExecContext(ctx, `DELETE FROM sessions WHERE id IN (`+candidates+`)`, before, batch)
+	res, err := tx.ExecContext(ctx, `
+		DELETE FROM sessions
+		 WHERE id IN (SELECT id FROM runtime_session_reap_candidates)`)
 	if err != nil {
 		return 0, err
 	}

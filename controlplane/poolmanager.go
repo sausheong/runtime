@@ -198,6 +198,23 @@ func (p *PoolManager) Replica(i int) (AgentProcess, bool) {
 	return p.replicas[i].ap, true
 }
 
+// leaseReplica pins one published replica in the pool until release. Scale-down
+// cannot cancel/reap it while an HTTP request is in flight. New sessions also
+// reject a replica that became draining after round-robin selection.
+func (p *PoolManager) leaseReplica(ap AgentProcess, newSession bool) (func(), bool) {
+	p.mu.RLock()
+	if ap.ReplicaIndex < 0 || ap.ReplicaIndex >= len(p.replicas) {
+		p.mu.RUnlock()
+		return nil, false
+	}
+	slot := p.replicas[ap.ReplicaIndex]
+	if !sameAgentProcessLifecycle(slot.ap, ap) || (newSession && slot.draining) {
+		p.mu.RUnlock()
+		return nil, false
+	}
+	return p.mu.RUnlock, true
+}
+
 // NextReplica round-robins over the NON-draining replicas for a new session. If
 // every replica is draining it falls back to index 0.
 func (p *PoolManager) NextReplica() int {

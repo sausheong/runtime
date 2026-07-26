@@ -61,6 +61,12 @@ func TestScoreJudge(t *testing.T) {
 	if ok2 || d2 == "" {
 		t.Errorf("nil judge should fail judge case, got ok=%v detail=%q", ok2, d2)
 	}
+	if _, _, err := ScoreChecked(ctx, fakeJudge{err: errors.New("boom")}, c, "x"); err == nil {
+		t.Fatal("checked scoring hid judge transport failure")
+	}
+	if _, _, err := ScoreChecked(ctx, nil, c, "x"); !errors.Is(err, ErrJudgeUnavailable) {
+		t.Fatalf("checked nil-judge error=%v, want ErrJudgeUnavailable", err)
+	}
 }
 
 // newTestJudge points an httpJudge at a test server URL.

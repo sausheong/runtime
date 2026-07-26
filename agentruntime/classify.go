@@ -72,18 +72,23 @@ func entriesHaveToolError(entries []session.SessionEntry) bool {
 }
 
 // classifyAndPersist derives the terminal session's failure category and records
-// it (store + metric). Best-effort and non-fatal: a store error is logged, never
-// returned — classification must never affect a turn. Deterministic + idempotent
-// ⇒ a DBOS replay re-derives and re-writes the identical category.
-func (m *Manager) classifyAndPersist(sessionID, status, terminalReason string, toolErrored, qualityFailed bool) {
-	m.classifyAndPersistContext(context.Background(), sessionID, status, terminalReason, toolErrored, qualityFailed)
+// it before the workflow reports terminal success. A persistence failure is
+// returned so DBOS recovery can retry the deterministic write; a terminal
+// session must never silently remain unclassified.
+func (m *Manager) classifyAndPersist(sessionID, status, terminalReason string, toolErrored, qualityFailed bool) error {
+	return m.classifyAndPersistContext(
+		context.Background(), sessionID, status, terminalReason, toolErrored, qualityFailed)
 }
 
-func (m *Manager) classifyAndPersistContext(ctx context.Context, sessionID, status, terminalReason string, toolErrored, qualityFailed bool) {
+func (m *Manager) classifyAndPersistContext(ctx context.Context, sessionID, status, terminalReason string, toolErrored, qualityFailed bool) error {
 	cat := classify(status, terminalReason, toolErrored, qualityFailed)
-	if err := m.st.SetFailureCategory(ctx, sessionID, cat); err != nil {
+	inserted, err := m.st.SetInitialFailureCategory(ctx, sessionID, cat)
+	if err != nil {
 		slog.Warn("eval: set failure category failed", "session", sessionID, "category", cat, "err", err)
-		return
+		return err
 	}
-	m.metrics.FailureClassified(cat)
+	if inserted {
+		m.metrics.FailureClassified(cat)
+	}
+	return nil
 }

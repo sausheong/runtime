@@ -408,7 +408,7 @@ func TestOBOExchangeEndToEnd(t *testing.T) {
 		tmp := t.TempDir()
 		cfgPath := filepath.Join(tmp, "runtime.yaml")
 		cfg := "agents:\n" +
-			"  - {id: a1, name: A1, model: test/scripted, listen_addr: 127.0.0.1:8487, tenant: acme}\n"
+			"  - {id: a1, name: A1, model: test/scripted, listen_addr: 127.0.0.1:8487, tenant: acme, registration_generation: test-generation-a1}\n"
 		if err := os.WriteFile(cfgPath, []byte(cfg), 0o644); err != nil {
 			t.Fatal(err)
 		}

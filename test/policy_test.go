@@ -39,12 +39,14 @@ func policyResetDB(t *testing.T, db *sql.DB) {
 	t.Helper()
 	mustExec(t, db, `DROP TABLE IF EXISTS markers`)
 	mustExec(t, db, `CREATE TABLE markers (id BIGSERIAL PRIMARY KEY, ran_at TIMESTAMPTZ)`)
-	mustExec(t, db, `DROP TABLE IF EXISTS session_events, sessions, agents CASCADE`)
+	mustExec(t, db, `DROP TABLE IF EXISTS online_eval_results, session_transcripts, session_events, sessions, agents CASCADE`)
 	mustExec(t, db, `DROP SCHEMA IF EXISTS dbos CASCADE`)
 	for _, q := range []string{
 		`DROP TABLE IF EXISTS gateway_policies CASCADE`,
 		`DROP TABLE IF EXISTS service_keys CASCADE`,
 		`DROP TABLE IF EXISTS identity_users CASCADE`,
+		`DROP TABLE IF EXISTS managed_agents CASCADE`,
+		`DROP TABLE IF EXISTS gateway_upstreams CASCADE`,
 		`DROP TABLE IF EXISTS tenants CASCADE`,
 	} {
 		mustExec(t, db, q)
@@ -94,6 +96,8 @@ func TestPolicyLifecycle(t *testing.T) {
 			`DROP TABLE IF EXISTS gateway_policies CASCADE`,
 			`DROP TABLE IF EXISTS service_keys CASCADE`,
 			`DROP TABLE IF EXISTS identity_users CASCADE`,
+			`DROP TABLE IF EXISTS managed_agents CASCADE`,
+			`DROP TABLE IF EXISTS gateway_upstreams CASCADE`,
 			`DROP TABLE IF EXISTS tenants CASCADE`,
 		} {
 			_, _ = cdb.Exec(q)
@@ -129,7 +133,7 @@ func TestPolicyLifecycle(t *testing.T) {
 
 	cfgPath := filepath.Join(tmp, "runtime.yaml")
 	cfg := "agents:\n" +
-		"  - {id: a1, name: A1, model: test/scripted, listen_addr: 127.0.0.1:8191, tenant: acme}\n" +
+		"  - {id: a1, name: A1, model: test/scripted, listen_addr: 127.0.0.1:8191, tenant: acme, registration_generation: test-generation-a1}\n" +
 		"gateway:\n" +
 		"  servers:\n" +
 		"    - {name: sbx, url: " + up + "}\n" // no tenants: ⇒ visible to all
@@ -248,6 +252,8 @@ func TestPolicyPlatformLayer(t *testing.T) {
 			`DROP TABLE IF EXISTS gateway_policies CASCADE`,
 			`DROP TABLE IF EXISTS service_keys CASCADE`,
 			`DROP TABLE IF EXISTS identity_users CASCADE`,
+			`DROP TABLE IF EXISTS managed_agents CASCADE`,
+			`DROP TABLE IF EXISTS gateway_upstreams CASCADE`,
 			`DROP TABLE IF EXISTS tenants CASCADE`,
 		} {
 			_, _ = cdb.Exec(q)
@@ -282,7 +288,7 @@ func TestPolicyPlatformLayer(t *testing.T) {
 
 	cfgPath := filepath.Join(tmp, "runtime.yaml")
 	cfg := "agents:\n" +
-		"  - {id: a1, name: A1, model: test/scripted, listen_addr: 127.0.0.1:8193, tenant: acme}\n" +
+		"  - {id: a1, name: A1, model: test/scripted, listen_addr: 127.0.0.1:8193, tenant: acme, registration_generation: test-generation-a1}\n" +
 		"gateway:\n" +
 		"  servers:\n" +
 		"    - {name: sbx, url: " + up + "}\n"
@@ -360,7 +366,7 @@ func TestPolicyBootFailsOnBadPlatformFile(t *testing.T) {
 	// A gateway section (so the policy block runs) + one agent.
 	up := fakePolicyUpstream(t)
 	cfg := "agents:\n" +
-		"  - {id: a1, name: A1, model: test/scripted, listen_addr: 127.0.0.1:8195, tenant: acme}\n" +
+		"  - {id: a1, name: A1, model: test/scripted, listen_addr: 127.0.0.1:8195, tenant: acme, registration_generation: test-generation-a1}\n" +
 		"gateway:\n  servers:\n    - {name: sbx, url: " + up + "}\n"
 	if err := os.WriteFile(cfgPath, []byte(cfg), 0o644); err != nil {
 		t.Fatal(err)

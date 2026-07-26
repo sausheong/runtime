@@ -16,6 +16,13 @@ func writeTmp(t *testing.T, body string) string {
 	return p
 }
 
+func testAgentConfig() AgentConfig {
+	return AgentConfig{
+		ID: "a", Name: "A", Model: "m", ListenAddr: "127.0.0.1:1",
+		RegistrationGeneration: "test-generation-a",
+	}
+}
+
 func TestLoad_Valid(t *testing.T) {
 	p := writeTmp(t, `
 agents:
@@ -23,10 +30,12 @@ agents:
     name: Support
     model: test/scripted
     listen_addr: 127.0.0.1:8101
+    registration_generation: support-generation-1
   - id: research
     name: Research
     model: test/scripted
     listen_addr: 127.0.0.1:8102
+    registration_generation: research-generation-1
 `)
 	cfg, err := Load(p)
 	if err != nil {
@@ -37,6 +46,19 @@ agents:
 	}
 	if cfg.Agents[0].ID != "support" || cfg.Agents[0].ListenAddr != "127.0.0.1:8101" {
 		t.Fatalf("bad first agent: %+v", cfg.Agents[0])
+	}
+}
+
+func TestLoadRequiresGenerationForLocalAgent(t *testing.T) {
+	p := writeTmp(t, `
+agents:
+  - id: support
+    name: Support
+    model: test/scripted
+    listen_addr: 127.0.0.1:8101
+`)
+	if _, err := Load(p); err == nil || !strings.Contains(err.Error(), "registration_generation") {
+		t.Fatalf("missing local generation error=%v", err)
 	}
 }
 
@@ -84,7 +106,7 @@ func TestValidateRejectsUnsafeIdentifiers(t *testing.T) {
 func TestLoadKind(t *testing.T) {
 	dir := t.TempDir()
 	p := filepath.Join(dir, "c.yaml")
-	os.WriteFile(p, []byte("agents:\n  - {id: n, name: N, model: openai/gpt, kind: nutrition, listen_addr: 127.0.0.1:8201}\n"), 0o644)
+	os.WriteFile(p, []byte("agents:\n  - {id: n, name: N, model: openai/gpt, kind: nutrition, listen_addr: 127.0.0.1:8201, registration_generation: test-generation-n}\n"), 0o644)
 	c, err := Load(p)
 	if err != nil {
 		t.Fatal(err)
@@ -101,6 +123,7 @@ agents:
     name: OpenAI SDK Agent
     model: openai/gpt-5.4
     listen_addr: 127.0.0.1:8301
+    registration_generation: test-generation-openai
     workdir: /tmp/shim
     command: ["uv", "run", "python", "main.py"]
 `)
@@ -120,7 +143,7 @@ agents:
 func TestLoad_DuplicateID(t *testing.T) {
 	p := writeTmp(t, `
 agents:
-  - {id: a, name: A, model: m, listen_addr: 127.0.0.1:8101}
+  - {id: a, name: A, model: m, listen_addr: 127.0.0.1:8101, registration_generation: test-generation-a}
   - {id: a, name: A2, model: m, listen_addr: 127.0.0.1:8102}
 `)
 	if _, err := Load(p); err == nil {
@@ -131,8 +154,8 @@ agents:
 func TestLoad_DuplicateAddr(t *testing.T) {
 	p := writeTmp(t, `
 agents:
-  - {id: a, name: A, model: m, listen_addr: 127.0.0.1:8101}
-  - {id: b, name: B, model: m, listen_addr: 127.0.0.1:8101}
+  - {id: a, name: A, model: m, listen_addr: 127.0.0.1:8101, registration_generation: test-generation-a}
+  - {id: b, name: B, model: m, listen_addr: 127.0.0.1:8101, registration_generation: test-generation-b}
 `)
 	if _, err := Load(p); err == nil {
 		t.Fatal("expected error for duplicate listen_addr")
@@ -159,7 +182,7 @@ func TestLoad_NoAgents(t *testing.T) {
 func TestLoad_WithTokens(t *testing.T) {
 	p := writeTmp(t, `
 agents:
-  - {id: a, name: A, model: m, listen_addr: 127.0.0.1:8101}
+  - {id: a, name: A, model: m, listen_addr: 127.0.0.1:8101, registration_generation: test-generation-a}
 tokens:
   - {token: "abc", label: "ci"}
   - {token: "xyz", label: "ops"}
@@ -180,7 +203,7 @@ tokens:
 func TestLoad_NoTokensIsValid(t *testing.T) {
 	p := writeTmp(t, `
 agents:
-  - {id: a, name: A, model: m, listen_addr: 127.0.0.1:8101}
+  - {id: a, name: A, model: m, listen_addr: 127.0.0.1:8101, registration_generation: test-generation-a}
 `)
 	cfg, err := Load(p)
 	if err != nil {
@@ -194,7 +217,7 @@ agents:
 func TestLoad_DuplicateToken(t *testing.T) {
 	p := writeTmp(t, `
 agents:
-  - {id: a, name: A, model: m, listen_addr: 127.0.0.1:8101}
+  - {id: a, name: A, model: m, listen_addr: 127.0.0.1:8101, registration_generation: test-generation-a}
 tokens:
   - {token: "dup", label: "one"}
   - {token: "dup", label: "two"}
@@ -207,7 +230,7 @@ tokens:
 func TestLoad_EmptyTokenString(t *testing.T) {
 	p := writeTmp(t, `
 agents:
-  - {id: a, name: A, model: m, listen_addr: 127.0.0.1:8101}
+  - {id: a, name: A, model: m, listen_addr: 127.0.0.1:8101, registration_generation: test-generation-a}
 tokens:
   - {token: "", label: "x"}
 `)
@@ -219,8 +242,8 @@ tokens:
 func TestLoad_TenantField(t *testing.T) {
 	p := writeTmp(t, `
 agents:
-  - {id: a, name: A, model: m, listen_addr: 127.0.0.1:8101, tenant: alpha}
-  - {id: b, name: B, model: m, listen_addr: 127.0.0.1:8102}
+  - {id: a, name: A, model: m, listen_addr: 127.0.0.1:8101, tenant: alpha, registration_generation: test-generation-a}
+  - {id: b, name: B, model: m, listen_addr: 127.0.0.1:8102, registration_generation: test-generation-b}
 `)
 	cfg, err := Load(p)
 	if err != nil {
@@ -243,11 +266,13 @@ func TestLoad_MemoryFlag(t *testing.T) {
     name: A1
     model: test/scripted
     listen_addr: "127.0.0.1:9101"
+    registration_generation: test-generation-a1
     memory: true
   - id: a2
     name: A2
     model: test/scripted
     listen_addr: "127.0.0.1:9102"
+    registration_generation: test-generation-a2
 `
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
@@ -267,8 +292,8 @@ func TestLoad_MemoryFlag(t *testing.T) {
 func TestAgentTenants(t *testing.T) {
 	p := writeTmp(t, `
 agents:
-  - {id: a, name: A, model: m, listen_addr: 127.0.0.1:8101, tenant: alpha}
-  - {id: b, name: B, model: m, listen_addr: 127.0.0.1:8102, tenant: beta}
+  - {id: a, name: A, model: m, listen_addr: 127.0.0.1:8101, tenant: alpha, registration_generation: test-generation-a}
+  - {id: b, name: B, model: m, listen_addr: 127.0.0.1:8102, tenant: beta, registration_generation: test-generation-b}
 `)
 	cfg, _ := Load(p)
 	m := cfg.AgentTenants()
@@ -279,9 +304,7 @@ agents:
 
 func TestGatewayConfigValidation(t *testing.T) {
 	base := func() *Config {
-		return &Config{Agents: []AgentConfig{
-			{ID: "a", Name: "A", Model: "m", ListenAddr: "127.0.0.1:1"},
-		}}
+		return &Config{Agents: []AgentConfig{testAgentConfig()}}
 	}
 
 	t.Run("valid stdio and http servers", func(t *testing.T) {
@@ -345,7 +368,7 @@ func TestGatewayEnvExpansion(t *testing.T) {
 
 	t.Run("expands ${VAR} in headers env and agent_keys", func(t *testing.T) {
 		c := &Config{
-			Agents: []AgentConfig{{ID: "a", Name: "A", Model: "m", ListenAddr: "127.0.0.1:1"}},
+			Agents: []AgentConfig{testAgentConfig()},
 			Gateway: GatewayConfig{
 				Servers: []GatewayServer{{
 					Name: "web", URL: "https://x/mcp",
@@ -371,7 +394,7 @@ func TestGatewayEnvExpansion(t *testing.T) {
 
 	t.Run("unset var is a load error", func(t *testing.T) {
 		c := &Config{
-			Agents: []AgentConfig{{ID: "a", Name: "A", Model: "m", ListenAddr: "127.0.0.1:1"}},
+			Agents: []AgentConfig{testAgentConfig()},
 			Gateway: GatewayConfig{Servers: []GatewayServer{{
 				Name: "web", URL: "https://x/mcp",
 				Headers: map[string]string{"Authorization": "Bearer ${GW_UNSET_VAR_XYZ}"},
@@ -386,7 +409,7 @@ func TestGatewayEnvExpansion(t *testing.T) {
 		t.Setenv("SPEC_URL", "https://api.example.com/openapi.json")
 		t.Setenv("API_BASE", "https://api.example.com/v2")
 		c := &Config{
-			Agents: []AgentConfig{{ID: "a", Name: "A", Model: "m", ListenAddr: "127.0.0.1:1"}},
+			Agents: []AgentConfig{testAgentConfig()},
 			Gateway: GatewayConfig{Servers: []GatewayServer{{
 				Name:    "orders",
 				OpenAPI: "${SPEC_URL}",
@@ -406,7 +429,7 @@ func TestGatewayEnvExpansion(t *testing.T) {
 
 	t.Run("unset var in openapi is a load error", func(t *testing.T) {
 		c := &Config{
-			Agents: []AgentConfig{{ID: "a", Name: "A", Model: "m", ListenAddr: "127.0.0.1:1"}},
+			Agents: []AgentConfig{testAgentConfig()},
 			Gateway: GatewayConfig{Servers: []GatewayServer{{
 				Name:    "orders",
 				OpenAPI: "${GW_UNSET_VAR_XYZ}",
@@ -424,7 +447,7 @@ func TestGatewayEnvExpansion(t *testing.T) {
 	t.Run("unset var in base_url is a load error", func(t *testing.T) {
 		t.Setenv("SPEC_URL", "https://api.example.com/openapi.json")
 		c := &Config{
-			Agents: []AgentConfig{{ID: "a", Name: "A", Model: "m", ListenAddr: "127.0.0.1:1"}},
+			Agents: []AgentConfig{testAgentConfig()},
 			Gateway: GatewayConfig{Servers: []GatewayServer{{
 				Name:    "orders",
 				OpenAPI: "${SPEC_URL}",
@@ -442,7 +465,7 @@ func TestGatewayEnvExpansion(t *testing.T) {
 
 	t.Run("literal values pass through", func(t *testing.T) {
 		c := &Config{
-			Agents: []AgentConfig{{ID: "a", Name: "A", Model: "m", ListenAddr: "127.0.0.1:1"}},
+			Agents: []AgentConfig{testAgentConfig()},
 			Gateway: GatewayConfig{Servers: []GatewayServer{{
 				Name: "web", URL: "https://x/mcp",
 				Headers: map[string]string{"X-Plain": "no-vars-here"},
@@ -458,10 +481,10 @@ func TestGatewayEnvExpansion(t *testing.T) {
 }
 
 func TestAgentConfigGatewayFlag(t *testing.T) {
+	agent := testAgentConfig()
+	agent.Gateway = GatewayFull
 	c := &Config{
-		Agents: []AgentConfig{
-			{ID: "a", Name: "A", Model: "m", ListenAddr: "127.0.0.1:1", Gateway: GatewayFull},
-		},
+		Agents:  []AgentConfig{agent},
 		Gateway: GatewayConfig{Servers: []GatewayServer{{Name: "fs", Command: "x"}}},
 	}
 	if err := c.Validate(); err != nil {
@@ -479,7 +502,7 @@ func TestGatewayModeYAML(t *testing.T) {
 		p := dir + "/runtime.yaml"
 		// A servers entry is present so gateway-enabled agents pass the
 		// agents-require-servers validation; it is inert for the off cases.
-		y := "agents:\n  - {id: a, name: A, model: m, listen_addr: 127.0.0.1:1" + gatewayVal + "}\n" +
+		y := "agents:\n  - {id: a, name: A, model: m, listen_addr: 127.0.0.1:1, registration_generation: test-generation-a" + gatewayVal + "}\n" +
 			"gateway:\n  servers:\n    - {name: fs, command: x}\n"
 		if err := os.WriteFile(p, []byte(y), 0o644); err != nil {
 			t.Fatal(err)
@@ -556,7 +579,7 @@ func TestGatewayModeYAML(t *testing.T) {
 func TestGatewayForwardTenantParsesAndValidates(t *testing.T) {
 	p := writeTmp(t, `
 agents:
-  - {id: a, name: A, model: m, listen_addr: 127.0.0.1:8101}
+  - {id: a, name: A, model: m, listen_addr: 127.0.0.1:8101, registration_generation: test-generation-a}
 gateway:
   servers:
     - {name: sandbox, command: sandboxd, forward_tenant: true}
@@ -577,7 +600,7 @@ gateway:
 func TestGatewayForwardTenantRejectsHTTPUpstream(t *testing.T) {
 	p := writeTmp(t, `
 agents:
-  - {id: a, name: A, model: m, listen_addr: 127.0.0.1:8101}
+  - {id: a, name: A, model: m, listen_addr: 127.0.0.1:8101, registration_generation: test-generation-a}
 gateway:
   servers:
     - {name: web, url: "https://example.com/mcp", forward_tenant: true}
@@ -598,7 +621,7 @@ gateway:
 func TestGatewayServerNameRejectsDoubleUnderscore(t *testing.T) {
 	p := writeTmp(t, `
 agents:
-  - {id: a, name: A, model: m, listen_addr: 127.0.0.1:8101}
+  - {id: a, name: A, model: m, listen_addr: 127.0.0.1:8101, registration_generation: test-generation-a}
 gateway:
   servers:
     - {name: a__b, command: x}
@@ -615,7 +638,7 @@ gateway:
 func TestGatewayOpenAPIServerParses(t *testing.T) {
 	p := writeTmp(t, `
 agents:
-  - {id: a, name: A, model: m, listen_addr: 127.0.0.1:8101}
+  - {id: a, name: A, model: m, listen_addr: 127.0.0.1:8101, registration_generation: test-generation-a}
 gateway:
   servers:
     - name: orders
@@ -645,7 +668,7 @@ func TestGatewayTransportExactlyOne(t *testing.T) {
 	base := func(srv GatewayServer) *Config {
 		srv.Name = "s"
 		return &Config{
-			Agents:  []AgentConfig{{ID: "a", Name: "A", Model: "m", ListenAddr: "127.0.0.1:1"}},
+			Agents:  []AgentConfig{testAgentConfig()},
 			Gateway: GatewayConfig{Servers: []GatewayServer{srv}},
 		}
 	}
@@ -681,7 +704,7 @@ func TestGatewayOpenAPIFieldRules(t *testing.T) {
 	base := func(srv GatewayServer) *Config {
 		srv.Name = "s"
 		return &Config{
-			Agents:  []AgentConfig{{ID: "a", Name: "A", Model: "m", ListenAddr: "127.0.0.1:1"}},
+			Agents:  []AgentConfig{testAgentConfig()},
 			Gateway: GatewayConfig{Servers: []GatewayServer{srv}},
 		}
 	}
@@ -737,7 +760,7 @@ func TestValidateOperationPattern(t *testing.T) {
 	}
 	// Bad glob through full config validation carries the server name.
 	c := &Config{
-		Agents: []AgentConfig{{ID: "a", Name: "A", Model: "m", ListenAddr: "127.0.0.1:1"}},
+		Agents: []AgentConfig{testAgentConfig()},
 		Gateway: GatewayConfig{Servers: []GatewayServer{
 			{Name: "orders", OpenAPI: "spec.yaml", Operations: []string{"GET /[x"}},
 		}},
@@ -752,9 +775,9 @@ func TestValidateOperationPattern(t *testing.T) {
 }
 
 func TestGatewayAgentRequiresServers(t *testing.T) {
-	c := &Config{Agents: []AgentConfig{
-		{ID: "a", Name: "A", Model: "m", ListenAddr: "127.0.0.1:1", Gateway: GatewayFull},
-	}}
+	agent := testAgentConfig()
+	agent.Gateway = GatewayFull
+	c := &Config{Agents: []AgentConfig{agent}}
 	if err := c.Validate(); err == nil {
 		t.Fatal("expected error: gateway agent without gateway.servers")
 	}
@@ -766,17 +789,20 @@ func TestGatewayAgentRequiresServers(t *testing.T) {
 
 func TestLoad_RemoteAgentURL(t *testing.T) {
 	t.Setenv("REMOTE_TOK", "shhh")
+	t.Setenv("REMOTE_GENERATION", "11111111-1111-4111-8111-111111111111")
 	p := writeTmp(t, `
 agents:
   - id: local-1
     name: Local
     model: test/scripted
     listen_addr: 127.0.0.1:8101
+    registration_generation: 22222222-2222-4222-8222-222222222222
   - id: remote-1
     name: Remote
     model: test/scripted
     url: https://agent-1.internal:8443
     auth_token: ${REMOTE_TOK}
+    registration_generation: ${REMOTE_GENERATION}
 `)
 	cfg, err := Load(p)
 	if err != nil {
@@ -788,6 +814,9 @@ agents:
 	if cfg.Agents[1].AuthToken != "shhh" {
 		t.Fatalf("auth_token not expanded: %q", cfg.Agents[1].AuthToken)
 	}
+	if cfg.Agents[1].RegistrationGeneration != "11111111-1111-4111-8111-111111111111" {
+		t.Fatalf("registration_generation not expanded: %q", cfg.Agents[1].RegistrationGeneration)
+	}
 	// The co-located local agent must still validate, and tenant defaulting
 	// must run for the remote agent (its branch sits before the default).
 	if cfg.Agents[0].ListenAddr != "127.0.0.1:8101" {
@@ -795,6 +824,19 @@ agents:
 	}
 	if cfg.Agents[1].Tenant != "default" {
 		t.Fatalf("remote agent tenant not defaulted: %q", cfg.Agents[1].Tenant)
+	}
+}
+
+func TestValidateRemoteRequiresLifecycleGeneration(t *testing.T) {
+	c := &Config{Agents: []AgentConfig{{
+		ID: "remote", Name: "Remote", Model: "m", URL: "https://agent.example",
+	}}}
+	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "registration_generation") {
+		t.Fatalf("error=%v, want missing registration_generation", err)
+	}
+	c.Agents[0].RegistrationGeneration = "11111111-1111-4111-8111-111111111111"
+	if err := c.Validate(); err != nil {
+		t.Fatalf("explicit lifecycle generation rejected: %v", err)
 	}
 }
 
@@ -919,8 +961,10 @@ func TestValidate_BadBasePort(t *testing.T) {
 
 func TestValidate_NonOverlappingPoolsOK(t *testing.T) {
 	c := &Config{Agents: []AgentConfig{
-		{ID: "a", Name: "A", Model: "m", ListenAddr: "127.0.0.1:8101", Replicas: 3},
-		{ID: "b", Name: "B", Model: "m", ListenAddr: "127.0.0.1:8201", Replicas: 3},
+		{ID: "a", Name: "A", Model: "m", ListenAddr: "127.0.0.1:8101", Replicas: 3,
+			RegistrationGeneration: "test-generation-a"},
+		{ID: "b", Name: "B", Model: "m", ListenAddr: "127.0.0.1:8201", Replicas: 3,
+			RegistrationGeneration: "test-generation-b"},
 	}}
 	if err := c.Validate(); err != nil {
 		t.Fatalf("non-overlapping pools should validate: %v", err)
@@ -941,6 +985,7 @@ agents:
     name: A
     model: m
     listen_addr: 127.0.0.1:9100
+    registration_generation: test-generation-a
     autoscale: {min: 1, max: 3, target_sessions_per_replica: 2}
 `
 	p := writeTmp(t, yaml)
@@ -1016,6 +1061,7 @@ func TestRemoteReplicaPool_Validate(t *testing.T) {
 		return &Config{Agents: []AgentConfig{{
 			ID: "support", Name: "S", Model: "m",
 			URL: "http://support-{i}.support-hl.ns.svc:8080", Replicas: 3,
+			RegistrationGeneration: "11111111-1111-4111-8111-111111111111",
 		}}}
 	}
 	t.Run("templated url with replicas>1 is valid", func(t *testing.T) {
@@ -1040,6 +1086,7 @@ func TestRemoteReplicaPool_Validate(t *testing.T) {
 	t.Run("single remote unchanged (no {i}, no replicas) still valid", func(t *testing.T) {
 		c := &Config{Agents: []AgentConfig{{
 			ID: "rem", Name: "R", Model: "m", URL: "https://h:8443",
+			RegistrationGeneration: "11111111-1111-4111-8111-111111111111",
 		}}}
 		if err := c.Validate(); err != nil {
 			t.Fatalf("C3 single-remote must stay valid: %v", err)
@@ -1054,8 +1101,8 @@ func TestRemoteReplicaPool_Validate(t *testing.T) {
 	})
 	t.Run("expanded ordinal URLs must be unique across agents", func(t *testing.T) {
 		c := &Config{Agents: []AgentConfig{
-			{ID: "a", Name: "A", Model: "m", URL: "http://x-{i}.svc:8080", Replicas: 2},
-			{ID: "b", Name: "B", Model: "m", URL: "http://x-{i}.svc:8080", Replicas: 2},
+			{ID: "a", Name: "A", Model: "m", URL: "http://x-{i}.svc:8080", Replicas: 2, RegistrationGeneration: "11111111-1111-4111-8111-111111111111"},
+			{ID: "b", Name: "B", Model: "m", URL: "http://x-{i}.svc:8080", Replicas: 2, RegistrationGeneration: "22222222-2222-4222-8222-222222222222"},
 		}}
 		if err := c.Validate(); err == nil {
 			t.Fatal("expected error: colliding expanded ordinal URLs")
@@ -1087,7 +1134,7 @@ func TestGatewayCredFieldsValidate(t *testing.T) {
 	// negative cases would pass for the wrong reason and the positive case
 	// would fail on the agent check rather than exercising cred validation.
 	agent := func() []AgentConfig {
-		return []AgentConfig{{ID: "a", Name: "A", Model: "m", ListenAddr: "127.0.0.1:1"}}
+		return []AgentConfig{testAgentConfig()}
 	}
 	// cred_header required when cred_secret set
 	c := &Config{Agents: agent(), Gateway: GatewayConfig{Servers: []GatewayServer{

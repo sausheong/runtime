@@ -28,6 +28,8 @@ func TestIdentityE2E_TwoTenants(t *testing.T) {
 	for _, q := range []string{
 		`DROP TABLE IF EXISTS service_keys CASCADE`,
 		`DROP TABLE IF EXISTS identity_users CASCADE`,
+		`DROP TABLE IF EXISTS managed_agents CASCADE`,
+		`DROP TABLE IF EXISTS gateway_upstreams CASCADE`,
 		`DROP TABLE IF EXISTS tenants CASCADE`,
 	} {
 		if _, err := db.Exec(q); err != nil {
@@ -53,6 +55,8 @@ func TestIdentityE2E_TwoTenants(t *testing.T) {
 		for _, q := range []string{
 			`DROP TABLE IF EXISTS service_keys CASCADE`,
 			`DROP TABLE IF EXISTS identity_users CASCADE`,
+			`DROP TABLE IF EXISTS managed_agents CASCADE`,
+			`DROP TABLE IF EXISTS gateway_upstreams CASCADE`,
 			`DROP TABLE IF EXISTS tenants CASCADE`,
 		} {
 			_, _ = cdb.Exec(q)

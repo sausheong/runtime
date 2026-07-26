@@ -4,7 +4,7 @@
 # go.mod, so a standalone clone builds without a sibling source checkout.
 #
 # Quick start:
-#   make build           # build agentd, runtimed, runtimectl, sandboxd into ./bin
+#   make build           # build all six shipped commands into ./bin
 #   make test            # hermetic unit tests
 #   make test-integration  # needs Postgres (make pg-up)
 #   make run             # build + run the control plane locally
@@ -21,7 +21,9 @@ VERSION     ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo 
 REVISION    ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
 IMAGE       ?= runtime
 
-BINS := agentd runtimed runtimectl sandboxd
+BINS := agentd browserd runtimectl runtimed sandboxd v1-probe
+SECURITY_BINS := $(BINS)
+GOVULNCHECK_VERSION ?= v1.4.0
 
 .DEFAULT_GOAL := help
 
@@ -66,7 +68,7 @@ test-integration: ## Run integration tests (requires Postgres at PG_DSN; see pg-
 	RUNTIME_TEST_ALLOW_SHARED_AGENT_DB_ROLE=1 \
 		GOFLAGS="$${GOFLAGS:-} -tags=runtime_integration" \
 		go test $(GOFLAGS) -tags integration -p 1 \
-			./internal/store ./internal/eval ./internal/memory ./internal/identity \
+			./internal/store ./internal/eval ./internal/memory ./internal/identity ./internal/agentstore ./internal/gateway \
 			-count=1 -timeout $(INTEGRATION_TIMEOUT)
 
 .PHONY: test-live
@@ -102,6 +104,18 @@ tidy: ## go mod tidy
 
 .PHONY: check
 check: fmt-check vet test ## fmt-check + vet + unit tests (CI gate)
+
+.PHONY: security-scan
+security-scan: ## Scan all imported packages and every shipped Go binary
+	go run golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION) -scan=package ./...
+	@set -eu; \
+	scan_dir="$$(mktemp -d)"; \
+	trap 'rm -rf "$$scan_dir"' EXIT; \
+	for command_name in $(SECURITY_BINS); do \
+		go build -o "$$scan_dir/$$command_name" "./cmd/$$command_name"; \
+		go run golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION) \
+			-mode=binary "$$scan_dir/$$command_name"; \
+	done
 
 # ---- Run ----
 .PHONY: run

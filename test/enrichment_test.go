@@ -120,7 +120,7 @@ func TestEnrichmentInjectsClaims(t *testing.T) {
 	// because the spec declares servers: [].
 	cfgPath := filepath.Join(tmp, "runtime.yaml")
 	cfg := "agents:\n" +
-		"  - {id: a1, name: A1, model: test/scripted, listen_addr: 127.0.0.1:8493, tenant: acme}\n" +
+		"  - {id: a1, name: A1, model: test/scripted, listen_addr: 127.0.0.1:8493, tenant: acme, registration_generation: test-generation-a1}\n" +
 		"gateway:\n" +
 		"  servers:\n" +
 		"    - name: echo\n" +

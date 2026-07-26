@@ -31,10 +31,13 @@ type Manager struct {
 	agentID string
 	// tenant is the immutable owner stamped onto every session created by this
 	// agent process. It comes from RUNTIME_AGENT_TENANT, not caller headers.
-	tenant  string
-	cfg     Config
-	dbosCtx dbos.DBOSContext
-	st      store.Store
+	tenant string
+	// generation is the immutable agent instance that owns newly-created
+	// sessions. The control plane rejects routing when this no longer matches.
+	generation string
+	cfg        Config
+	dbosCtx    dbos.DBOSContext
+	st         store.Store
 	// metrics is this agent's Prometheus registry. Nil-safe: tests construct
 	// Manager without it and every obs method no-ops on a nil receiver.
 	metrics *obs.AgentMetrics
@@ -252,12 +255,15 @@ func (m *Manager) failLimit(wfID, limit string, observed, configured int64) (str
 	// M3: classify the breach. A per-turn deadline (turn_timeout) becomes
 	// terminalReason "limit:turn_timeout" so classify reports `timeout`; the
 	// cumulative-budget limits report `limit_exceeded`. No policy criteria apply
-	// to a truncated session ⇒ qualityFailed=false. Best-effort (never fatal).
+	// to a truncated session ⇒ qualityFailed=false.
 	terminalReason := "limit_exceeded"
 	if limit == "turn_timeout" {
 		terminalReason = "limit:turn_timeout"
 	}
-	m.classifyAndPersist(wfID, "limit_exceeded", terminalReason, false, false)
+	if err := m.classifyAndPersist(
+		wfID, "limit_exceeded", terminalReason, false, false); err != nil {
+		return "error", fmt.Errorf("persist terminal classification: %w", err)
+	}
 	return "limit_exceeded", nil
 }
 
@@ -583,19 +589,15 @@ func (m *Manager) sessionWorkflow(ctx dbos.DBOSContext, in turnInput) (string, e
 			if out.Reason != "completed" {
 				status = "error"
 			}
-			// M3 failure classification. When a policy is sampled, fold
-			// classification into the SCORING goroutine's tail so quality_fail
-			// reads the criteria results that goroutine writes (no race). Otherwise
-			// classify inline with qualityFailed=false (no criteria to fail).
-			if m.evalPolicy != nil && sampled(wfID, m.evalPolicy.SampleRate) {
-				entries := out.Entries
-				tenant, actor := in.Tenant, in.Subject
-				m.enqueueScore(scoreJob{
-					sessionID: wfID, tenant: tenant, actor: actor, status: status,
-					terminalReason: out.Reason, toolErrored: toolErrored, entries: entries,
-				})
-			} else {
-				m.classifyAndPersist(wfID, status, out.Reason, toolErrored, false)
+			// Persist the deterministic non-quality category before optional
+			// sampled scoring. Queue admission, saturation, shutdown, and scorer
+			// failure can no longer leave a terminal session unclassified.
+			job := scoreJob{
+				sessionID: wfID, tenant: in.Tenant, actor: in.Subject, status: status,
+				terminalReason: out.Reason, toolErrored: toolErrored, entries: out.Entries,
+			}
+			if err := m.classifyAndQueueScore(job); err != nil {
+				return "error", fmt.Errorf("persist terminal classification: %w", err)
 			}
 			return out.Reason, nil
 		}
@@ -608,7 +610,8 @@ func (m *Manager) sessionWorkflow(ctx dbos.DBOSContext, in turnInput) (string, e
 // originating POST's X-Request-ID, carried into the checkpointed workflow
 // input for log correlation.
 func (m *Manager) startSession(ctx context.Context, userMsg, imageB64, imageMime, requestID, subject, tenant, role, assertion string) (string, error) {
-	sessionID, err := m.st.CreateSessionForTenant(ctx, m.tenantID(), m.agentID, m.replica)
+	sessionID, err := m.st.CreateSessionForIdentity(
+		ctx, m.tenantID(), m.agentID, m.generation, m.replica)
 	if err != nil {
 		return "", err
 	}
@@ -711,8 +714,9 @@ func Serve(ctx context.Context, cfg Config) error {
 	defer st.Close()
 
 	dctx, err := dbos.NewDBOSContext(ctx, dbos.Config{
-		AppName:     cfg.Spec.ID,
-		DatabaseURL: pgDSN,
+		AppName:        cfg.Spec.ID,
+		DatabaseURL:    pgDSN,
+		DatabaseSchema: os.Getenv("RUNTIME_DBOS_SCHEMA"),
 	})
 	if err != nil {
 		return err
@@ -735,6 +739,7 @@ func Serve(ctx context.Context, cfg Config) error {
 	m := &Manager{
 		agentID:           cfg.Spec.ID,
 		tenant:            agentTenant,
+		generation:        os.Getenv("RUNTIME_AGENT_GENERATION"),
 		cfg:               cfg,
 		dbosCtx:           dctx,
 		st:                st,

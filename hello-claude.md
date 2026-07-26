@@ -444,6 +444,7 @@ agents:
     name: Hello (Claude Agent SDK)
     model: claude-sonnet-4-6       # display only; the agent's ANTHROPIC_MODEL wins
     url: http://10.10.0.4:8080     # the agent VM's private IP:port
+    registration_generation: ${HELLO_CLAUDE_GENERATION}
 ```
 
 ```bash

@@ -18,8 +18,10 @@
 #     model: openai/gpt-5.4
 #     url: http://10.0.0.5:8080
 #     auth_token: ${MY_AGENT_TOKEN}
+#     registration_generation: ${MY_AGENT_GENERATION}
 agents:
   - id: demo
     name: Demo Agent
     model: test/scripted
     listen_addr: 127.0.0.1:8101
+    registration_generation: 65086d0a-4f3a-4e54-8350-9b326c8534dc

@@ -9,12 +9,19 @@ import (
 	"database/sql"
 	_ "embed"
 	"errors"
+	"fmt"
 
 	"github.com/sausheong/runtime/internal/store"
 )
 
 //go:embed schema.sql
 var schemaSQL string
+
+//go:embed registration_generation.sql
+var registrationGenerationSQL string
+
+//go:embed referential_integrity.sql
+var referentialIntegritySQL string
 
 // AgentRow is one tenant-registered remote agent (attach-only; a url, never a
 // spawned process). auth_secret is an optional per-tenant secret NAME brokered
@@ -27,6 +34,9 @@ type AgentRow struct {
 	URL        string
 	AuthSecret string
 	Enabled    bool
+	// RegistrationGeneration is a stable, non-secret instance marker. A
+	// delete/recreate receives a new value and cannot inherit old tokens.
+	RegistrationGeneration string
 	// Shadowed is a runtime-only presentation flag: a persisted row with the same
 	// id as an operator-file agent. It is never written to or read from Postgres.
 	Shadowed bool
@@ -38,7 +48,15 @@ type Store struct{ db *sql.DB }
 // New applies the managed_agents DDL (under the shared lock) and returns a
 // store. The tenants table (identity schema) must already exist (FK).
 func New(ctx context.Context, db *sql.DB) (*Store, error) {
-	if err := store.ApplySchemaMigrations(ctx, db, "managed-agents", 1, schemaSQL); err != nil {
+	if err := store.ApplyMigrationsLocked(ctx, db, "managed-agents", 1, 3, []store.Migration{
+		{Version: 1, Name: "baseline", SQL: schemaSQL},
+		{Version: 2, Name: "registration-generation", SQL: registrationGenerationSQL},
+		{Version: 3, Name: "repair-referential-integrity", SQL: referentialIntegritySQL},
+	}); err != nil {
+		return nil, err
+	}
+	if err := store.ApplyDDLLocked(ctx, db, schemaSQL+"\n"+registrationGenerationSQL+
+		"\n"+referentialIntegritySQL); err != nil {
 		return nil, err
 	}
 	return &Store{db: db}, nil
@@ -46,16 +64,24 @@ func New(ctx context.Context, db *sql.DB) (*Store, error) {
 
 // Insert adds a new managed agent (enabled). Duplicate id is a constraint error.
 func (s *Store) Insert(ctx context.Context, r AgentRow) error {
+	if r.RegistrationGeneration == "" {
+		return fmt.Errorf("managed agent %q requires a registration generation", r.ID)
+	}
 	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO managed_agents (id, tenant_id, name, model, url, auth_secret, enabled)
-		 VALUES ($1,$2,$3,$4,$5,$6,true)`,
-		r.ID, r.TenantID, r.Name, r.Model, r.URL, r.AuthSecret)
+		`INSERT INTO managed_agents
+		    (id, tenant_id, name, model, url, auth_secret, enabled,
+		     registration_generation)
+		 VALUES ($1,$2,$3,$4,$5,$6,true,$7)`,
+		r.ID, r.TenantID, r.Name, r.Model, r.URL, r.AuthSecret,
+		r.RegistrationGeneration)
 	return err
 }
 
 // List returns rows for one tenant, or all rows when tenant=="".
 func (s *Store) List(ctx context.Context, tenant string) ([]AgentRow, error) {
-	q := `SELECT id, tenant_id, name, model, url, auth_secret, enabled FROM managed_agents`
+	q := `SELECT id, tenant_id, name, model, url, auth_secret, enabled,
+	             registration_generation
+	        FROM managed_agents`
 	args := []any{}
 	if tenant != "" {
 		q += ` WHERE tenant_id=$1`
@@ -71,7 +97,7 @@ func (s *Store) List(ctx context.Context, tenant string) ([]AgentRow, error) {
 	for rows.Next() {
 		var r AgentRow
 		if err := rows.Scan(&r.ID, &r.TenantID, &r.Name, &r.Model, &r.URL,
-			&r.AuthSecret, &r.Enabled); err != nil {
+			&r.AuthSecret, &r.Enabled, &r.RegistrationGeneration); err != nil {
 			return nil, err
 		}
 		out = append(out, r)
@@ -83,9 +109,11 @@ func (s *Store) List(ctx context.Context, tenant string) ([]AgentRow, error) {
 func (s *Store) Get(ctx context.Context, id string) (AgentRow, bool, error) {
 	var r AgentRow
 	err := s.db.QueryRowContext(ctx,
-		`SELECT id, tenant_id, name, model, url, auth_secret, enabled
+		`SELECT id, tenant_id, name, model, url, auth_secret, enabled,
+		        registration_generation
 		 FROM managed_agents WHERE id=$1`, id).
-		Scan(&r.ID, &r.TenantID, &r.Name, &r.Model, &r.URL, &r.AuthSecret, &r.Enabled)
+		Scan(&r.ID, &r.TenantID, &r.Name, &r.Model, &r.URL, &r.AuthSecret,
+			&r.Enabled, &r.RegistrationGeneration)
 	if errors.Is(err, sql.ErrNoRows) {
 		return AgentRow{}, false, nil
 	}

@@ -63,8 +63,24 @@ spec:
               value: "1"
             - name: RUNTIME_AGENT_TENANT
               value: {{ $a.tenant | default "default" | quote }}
+            - name: RUNTIME_AGENT_GENERATION
+              value: {{ $a.registration_generation | quote }}
+            - name: RUNTIME_DBOS_SCHEMA
+              value: {{ include "runtime.agentDBOSSchema" (dict "tenant" ($a.tenant | default "default") "id" $a.id) | quote }}
             - name: RUNTIME_AGENT_MEMORY
               value: {{ if $a.memory }}"1"{{ else }}""{{ end }}
+            - name: RUNTIME_AGENT_MAX_REQUESTS
+              value: {{ $root.Values.agent.maxRequests | quote }}
+            - name: RUNTIME_AGENT_MAX_STREAMS
+              value: {{ $root.Values.agent.maxStreams | quote }}
+            - name: RUNTIME_MEMORY_RETENTION_DRY_RUN
+              value: {{ $root.Values.agent.memoryRetention.dryRun | quote }}
+            - name: RUNTIME_MEMORY_RETENTION_EPISODE
+              value: {{ $root.Values.agent.memoryRetention.episode | quote }}
+            - name: RUNTIME_MEMORY_RETENTION_FACT
+              value: {{ $root.Values.agent.memoryRetention.fact | quote }}
+            - name: RUNTIME_MEMORY_RETENTION_SUMMARY
+              value: {{ $root.Values.agent.memoryRetention.summary | quote }}
             - name: RUNTIME_SUBJECT_FORWARDING
               value: {{ ternary "1" "" $root.Values.identity.subjectForwarding | quote }}
             {{- if $root.Values.identity.subjectForwarding }}

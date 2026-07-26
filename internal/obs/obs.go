@@ -377,7 +377,9 @@ type AgentMetrics struct {
 	evalSessions    *prometheus.CounterVec
 	evalCriteria    *prometheus.CounterVec
 	evalFailures    *prometheus.CounterVec
+	evalRefinements *prometheus.CounterVec
 	evalQueueDrops  *prometheus.CounterVec
+	evalScoreErrors *prometheus.CounterVec
 	httpRejected    *prometheus.CounterVec
 }
 
@@ -441,17 +443,25 @@ func NewAgentMetrics(agentID, tenant, model string) *AgentMetrics {
 	}, []string{"agent", "tenant", "result"})
 	a.evalFailures = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "agent_eval_failures_total",
-		Help: "Terminal sessions classified by failure category, by agent, tenant, and category (fixed taxonomy: none/quality_fail/tool_error/agent_error/timeout/limit_exceeded).",
+		Help: "Initial deterministic terminal classifications, by agent, tenant, and category (fixed taxonomy: none/quality_fail/tool_error/agent_error/timeout/limit_exceeded).",
 	}, []string{"agent", "tenant", "category"})
+	a.evalRefinements = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "agent_eval_failure_refinements_total",
+		Help: "Durable terminal-classification refinements completed by online scoring.",
+	}, []string{"agent", "tenant", "from", "to"})
 	a.evalQueueDrops = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "agent_eval_queue_dropped_total",
 		Help: "Online eval jobs dropped because the bounded queue was full or shutting down.",
+	}, []string{"agent", "tenant", "reason"})
+	a.evalScoreErrors = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "agent_eval_scoring_failures_total",
+		Help: "Online eval scoring attempts that could not produce a complete durable score.",
 	}, []string{"agent", "tenant", "reason"})
 	a.httpRejected = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "agent_http_rejected_total",
 		Help: "Agent HTTP requests rejected by a concurrency limit.",
 	}, []string{"agent", "reason"})
-	a.reg.MustRegister(a.turns, a.turnDur, a.tokens, a.cost, a.unpriced, a.toolCalls, a.limitHits, a.summaryWrites, a.gcDeleted, a.retentionReaped, a.episodeWrites, a.evalSessions, a.evalCriteria, a.evalFailures, a.evalQueueDrops, a.httpRejected)
+	a.reg.MustRegister(a.turns, a.turnDur, a.tokens, a.cost, a.unpriced, a.toolCalls, a.limitHits, a.summaryWrites, a.gcDeleted, a.retentionReaped, a.episodeWrites, a.evalSessions, a.evalCriteria, a.evalFailures, a.evalRefinements, a.evalQueueDrops, a.evalScoreErrors, a.httpRejected)
 	return a
 }
 
@@ -544,6 +554,15 @@ func (a *AgentMetrics) EvalQueueDropped(reason string) {
 	a.evalQueueDrops.WithLabelValues(a.agentID, a.tenant, reason).Inc()
 }
 
+// EvalScoringFailure records an online score that was not durably complete.
+// reason is bounded by callers to scorer, result_store, or classification_store.
+func (a *AgentMetrics) EvalScoringFailure(reason string) {
+	if a == nil {
+		return
+	}
+	a.evalScoreErrors.WithLabelValues(a.agentID, a.tenant, reason).Inc()
+}
+
 func (a *AgentMetrics) HTTPRejected(reason string) {
 	if a == nil {
 		return
@@ -558,6 +577,15 @@ func (a *AgentMetrics) FailureClassified(category string) {
 		return
 	}
 	a.evalFailures.WithLabelValues(a.agentID, a.tenant, category).Inc()
+}
+
+// FailureRefined counts one successful durable category transition. Callers
+// emit it only when the store reports that the atomic transition occurred.
+func (a *AgentMetrics) FailureRefined(from, to string) {
+	if a == nil || a.evalRefinements == nil {
+		return
+	}
+	a.evalRefinements.WithLabelValues(a.agentID, a.tenant, from, to).Inc()
 }
 
 // MemoryGCReaped adds n to the count of dead memory rows reaped by GC. Nil-safe.

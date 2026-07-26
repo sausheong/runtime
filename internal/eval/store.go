@@ -10,11 +10,54 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/sausheong/runtime/internal/store"
 )
 
 //go:embed schema.sql
 var schemaSQL string
+
+//go:embed run_state_constraints.sql
+var runStateConstraintsSQL string
+
+//go:embed referential_integrity.sql
+var referentialIntegritySQL string
+
+var (
+	ErrRunExists            = errors.New("eval: run already exists")
+	ErrInvalidRunTransition = errors.New("eval: invalid run transition")
+)
+
+func validateNewRun(r Run) error {
+	if r.RunID == "" || r.Status != StatusPending || r.LeaseOwner != "" ||
+		r.LeaseUntil != nil || r.FinishedAt != nil {
+		return fmt.Errorf("%w: new run must be pending, unleased, and unfinished",
+			ErrInvalidRunTransition)
+	}
+	return nil
+}
+
+func validateClaim(owner string, now, until time.Time) error {
+	if owner == "" {
+		return fmt.Errorf("%w: claim owner is required", ErrInvalidRunTransition)
+	}
+	if !until.After(now) {
+		return fmt.Errorf("%w: claim lease must expire after acquisition",
+			ErrInvalidRunTransition)
+	}
+	return nil
+}
+
+func validateFinalization(owner, status string) error {
+	if owner == "" {
+		return fmt.Errorf("%w: finalization owner is required", ErrInvalidRunTransition)
+	}
+	if status != StatusCompleted && status != StatusError {
+		return fmt.Errorf("%w: final status must be completed or error",
+			ErrInvalidRunTransition)
+	}
+	return nil
+}
 
 // EvalStore is the eval persistence surface. Both *Store (Postgres) and
 // *MemStore implement it.
@@ -27,8 +70,6 @@ type EvalStore interface {
 	GetRun(ctx context.Context, runID string) (Run, bool, error)
 	ListRuns(ctx context.Context, tenant string) ([]Run, error)
 	ListIncompleteRuns(ctx context.Context, limit int) ([]Run, error)
-	SetRunStatus(ctx context.Context, runID, status string) error
-	FinishRun(ctx context.Context, runID, status string, total, passed, failed int, score float64, errMsg string) error
 	ClaimRun(ctx context.Context, runID, owner string, now, until time.Time) (bool, error)
 	FailPendingRun(ctx context.Context, runID, errMsg string) (bool, error)
 	FinishRunClaimed(ctx context.Context, runID, owner, status string, total, passed, failed int, score float64, errMsg string) (bool, error)
@@ -47,7 +88,15 @@ type Store struct {
 
 // NewStore applies the eval DDL under the shared DDL lock.
 func NewStore(ctx context.Context, db *sql.DB) (*Store, error) {
-	if err := store.ApplySchemaMigrations(ctx, db, "evaluation", 1, schemaSQL); err != nil {
+	if err := store.ApplyMigrationsLocked(ctx, db, "evaluation", 1, 3, []store.Migration{
+		{Version: 1, Name: "baseline", SQL: schemaSQL},
+		{Version: 2, Name: "enforce-run-state", SQL: runStateConstraintsSQL},
+		{Version: 3, Name: "repair-referential-integrity", SQL: referentialIntegritySQL},
+	}); err != nil {
+		return nil, err
+	}
+	if err := store.ApplyDDLLocked(ctx, db, schemaSQL+"\n"+runStateConstraintsSQL+
+		"\n"+referentialIntegritySQL); err != nil {
 		return nil, err
 	}
 	return &Store{db: db}, nil
@@ -140,10 +189,17 @@ func (s *Store) DeleteSet(ctx context.Context, tenant, name string) (bool, error
 }
 
 func (s *Store) CreateRun(ctx context.Context, r Run) error {
+	if err := validateNewRun(r); err != nil {
+		return err
+	}
 	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO eval_runs (run_id, tenant, set_name, agent_id, status) VALUES ($1,$2,$3,$4,$5)`,
 		r.RunID, r.Tenant, r.SetName, r.AgentID, r.Status)
 	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+			return fmt.Errorf("%w: %s", ErrRunExists, r.RunID)
+		}
 		return fmt.Errorf("eval create run %s: %w", r.RunID, err)
 	}
 	s.gen.Add(1)
@@ -240,16 +296,6 @@ func (s *Store) ListIncompleteRuns(ctx context.Context, limit int) ([]Run, error
 	return scanRuns(rows)
 }
 
-func (s *Store) SetRunStatus(ctx context.Context, runID, status string) error {
-	_, err := s.db.ExecContext(ctx,
-		`UPDATE eval_runs SET status=$2 WHERE run_id=$1`, runID, status)
-	if err != nil {
-		return fmt.Errorf("eval set run status %s: %w", runID, err)
-	}
-	s.gen.Add(1)
-	return nil
-}
-
 func scanRuns(rows *sql.Rows) ([]Run, error) {
 	var out []Run
 	for rows.Next() {
@@ -275,22 +321,12 @@ func scanRuns(rows *sql.Rows) ([]Run, error) {
 	return out, rows.Err()
 }
 
-func (s *Store) FinishRun(ctx context.Context, runID, status string, total, passed, failed int, score float64, errMsg string) error {
-	_, err := s.db.ExecContext(ctx,
-		`UPDATE eval_runs SET status=$2, total=$3, passed=$4, failed=$5, score=$6, error=$7,
-		        lease_owner='', lease_until=NULL, finished_at=now()
-		   WHERE run_id=$1`,
-		runID, status, total, passed, failed, score, errMsg)
-	if err != nil {
-		return fmt.Errorf("eval finish run %s: %w", runID, err)
-	}
-	s.gen.Add(1)
-	return nil
-}
-
 // ClaimRun atomically acquires or renews a lease for pending/running work. A
 // live lease held by another worker is never stolen.
 func (s *Store) ClaimRun(ctx context.Context, runID, owner string, now, until time.Time) (bool, error) {
+	if err := validateClaim(owner, now, until); err != nil {
+		return false, err
+	}
 	leaseFor := until.Sub(now)
 	res, err := s.db.ExecContext(ctx,
 		`UPDATE eval_runs
@@ -330,6 +366,9 @@ func (s *Store) FailPendingRun(ctx context.Context, runID, errMsg string) (bool,
 
 // FinishRunClaimed finalizes a run only for its current lease owner.
 func (s *Store) FinishRunClaimed(ctx context.Context, runID, owner, status string, total, passed, failed int, score float64, errMsg string) (bool, error) {
+	if err := validateFinalization(owner, status); err != nil {
+		return false, err
+	}
 	res, err := s.db.ExecContext(ctx,
 		`UPDATE eval_runs
 		    SET status=$3, total=$4, passed=$5, failed=$6, score=$7, error=$8,
@@ -350,6 +389,9 @@ func (s *Store) FinishRunClaimed(ctx context.Context, runID, owner, status strin
 }
 
 func (s *Store) PutResultClaimed(ctx context.Context, runID, owner string, result Result) (bool, error) {
+	if owner == "" {
+		return false, fmt.Errorf("%w: result owner is required", ErrInvalidRunTransition)
+	}
 	res, err := s.db.ExecContext(ctx,
 		`INSERT INTO eval_results (run_id, case_index, input, output, scorer, passed, detail)
 		 SELECT $1,$3,$4,$5,$6,$7,$8
@@ -393,8 +435,9 @@ func (s *Store) ListResults(ctx context.Context, runID string) ([]Result, error)
 	return out, rows.Err()
 }
 
-// ReapBefore deletes completed/error runs older than before. Results cascade;
-// pending/running work is retained for startup recovery.
+// ReapBefore deletes completed/error runs whose completion time is older than
+// before. Results cascade; pending/running work is retained for recovery. The
+// state-coherence migration guarantees terminal rows have finished_at.
 func (s *Store) ReapBefore(ctx context.Context, before time.Time, batch int) (int64, error) {
 	if batch < 1 {
 		batch = 1
@@ -403,8 +446,8 @@ func (s *Store) ReapBefore(ctx context.Context, before time.Time, batch int) (in
 		`DELETE FROM eval_runs
 		  WHERE run_id IN (
 		        SELECT run_id FROM eval_runs
-		         WHERE created_at < $1 AND status IN ($2,$3)
-		         ORDER BY created_at, run_id
+		         WHERE finished_at < $1 AND status IN ($2,$3)
+		         ORDER BY finished_at, run_id
 		         LIMIT $4
 		  )`,
 		before, StatusCompleted, StatusError, batch)

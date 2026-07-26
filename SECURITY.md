@@ -26,5 +26,10 @@ VMs with restricted credentials and networking. A Docker socket is a host-level
 privilege boundary. Transcript redaction is best effort and does not replace
 data classification, encryption, retention, or access control.
 
+Registration credentials are bound to an immutable tenant and agent-instance
+generation. Agent deletion/recreation or cross-tenant ID reuse does not transfer
+an old token to the replacement. Legacy unbound registration tokens fail closed
+after migration and must be rotated.
+
 See [operator-guide.md](operator-guide.md) for deployment hardening and
 [RELEASING.md](RELEASING.md) for release integrity.

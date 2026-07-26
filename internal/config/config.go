@@ -42,6 +42,10 @@ type AgentConfig struct {
 	// AuthToken is an optional shared bearer for the runtimed→remote-agent hop;
 	// ${VAR}-expanded at load. Only valid with URL.
 	AuthToken string `yaml:"auth_token"`
+	// RegistrationGeneration is an operator-rotated immutable instance
+	// generation. Remote agents require it because endpoint ownership and
+	// registration tokens must not follow a reused tenant/agent ID.
+	RegistrationGeneration string `yaml:"registration_generation"`
 
 	// Gateway opts the agent into the platform MCP gateway (env-injected
 	// URL+key). Optional; off (default) | full (true) | search.
@@ -375,6 +379,12 @@ func (c *Config) Validate() error {
 		if (a.ListenAddr == "") == (a.URL == "") {
 			return fmt.Errorf("config: agent %q requires exactly one of listen_addr (local) or url (remote)", a.ID)
 		}
+		if err := expandEnvScalar(
+			&a.RegistrationGeneration,
+			"agent "+a.ID+" registration_generation",
+		); err != nil {
+			return err
+		}
 		remote := a.URL != ""
 		if remote {
 			// Validate the concrete dial form: substitute the {i} placeholder
@@ -405,6 +415,13 @@ func (c *Config) Validate() error {
 			}
 		} else if a.AuthToken != "" {
 			return fmt.Errorf("config: agent %q auth_token is only valid with url (remote agents)", a.ID)
+		}
+		if a.RegistrationGeneration == "" {
+			return fmt.Errorf("config: agent %q requires registration_generation; keep it stable across ordinary restarts and rotate it when replacing or recreating the agent", a.ID)
+		}
+		n := len(a.RegistrationGeneration)
+		if n < 16 || n > 128 || strings.TrimSpace(a.RegistrationGeneration) != a.RegistrationGeneration {
+			return fmt.Errorf("config: agent %q registration_generation must be 16-128 non-space-surrounded characters", a.ID)
 		}
 		if a.Tenant == "" {
 			a.Tenant = "default"

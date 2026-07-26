@@ -44,25 +44,38 @@ func TestRestrictedAgentRoleCannotReadOtherTenantOrIdentityTables(t *testing.T) 
 		t.Fatal(err)
 	}
 	defer ownerStore.Close()
-	if err := store.ProvisionAgentRole(ctx, ownerDB, ownerRole, "alpha", false); err == nil {
+	if err := store.ProvisionAgentRole(ctx, ownerDB, ownerRole, "alpha", "agent-a", false); err == nil {
 		t.Fatal("control-plane database role was accepted as an agent role")
 	}
-	if err := store.ProvisionAgentRole(ctx, ownerDB, role, "alpha", true); err != nil {
+	if err := store.ProvisionAgentRole(ctx, ownerDB, role, "alpha", "agent-a", true); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.ConfigureAgentTenantRole(ctx, ownerDB, role, "beta", false); err == nil {
-		t.Fatal("production role binding allowed a tenant reassignment")
+	if err := store.ConfigureAgentRole(ctx, ownerDB, role, "alpha", "agent-b", false); err == nil {
+		t.Fatal("production role binding allowed a same-tenant agent reassignment")
 	}
-	alphaID, err := ownerStore.CreateSessionForTenant(ctx, "alpha", "restricted-role-test", 0)
+	alphaID, err := ownerStore.CreateSessionForIdentity(ctx, "alpha", "agent-a", "generation-a", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	betaID, err := ownerStore.CreateSessionForTenant(ctx, "beta", "restricted-role-test", 0)
+	sameTenantOtherAgentID, err := ownerStore.CreateSessionForIdentity(ctx, "alpha", "agent-b", "generation-b", 0)
 	if err != nil {
+		t.Fatal(err)
+	}
+	betaID, err := ownerStore.CreateSessionForIdentity(ctx, "beta", "agent-a", "generation-c", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherSchema := store.AgentDBOSSchema("alpha", "agent-b")
+	if _, err := ownerDB.ExecContext(ctx,
+		`CREATE SCHEMA IF NOT EXISTS "`+otherSchema+`";
+		 CREATE TABLE IF NOT EXISTS "`+otherSchema+`".workflow_probe (id INT)`); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
-		_, _ = ownerDB.Exec(`DELETE FROM sessions WHERE id IN ($1,$2)`, alphaID, betaID)
+		_, _ = ownerDB.Exec(
+			`DELETE FROM sessions WHERE id IN ($1,$2,$3)`,
+			alphaID, sameTenantOtherAgentID, betaID)
+		_, _ = ownerDB.Exec(`DROP SCHEMA IF EXISTS "` + otherSchema + `" CASCADE`)
 	})
 
 	agentDB, err := sql.Open("pgx", agentDSN)
@@ -71,7 +84,10 @@ func TestRestrictedAgentRoleCannotReadOtherTenantOrIdentityTables(t *testing.T) 
 	}
 	defer agentDB.Close()
 	var visible []string
-	rows, err := agentDB.QueryContext(ctx, `SELECT id FROM sessions WHERE id IN ($1,$2) ORDER BY id`, alphaID, betaID)
+	rows, err := agentDB.QueryContext(
+		ctx,
+		`SELECT id FROM sessions WHERE id IN ($1,$2,$3) ORDER BY id`,
+		alphaID, sameTenantOtherAgentID, betaID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -87,6 +103,23 @@ func TestRestrictedAgentRoleCannotReadOtherTenantOrIdentityTables(t *testing.T) 
 	}
 	if len(visible) != 1 || visible[0] != alphaID {
 		t.Fatalf("restricted role saw sessions %v, want only alpha session %q", visible, alphaID)
+	}
+	if _, err := agentDB.ExecContext(ctx,
+		`UPDATE sessions SET turn_count=999 WHERE id=$1`, sameTenantOtherAgentID); err != nil {
+		t.Fatal(err)
+	} else {
+		var turns int
+		if err := ownerDB.QueryRowContext(ctx,
+			`SELECT turn_count FROM sessions WHERE id=$1`, sameTenantOtherAgentID).Scan(&turns); err != nil {
+			t.Fatal(err)
+		}
+		if turns == 999 {
+			t.Fatal("restricted role mutated another same-tenant agent's session")
+		}
+	}
+	if _, err := agentDB.ExecContext(ctx,
+		`SELECT 1 FROM "`+otherSchema+`".workflow_probe LIMIT 1`); err == nil {
+		t.Fatal("restricted role read another same-tenant agent's DBOS schema")
 	}
 	for _, table := range []string{"identity_users", "service_keys", "secrets"} {
 		if _, err := agentDB.ExecContext(ctx, `SELECT 1 FROM "`+table+`" LIMIT 1`); err == nil {
@@ -124,7 +157,7 @@ func TestProvisionAgentRoleRejectsElevatedCatalogRole(t *testing.T) {
 		 LIMIT 1`).Scan(&privilegedRole); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.ProvisionAgentRole(ctx, db, privilegedRole, "alpha", false); err == nil {
+	if err := store.ProvisionAgentRole(ctx, db, privilegedRole, "alpha", "agent-a", false); err == nil {
 		t.Fatalf("elevated catalog role %q was accepted as an agent role", privilegedRole)
 	}
 	var memberRole string
@@ -136,7 +169,7 @@ func TestProvisionAgentRoleRejectsElevatedCatalogRole(t *testing.T) {
 		 LIMIT 1`).Scan(&memberRole); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.ProvisionAgentRole(ctx, db, memberRole, "alpha", false); err == nil {
+	if err := store.ProvisionAgentRole(ctx, db, memberRole, "alpha", "agent-a", false); err == nil {
 		t.Fatalf("role %q with inherited membership was accepted as an agent role", memberRole)
 	}
 }

@@ -165,6 +165,25 @@ func NewAPI(reg *Registry, m *obs.ControlMetrics, st store.Store, subjectForward
 			}
 			return
 		}
+		// The identity middleware and this handler deliberately do not share a
+		// mutable registry lookup. Re-authorize against the exact immutable
+		// AgentProcess snapshot selected for forwarding so delete/recreate or
+		// tenant reassignment cannot turn a stale authorization into access to a
+		// replacement agent.
+		if p, ok := PrincipalFromContext(r.Context()); ok {
+			if err := authorizeSelectedAgent(p, ap, actionForRequest(r.Method, "/agents/"+id+r.URL.Path)); err != nil {
+				status := authzStatus(err)
+				http.Error(w, authzMessage(status), status)
+				return
+			}
+		}
+		releaseReplica, leased := reg.LeaseReplica(
+			ap, r.Method == http.MethodPost && r.URL.Path == "/sessions")
+		if !leased {
+			http.Error(w, "session routing unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		defer releaseReplica()
 		m.ProxyCall(id, proxyKind(r.Method, r.URL.Path))
 		forwardSubject(r, subjectForwarding)
 		if subjectForwarding {
@@ -182,6 +201,11 @@ func NewAPI(reg *Registry, m *obs.ControlMetrics, st store.Store, subjectForward
 	})
 
 	return mux
+}
+
+func authorizeSelectedAgent(p identity.Principal, ap AgentProcess, action identity.Action) error {
+	az := identity.NewAuthorizer(map[string]string{ap.AgentID: ap.Tenant})
+	return az.Authorize(p, ap.AgentID, action)
 }
 
 // proxyKind classifies a prefix-stripped agent request path+method into the
@@ -227,35 +251,16 @@ func pickReplica(r *http.Request, reg *Registry, st store.Store, id string) (Age
 			if !errors.Is(err, store.ErrSessionNotFound) {
 				return AgentProcess{}, fmt.Errorf("%w: get session affinity: %w", errSessionRoutingStore, err)
 			}
-			// Some agents own their OWN session store, so the control plane's
-			// store may not contain historical, pre-binding sessions. A
-			// single-replica target is safe to ask directly; a pool is not.
-			//   - REMOTE agents (url:) own a store on their instance.
-			//   - COMMAND-spawned agents (the foreign-process shim, e.g. the
-			//     Python contract library) are local but keep sessions in their
-			//     own SQLite, not the control plane's Postgres.
-			replicas, _ := reg.Replicas(id)
-			if len(replicas) == 1 && (replicas[0].Remote || len(replicas[0].Command) > 0) {
-				return replicas[0], nil
-			}
+			// Historical external sessions without a durable binding cannot
+			// prove tenant, agent generation, or replica ownership. Fail closed
+			// even for a single replica: silently asking the current endpoint
+			// lets ID/endpoint reuse inherit another instance's session.
 			return AgentProcess{}, fmt.Errorf("%w: %q", store.ErrSessionNotFound, sid)
 		}
 		// Authentication authorizes the agent named in the URL. A session id is
 		// not an authority token: it must also belong to that exact agent before
 		// its replica affinity may influence routing. Without this check, a known
 		// session id from agent B could be read through an authorized path for A.
-		tenant, _ := reg.TenantOf(id)
-		if tenant == "" {
-			tenant = "default"
-		}
-		if session.AgentID != id || session.TenantID != tenant {
-			return AgentProcess{}, fmt.Errorf("%w: %q", store.ErrSessionNotFound, sid)
-		}
-		if session.Status == "external" {
-			if err := st.TouchSession(r.Context(), sid); err != nil {
-				return AgentProcess{}, fmt.Errorf("%w: touch external session affinity: %w", errSessionRoutingStore, err)
-			}
-		}
 		// A known session whose stored owner index is now out of range (e.g. the
 		// agent was reconfigured to fewer replicas than when this session was
 		// created) is unroutable: only that original executor can resume its
@@ -264,6 +269,16 @@ func pickReplica(r *http.Request, reg *Registry, st store.Store, id string) (Age
 		ap, ok := reg.Replica(id, session.Replica)
 		if !ok {
 			return AgentProcess{}, errSessionOwnerUnavailable
+		}
+		if session.AgentID != ap.AgentID || session.TenantID != ap.Tenant ||
+			session.AgentGeneration == "" ||
+			session.AgentGeneration != ap.RegistrationGeneration {
+			return AgentProcess{}, fmt.Errorf("%w: %q", store.ErrSessionNotFound, sid)
+		}
+		if session.Status == "external" {
+			if err := st.TouchSession(r.Context(), sid); err != nil {
+				return AgentProcess{}, fmt.Errorf("%w: touch external session affinity: %w", errSessionRoutingStore, err)
+			}
 		}
 		return ap, nil
 	}
@@ -312,7 +327,12 @@ func addSessionBinding(rp *httputil.ReverseProxy, st store.Store, ap AgentProces
 		}
 		bindCtx, cancel := context.WithTimeout(context.WithoutCancel(resp.Request.Context()), 5*time.Second)
 		defer cancel()
-		if err := st.BindSession(bindCtx, envelope.SessionID, tenant, ap.AgentID, ap.ReplicaIndex); err != nil {
+		if ap.RegistrationGeneration == "" {
+			return fmt.Errorf("persist external session affinity: selected agent has no generation")
+		}
+		if err := st.BindSession(
+			bindCtx, envelope.SessionID, tenant, ap.AgentID,
+			ap.RegistrationGeneration, ap.ReplicaIndex); err != nil {
 			return fmt.Errorf("persist external session affinity: %w", err)
 		}
 		return nil

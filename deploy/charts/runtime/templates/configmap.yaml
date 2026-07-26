@@ -23,6 +23,7 @@ data:
         name: {{ $a.name | quote }}
         model: {{ $a.model | quote }}
         tenant: {{ $a.tenant | default "default" | quote }}
+        registration_generation: {{ $a.registration_generation | quote }}
         {{- $n := $a.replicas | default 1 | int }}
         {{- $tmpl := include "runtime.agentDialTemplate" (dict "root" $root "id" $a.id) }}
         {{- if gt $n 1 }}

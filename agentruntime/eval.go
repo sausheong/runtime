@@ -21,6 +21,20 @@ type scoreJob struct {
 	entries        []session.SessionEntry
 }
 
+// classifyAndQueueScore durably records the deterministic terminal category
+// before optional scoring admission. Scoring may refine a clean category to
+// quality_fail later, but queue lifecycle can never suppress classification.
+func (m *Manager) classifyAndQueueScore(job scoreJob) error {
+	if err := m.classifyAndPersist(
+		job.sessionID, job.status, job.terminalReason, job.toolErrored, false); err != nil {
+		return err
+	}
+	if m.evalPolicy != nil && sampled(job.sessionID, m.evalPolicy.SampleRate) {
+		m.enqueueScore(job)
+	}
+	return nil
+}
+
 // sampled is the deterministic sample decision: fnv32a(sessionID) % 100 < rate.
 func sampled(sessionID string, rate int) bool {
 	if rate <= 0 {
@@ -49,7 +63,7 @@ func finalAssistantText(entries []session.SessionEntry) string {
 }
 
 type resultPutter interface {
-	PutOnlineResult(ctx context.Context, sessionID, criterion, tenant, actor, scorer string, passed bool, detail string) error
+	PutOnlineResultIfNew(ctx context.Context, sessionID, criterion, tenant, actor, scorer string, passed bool, detail string) (bool, error)
 }
 
 func (m *Manager) startScoring(workers, queue int, timeout time.Duration) {
@@ -138,30 +152,62 @@ func (m *Manager) scoreOnto(ctx context.Context, rs resultPutter, sessionID, ten
 	output := finalAssistantText(entries)
 	qualityFailed := false
 	allPersisted := true
+	anyNewResult := false
 	if m.evalPolicy != nil {
 		for _, c := range m.evalPolicy.Criteria {
 			if ctx.Err() != nil {
 				allPersisted = false
 				break
 			}
-			passed, detail := eval.Score(ctx, m.evalJudge, criterionCase(c), output)
-			if err := rs.PutOnlineResult(ctx, sessionID, c.Name, tenant, actor, string(c.Scorer), passed, detail); err != nil {
+			passed, detail, scoreErr := eval.ScoreChecked(
+				ctx, m.evalJudge, criterionCase(c), output)
+			if scoreErr != nil {
 				allPersisted = false
+				m.metrics.EvalScoringFailure("scorer")
+				slog.Warn("eval: online scorer failed",
+					"session", sessionID, "criterion", c.Name, "err", scoreErr)
+				continue
+			}
+			inserted, err := rs.PutOnlineResultIfNew(
+				ctx, sessionID, c.Name, tenant, actor, string(c.Scorer), passed, detail)
+			if err != nil {
+				allPersisted = false
+				m.metrics.EvalScoringFailure("result_store")
 				slog.Warn("eval: put online result failed", "session", sessionID, "criterion", c.Name, "err", err)
 				continue
 			}
+			anyNewResult = anyNewResult || inserted
 			if !passed {
 				qualityFailed = true
 			}
-			result := "fail"
-			if passed {
-				result = "pass"
+			if inserted {
+				result := "fail"
+				if passed {
+					result = "pass"
+				}
+				m.metrics.EvalCriterion(result)
 			}
-			m.metrics.EvalCriterion(result)
 		}
-		if allPersisted {
+		if allPersisted && anyNewResult {
 			m.metrics.EvalSessionScored()
 		}
 	}
-	m.classifyAndPersistContext(ctx, sessionID, status, terminalReason, toolErrored, qualityFailed)
+	// The terminal path already persisted and counted the deterministic base
+	// category before queue admission. Refine it to quality_fail only when the
+	// complete sampled score persisted successfully. The conditional store
+	// transition makes the separate refinement metric replay-safe.
+	if allPersisted && qualityFailed &&
+		classify(status, terminalReason, toolErrored, false) == CatNone {
+		classifyCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		refined, err := m.st.RefineFailureCategory(
+			classifyCtx, sessionID, CatNone, CatQualityFail)
+		if err != nil {
+			m.metrics.EvalScoringFailure("classification_store")
+			slog.Warn("eval: refine failure category failed",
+				"session", sessionID, "category", CatQualityFail, "err", err)
+		} else if refined {
+			m.metrics.FailureRefined(CatNone, CatQualityFail)
+		}
+	}
 }

@@ -73,7 +73,7 @@ func TestNutritionAgentImageSession(t *testing.T) {
 	}
 
 	// Clean slate.
-	mustExec(t, db, `DROP TABLE IF EXISTS session_events, sessions, agents CASCADE`)
+	mustExec(t, db, `DROP TABLE IF EXISTS online_eval_results, session_transcripts, session_events, sessions, agents CASCADE`)
 	mustExec(t, db, `DROP SCHEMA IF EXISTS dbos CASCADE`)
 
 	reg := tool.NewRegistry()

@@ -1,22 +1,19 @@
 # Turnkey-compose agent registry. Identity is enabled via env in
 # docker-compose.yml (RUNTIME_ADMIN_BOOTSTRAP + RUNTIME_SECRETS_KEYS/PRIMARY).
-# Two scripted agents need no LLM key, so the stack runs with zero external
-# accounts. The code interpreter and browser ship as stdio gateway upstreams
-# (runtimed spawns /app/sandboxd and /app/browserd; each launches sibling
-# containers on the mounted Docker socket).
+# The scripted agent needs no LLM key, so the stack runs with zero external
+# accounts. One local agent deliberately matches the one restricted database
+# role trust domain. Deploy another Runtime/role or attach a remote agent for
+# additional identities. The code interpreter and browser ship as stdio gateway
+# upstreams (runtimed spawns /app/sandboxd and /app/browserd; each launches
+# sibling containers on the mounted Docker socket).
 agents:
   - id: support
     name: Support Agent
     model: test/scripted
     listen_addr: 127.0.0.1:8101
+    registration_generation: 03187b3a-4e1c-4b5f-a60f-c79fcff6c150
     memory: true        # durable per-tenant memory (semantic recall via embedder)
     gateway: true       # sees federated gateway tools (sandbox, browser, upstreams)
-  - id: research
-    name: Research Agent
-    model: test/scripted
-    listen_addr: 127.0.0.1:8102
-    gateway: true
-
 # Cost metering. Prices are $ per MILLION tokens, keyed by the exact
 # provider/model. The bundled agents use test/scripted, priced here with nominal
 # values so the shipped stack demonstrates agent_cost_usd_total out of the box.

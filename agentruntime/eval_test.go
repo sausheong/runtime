@@ -64,9 +64,8 @@ func TestFinalAssistantText(t *testing.T) {
 	}
 }
 
-// erroringJudge always fails transport — mirrors M1's fake-judge pattern
-// (internal/eval/scorer_test.go). eval.Score turns this into a failed criterion
-// with a detail, never a propagated error, so scoreOnto's loop continues.
+// erroringJudge always fails transport. Online scoring must distinguish this
+// infrastructure failure from a real failed quality criterion.
 type erroringJudge struct{}
 
 func (erroringJudge) Grade(_ context.Context, _, _, _ string) (bool, string, error) {
@@ -76,9 +75,9 @@ func (erroringJudge) Grade(_ context.Context, _, _, _ string) (bool, string, err
 // fakeResultStore records the criteria persisted via PutOnlineResult.
 type fakeResultStore struct{ puts []string }
 
-func (f *fakeResultStore) PutOnlineResult(_ context.Context, s, c, t, a, sc string, p bool, d string) error {
+func (f *fakeResultStore) PutOnlineResultIfNew(_ context.Context, s, c, t, a, sc string, p bool, d string) (bool, error) {
 	f.puts = append(f.puts, c)
-	return nil
+	return true, nil
 }
 
 // newTestManagerForScoring builds a Manager with just the scoring deps set: the
@@ -90,17 +89,20 @@ func newTestManagerForScoring(pol *eval.Policy, j eval.Judge) *Manager {
 	return &Manager{evalPolicy: pol, evalJudge: j, st: &fakeCatStore{}}
 }
 
-func TestScoreSessionAllCriteriaFailClosed(t *testing.T) {
+func TestOnlineJudgeFailureDoesNotBecomeQualityFailure(t *testing.T) {
 	pol := &eval.Policy{Tenant: "t1", AgentID: "a1", SampleRate: 100, Criteria: []eval.Criterion{
 		{Name: "has-final", Scorer: eval.ScorerContains, Pattern: "final"}, // pass
 		{Name: "has-zzz", Scorer: eval.ScorerContains, Pattern: "zzz"},     // fail
-		{Name: "j", Scorer: eval.ScorerJudge, Rubric: "polite"},            // judge err → fail-criterion
+		{Name: "j", Scorer: eval.ScorerJudge, Rubric: "polite"},            // infrastructure failure
 	}}
 	m := newTestManagerForScoring(pol, erroringJudge{})
 	rs := &fakeResultStore{}
 	m.scoreOnto(context.Background(), rs, "s1", "t1", "alice", "completed", "completed", false, []session.SessionEntry{msgEntry("assistant", "the final answer")})
-	if len(rs.puts) != 3 {
-		t.Fatalf("want 3 criteria persisted (judge error must NOT abort), got %d", len(rs.puts))
+	if len(rs.puts) != 2 {
+		t.Fatalf("persisted criteria=%v, want only two completed deterministic scores", rs.puts)
+	}
+	if fs := m.st.(*fakeCatStore); fs.setCat != "" {
+		t.Fatalf("judge failure incorrectly refined category to %q", fs.setCat)
 	}
 }
 
@@ -195,6 +197,56 @@ func TestScoringQueueFullDropsWithoutBlocking(t *testing.T) {
 	}
 }
 
+func TestQueueRejectionCannotSuppressTerminalClassification(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		closeQueue bool
+		want       string
+		toolError  bool
+	}{
+		{name: "full queue", want: CatNone},
+		{name: "closed queue", closeQueue: true, want: CatToolError, toolError: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			st := store.NewMemStore()
+			sid, err := st.CreateSessionForIdentity(
+				context.Background(), "t", "a", "generation", 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			m := &Manager{
+				agentID: "a", tenant: "t", st: st,
+				metrics: obs.NewAgentMetrics("a", "t", "test"),
+				evalPolicy: &eval.Policy{
+					SampleRate: 100,
+					Criteria: []eval.Criterion{{
+						Name: "quality", Scorer: eval.ScorerContains, Pattern: "ok",
+					}},
+				},
+			}
+			m.scoreMu.Lock()
+			m.scoreQueue = make(chan scoreJob, 1)
+			m.scoreQueue <- scoreJob{sessionID: "occupied"}
+			m.scoreClosed = tc.closeQueue
+			m.scoreMu.Unlock()
+
+			if err := m.classifyAndQueueScore(scoreJob{
+				sessionID: sid, status: "completed", terminalReason: "completed",
+				toolErrored: tc.toolError,
+			}); err != nil {
+				t.Fatal(err)
+			}
+			row, err := st.GetSession(context.Background(), sid)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if row.FailureCategory != tc.want {
+				t.Fatalf("category=%q, want %q", row.FailureCategory, tc.want)
+			}
+		})
+	}
+}
+
 func TestScoringShutdownCancelsAfterDrainDeadline(t *testing.T) {
 	never := make(chan struct{})
 	started := make(chan struct{}, 1)
@@ -237,8 +289,8 @@ func TestScoringShutdownRemainsBoundedWhenWorkerIgnoresCancellation(t *testing.T
 
 type errorResultStore struct{ error }
 
-func (e errorResultStore) PutOnlineResult(context.Context, string, string, string, string, string, bool, string) error {
-	return e.error
+func (e errorResultStore) PutOnlineResultIfNew(context.Context, string, string, string, string, string, bool, string) (bool, error) {
+	return false, e.error
 }
 
 func TestScoringMetricsRequirePersistedResults(t *testing.T) {
@@ -250,6 +302,43 @@ func TestScoringMetricsRequirePersistedResults(t *testing.T) {
 	body := scrapeAgentMetrics(t, m)
 	if strings.Contains(body, "agent_eval_criteria_total") || strings.Contains(body, "agent_eval_sessions_scored_total") {
 		t.Fatalf("persist-failed metrics were emitted:\n%s", body)
+	}
+	if !strings.Contains(body,
+		`agent_eval_scoring_failures_total{agent="a",reason="result_store",tenant="t"} 1`) {
+		t.Fatalf("result-store failure metric missing:\n%s", body)
+	}
+}
+
+func TestScoringMetricsDoNotDoubleCountReplay(t *testing.T) {
+	ctx := context.Background()
+	st := store.NewMemStore()
+	sid, err := st.CreateSessionForIdentity(ctx, "t", "a", "generation", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := &Manager{
+		agentID: "a", tenant: "t", st: st,
+		metrics: obs.NewAgentMetrics("a", "t", "test"),
+		evalPolicy: &eval.Policy{Criteria: []eval.Criterion{{
+			Name: "contains-z", Scorer: eval.ScorerContains, Pattern: "z",
+		}}},
+	}
+	jobEntries := []session.SessionEntry{msgEntry("assistant", "x")}
+	if err := m.classifyAndPersist(sid, "completed", "completed", false, false); err != nil {
+		t.Fatal(err)
+	}
+	m.scoreOnto(ctx, st, sid, "t", "actor", "completed", "completed", false, jobEntries)
+	m.scoreOnto(ctx, st, sid, "t", "actor", "completed", "completed", false, jobEntries)
+	body := scrapeAgentMetrics(t, m)
+	for _, want := range []string{
+		`agent_eval_sessions_scored_total{agent="a",tenant="t"} 1`,
+		`agent_eval_criteria_total{agent="a",result="fail",tenant="t"} 1`,
+		`agent_eval_failures_total{agent="a",category="none",tenant="t"} 1`,
+		`agent_eval_failure_refinements_total{agent="a",from="none",tenant="t",to="quality_fail"} 1`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("replay-safe metric %q missing:\n%s", want, body)
+		}
 	}
 }
 

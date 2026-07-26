@@ -9,10 +9,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/filters"
-	"github.com/docker/docker/client"
-	"github.com/docker/docker/pkg/stdcopy"
+	"github.com/moby/moby/api/pkg/stdcopy"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/client"
 )
 
 // sandboxLabel marks every container sandboxd creates, for reap-on-start.
@@ -65,8 +64,8 @@ func NewDockerBackend(cfg DockerConfig) (Backend, error) {
 // bounded cpu/memory/pids.
 func (d *dockerBackend) Create(ctx context.Context, tenant string) (string, error) {
 	pids := int64(128)
-	created, err := d.cli.ContainerCreate(ctx,
-		&container.Config{
+	created, err := d.cli.ContainerCreate(ctx, client.ContainerCreateOptions{
+		Config: &container.Config{
 			Image:      d.cfg.Image,
 			Cmd:        []string{"sleep", "infinity"},
 			User:       strconv.Itoa(sandboxUID),
@@ -76,7 +75,7 @@ func (d *dockerBackend) Create(ctx context.Context, tenant string) (string, erro
 				sandboxLabel + ".tenant": tenant,
 			},
 		},
-		&container.HostConfig{
+		HostConfig: &container.HostConfig{
 			NetworkMode:    "none",
 			ReadonlyRootfs: true,
 			Tmpfs: map[string]string{
@@ -92,13 +91,13 @@ func (d *dockerBackend) Create(ctx context.Context, tenant string) (string, erro
 				PidsLimit: &pids,
 			},
 		},
-		nil, nil, "")
+	})
 	if err != nil {
 		return "", err
 	}
-	if err := d.cli.ContainerStart(ctx, created.ID, container.StartOptions{}); err != nil {
+	if _, err := d.cli.ContainerStart(ctx, created.ID, client.ContainerStartOptions{}); err != nil {
 		// Don't leave a created-but-never-started container behind.
-		_ = d.cli.ContainerRemove(ctx, created.ID, container.RemoveOptions{Force: true})
+		_, _ = d.cli.ContainerRemove(ctx, created.ID, client.ContainerRemoveOptions{Force: true})
 		return "", err
 	}
 	return created.ID, nil
@@ -131,7 +130,7 @@ func (d *dockerBackend) runExec(ctx context.Context, containerID string, argv []
 	defer cancel()
 
 	start := time.Now()
-	exec, err := d.cli.ContainerExecCreate(ctx, containerID, container.ExecOptions{
+	exec, err := d.cli.ExecCreate(ctx, containerID, client.ExecCreateOptions{
 		Cmd:          cmd,
 		WorkingDir:   workspace,
 		AttachStdin:  stdin != nil,
@@ -141,7 +140,7 @@ func (d *dockerBackend) runExec(ctx context.Context, containerID string, argv []
 	if err != nil {
 		return ExecResult{}, err
 	}
-	attach, err := d.cli.ContainerExecAttach(ctx, exec.ID, container.ExecAttachOptions{})
+	attach, err := d.cli.ExecAttach(ctx, exec.ID, client.ExecAttachOptions{})
 	if err != nil {
 		return ExecResult{}, err
 	}
@@ -216,7 +215,7 @@ func (d *dockerBackend) runExec(ctx context.Context, containerID string, argv []
 	// expired, and exit-code/TimedOut reporting must survive that.
 	inspectCtx, cancelInspect := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancelInspect()
-	inspect, err := d.cli.ContainerExecInspect(inspectCtx, exec.ID)
+	inspect, err := d.cli.ExecInspect(inspectCtx, exec.ID, client.ExecInspectOptions{})
 	elapsed := time.Since(start)
 	if err != nil {
 		if ctxExpired {
@@ -310,21 +309,22 @@ func (d *dockerBackend) ReadFile(ctx context.Context, containerID, p string, lim
 
 // Remove force-removes the container.
 func (d *dockerBackend) Remove(ctx context.Context, containerID string) error {
-	return d.cli.ContainerRemove(ctx, containerID, container.RemoveOptions{Force: true})
+	_, err := d.cli.ContainerRemove(ctx, containerID, client.ContainerRemoveOptions{Force: true})
+	return err
 }
 
 // ListLeftovers returns every container (any state) carrying the sandbox
 // label, for reap-on-start after a crash.
 func (d *dockerBackend) ListLeftovers(ctx context.Context) ([]string, error) {
-	list, err := d.cli.ContainerList(ctx, container.ListOptions{
+	list, err := d.cli.ContainerList(ctx, client.ContainerListOptions{
 		All:     true,
-		Filters: filters.NewArgs(filters.Arg("label", sandboxLabel+"=1")),
+		Filters: make(client.Filters).Add("label", sandboxLabel+"=1"),
 	})
 	if err != nil {
 		return nil, err
 	}
-	ids := make([]string, 0, len(list))
-	for _, c := range list {
+	ids := make([]string, 0, len(list.Items))
+	for _, c := range list.Items {
 		ids = append(ids, c.ID)
 	}
 	return ids, nil

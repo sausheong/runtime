@@ -805,7 +805,7 @@ func Handler(reg *controlplane.Registry, st store.Store, oidc OIDCConfig, onb *O
 			}))
 
 			mux.HandleFunc("POST /ui/onboarding/agents/{id}/delete", guard(func(p identity.Principal, w http.ResponseWriter, r *http.Request) {
-				if err := controlplane.DeregisterAgentShared(r.Context(), onb.Agents, onb.AgentMgr, p.TenantID, r.PathValue("id")); err != nil {
+				if err := controlplane.DeregisterAgentShared(r.Context(), onb.Agents, onb.Admin, onb.AgentMgr, p.TenantID, r.PathValue("id")); err != nil {
 					http.Error(w, err.Error(), http.StatusBadRequest)
 					return
 				}

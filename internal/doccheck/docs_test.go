@@ -2,6 +2,7 @@ package doccheck_test
 
 import (
 	"bufio"
+	"fmt"
 	"net/url"
 	"os"
 	"os/exec"
@@ -15,6 +16,122 @@ import (
 )
 
 var markdownLink = regexp.MustCompile(`\[[^]]*]\(([^)\s]+)(?:\s+"[^"]*")?\)`)
+
+type workflowDocument struct {
+	Jobs map[string]workflowJob `yaml:"jobs"`
+}
+
+type workflowJob struct {
+	Steps []workflowStep `yaml:"steps"`
+}
+
+type workflowStep struct {
+	Name            string `yaml:"name"`
+	Run             string `yaml:"run"`
+	Uses            string `yaml:"uses"`
+	ContinueOnError bool   `yaml:"continue-on-error"`
+}
+
+var releaseValidationCommands = []string{
+	"make check",
+	"make security-scan",
+	"make test-integration",
+	"go test -race",
+	"pytest contrib/shims/python/tests",
+	"make helm-lint",
+	"bash deploy/charts/runtime/test.sh",
+	"shellcheck",
+	"docker compose -f deploy/compose/docker-compose.yml config --quiet",
+	"docker compose -f deploy/gcp/control-plane/docker-compose.yml config --quiet",
+}
+
+var publicationCommands = []string{
+	"docker push",
+	"helm push",
+	"cosign sign",
+	"cosign attest",
+	"gh release create",
+}
+
+func stepRuns(step workflowStep, command string) bool {
+	for _, line := range strings.Split(step.Run, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		if strings.Contains(line, command) {
+			return true
+		}
+	}
+	return false
+}
+
+func validateReleasePublicationGates(data []byte) error {
+	var workflow workflowDocument
+	if err := yaml.Unmarshal(data, &workflow); err != nil {
+		return fmt.Errorf("parse release workflow: %w", err)
+	}
+	publish, ok := workflow.Jobs["publish"]
+	if !ok {
+		return fmt.Errorf("release workflow has no publish job")
+	}
+	firstPublication := -1
+	for i, step := range publish.Steps {
+		for _, command := range publicationCommands {
+			if stepRuns(step, command) {
+				firstPublication = i
+				break
+			}
+		}
+		if firstPublication >= 0 {
+			break
+		}
+	}
+	if firstPublication < 0 {
+		return fmt.Errorf("publish job has no publication operation")
+	}
+	for _, required := range releaseValidationCommands {
+		found := false
+		for i, step := range publish.Steps {
+			if i >= firstPublication {
+				break
+			}
+			if step.ContinueOnError {
+				continue
+			}
+			if stepRuns(step, required) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return fmt.Errorf("publish job lacks blocking pre-publication gate %q", required)
+		}
+	}
+	for i, step := range publish.Steps[:firstPublication] {
+		if stepRuns(step, "go test -race") && !stepRuns(step, "./internal/eval") {
+			return fmt.Errorf("race gate at step %d omits ./internal/eval", i)
+		}
+	}
+	return nil
+}
+
+func validateCIHelmLint(data []byte) error {
+	var workflow workflowDocument
+	if err := yaml.Unmarshal(data, &workflow); err != nil {
+		return fmt.Errorf("parse CI workflow: %w", err)
+	}
+	job, ok := workflow.Jobs["helm"]
+	if !ok {
+		return fmt.Errorf("CI workflow has no helm job")
+	}
+	for _, step := range job.Steps {
+		if !step.ContinueOnError && stepRuns(step, "make helm-lint") {
+			return nil
+		}
+	}
+	return fmt.Errorf("CI helm job lacks blocking make helm-lint")
+}
 
 func repositoryRoot(t *testing.T) string {
 	t.Helper()
@@ -135,6 +252,9 @@ func TestReleaseWorkflowIsValidAndPinned(t *testing.T) {
 	if got := len(action.FindAll(data, -1)); got != len(usesLines) {
 		t.Errorf("release workflow has unpinned action references: %d actions, %d commit-pinned", len(usesLines), got)
 	}
+	if err := validateReleasePublicationGates(data); err != nil {
+		t.Error(err)
+	}
 	for _, required := range []string{
 		"${{ github.ref_name }}",
 		"docker push",
@@ -142,16 +262,81 @@ func TestReleaseWorkflowIsValidAndPinned(t *testing.T) {
 		"cosign sign ",
 		"cosign attest ",
 		"helm push",
-		"make test-integration",
-		"go test -race",
-		"./internal/eval",
-		"pytest contrib/shims/python/tests",
-		"bash deploy/charts/runtime/test.sh",
-		"docker compose -f deploy/compose/docker-compose.yml config --quiet",
-		"shellcheck ",
 	} {
 		if !strings.Contains(string(data), required) {
 			t.Errorf("release workflow missing %q", required)
+		}
+	}
+	ciData, err := os.ReadFile(filepath.Join(root, ".github/workflows/ci.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := validateCIHelmLint(ciData); err != nil {
+		t.Error(err)
+	}
+}
+
+func TestReleaseWorkflowGateValidatorRejectsMutations(t *testing.T) {
+	step := func(command string, continueOnError bool) string {
+		extra := ""
+		if continueOnError {
+			extra = "\n        continue-on-error: true"
+		}
+		return fmt.Sprintf("\n      - run: %q%s", command, extra)
+	}
+	valid := "jobs:\n  publish:\n    steps:"
+	for _, command := range releaseValidationCommands {
+		if command == "go test -race" {
+			command += " ./controlplane ./internal/eval"
+		}
+		valid += step(command, false)
+	}
+	valid += step("docker push image", false)
+	if err := validateReleasePublicationGates([]byte(valid)); err != nil {
+		t.Fatalf("valid fixture rejected: %v", err)
+	}
+
+	tests := map[string]string{
+		"omitted": strings.Replace(valid,
+			step("make helm-lint", false), "", 1),
+		"after publication": strings.Replace(
+			strings.Replace(valid, step("make helm-lint", false), "", 1),
+			step("docker push image", false),
+			step("docker push image", false)+step("make helm-lint", false), 1),
+		"unrelated job": strings.Replace(
+			strings.Replace(valid, step("make helm-lint", false), "", 1),
+			"jobs:", "jobs:\n  unrelated:\n    steps:"+step("make helm-lint", false), 1),
+		"comment only": strings.Replace(valid,
+			step("make helm-lint", false),
+			"\n      - run: |\n          # make helm-lint\n          echo skipped", 1),
+		"continue on error": strings.Replace(valid,
+			step("make helm-lint", false), step("make helm-lint", true), 1),
+	}
+	for name, fixture := range tests {
+		t.Run(name, func(t *testing.T) {
+			if err := validateReleasePublicationGates([]byte(fixture)); err == nil {
+				t.Fatal("mutated workflow was accepted")
+			}
+		})
+	}
+}
+
+func TestSecurityScanCoversEveryShippedBinaryAndFailsClosed(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join(repositoryRoot(t), "Makefile"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	makefile := string(data)
+	for _, required := range []string{
+		"BINS := agentd browserd runtimectl runtimed sandboxd v1-probe",
+		"SECURITY_BINS := $(BINS)",
+		"security-scan:",
+		"-scan=package ./...",
+		"set -eu",
+		"-mode=binary",
+	} {
+		if !strings.Contains(makefile, required) {
+			t.Errorf("security scan is missing fail-closed requirement %q", required)
 		}
 	}
 }
@@ -185,6 +370,61 @@ func TestDeploymentAgentDatabaseCredentialsFailClosed(t *testing.T) {
 		}
 		if strings.Count(string(data), "RUNTIME_AGENT_DB_PASSWORD:") < 2 {
 			t.Errorf("%s does not configure the agent database password for both Compose gates", workflow)
+		}
+	}
+}
+
+func TestDeploymentProfilesExposeRetentionAndConcurrencyControls(t *testing.T) {
+	root := repositoryRoot(t)
+	requiredControl := []string{
+		"RUNTIME_SESSION_RETENTION",
+		"RUNTIME_SESSION_RETENTION_BATCH",
+		"RUNTIME_SESSION_RETENTION_DRY_RUN",
+		"RUNTIME_EVAL_RETENTION",
+		"RUNTIME_MAX_REQUESTS",
+		"RUNTIME_MAX_STREAMS",
+	}
+	for _, name := range []string{
+		"deploy/docker-compose.full.yml",
+		"deploy/compose/docker-compose.yml",
+		"deploy/secured/docker-compose.yml",
+		"deploy/gcp/control-plane/docker-compose.yml",
+		"deploy/charts/runtime/templates/deployment.yaml",
+	} {
+		data, err := os.ReadFile(filepath.Join(root, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, variable := range requiredControl {
+			if !strings.Contains(string(data), variable) {
+				t.Errorf("%s does not expose %s", name, variable)
+			}
+		}
+	}
+
+	requiredAgent := []string{
+		"RUNTIME_AGENT_MAX_REQUESTS",
+		"RUNTIME_AGENT_MAX_STREAMS",
+		"RUNTIME_MEMORY_RETENTION_DRY_RUN",
+		"RUNTIME_MEMORY_RETENTION_EPISODE",
+		"RUNTIME_MEMORY_RETENTION_FACT",
+		"RUNTIME_MEMORY_RETENTION_SUMMARY",
+	}
+	for _, name := range []string{
+		"deploy/compose/docker-compose.yml",
+		"deploy/secured/docker-compose.yml",
+		"deploy/gcp/agent-go/docker-compose.yml",
+		"deploy/charts/runtime/templates/deployment.yaml",
+		"deploy/charts/runtime/templates/agent-statefulset.yaml",
+	} {
+		data, err := os.ReadFile(filepath.Join(root, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, variable := range requiredAgent {
+			if !strings.Contains(string(data), variable) {
+				t.Errorf("%s does not expose %s", name, variable)
+			}
 		}
 	}
 }

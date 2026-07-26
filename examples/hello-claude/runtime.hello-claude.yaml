@@ -9,5 +9,6 @@ agents:
     name: Hello (Claude Agent SDK)
     model: claude-sonnet-4-6
     listen_addr: 127.0.0.1:8310
+    registration_generation: eac28179-b2f9-4dd4-8367-7704bde9dcfe
     workdir: ./examples/hello-claude
     command: ["uv", "run", "python", "serve.py"]

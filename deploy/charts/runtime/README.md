@@ -44,10 +44,11 @@ curl http://127.0.0.1:8080/healthz
 > **`make helm-deps` is required first.** Helm v4 needs the Bitnami `postgresql`
 > subchart vendored *and unpacked* under `charts/`; a loose `.tgz` will not load.
 
-Sample `my-values.yaml` with two scripted agents. Each agent requires `id`,
-`name`, `model`, and `listen_addr` (the loader rejects any agent missing these,
-and refuses to start with an empty registry). `model: test/scripted` selects the
-built-in scripted test agent — there is no `script:` field:
+Sample `my-values.yaml` with one scripted agent. Each release carries one
+restricted agent database identity, so deploy a separate release, role, and
+database for another agent. Each agent requires `id`, `name`, `model`,
+`listen_addr`, and a persisted `registration_generation`. `model:
+test/scripted` selects the built-in scripted test agent:
 
 ```yaml
 # my-values.yaml
@@ -57,10 +58,7 @@ config:
       name: Support Agent
       model: test/scripted
       listen_addr: 127.0.0.1:8101
-    - id: research
-      name: Research Agent
-      model: test/scripted
-      listen_addr: 127.0.0.1:8102
+      registration_generation: 89ef9a06-e752-49e2-a8bc-a9b14983dc6f
 ```
 
 ## Deploy modes
@@ -184,6 +182,7 @@ config:
       name: My Agent
       model: anthropic/claude-...
       listen_addr: 127.0.0.1:8101
+      registration_generation: 2256e5b4-298a-45d9-b7a7-500901374ec4
       limits:
         turn_timeout: 2m
         session_timeout: 30m
@@ -238,13 +237,16 @@ helm install runtime deploy/charts/runtime \
 helm install runtime deploy/charts/runtime --set networkPolicy.enabled=true
 ```
 
-The control-plane policy allows its service/metrics ports and required egress.
-In `perAgentPods` mode, every agent StatefulSet also receives a policy allowing
-port `8080` only from the release's control-plane pod. Egress remains open
-because agents may need PostgreSQL, model providers, and approved upstreams.
-The opt-in `live-networkpolicy-test.sh <namespace> <release>` acceptance check
-also verifies that the management endpoint reports `runtime_agent_up=1` for an
-authenticated, signed agent metrics scrape.
+The control-plane API port remains reachable through the release Service.
+Management port `9091` is a separate ingress rule that allows only the
+control-plane pod itself and `networkPolicy.metricsIngress` peers. The secure
+default selects same-namespace pods labelled
+`app.kubernetes.io/name: prometheus`. For a monitoring namespace, supply an
+explicit peer with both `namespaceSelector` and `podSelector`; do not use an
+empty namespace selector. In `perAgentPods` mode, every agent StatefulSet also
+receives a policy allowing port `8080` only from its release's control-plane
+pod. Egress remains open because agents may need PostgreSQL, model providers,
+and approved upstreams.
 
 ## Docker-dependent features (sandbox / browser)
 
@@ -319,7 +321,20 @@ In addition:
 | `ingress.hosts` | `[]` | Hosts/paths. |
 | `ingress.tls` | `[]` | TLS config. |
 | `networkPolicy.enabled` | `true` | Emit control-plane and per-agent ingress policies. |
+| `networkPolicy.metricsIngress` | Same-namespace Prometheus peer | Additional `NetworkPolicyPeer` entries allowed to scrape private port `9091`. |
 | `obs.enabled` | `false` | ServiceMonitor + Grafana dashboard ConfigMap. |
+| `runtime.sessionRetention` | `720h` | Terminal session/event retention; `0` disables. |
+| `runtime.sessionRetentionBatch` | `500` | Maximum sessions removed per statement. |
+| `runtime.sessionRetentionDryRun` | `false` | Report eligible sessions without deletion. |
+| `runtime.evalRetention` | `720h` | Evaluation artefact retention; `0` disables. |
+| `runtime.maxRequests` | `512` | Control-plane concurrent request cap. |
+| `runtime.maxStreams` | `128` | Control-plane concurrent SSE cap. |
+| `agent.maxRequests` | `256` | Agent concurrent request cap. |
+| `agent.maxStreams` | `64` | Agent concurrent SSE cap. |
+| `agent.memoryRetention.dryRun` | `false` | Report eligible live-memory rows without deletion. |
+| `agent.memoryRetention.episode` | `""` | Episodic-memory retention; empty disables. |
+| `agent.memoryRetention.fact` | `""` | Fact-memory retention; empty disables. |
+| `agent.memoryRetention.summary` | `""` | Summary-memory retention; empty disables. |
 | `postgresql.enabled` | `false` | Bundle the Bitnami Postgres subchart. |
 | `postgresql.auth.username` | `runtime` | Bundled DB user. |
 | `postgresql.auth.password` | `runtime` | Bundled DB password. |
@@ -394,17 +409,27 @@ When `identity.subjectForwarding=true`, rendering also requires a stable
 Ed25519 key pair. The private key is mounted only in the control plane; agent
 pods receive the public key. Signatures bind claims to the method, request
 target, timestamp, and nonce, and replayed nonces are rejected.
+The agent replay cache uses bounded rotating validity buckets rather than
+scanning all recent nonces on every request. It fails closed if its 131,072
+entry bound is reached.
 
-After installing at least two agents on a cluster whose CNI enforces
-NetworkPolicy, run the live isolation acceptance test:
+Install two one-agent releases with different release names, restricted
+database roles, and agent IDs on a cluster whose CNI enforces NetworkPolicy.
+Then run the live isolation acceptance test:
 
 ```bash
-deploy/charts/runtime/live-networkpolicy-test.sh <namespace> <release>
+deploy/charts/runtime/live-networkpolicy-test.sh \
+  <namespace> <source-release> <target-release>
 ```
 
-It proves that one agent pod cannot reach another agent's health endpoint while
-the control-plane pod can. The test uses short-lived `curlimages/curl` ephemeral
-debug containers and therefore requires the Kubernetes ephemeral-containers
+The script selects only Running and Ready pods, fails on missing Services, and
+first proves source-side debug/DNS connectivity plus the target release's
+allowed agent and metrics paths. Denial probes emit an explicit in-container
+curl result, so image-pull, debug permission, DNS, HTTP, and resource failures
+cannot be mistaken for NetworkPolicy enforcement. It then proves that the
+source agent cannot reach either the target agent or the target release's
+management metrics. The test uses short-lived `curlimages/curl` ephemeral debug
+containers and therefore requires the Kubernetes ephemeral-containers
 permission.
 
 **Known limitation — lifecycle limits.** Per-agent `limits:` are supported in
@@ -457,27 +482,30 @@ Then wire it in:
 scheduling:
   mode: perAgentPods
 secrets:
-  registrationToken: "<minted-plaintext>"   # shared by all agent pods (see note)
+  registrationToken: "<minted-plaintext>"   # token for this release's one agent
 ```
 
 Notes:
 
-- **Per-agent identity-backed token.** Each token binds to one `agent_id` (whose
-  tenant comes from config) and is bcrypt-hashed in the `registration_tokens`
-  table. A leaked token can fetch ONLY its own agent's tenant secrets, and only
-  for ordinals the StatefulSet will actually create (fail-closed bounds check).
+- **Per-instance identity-backed token.** Each token binds to the `agent_id`,
+  tenant, and stable agent-instance generation and is bcrypt-hashed in the
+  `registration_tokens` table. A leaked or old token cannot follow an ID into a
+  different tenant or a deleted/recreated managed-agent instance. A valid token
+  can fetch only its bound tenant's secrets and only for configured ordinals.
   Tokens are revocable; `agentd` re-fetches on every restart, so a revoke takes
-  effect at the next restart.
+  effect at the next restart. The schema migration deliberately disables
+  legacy agent-ID-only tokens; mint and deploy replacements after upgrading.
 - **`RUNTIME_LISTEN_ADDR` and the ordinal stay pod/infra-provided.** The handshake
   delivers DSN + identity + tenant + feature env + brokered secrets — NOT the bind
   address or replica ordinal. A remote agent has no control-plane `Addr`, so the
   delta returns those empty and `agentd` skips empty values; the StatefulSet sets
   `RUNTIME_LISTEN_ADDR` statically and the `$HOSTNAME` wrapper provides the ordinal
   fallback, exactly as before.
-- **Shared token simplification.** `secrets.registrationToken` is a single value
-  shared by all agent pods in this chart. For **distinct per-agent tokens**, supply
-  an `existingSecret` with per-agent keys (out of chart scope) — handshake mode is
-  detected whenever an `existingSecret` is set.
+- **One release, one agent identity.** The chart rejects more than one agent
+  because one restricted database role cannot isolate multiple agents. The
+  single `secrets.registrationToken` is therefore shared only by replicas of
+  that one immutable identity. Cross-agent acceptance uses two releases,
+  distinct generations, roles/databases, and tokens.
 - **Known limitation — gateway in perAgentPods.** Per-agent-pod (remote) agents
   still cannot opt into the gateway. `config.Validate` rejects `gateway:` on a
   remote agent (gateway is a spawn-time-only field), so `RUNTIME_GATEWAY_URL`/`_KEY`

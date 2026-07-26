@@ -31,7 +31,7 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
         with:
-          go-version: '1.25.1'
+          go-version: '1.25.12'
           cache: true
       - uses: azure/setup-helm@b9e51907a09c216f16ebe8536097933489208112 # v4.3.0
       - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
@@ -43,6 +43,8 @@ jobs:
           test "$(sed -n 's/^version: //p' deploy/charts/runtime/Chart.yaml)" = "$version"
           test "$(sed -n 's/^appVersion: \"\\(.*\\)\"/\\1/p' deploy/charts/runtime/Chart.yaml)" = "$version"
       - run: make check
+      - name: Scan dependencies and every shipped Go binary
+        run: make security-scan
       - name: Enable PostgreSQL integration features
         run: |
           container_id=$(docker ps --filter ancestor=pgvector/pgvector:pg16 --format '{{.ID}}' | head -1)
@@ -62,6 +64,7 @@ jobs:
       - name: Run Helm lint and render matrix
         run: |
           make helm-deps
+          make helm-lint
           bash deploy/charts/runtime/test.sh
       - name: Validate shell and Compose deployment assets
         run: |
@@ -94,9 +97,13 @@ jobs:
           RUNTIME_AGENT_DB_PASSWORD: release-agent-db-password
           GRAFANA_ADMIN_PASSWORD: release-validation-only
           NUTRITION_GO_TOKEN: release-go-token
+          NUTRITION_GO_GENERATION: 11111111-1111-4111-8111-111111111111
           NUTRITION_OPENAI_TOKEN: release-python-token
+          NUTRITION_OPENAI_GENERATION: 22222222-2222-4222-8222-222222222222
           HELLO_CLAUDE_TOKEN: release-claude-token
+          HELLO_CLAUDE_GENERATION: 33333333-3333-4333-8333-333333333333
           FOOD_LABEL_TOKEN: release-food-token
+          FOOD_LABEL_GENERATION: 44444444-4444-4444-8444-444444444444
           OPENAI_API_KEY: release-openai-key
           ANTHROPIC_API_KEY: release-anthropic-key
       - name: Install release integrity tools

@@ -58,7 +58,33 @@ spec:
               value: "/etc/runtime/runtime.yaml"
             - name: RUNTIME_AGENTD_BIN
               value: "/app/agentd"
+            - name: RUNTIME_SESSION_RETENTION
+              value: {{ .Values.runtime.sessionRetention | quote }}
+            - name: RUNTIME_SESSION_RETENTION_BATCH
+              value: {{ .Values.runtime.sessionRetentionBatch | quote }}
+            - name: RUNTIME_SESSION_RETENTION_DRY_RUN
+              value: {{ .Values.runtime.sessionRetentionDryRun | quote }}
+            - name: RUNTIME_EVAL_RETENTION
+              value: {{ .Values.runtime.evalRetention | quote }}
+            - name: RUNTIME_MAX_REQUESTS
+              value: {{ .Values.runtime.maxRequests | quote }}
+            - name: RUNTIME_MAX_STREAMS
+              value: {{ .Values.runtime.maxStreams | quote }}
+            - name: RUNTIME_AGENT_MAX_REQUESTS
+              value: {{ .Values.agent.maxRequests | quote }}
+            - name: RUNTIME_AGENT_MAX_STREAMS
+              value: {{ .Values.agent.maxStreams | quote }}
+            - name: RUNTIME_MEMORY_RETENTION_DRY_RUN
+              value: {{ .Values.agent.memoryRetention.dryRun | quote }}
+            - name: RUNTIME_MEMORY_RETENTION_EPISODE
+              value: {{ .Values.agent.memoryRetention.episode | quote }}
+            - name: RUNTIME_MEMORY_RETENTION_FACT
+              value: {{ .Values.agent.memoryRetention.fact | quote }}
+            - name: RUNTIME_MEMORY_RETENTION_SUMMARY
+              value: {{ .Values.agent.memoryRetention.summary | quote }}
             {{- if eq .Values.scheduling.mode "perAgentPods" }}
+            - name: RUNTIME_PROVISION_REMOTE_AGENT_ROLE
+              value: "1"
             {{- range $a := .Values.config.agents }}
             - name: {{ include "runtime.agentAuthKey" (dict "id" $a.id) }}
               valueFrom:

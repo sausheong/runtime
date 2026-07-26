@@ -25,14 +25,14 @@ const operCtlAddr = "127.0.0.1:8230"
 
 // oneAgentTokenCfg is a single-agent config with bearer-token auth ON.
 const oneAgentTokenCfg = `agents:
-  - {id: solo, name: Solo, model: test/scripted, listen_addr: 127.0.0.1:8231}
+  - {id: solo, name: Solo, model: test/scripted, listen_addr: 127.0.0.1:8231, registration_generation: test-generation-solo}
 tokens:
   - {token: "t0ken", label: "test"}
 `
 
 // oneAgentOpenCfg is a single-agent config with NO tokens (OPEN mode).
 const oneAgentOpenCfg = `agents:
-  - {id: solo, name: Solo, model: test/scripted, listen_addr: 127.0.0.1:8231}
+  - {id: solo, name: Solo, model: test/scripted, listen_addr: 127.0.0.1:8231, registration_generation: test-generation-solo}
 `
 
 // startRuntimed builds agentd + runtimed, writes cfgBody to a temp runtime.yaml,
@@ -58,7 +58,7 @@ func startRuntimed(t *testing.T, cfgBody string) (string, func()) {
 
 	// One-time durable-state cleanup so each test starts from a blank slate.
 	// DBOS recreates its schema on Launch.
-	mustExec(t, db, `DROP TABLE IF EXISTS session_events, sessions, agents, markers CASCADE`)
+	mustExec(t, db, `DROP TABLE IF EXISTS online_eval_results, session_transcripts, session_events, sessions, agents, markers CASCADE`)
 	mustExec(t, db, `CREATE TABLE markers (id BIGSERIAL PRIMARY KEY, ran_at TIMESTAMPTZ)`)
 	mustExec(t, db, `DROP SCHEMA IF EXISTS dbos CASCADE`)
 	resetIdentityTables(t, db)

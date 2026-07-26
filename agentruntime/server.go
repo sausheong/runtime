@@ -53,6 +53,63 @@ func (m *Manager) tenantID() string {
 // from buffering an arbitrarily large JSON body.
 const maxSessionBodyBytes int64 = 16 << 20
 
+const signedNonceCapacity = 131072
+
+// nonceReplayCache keeps two fixed-duration buckets. Lookup and insertion are
+// constant-time; rotating a bucket drops the whole expired map without scanning
+// entries on the request path. At most maxEntries authenticated nonces are
+// retained, and saturation fails closed.
+type nonceReplayCache struct {
+	mu          sync.Mutex
+	current     map[string]struct{}
+	previous    map[string]struct{}
+	currentFrom time.Time
+	maxEntries  int
+}
+
+func newNonceReplayCache(maxEntries int) *nonceReplayCache {
+	if maxEntries < 1 {
+		maxEntries = signedNonceCapacity
+	}
+	return &nonceReplayCache{
+		current:    make(map[string]struct{}),
+		previous:   make(map[string]struct{}),
+		maxEntries: maxEntries,
+	}
+}
+
+func (c *nonceReplayCache) accept(nonce string, now time.Time, window time.Duration) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if c.currentFrom.IsZero() {
+		c.currentFrom = now
+	} else {
+		elapsed := now.Sub(c.currentFrom)
+		switch {
+		case elapsed >= 2*window:
+			c.current = make(map[string]struct{})
+			c.previous = make(map[string]struct{})
+			c.currentFrom = now
+		case elapsed >= window:
+			c.previous = c.current
+			c.current = make(map[string]struct{})
+			c.currentFrom = now
+		}
+	}
+	if _, exists := c.current[nonce]; exists {
+		return false
+	}
+	if _, exists := c.previous[nonce]; exists {
+		return false
+	}
+	if len(c.current)+len(c.previous) >= c.maxEntries {
+		return false
+	}
+	c.current[nonce] = struct{}{}
+	return true
+}
+
 // handler is the full agentd HTTP stack, outermost to innermost:
 // RequestID (mutates r.Header, so nothing may observe the request first) →
 // requireBearer (only when an auth token is set; a 401 short-circuits before
@@ -121,11 +178,12 @@ func (m *Manager) acquireStream() (func(), bool) {
 }
 
 func requireSignedIdentity(publicKey string, next http.Handler) http.Handler {
-	var (
-		mu   sync.Mutex
-		seen = map[string]time.Time{}
-		skew = 30 * time.Second
-	)
+	replays := newNonceReplayCache(signedNonceCapacity)
+	const skew = 30 * time.Second
+	// Verify accepts timestamps on either side of the local clock. Retain each
+	// nonce for at least twice the skew so a request first seen with a future
+	// timestamp cannot become replayable while its signature is still valid.
+	const replayWindow = 2 * skew
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet && (r.URL.Path == "/healthz" || r.URL.Path == "/readyz") {
 			next.ServeHTTP(w, r)
@@ -137,19 +195,10 @@ func requireSignedIdentity(publicKey string, next http.Handler) http.Handler {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
-		mu.Lock()
-		for value, expiry := range seen {
-			if !expiry.After(now) {
-				delete(seen, value)
-			}
-		}
-		if _, replay := seen[nonce]; replay {
-			mu.Unlock()
+		if !replays.accept(nonce, now, replayWindow) {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
-		seen[nonce] = now.Add(skew)
-		mu.Unlock()
 		next.ServeHTTP(w, r)
 	})
 }

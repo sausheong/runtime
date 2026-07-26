@@ -34,7 +34,7 @@ func TestRemoteReplicaPoolAttach(t *testing.T) {
 	if err := db.Ping(); err != nil {
 		t.Fatalf("ping postgres (is it running at %s?): %v", dsn, err)
 	}
-	mustExec(t, db, `DROP TABLE IF EXISTS session_events, sessions, agents CASCADE`)
+	mustExec(t, db, `DROP TABLE IF EXISTS online_eval_results, session_transcripts, session_events, sessions, agents CASCADE`)
 	mustExec(t, db, `DROP SCHEMA IF EXISTS dbos CASCADE`)
 
 	tmp := t.TempDir()
@@ -68,6 +68,7 @@ func TestRemoteReplicaPoolAttach(t *testing.T) {
 			"RUNTIME_LISTEN_ADDR="+ords[i].addr,
 			"RUNTIME_AGENT_ID=pool",
 			"RUNTIME_AGENT_TENANT=default",
+			"RUNTIME_AGENT_GENERATION=test-generation-pool",
 			"RUNTIME_AGENT_REPLICA="+fmt.Sprint(i),
 			"DBOS__VMID="+ords[i].vmid,
 		)
@@ -99,7 +100,7 @@ func TestRemoteReplicaPoolAttach(t *testing.T) {
 	// runtimed config: one remote POOL, {i}-templated url, replicas: 2.
 	cfgPath := filepath.Join(tmp, "runtime.yaml")
 	cfg := "agents:\n" +
-		"  - {id: pool, name: Pool, model: test/scripted, url: \"http://127.0.0.1:831{i}\", replicas: 2}\n"
+		"  - {id: pool, name: Pool, model: test/scripted, url: \"http://127.0.0.1:831{i}\", registration_generation: test-generation-pool, replicas: 2}\n"
 	if err := os.WriteFile(cfgPath, []byte(cfg), 0o644); err != nil {
 		t.Fatal(err)
 	}

@@ -5,11 +5,14 @@ package eval
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
+	runtimestore "github.com/sausheong/runtime/internal/store"
 )
 
 func testDSN() string {
@@ -124,6 +127,26 @@ func TestStoreSetsRoundTrip(t *testing.T) {
 	}
 }
 
+func TestStoreRetentionAgesTerminalRunsFromCompletion(t *testing.T) {
+	st, db := freshStore(t)
+	defer db.Close()
+	ctx := context.Background()
+	if _, err := db.ExecContext(ctx, `
+		INSERT INTO eval_runs
+		    (run_id, tenant, set_name, agent_id, status, created_at, finished_at)
+		VALUES
+		    ('long-running-retention', 't', 's', 'a', 'completed',
+		     now() - interval '48 hours', now() - interval '1 minute')`); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := st.ReapBefore(ctx, time.Now().UTC().Add(-24*time.Hour), 10); err != nil || n != 0 {
+		t.Fatalf("newly completed long-running run reaped: n=%d err=%v", n, err)
+	}
+	if _, ok, err := st.GetRun(ctx, "long-running-retention"); err != nil || !ok {
+		t.Fatalf("newly completed run missing: ok=%v err=%v", ok, err)
+	}
+}
+
 func TestStoreSetUpsert(t *testing.T) {
 	st, db := freshStore(t)
 	defer db.Close()
@@ -216,12 +239,9 @@ func TestStoreRunsAndResults(t *testing.T) {
 		t.Fatalf("renew expired owner: ok=%v err=%v", ok, err)
 	}
 
-	// SetRunStatus.
-	if err := st.SetRunStatus(ctx, "r1", StatusRunning); err != nil {
-		t.Fatal(err)
-	}
+	// Claiming is the only supported transition into running.
 	if gr, _, _ := st.GetRun(ctx, "r1"); gr.Status != StatusRunning {
-		t.Fatalf("set status: %+v", gr)
+		t.Fatalf("claimed status: %+v", gr)
 	}
 
 	// PutResult ×2 (out of order) → ListResults ascending by case_index.
@@ -260,9 +280,9 @@ func TestStoreRunsAndResults(t *testing.T) {
 		t.Fatalf("upsert did not replace output: %+v", results[0])
 	}
 
-	// FinishRun → counts/score/FinishedAt.
-	if err := st.FinishRun(ctx, "r1", StatusCompleted, 2, 1, 1, 0.5, ""); err != nil {
-		t.Fatal(err)
+	// Claimed finalization → counts/score/FinishedAt.
+	if ok, err := st.FinishRunClaimed(ctx, "r1", "worker-2", StatusCompleted, 2, 1, 1, 0.5, ""); err != nil || !ok {
+		t.Fatalf("finish claimed run: ok=%v err=%v", ok, err)
 	}
 	fr, ok, err := st.GetRun(ctx, "r1")
 	if err != nil || !ok {
@@ -276,6 +296,143 @@ func TestStoreRunsAndResults(t *testing.T) {
 	}
 	if fr.FinishedAt.Before(fr.CreatedAt) {
 		t.Fatalf("FinishedAt before CreatedAt: created=%v finished=%v", fr.CreatedAt, *fr.FinishedAt)
+	}
+}
+
+func TestStoreRejectsInvalidRunStateTransitions(t *testing.T) {
+	st, db := freshStore(t)
+	defer db.Close()
+	ctx := context.Background()
+
+	if err := st.CreateRun(ctx, Run{RunID: "bad", Status: StatusCompleted}); !errors.Is(err, ErrInvalidRunTransition) {
+		t.Fatalf("non-pending create error=%v", err)
+	}
+	if err := st.CreateRun(ctx, Run{RunID: "r", Status: StatusPending}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.CreateRun(ctx, Run{RunID: "r", Status: StatusPending}); !errors.Is(err, ErrRunExists) {
+		t.Fatalf("duplicate create error=%v, want ErrRunExists", err)
+	}
+	now := time.Now().UTC()
+	if _, err := st.ClaimRun(ctx, "r", "", now, now.Add(time.Minute)); !errors.Is(err, ErrInvalidRunTransition) {
+		t.Fatalf("empty-owner claim error=%v", err)
+	}
+	if _, err := st.ClaimRun(ctx, "r", "worker", now, now); !errors.Is(err, ErrInvalidRunTransition) {
+		t.Fatalf("non-positive claim error=%v", err)
+	}
+	if ok, err := st.ClaimRun(ctx, "r", "worker", now, now.Add(time.Minute)); err != nil || !ok {
+		t.Fatalf("valid claim ok=%v err=%v", ok, err)
+	}
+	if _, err := st.FinishRunClaimed(ctx, "r", "worker", StatusRunning, 0, 0, 0, 0, ""); !errors.Is(err, ErrInvalidRunTransition) {
+		t.Fatalf("non-terminal finish error=%v", err)
+	}
+	if _, err := st.FinishRunClaimed(ctx, "r", "", StatusCompleted, 0, 0, 0, 0, ""); !errors.Is(err, ErrInvalidRunTransition) {
+		t.Fatalf("empty-owner finish error=%v", err)
+	}
+
+	if _, err := db.ExecContext(ctx,
+		`INSERT INTO eval_runs (run_id,tenant,set_name,agent_id,status)
+		 VALUES ('direct-invalid','t','s','a','bogus')`); err == nil {
+		t.Fatal("database accepted an invalid run status")
+	}
+	if _, err := db.ExecContext(ctx,
+		`UPDATE eval_runs SET lease_owner='', lease_until=NULL WHERE run_id='r'`); err == nil {
+		t.Fatal("database accepted an incoherent running state")
+	}
+}
+
+func TestRunStateMigrationRecoversLegacyUnleasedRunningRow(t *testing.T) {
+	db, err := sql.Open("pgx", testDSN())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	ctx := context.Background()
+	if err := db.PingContext(ctx); err != nil {
+		t.Skipf("postgres not reachable: %v", err)
+	}
+	_, _ = db.Exec(`DELETE FROM runtime_schema_migrations WHERE component='evaluation'`)
+	_, _ = db.Exec(`DROP TABLE IF EXISTS eval_results CASCADE`)
+	_, _ = db.Exec(`DROP TABLE IF EXISTS eval_runs CASCADE`)
+	_, _ = db.Exec(`DROP TABLE IF EXISTS eval_sets CASCADE`)
+	t.Cleanup(func() {
+		_, _ = db.Exec(`DROP TABLE IF EXISTS eval_results CASCADE`)
+		_, _ = db.Exec(`DROP TABLE IF EXISTS eval_runs CASCADE`)
+		_, _ = db.Exec(`DROP TABLE IF EXISTS eval_sets CASCADE`)
+	})
+
+	if err := runtimestore.ApplyMigrationsLocked(ctx, db, "evaluation", 1, 1,
+		[]runtimestore.Migration{{Version: 1, Name: "baseline", SQL: schemaSQL}}); err != nil {
+		t.Fatalf("install evaluation v1: %v", err)
+	}
+	if _, err := db.ExecContext(ctx,
+		`INSERT INTO eval_runs (run_id,tenant,set_name,agent_id,status)
+		 VALUES ('legacy-running','t','s','a','running')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx,
+		`INSERT INTO eval_runs
+		    (run_id,tenant,set_name,agent_id,status,lease_owner,lease_until,finished_at)
+		 VALUES
+		    ('legacy-running-finished','t','s','a','running','worker',
+		     now() + interval '1 minute', now()),
+		    ('legacy-unknown','t','s','a','custom-state','',NULL,now())`); err != nil {
+		t.Fatal(err)
+	}
+	st, err := NewStore(ctx, db)
+	if err != nil {
+		t.Fatalf("migrate evaluation v1 to v2: %v", err)
+	}
+	run, ok, err := st.GetRun(ctx, "legacy-running")
+	if err != nil || !ok {
+		t.Fatalf("get migrated run ok=%v err=%v", ok, err)
+	}
+	if run.Status != StatusPending || run.LeaseOwner != "" ||
+		run.LeaseUntil != nil || run.FinishedAt != nil {
+		t.Fatalf("legacy run not safely recovered: %+v", run)
+	}
+	running, ok, err := st.GetRun(ctx, "legacy-running-finished")
+	if err != nil || !ok {
+		t.Fatalf("get migrated leased run ok=%v err=%v", ok, err)
+	}
+	if running.Status != StatusRunning || running.LeaseOwner != "worker" ||
+		running.LeaseUntil == nil || running.FinishedAt != nil {
+		t.Fatalf("legacy leased run not normalized: %+v", running)
+	}
+	unknown, ok, err := st.GetRun(ctx, "legacy-unknown")
+	if err != nil || !ok {
+		t.Fatalf("get migrated unknown run ok=%v err=%v", ok, err)
+	}
+	if unknown.Status != StatusError || unknown.LeaseOwner != "" ||
+		unknown.LeaseUntil != nil || unknown.FinishedAt == nil ||
+		!strings.Contains(unknown.Error, "invalid legacy evaluation status") {
+		t.Fatalf("legacy unknown run not failed safely: %+v", unknown)
+	}
+}
+
+func TestStoreRecoversMissingRunTableAndForeignKeyAtCurrentLedger(t *testing.T) {
+	st, db := freshStore(t)
+	_ = st
+	defer db.Close()
+	ctx := context.Background()
+	if _, err := db.ExecContext(ctx, `DROP TABLE eval_runs CASCADE`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewStore(ctx, db); err != nil {
+		t.Fatalf("recover evaluation schema with current ledger: %v", err)
+	}
+	var validFK bool
+	if err := db.QueryRowContext(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM pg_constraint
+			 WHERE conrelid='eval_results'::regclass
+			   AND confrelid='eval_runs'::regclass
+			   AND contype='f' AND confdeltype='c'
+		)`).Scan(&validFK); err != nil {
+		t.Fatal(err)
+	}
+	if !validFK {
+		t.Fatal("recovered eval_results lacks cascading eval_runs foreign key")
 	}
 }
 

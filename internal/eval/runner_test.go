@@ -31,11 +31,11 @@ func TestExecuteResumesFromPersistedCaseIndexes(t *testing.T) {
 		{Input: "already", Scorer: ScorerExact, Expected: "A"},
 		{Input: "remaining", Scorer: ScorerExact, Expected: "B"},
 	}})
-	_ = m.CreateRun(ctx, Run{RunID: "r", Tenant: "t1", SetName: "s", AgentID: "a1", Status: StatusRunning})
+	_ = m.CreateRun(ctx, Run{RunID: "r", Tenant: "t1", SetName: "s", AgentID: "a1", Status: StatusPending})
 	now := time.Now().UTC()
 	_, _ = m.ClaimRun(ctx, "r", "seed", now, now.Add(time.Minute))
 	_, _ = m.PutResultClaimed(ctx, "r", "seed", Result{CaseIndex: 0, Input: "already", Output: "A", Scorer: string(ScorerExact), Passed: true})
-	_, _ = m.ClaimRun(ctx, "r", "seed", now, now.Add(-time.Second))
+	expireMemLease(t, m, "r")
 	calls := map[string]int{}
 	inv := fakeInvoker{out: map[string]string{"remaining": "B"}, calls: calls}
 
@@ -256,9 +256,10 @@ func TestExpiredLeaseCanBeReclaimed(t *testing.T) {
 		t.Fatal(err)
 	}
 	now := time.Now().UTC()
-	if ok, err := st.ClaimRun(ctx, "r", "old", now, now.Add(-time.Second)); err != nil || !ok {
+	if ok, err := st.ClaimRun(ctx, "r", "old", now, now.Add(time.Minute)); err != nil || !ok {
 		t.Fatalf("initial claim ok=%v err=%v", ok, err)
 	}
+	expireMemLease(t, st, "r")
 	if ok, err := st.ClaimRun(ctx, "r", "new", now, now.Add(time.Minute)); err != nil || !ok {
 		t.Fatalf("expired lease reclaim ok=%v err=%v", ok, err)
 	}

@@ -277,6 +277,8 @@ func TestBuildEnvPassesSafeMemoryMaintenanceControls(t *testing.T) {
 	t.Setenv("RUNTIME_MEMORY_RETENTION_FACT", "720h")
 	t.Setenv("RUNTIME_MEMORY_RETENTION_DRY_RUN", "1")
 	t.Setenv("RUNTIME_MEMORY_GC_INTERVAL", "30m")
+	t.Setenv("RUNTIME_AGENT_MAX_REQUESTS", "73")
+	t.Setenv("RUNTIME_AGENT_MAX_STREAMS", "17")
 	ap := AgentProcess{AgentID: "a1", Addr: "127.0.0.1:8081", PGDSN: "dsn://x", Tenant: "t1"}
 	full, err := ap.buildEnv(context.Background())
 	if err != nil {
@@ -285,6 +287,8 @@ func TestBuildEnvPassesSafeMemoryMaintenanceControls(t *testing.T) {
 	assertHasEnv(t, full, "RUNTIME_MEMORY_RETENTION_FACT=720h")
 	assertHasEnv(t, full, "RUNTIME_MEMORY_RETENTION_DRY_RUN=1")
 	assertHasEnv(t, full, "RUNTIME_MEMORY_GC_INTERVAL=30m")
+	assertHasEnv(t, full, "RUNTIME_AGENT_MAX_REQUESTS=73")
+	assertHasEnv(t, full, "RUNTIME_AGENT_MAX_STREAMS=17")
 }
 
 func TestSpawnFuncCommand(t *testing.T) {

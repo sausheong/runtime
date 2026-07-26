@@ -9,5 +9,6 @@ agents:
     name: SG Nutrition Investigator (Claude Agent SDK)
     model: claude-sonnet-4-6
     listen_addr: 127.0.0.1:8303
+    registration_generation: 37b5702d-ca71-4d89-a415-aa2d75f9c2de
     workdir: ./examples/nutrition-label-claude
     command: ["uv", "run", "python", "serve.py"]

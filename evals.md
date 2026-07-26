@@ -127,6 +127,14 @@ provider or judge calls. Expired leases are recoverable. Recovery scans at
 startup and periodically thereafter using a bounded worker pool, so a run held
 by a dead worker is reclaimed after expiry without another restart.
 
+The persistence layer enforces the same state machine in memory and PostgreSQL:
+new runs must be `pending` and unleased, claims require a non-empty owner and a
+positive lease duration, and only a live owner may finalize to `completed` or
+`error`. Duplicate run IDs and attempts to create running/terminal rows, use an
+empty owner, or finalize back to a non-terminal state are rejected. Database
+constraints also prevent direct SQL from storing an incoherent status, lease,
+and completion timestamp.
+
 ## Online evaluation
 
 Golden sets test known inputs. Online evaluation samples what a native agent
@@ -243,7 +251,7 @@ First-match precedence determines the category:
 | 2 | `limit_exceeded` | The session exceeded `max_turns`, `max_tokens`, or `session_timeout` |
 | 3 | `agent_error` | The session errored or aborted for another reason |
 | 4 | `tool_error` | A turn produced a tool result marked as an error |
-| 5 | `quality_fail` | The session completed but an online criterion failed |
+| 5 | `quality_fail` | The session completed and a complete online score was durably persisted with a failed criterion |
 | 6 | `none` | Clean completion with no failed criterion |
 
 Read the breakdown for an agent:
@@ -282,10 +290,22 @@ Native-agent online metrics:
 |---|---|---|
 | `agent_eval_sessions_scored_total` | `agent,tenant` | Sampled sessions scored |
 | `agent_eval_criteria_total` | `agent,tenant,result` | Online criteria scored as `pass` or `fail` |
-| `agent_eval_failures_total` | `agent,tenant,category` | Terminal sessions by the fixed failure taxonomy |
+| `agent_eval_failures_total` | `agent,tenant,category` | Initial deterministic terminal classifications by the fixed failure taxonomy |
+| `agent_eval_failure_refinements_total` | `agent,tenant,from,to` | Successful durable scoring refinements, currently `none` to `quality_fail` |
+| `agent_eval_queue_dropped_total` | `agent,tenant,reason` | Sampled jobs rejected by the bounded queue or abandoned at bounded shutdown |
+| `agent_eval_scoring_failures_total` | `agent,tenant,reason` | Incomplete online scores caused by scorer, result-store, or classification-store failure |
 
 Metrics are operational signals rather than the source of truth. Durable run,
 case, and online-result records are available through the CLI, API, and console.
+
+Terminal classification is persisted before optional queue admission. A full
+or closing queue therefore retains the truthful deterministic category.
+Provider/judge failure is an incomplete score, not a failed quality criterion,
+and cannot produce `quality_fail`. Result and classification writes are checked
+before success metrics are emitted. DBOS replay preserves a later
+`quality_fail` refinement. Initial-classification, refinement, criterion, and
+scored-session counters increment only for their corresponding first durable
+write or transition.
 
 ## Operational boundaries
 
@@ -296,8 +316,9 @@ case, and online-result records are available through the CLI, API, and console.
   best-effort credential filtering.
 - Run leases prevent duplicate recovery workers; control-plane HA still
   requires leader ownership for non-evaluation singleton duties.
-- Native-agent metric increments can be replay-tolerant rather than suitable
-  for financial accounting.
+- Process counters reset on restart and are unsuitable for financial
+  accounting; within a process, durable first-write scoring and classification
+  transitions are replay-safe.
 
 See also the [Runtime overview](runtime.md), [operator guide](operator-guide.md),
 and [roadmap](ROADMAP.md).

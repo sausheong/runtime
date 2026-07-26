@@ -98,7 +98,9 @@ func TestAPI_NewSessionRoundRobinsAndPins(t *testing.T) {
 	reg := twoReplicaRegistry(t, "a", b0.URL, b1.URL)
 
 	st := store.NewMemStore()
-	owned, _ := st.CreateSession(context.Background(), "a", 1) // owned by replica 1
+	owned, _ := st.CreateSessionForIdentity(
+		context.Background(), "default", "a", "test-generation-a", 1,
+	) // owned by replica 1
 
 	srv := httptest.NewServer(NewAPI(reg, nil, st, false))
 	defer srv.Close()
@@ -145,11 +147,14 @@ func TestAPI_RemotePoolPersistsExternalSessionAffinity(t *testing.T) {
 	cfg := &config.Config{Agents: []config.AgentConfig{{
 		ID: "remote", Name: "Remote", Model: "m", Tenant: "alpha",
 		URL: "http://remote-{i}.example:8080", Replicas: 2,
+		RegistrationGeneration: "remote-pool-generation",
 	}}}
 	reg := NewRegistry(cfg, "", "")
 	reg.sets["remote"] = []AgentProcess{
-		{AgentID: "remote", Tenant: "alpha", Remote: true, BaseURL: b0.URL, ReplicaIndex: 0},
-		{AgentID: "remote", Tenant: "alpha", Remote: true, BaseURL: b1.URL, ReplicaIndex: 1},
+		{AgentID: "remote", Tenant: "alpha", Remote: true, BaseURL: b0.URL, ReplicaIndex: 0,
+			RegistrationGeneration: "remote-pool-generation"},
+		{AgentID: "remote", Tenant: "alpha", Remote: true, BaseURL: b1.URL, ReplicaIndex: 1,
+			RegistrationGeneration: "remote-pool-generation"},
 	}
 	st := store.NewMemStore()
 	srv := httptest.NewServer(NewAPI(reg, nil, st, false))
@@ -292,12 +297,15 @@ func twoReplicaRegistry(t *testing.T, id, base0, base1 string) *Registry {
 	t.Helper()
 	host0 := strings.TrimPrefix(base0, "http://")
 	cfg := &config.Config{Agents: []config.AgentConfig{
-		{ID: id, Name: id, Model: "m", ListenAddr: host0, Tenant: "default"},
+		{ID: id, Name: id, Model: "m", ListenAddr: host0, Tenant: "default",
+			RegistrationGeneration: "test-generation-" + id},
 	}}
 	r := NewRegistry(cfg, "/bin/agentd", "dsn")
 	r.sets[id] = []AgentProcess{
-		{AgentID: id, Addr: strings.TrimPrefix(base0, "http://"), BaseURL: base0, ReplicaIndex: 0, DBOSVMID: id + "#0", Tenant: "default"},
-		{AgentID: id, Addr: strings.TrimPrefix(base1, "http://"), BaseURL: base1, ReplicaIndex: 1, DBOSVMID: id + "#1", Tenant: "default"},
+		{AgentID: id, Addr: strings.TrimPrefix(base0, "http://"), BaseURL: base0, ReplicaIndex: 0, DBOSVMID: id + "#0", Tenant: "default",
+			RegistrationGeneration: "test-generation-" + id},
+		{AgentID: id, Addr: strings.TrimPrefix(base1, "http://"), BaseURL: base1, ReplicaIndex: 1, DBOSVMID: id + "#1", Tenant: "default",
+			RegistrationGeneration: "test-generation-" + id},
 	}
 	return r
 }
@@ -330,14 +338,10 @@ func httpGetCode(t *testing.T, url string) int {
 	return resp.StatusCode
 }
 
-// TestAPI_RemoteAgentSessionRoutesWithoutLocalStore reproduces the C3 remote-agent
-// bug: a remote agent owns its OWN session store (a separate Postgres on its
-// instance), so the session id it returns from POST /sessions is NOT recorded in
-// the control plane's store. A session-scoped follow-up (stream/get) must still
-// proxy to the remote — the control plane cannot resolve affinity from its store
-// and must NOT 404 "unknown session" for a remote. (Local agents share the
-// control plane's store, so their affinity lookup is unaffected.)
-func TestAPI_RemoteAgentSessionRoutesWithoutLocalStore(t *testing.T) {
+// An unbound external session has no durable proof of tenant, agent generation,
+// or replica ownership. Even a single-replica remote must therefore fail closed
+// rather than treating its URL as sufficient authority.
+func TestAPI_RemoteAgentSessionWithoutBindingFailsClosed(t *testing.T) {
 	var streamHit int32
 	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/sessions" && r.Method == "POST" {
@@ -359,25 +363,18 @@ func TestAPI_RemoteAgentSessionRoutesWithoutLocalStore(t *testing.T) {
 	srv := httptest.NewServer(NewAPI(reg, nil, store.NewMemStore(), false))
 	defer srv.Close()
 
-	// A session-scoped GET for a session the control-plane store has never heard
-	// of must still proxy to the remote (not 404).
 	code := httpGetCode(t, srv.URL+"/agents/rem/sessions/ses-remote-123/stream?since=0")
-	if code != http.StatusOK {
-		t.Fatalf("remote session-scoped request: got %d, want 200 (must proxy, not 'unknown session')", code)
+	if code != http.StatusNotFound {
+		t.Fatalf("remote unbound session: got %d, want fail-closed 404", code)
 	}
-	if atomic.LoadInt32(&streamHit) != 1 {
-		t.Fatalf("remote session-scoped request did not reach the backend (hits=%d)", streamHit)
+	if atomic.LoadInt32(&streamHit) != 0 {
+		t.Fatalf("remote unbound session reached the backend (hits=%d)", streamHit)
 	}
 }
 
-// TestAPI_CommandAgentSessionRoutesWithoutLocalStore reproduces the foreign-shim
-// bug: a command-spawned agent (the Python contract shim) is LOCAL but owns its
-// OWN session store (SQLite in its workdir), so the session id it returns from
-// POST /sessions is NOT in the control plane's store — exactly like a remote.
-// A session-scoped follow-up must still proxy to it, not 404 "unknown session".
-// Before the fix, pickReplica treated every non-remote local agent as sharing
-// the CP store and returned a hard 404, making shim agents uninvokable.
-func TestAPI_CommandAgentSessionRoutesWithoutLocalStore(t *testing.T) {
+// Command agents with private stores have the same requirement: their POST
+// response must be durably bound by the control plane before follow-up routing.
+func TestAPI_CommandAgentSessionWithoutBindingFailsClosed(t *testing.T) {
 	var streamHit int32
 	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/sessions" && r.Method == "POST" {
@@ -398,11 +395,11 @@ func TestAPI_CommandAgentSessionRoutesWithoutLocalStore(t *testing.T) {
 	defer srv.Close()
 
 	code := httpGetCode(t, srv.URL+"/agents/shim/sessions/ses-shim-123/stream?since=0")
-	if code != http.StatusOK {
-		t.Fatalf("command-agent session-scoped request: got %d, want 200 (must proxy, not 'unknown session')", code)
+	if code != http.StatusNotFound {
+		t.Fatalf("command-agent unbound session: got %d, want fail-closed 404", code)
 	}
-	if atomic.LoadInt32(&streamHit) != 1 {
-		t.Fatalf("command-agent session-scoped request did not reach the backend (hits=%d)", streamHit)
+	if atomic.LoadInt32(&streamHit) != 0 {
+		t.Fatalf("command-agent unbound session reached the backend (hits=%d)", streamHit)
 	}
 }
 
@@ -414,12 +411,14 @@ func commandRegistry(t *testing.T, id, base string) *Registry {
 	host := strings.TrimPrefix(base, "http://")
 	cfg := &config.Config{Agents: []config.AgentConfig{
 		{ID: id, Name: id, Model: "m", ListenAddr: host, Tenant: "default",
-			Command: []string{"uv", "run", "python", "serve.py"}},
+			Command:                []string{"uv", "run", "python", "serve.py"},
+			RegistrationGeneration: "test-generation-" + id},
 	}}
 	r := NewRegistry(cfg, "/bin/agentd", "dsn")
 	r.sets[id] = []AgentProcess{
 		{AgentID: id, Addr: host, BaseURL: base, ReplicaIndex: 0,
-			Command: []string{"uv", "run", "python", "serve.py"}, Tenant: "default"},
+			Command: []string{"uv", "run", "python", "serve.py"}, Tenant: "default",
+			RegistrationGeneration: "test-generation-" + id},
 	}
 	return r
 }
@@ -429,11 +428,13 @@ func commandRegistry(t *testing.T, id, base string) *Registry {
 func remoteRegistry(t *testing.T, id, base string) *Registry {
 	t.Helper()
 	cfg := &config.Config{Agents: []config.AgentConfig{
-		{ID: id, Name: id, Model: "m", URL: base, Tenant: "default"},
+		{ID: id, Name: id, Model: "m", URL: base, Tenant: "default",
+			RegistrationGeneration: "test-generation-" + id},
 	}}
 	r := NewRegistry(cfg, "/bin/agentd", "dsn")
 	r.sets[id] = []AgentProcess{
-		{AgentID: id, BaseURL: base, Remote: true, ReplicaIndex: 0, Tenant: "default"},
+		{AgentID: id, BaseURL: base, Remote: true, ReplicaIndex: 0, Tenant: "default",
+			RegistrationGeneration: "test-generation-" + id},
 	}
 	return r
 }

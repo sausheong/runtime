@@ -83,6 +83,11 @@ This provides several practical guarantees:
 - Completed turns are not re-run after an ordinary crash and restart of the same agent binary.
 - Persisted SSE events can be replayed when a client reconnects with `?since=<sequence>`.
 - A session exposes a real lifecycle and turn count rather than being only an open HTTP stream.
+- Session ownership includes tenant, agent generation, and replica. Unknown or
+  generation-less affinity fails closed, and a selected replica is lifecycle
+  pinned while a request is forwarded.
+- Restricted native agents use a tenant/agent-specific DBOS schema; sharing one
+  restricted database role across agents is rejected.
 - Each replica has a stable executor identity, so only the replica that owns a session recovers it.
 - Operator limits are evaluated from checkpointed state, so token and turn budgets survive ordinary recovery.
 
@@ -372,6 +377,7 @@ agents:
     name: Support Agent
     model: anthropic/claude-sonnet-4-6
     listen_addr: 127.0.0.1:8101
+    registration_generation: 89ef9a06-e752-49e2-a8bc-a9b14983dc6f
     tenant: acme
     memory: true
     gateway: search
@@ -441,6 +447,7 @@ agents:
     name: Python Agent
     model: openai/gpt-5.4
     listen_addr: 127.0.0.1:8302
+    registration_generation: 9e6943ce-eae1-4fc1-bcfa-10603c4fd18e
     workdir: ./examples/my-agent
     command: ["uv", "run", "python", "serve.py"]
 ```

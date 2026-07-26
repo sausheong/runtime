@@ -16,6 +16,7 @@ agents:
     name: SG Nutrition Investigator (Go)
     model: openai/gpt-5.4          # display only; B's OPENAI_MODEL is authoritative
     tenant: acme
+    registration_generation: ${NUTRITION_GO_GENERATION}
     url: http://10.10.0.3:8080
     auth_token: ${NUTRITION_GO_TOKEN}
 
@@ -23,6 +24,7 @@ agents:
     name: SG Nutrition Investigator (OpenAI SDK)
     model: openai/gpt-5.4          # display only; C's OPENAI_MODEL is authoritative
     tenant: acme
+    registration_generation: ${NUTRITION_OPENAI_GENERATION}
     url: http://10.10.0.4:8302
     auth_token: ${NUTRITION_OPENAI_TOKEN}
 
@@ -30,6 +32,7 @@ agents:
     name: Hello Claude
     model: anthropic/claude-sonnet-4-5
     tenant: acme
+    registration_generation: ${HELLO_CLAUDE_GENERATION}
     url: http://10.10.0.4:8080
     auth_token: ${HELLO_CLAUDE_TOKEN}
 
@@ -37,5 +40,6 @@ agents:
     name: Food Label Advisor
     model: anthropic/claude-sonnet-4-5
     tenant: acme
+    registration_generation: ${FOOD_LABEL_GENERATION}
     url: http://10.10.0.4:8310
     auth_token: ${FOOD_LABEL_TOKEN}

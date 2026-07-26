@@ -37,7 +37,7 @@ func TestGatewayE2E(t *testing.T) {
 	}
 	mustExec(t, db, `DROP TABLE IF EXISTS markers`)
 	mustExec(t, db, `CREATE TABLE markers (id BIGSERIAL PRIMARY KEY, ran_at TIMESTAMPTZ)`)
-	mustExec(t, db, `DROP TABLE IF EXISTS session_events, sessions, agents CASCADE`)
+	mustExec(t, db, `DROP TABLE IF EXISTS online_eval_results, session_transcripts, session_events, sessions, agents CASCADE`)
 	mustExec(t, db, `DROP SCHEMA IF EXISTS dbos CASCADE`)
 
 	// Fake upstream MCP server over Streamable HTTP.
@@ -68,7 +68,7 @@ func TestGatewayE2E(t *testing.T) {
 	// identity), so no agent_keys needed.
 	cfgPath := filepath.Join(tmp, "runtime.yaml")
 	cfg := "agents:\n" +
-		"  - {id: gw-agent, name: GW, model: test/scripted, listen_addr: 127.0.0.1:8131, gateway: true}\n" +
+		"  - {id: gw-agent, name: GW, model: test/scripted, listen_addr: 127.0.0.1:8131, registration_generation: test-generation-gw-agent, gateway: true}\n" +
 		"gateway:\n" +
 		"  servers:\n" +
 		"    - {name: fake, url: " + upSrv.URL + "}\n"

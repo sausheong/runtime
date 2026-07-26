@@ -1,6 +1,6 @@
 # Build context is the runtime repository root:
 #   docker build -f deploy/Dockerfile -t runtime:latest .
-FROM golang:1.25 AS build
+FROM golang:1.25.12 AS build
 WORKDIR /src/runtime
 COPY go.mod go.sum ./
 RUN go mod download

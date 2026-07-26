@@ -93,12 +93,14 @@ agents:
     name: A1
     model: m
     listen_addr: ":9301"
+    registration_generation: test-generation-a1
     limits:
       turn_timeout: 5s
   - id: a2
     name: A2
     model: m
     url: "http://remote:9000"
+    registration_generation: 11111111-1111-4111-8111-111111111111
     limits:
       max_tokens: 100
 `)

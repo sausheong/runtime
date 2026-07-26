@@ -94,7 +94,7 @@ func TestDeregisterShadowedRowPreservesFileAgent(t *testing.T) {
 		URL: "https://old.example", Enabled: false,
 	}
 
-	if err := DeregisterAgentShared(context.Background(), s, mgr, "acme", "shared"); err != nil {
+	if err := DeregisterAgentShared(context.Background(), s, nil, mgr, "acme", "shared"); err != nil {
 		t.Fatalf("DeregisterAgentShared: %v", err)
 	}
 	if _, ok := s.rows["shared"]; ok {
@@ -227,6 +227,50 @@ func TestAgentAdmin_Deregister(t *testing.T) {
 	}
 	if _, ok := reg.Get("hello"); ok {
 		t.Fatal("agent should be detached from registry")
+	}
+}
+
+func TestAgentAdmin_DeregisterRevokesDeletedGeneration(t *testing.T) {
+	reg := NewRegistry(&config.Config{}, "/bin/agentd", "dsn")
+	mgr := NewAgentManager(reg, NewMonitorSet(context.Background(), reg, nil), nil)
+	agents := newFakeAgentStore()
+	admin := newFakeAdminStore()
+	_ = admin.CreateTenant(context.Background(), "acme", "Acme")
+	mux := http.NewServeMux()
+	RegisterAgentAdmin(mux, agents, admin, mgr)
+
+	create := httptest.NewRecorder()
+	mux.ServeHTTP(create, acmeAdmin(httptest.NewRequest("POST", "/admin/agents",
+		strings.NewReader(`{"id":"reusable","url":"https://example.com"}`))))
+	if create.Code != http.StatusCreated {
+		t.Fatalf("create code=%d body=%s", create.Code, create.Body.String())
+	}
+	row := agents.rows["reusable"]
+	if row.RegistrationGeneration == "" {
+		t.Fatal("managed agent has no registration generation")
+	}
+	admin.regTokens["old-token"] = identity.RegTokenRow{
+		TokenID: "old-token", AgentID: row.ID, TenantID: row.TenantID,
+		AgentGeneration: row.RegistrationGeneration,
+	}
+
+	remove := httptest.NewRecorder()
+	mux.ServeHTTP(remove, acmeAdmin(httptest.NewRequest("DELETE", "/admin/agents/reusable", nil)))
+	if remove.Code != http.StatusNoContent {
+		t.Fatalf("delete code=%d body=%s", remove.Code, remove.Body.String())
+	}
+	if !admin.regTokens["old-token"].Revoked {
+		t.Fatal("deleting managed agent did not revoke its registration tokens")
+	}
+
+	recreate := httptest.NewRecorder()
+	mux.ServeHTTP(recreate, acmeAdmin(httptest.NewRequest("POST", "/admin/agents",
+		strings.NewReader(`{"id":"reusable","url":"https://example.com"}`))))
+	if recreate.Code != http.StatusCreated {
+		t.Fatalf("recreate code=%d body=%s", recreate.Code, recreate.Body.String())
+	}
+	if next := agents.rows["reusable"].RegistrationGeneration; next == row.RegistrationGeneration {
+		t.Fatalf("delete/recreate reused generation %q", next)
 	}
 }
 

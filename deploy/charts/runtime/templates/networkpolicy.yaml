@@ -19,6 +19,17 @@ spec:
     - ports:
         - port: 8080
           protocol: TCP
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "runtime.selectorLabels" . | nindent 14 }}
+              {{- if eq .Values.scheduling.mode "perAgentPods" }}
+              app.kubernetes.io/component: control-plane
+              {{- end }}
+        {{- with .Values.networkPolicy.metricsIngress }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      ports:
         - port: 9091
           protocol: TCP
   egress:

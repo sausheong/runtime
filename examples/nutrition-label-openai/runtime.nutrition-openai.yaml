@@ -9,5 +9,6 @@ agents:
     name: SG Nutrition Investigator (OpenAI SDK)
     model: openai/gpt-5.4
     listen_addr: 127.0.0.1:8302
+    registration_generation: 9e6943ce-eae1-4fc1-bcfa-10603c4fd18e
     workdir: ./examples/nutrition-label-openai
     command: ["uv", "run", "python", "serve.py"]

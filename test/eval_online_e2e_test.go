@@ -63,12 +63,14 @@ func evalOnlineResetDB(t *testing.T, db *sql.DB) {
 		`DROP TABLE IF EXISTS markers`,
 		`DROP TABLE IF EXISTS online_eval_results CASCADE`,
 		`DROP TABLE IF EXISTS session_transcripts CASCADE`,
-		`DROP TABLE IF EXISTS session_events, sessions, agents CASCADE`,
+		`DROP TABLE IF EXISTS online_eval_results, session_transcripts, session_events, sessions, agents CASCADE`,
 		`DROP SCHEMA IF EXISTS dbos CASCADE`,
 		`DROP TABLE IF EXISTS eval_results, eval_runs, eval_sets CASCADE`,
 		`DROP TABLE IF EXISTS eval_policies CASCADE`,
 		`DROP TABLE IF EXISTS service_keys CASCADE`,
 		`DROP TABLE IF EXISTS identity_users CASCADE`,
+		`DROP TABLE IF EXISTS managed_agents CASCADE`,
+		`DROP TABLE IF EXISTS gateway_upstreams CASCADE`,
 		`DROP TABLE IF EXISTS tenants CASCADE`,
 	} {
 		mustExec(t, db, q)
@@ -104,6 +106,8 @@ func TestOnlineSamplingLifecycle(t *testing.T) {
 			`DROP TABLE IF EXISTS eval_results, eval_runs, eval_sets CASCADE`,
 			`DROP TABLE IF EXISTS service_keys CASCADE`,
 			`DROP TABLE IF EXISTS identity_users CASCADE`,
+			`DROP TABLE IF EXISTS managed_agents CASCADE`,
+			`DROP TABLE IF EXISTS gateway_upstreams CASCADE`,
 			`DROP TABLE IF EXISTS tenants CASCADE`,
 		} {
 			_, _ = cdb.Exec(q)
@@ -157,7 +161,7 @@ func TestOnlineSamplingLifecycle(t *testing.T) {
 
 	cfgPath := filepath.Join(tmp, "runtime.yaml")
 	cfg := "agents:\n" +
-		"  - {id: ev1, name: Ev1, model: test/scripted, listen_addr: 127.0.0.1:8521, tenant: acme}\n"
+		"  - {id: ev1, name: Ev1, model: test/scripted, listen_addr: 127.0.0.1:8521, tenant: acme, registration_generation: test-generation-ev1}\n"
 	if err := os.WriteFile(cfgPath, []byte(cfg), 0o644); err != nil {
 		t.Fatal(err)
 	}

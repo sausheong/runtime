@@ -7,3 +7,4 @@ agents:
     model: openai/gpt-5.4
     kind: nutrition
     listen_addr: 127.0.0.1:8201
+    registration_generation: e14457a6-b1fa-44fb-b282-8434903f4a0e

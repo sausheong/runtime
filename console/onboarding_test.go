@@ -106,13 +106,16 @@ func (f *fakeAdmin2) ListKeys(ctx context.Context, tenantID string) ([]identity.
 func (f *fakeAdmin2) ListTenants(ctx context.Context) ([]identity.TenantRow, error) {
 	return nil, nil
 }
-func (f *fakeAdmin2) InsertRegistrationToken(ctx context.Context, tokenID, agentID, hash string) error {
+func (f *fakeAdmin2) InsertRegistrationToken(ctx context.Context, tokenID, agentID, tenantID, agentGeneration, hash string) error {
 	return nil
 }
 func (f *fakeAdmin2) ListRegistrationTokens(ctx context.Context) ([]identity.RegTokenRow, error) {
 	return nil, nil
 }
 func (f *fakeAdmin2) RevokeRegistrationToken(ctx context.Context, tokenID string) error { return nil }
+func (f *fakeAdmin2) RevokeRegistrationTokensForAgent(ctx context.Context, tenantID, agentID, agentGeneration string) error {
+	return nil
+}
 
 // fakeSec2 implements controlplane.SecretAdmin with zero-value stubs;
 // SetSecret records the names it was called with so tests can assert a

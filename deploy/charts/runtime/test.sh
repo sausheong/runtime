@@ -9,8 +9,11 @@ DSN='--set secrets.pgDsn=postgres://x:x@h:5432/d?sslmode=disable'
 # and the chart enforces that at render time (runtime.requireAgents). Supply one
 # valid agent in every render that is expected to succeed.
 AGENTS='--set config.agents[0].id=a --set config.agents[0].name=A --set config.agents[0].model=test/scripted --set config.agents[0].listen_addr=127.0.0.1:8101'
+PAP_GENERATION='--set config.agents[0].registration_generation=11111111-1111-4111-8111-111111111111'
 fail() { echo "FAIL: $1" >&2; exit 1; }
 ok()   { echo "ok: $1"; }
+
+bash "$CHART/live-networkpolicy-test_test.sh"
 
 # 1. Defaults: core invariants.
 out=$(helm template r "$CHART" $DSN $AGENTS)
@@ -62,6 +65,16 @@ helm template r "$CHART" $DSN $AGENTS --set ingress.enabled=true \
   --set 'ingress.hosts[0].paths[0].pathType=Prefix' | grep -q 'kind: Ingress' || fail "ingress toggle"
 helm template r "$CHART" $DSN $AGENTS --set obs.enabled=true | grep -q 'kind: ServiceMonitor' || fail "servicemonitor toggle"
 helm template r "$CHART" $DSN $AGENTS --set obs.enabled=true | grep -q 'grafana_dashboard' || fail "dashboard toggle"
+out=$(helm template r "$CHART" $DSN $AGENTS)
+grep -q 'app.kubernetes.io/name: prometheus' <<<"$out" ||
+  fail "metrics ingress does not select same-namespace Prometheus by default"
+[ "$(grep -c 'port: 9091' <<<"$out")" = "2" ] ||
+  fail "management metrics port should appear only in Service and restricted NetworkPolicy"
+out=$(helm template r "$CHART" $DSN $AGENTS \
+  --set 'networkPolicy.metricsIngress[0].namespaceSelector.matchLabels.team=observability' \
+  --set 'networkPolicy.metricsIngress[0].podSelector.matchLabels.app=collector')
+grep -q 'team: observability' <<<"$out" || fail "metrics namespace selector not rendered"
+grep -q 'app: collector' <<<"$out" || fail "metrics pod selector not rendered"
 ok "toggles"
 
 # 6. config change flips the checksum annotation.
@@ -74,12 +87,13 @@ ok "config checksum"
 
 # 7. perAgentPods: one StatefulSet + headless Service per agent; runtimed config
 #    generated as remote pools; monolith Deployment still present (control plane).
-PAP='--set scheduling.mode=perAgentPods --set secrets.existingSecret=pap-secret'
+PAP="--set scheduling.mode=perAgentPods --set secrets.existingSecret=pap-secret $PAP_GENERATION"
 out=$(helm template r "$CHART" $DSN --set scheduling.mode=perAgentPods \
   --set secrets.agentPgDsn=postgres://agent:agent@h:5432/d \
   --set secrets.agentAuthTokens.support=agent-support-secret \
   --set config.agents[0].id=support --set config.agents[0].name=S \
-  --set config.agents[0].model=test/scripted --set config.agents[0].replicas=2)
+  --set config.agents[0].model=test/scripted --set config.agents[0].replicas=2 \
+  $PAP_GENERATION)
 grep -q 'kind: StatefulSet'        <<<"$out" || fail "perAgentPods: no StatefulSet"
 grep -q 'clusterIP: None'          <<<"$out" || fail "perAgentPods: no headless Service"
 grep -q 'serviceName: r-agent-support-hl' <<<"$out" || fail "perAgentPods: wrong serviceName"
@@ -90,7 +104,14 @@ grep -q 'support-{i}.r-agent-support-hl' <<<"$out" || fail "perAgentPods: genera
 # appears in both the headless Service name and the generated url.
 grep -q 'r-agent-support-hl.default.svc.cluster.local' <<<"$out" || fail "perAgentPods: DNS base drift"
 grep -q 'RUNTIME_AGENT_AUTH_TOKEN_SUPPORT' <<<"$out" || fail "perAgentPods: no per-agent bearer"
+grep -q 'RUNTIME_PROVISION_REMOTE_AGENT_ROLE' <<<"$out" || fail "perAgentPods: remote role provisioning not enabled"
 grep -q 'key: RUNTIME_AGENT_PG_DSN' <<<"$out" || fail "perAgentPods: agent does not use restricted DSN"
+grep -q 'registration_generation: "11111111-1111-4111-8111-111111111111"' <<<"$out" ||
+  fail "perAgentPods: generation absent from control-plane registry"
+grep -A1 'name: RUNTIME_AGENT_GENERATION' <<<"$out" | grep -q '11111111-1111-4111-8111-111111111111' ||
+  fail "perAgentPods: generation absent from agent pod"
+grep -A1 'name: RUNTIME_DBOS_SCHEMA' <<<"$out" | grep -q 'dbos_agent_' ||
+  fail "perAgentPods: isolated DBOS schema absent"
 [ "$(grep -c 'kind: NetworkPolicy' <<<"$out")" -ge 2 ] || fail "perAgentPods: no dedicated agent NetworkPolicy"
 ok "perAgentPods renders StatefulSet+headless+generated remote config"
 
@@ -119,7 +140,17 @@ if helm template r "$CHART" $DSN --set scheduling.mode=perAgentPods \
 fi
 ok "perAgentPods fail-closed (per-agent auth absent)"
 
-# 7e. One perAgentPods release has one restricted DB role and therefore one
+# 7e. perAgentPods fails closed without an explicit persisted generation.
+if helm template r "$CHART" $DSN --set scheduling.mode=perAgentPods \
+  --set secrets.agentPgDsn=postgres://agent:agent@h:5432/d \
+  --set secrets.agentAuthTokens.s=agent-secret \
+  --set config.agents[0].id=s --set config.agents[0].name=S \
+  --set config.agents[0].model=m >/dev/null 2>&1; then
+  fail "expected perAgentPods generation fail-closed"
+fi
+ok "perAgentPods fail-closed (instance generation absent)"
+
+# 7f. One perAgentPods release has one restricted DB role and therefore one
 # tenant. Sharing it across tenants would defeat the database row boundary.
 if helm template r "$CHART" $DSN $PAP \
   --set config.agents[0].id=a --set config.agents[0].name=A \
@@ -130,7 +161,7 @@ if helm template r "$CHART" $DSN $PAP \
 fi
 ok "perAgentPods fail-closed (one restricted role cannot span tenants)"
 
-# 7f. Tenant RLS is not an agent boundary. One shared restricted role may not
+# 7g. Tenant RLS is not an agent boundary. One shared restricted role may not
 # be reused by two agents even when both belong to the same tenant.
 if helm template r "$CHART" $DSN $PAP \
   --set config.agents[0].id=a --set config.agents[0].name=A \
@@ -155,6 +186,7 @@ out=$(helm template r "$CHART" $DSN --set scheduling.mode=perAgentPods \
   --set secrets.agentAuthTokens.support=agent-support-secret \
   --set config.agents[0].id=support --set config.agents[0].name=S \
   --set config.agents[0].model=test/scripted \
+  $PAP_GENERATION \
   --set secrets.registrationToken=svk-a.b)
 grep -q 'RUNTIME_REGISTRATION_URL'   <<<"$out" || fail "handshake: no RUNTIME_REGISTRATION_URL in StatefulSet"
 grep -q '/register'                  <<<"$out" || fail "handshake: registration URL not /register"
@@ -171,7 +203,8 @@ out=$(helm template r "$CHART" $DSN --set scheduling.mode=perAgentPods \
   --set secrets.agentPgDsn=postgres://agent:agent@h:5432/d \
   --set secrets.agentAuthTokens.support=agent-support-secret \
   --set config.agents[0].id=support --set config.agents[0].name=S \
-  --set config.agents[0].model=test/scripted)
+  --set config.agents[0].model=test/scripted \
+  $PAP_GENERATION)
 if grep -q 'RUNTIME_REGISTRATION_URL' <<<"$out"; then fail "handshake leaked without a registration token"; fi
 ok "handshake off (perAgentPods, no token)"
 
@@ -195,5 +228,51 @@ grep -q 'RUNTIME_IDENTITY_SIGNING_PUBLIC_KEY' <<<"$out" || fail "subject forward
 [ "$(grep -c 'key: RUNTIME_IDENTITY_SIGNING_PRIVATE_KEY' <<<"$out")" = "1" ] ||
   fail "subject forwarding: private key exposed outside control plane"
 ok "subject forwarding requires asymmetric signing keys"
+
+# 11. Documented retention and concurrency controls are renderable without
+# editing the chart, and agent controls reach both monolith children and
+# perAgentPods StatefulSets.
+out=$(helm template r "$CHART" $DSN $AGENTS \
+  --set runtime.sessionRetention=168h \
+  --set runtime.sessionRetentionBatch=77 \
+  --set runtime.sessionRetentionDryRun=true \
+  --set runtime.evalRetention=336h \
+  --set runtime.maxRequests=91 \
+  --set runtime.maxStreams=19 \
+  --set agent.maxRequests=73 \
+  --set agent.maxStreams=17 \
+  --set agent.memoryRetention.dryRun=true \
+  --set agent.memoryRetention.fact=720h)
+for pair in \
+  'RUNTIME_SESSION_RETENTION 168h' \
+  'RUNTIME_SESSION_RETENTION_BATCH 77' \
+  'RUNTIME_SESSION_RETENTION_DRY_RUN true' \
+  'RUNTIME_EVAL_RETENTION 336h' \
+  'RUNTIME_MAX_REQUESTS 91' \
+  'RUNTIME_MAX_STREAMS 19' \
+  'RUNTIME_AGENT_MAX_REQUESTS 73' \
+  'RUNTIME_AGENT_MAX_STREAMS 17' \
+  'RUNTIME_MEMORY_RETENTION_DRY_RUN true' \
+  'RUNTIME_MEMORY_RETENTION_FACT 720h'
+do
+  name="${pair%% *}"
+  value="${pair#* }"
+  grep -A1 "name: ${name}" <<<"$out" | grep -q "value: \"${value}\"" ||
+    fail "configured ${name}=${value} not rendered"
+done
+
+out=$(helm template r "$CHART" $DSN --set scheduling.mode=perAgentPods \
+  --set secrets.agentPgDsn=postgres://agent:agent@h:5432/d \
+  --set secrets.agentAuthTokens.support=agent-support-secret \
+  --set config.agents[0].id=support --set config.agents[0].name=S \
+  --set config.agents[0].model=test/scripted \
+  $PAP_GENERATION \
+  --set agent.maxRequests=73 --set agent.maxStreams=17 \
+  --set agent.memoryRetention.fact=720h)
+[ "$(grep -c 'name: RUNTIME_AGENT_MAX_REQUESTS' <<<"$out")" = "2" ] ||
+  fail "agent request limit must reach control plane and per-agent pod"
+grep -A1 'name: RUNTIME_MEMORY_RETENTION_FACT' <<<"$out" | grep -q 'value: "720h"' ||
+  fail "perAgentPods memory retention not rendered"
+ok "retention and concurrency configuration"
 
 echo "ALL CHART TESTS PASSED"

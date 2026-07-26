@@ -116,7 +116,7 @@ exposing it.
 
 ## Local development
 
-Local development requires Go 1.25.1 or later, Postgres, and Docker if you use
+Local development requires Go 1.25.12 or later, Postgres, and Docker if you use
 the supplied database target:
 
 ```bash
@@ -149,6 +149,7 @@ agents:
     name: Support Agent
     model: test/scripted
     listen_addr: 127.0.0.1:8101
+    registration_generation: 89ef9a06-e752-49e2-a8bc-a9b14983dc6f
     replicas: 2
     memory: true
     gateway: search
@@ -240,13 +241,16 @@ multi-tenant cloud isolation boundary.
 make fmt-check
 make vet
 make test
+make security-scan
 make pg-up
 make test-integration
 make helm-lint
 ```
 
-CI also runs race detection on concurrency-heavy packages, `govulncheck`,
-Python-shim tests, Helm rendering, shell checks, GCP image builds, and
+`make security-scan` checks every imported Go package and performs reachable
+symbol scans on all six shipped commands. CI also runs race detection on
+concurrency-heavy packages, Python-shim tests, Helm rendering, shell checks,
+GCP image builds, and
 turnkey/distributed Compose validation. GitHub Actions are pinned to commit SHAs and Dependabot tracks Go,
 Actions, Python, and container dependencies.
 

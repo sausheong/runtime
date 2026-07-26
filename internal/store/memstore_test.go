@@ -63,6 +63,55 @@ func TestMemFailureCategory(t *testing.T) {
 	}
 }
 
+func TestMemInitialFailureCategoryIsMonotonicAndReplaySafe(t *testing.T) {
+	ctx := context.Background()
+	s := NewMemStore()
+	id, _ := s.CreateSession(ctx, "agent-x", 0)
+	changed, err := s.SetInitialFailureCategory(ctx, id, "none")
+	if err != nil || !changed {
+		t.Fatalf("initial classification changed=%v err=%v", changed, err)
+	}
+	if err := s.SetFailureCategory(ctx, id, "quality_fail"); err != nil {
+		t.Fatal(err)
+	}
+	changed, err = s.SetInitialFailureCategory(ctx, id, "none")
+	if err != nil || changed {
+		t.Fatalf("replay classification changed=%v err=%v", changed, err)
+	}
+	row, _ := s.GetSession(ctx, id)
+	if row.FailureCategory != "quality_fail" {
+		t.Fatalf("replay downgraded quality refinement to %q", row.FailureCategory)
+	}
+	refined, err := s.RefineFailureCategory(ctx, id, "quality_fail", "tool_error")
+	if err != nil || !refined {
+		t.Fatalf("refine category changed=%v err=%v", refined, err)
+	}
+	refined, err = s.RefineFailureCategory(ctx, id, "quality_fail", "none")
+	if err != nil || refined {
+		t.Fatalf("replayed/wrong-source refinement changed=%v err=%v", refined, err)
+	}
+}
+
+func TestMemOnlineResultReportsFirstDurableWrite(t *testing.T) {
+	ctx := context.Background()
+	s := NewMemStore()
+	id, _ := s.CreateSession(ctx, "agent-x", 0)
+	inserted, err := s.PutOnlineResultIfNew(
+		ctx, id, "quality", "default", "actor", "contains", true, "")
+	if err != nil || !inserted {
+		t.Fatalf("first write inserted=%v err=%v", inserted, err)
+	}
+	inserted, err = s.PutOnlineResultIfNew(
+		ctx, id, "quality", "default", "actor", "contains", false, "changed")
+	if err != nil || inserted {
+		t.Fatalf("replay write inserted=%v err=%v", inserted, err)
+	}
+	results, err := s.ListOnlineResults(ctx, id)
+	if err != nil || len(results) != 1 || results[0].Passed {
+		t.Fatalf("upsert result=%+v err=%v", results, err)
+	}
+}
+
 func TestMemFailureBreakdownByAgent(t *testing.T) {
 	ctx := context.Background()
 	s := NewMemStore()

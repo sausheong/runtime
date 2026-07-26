@@ -7,15 +7,15 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"os"
 	"strconv"
 	"time"
 
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/filters"
-	"github.com/docker/docker/client"
-	"github.com/docker/go-connections/nat"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/network"
+	"github.com/moby/moby/client"
 )
 
 const (
@@ -127,7 +127,7 @@ func cdpPublishHost() string {
 // private network. Host installations without a network publish to loopback.
 func (d *dockerBackend) Create(ctx context.Context, tenant, proxyAddr string) (BrowserHandle, error) {
 	pids := int64(512)
-	port := nat.Port(cdpPort + "/tcp")
+	port := network.MustParsePort(cdpPort + "/tcp")
 	cp := containerProxyAddrForHost(proxyAddr, d.cfg.ProxyHost)
 	hostConfig := &container.HostConfig{
 		ReadonlyRootfs: true,
@@ -145,10 +145,12 @@ func (d *dockerBackend) Create(ctx context.Context, tenant, proxyAddr string) (B
 	if d.cfg.Network != "" {
 		hostConfig.NetworkMode = container.NetworkMode(d.cfg.Network)
 	} else {
-		hostConfig.PortBindings = nat.PortMap{port: []nat.PortBinding{{HostIP: cdpPublishHost()}}}
+		hostConfig.PortBindings = network.PortMap{
+			port: []network.PortBinding{{HostIP: netip.MustParseAddr(cdpPublishHost())}},
+		}
 	}
-	created, err := d.cli.ContainerCreate(ctx,
-		&container.Config{
+	created, err := d.cli.ContainerCreate(ctx, client.ContainerCreateOptions{
+		Config: &container.Config{
 			Image: d.cfg.Image,
 			User:  strconv.Itoa(browserUID),
 			Env: []string{
@@ -158,20 +160,20 @@ func (d *dockerBackend) Create(ctx context.Context, tenant, proxyAddr string) (B
 				"NO_PROXY=",
 			},
 			Labels:       map[string]string{browserLabel: "1", browserLabel + ".tenant": tenant},
-			ExposedPorts: nat.PortSet{port: struct{}{}},
+			ExposedPorts: network.PortSet{port: struct{}{}},
 		},
-		hostConfig,
-		nil, nil, "")
+		HostConfig: hostConfig,
+	})
 	if err != nil {
 		return BrowserHandle{}, err
 	}
-	if err := d.cli.ContainerStart(ctx, created.ID, container.StartOptions{}); err != nil {
-		_ = d.cli.ContainerRemove(ctx, created.ID, container.RemoveOptions{Force: true})
+	if _, err := d.cli.ContainerStart(ctx, created.ID, client.ContainerStartOptions{}); err != nil {
+		_, _ = d.cli.ContainerRemove(ctx, created.ID, client.ContainerRemoveOptions{Force: true})
 		return BrowserHandle{}, err
 	}
 	endpoint, err := d.waitForCDP(ctx, created.ID)
 	if err != nil {
-		_ = d.cli.ContainerRemove(ctx, created.ID, container.RemoveOptions{Force: true})
+		_, _ = d.cli.ContainerRemove(ctx, created.ID, client.ContainerRemoveOptions{Force: true})
 		return BrowserHandle{}, fmt.Errorf("CDP never became ready: %w", err)
 	}
 	return BrowserHandle{ContainerID: created.ID, Endpoint: endpoint}, nil
@@ -205,22 +207,22 @@ func (d *dockerBackend) waitForCDP(ctx context.Context, containerID string) (str
 // host.docker.internal when browserd is containerized) (Chrome reports
 // 0.0.0.0/its own hostname there, which the host can't dial).
 func cdpEndpointFromInspect(ctx context.Context, cli *client.Client, containerID, networkName string) (string, error) {
-	insp, err := cli.ContainerInspect(ctx, containerID)
+	insp, err := cli.ContainerInspect(ctx, containerID, client.ContainerInspectOptions{})
 	if err != nil {
 		return "", err
 	}
-	if insp.NetworkSettings == nil {
+	if insp.Container.NetworkSettings == nil {
 		return "", fmt.Errorf("no network settings yet")
 	}
 	dialHost, dialPort := "", cdpPort
 	if networkName != "" {
-		network, ok := insp.NetworkSettings.Networks[networkName]
-		if !ok || network == nil || network.IPAddress == "" {
+		endpoint, ok := insp.Container.NetworkSettings.Networks[networkName]
+		if !ok || endpoint == nil || !endpoint.IPAddress.IsValid() {
 			return "", fmt.Errorf("no address on private browser network yet")
 		}
-		dialHost = network.IPAddress
+		dialHost = endpoint.IPAddress.String()
 	} else {
-		bindings := insp.NetworkSettings.Ports[nat.Port(cdpPort+"/tcp")]
+		bindings := insp.Container.NetworkSettings.Ports[network.MustParsePort(cdpPort+"/tcp")]
 		if len(bindings) == 0 || bindings[0].HostPort == "" {
 			return "", fmt.Errorf("no host port yet")
 		}
@@ -263,20 +265,21 @@ func cdpEndpointFromInspect(ctx context.Context, cli *client.Client, containerID
 
 // Remove force-removes the container.
 func (d *dockerBackend) Remove(ctx context.Context, containerID string) error {
-	return d.cli.ContainerRemove(ctx, containerID, container.RemoveOptions{Force: true})
+	_, err := d.cli.ContainerRemove(ctx, containerID, client.ContainerRemoveOptions{Force: true})
+	return err
 }
 
 // ListLeftovers returns every container carrying the browser label.
 func (d *dockerBackend) ListLeftovers(ctx context.Context) ([]string, error) {
-	list, err := d.cli.ContainerList(ctx, container.ListOptions{
+	list, err := d.cli.ContainerList(ctx, client.ContainerListOptions{
 		All:     true,
-		Filters: filters.NewArgs(filters.Arg("label", browserLabel+"=1")),
+		Filters: make(client.Filters).Add("label", browserLabel+"=1"),
 	})
 	if err != nil {
 		return nil, err
 	}
-	ids := make([]string, 0, len(list))
-	for _, c := range list {
+	ids := make([]string, 0, len(list.Items))
+	for _, c := range list.Items {
 		ids = append(ids, c.ID)
 	}
 	return ids, nil

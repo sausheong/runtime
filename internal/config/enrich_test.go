@@ -16,7 +16,7 @@ func writeCfg(t *testing.T, body string) string {
 }
 
 func TestEnrichValidation(t *testing.T) {
-	base := "agents:\n  - {id: a1, name: A1, model: test/scripted, listen_addr: 127.0.0.1:9401}\n" +
+	base := "agents:\n  - {id: a1, name: A1, model: test/scripted, listen_addr: 127.0.0.1:9401, registration_generation: test-generation-a1}\n" +
 		"gateway:\n  servers:\n"
 
 	// enrich on a non-openapi upstream ⇒ error.

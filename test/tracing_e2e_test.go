@@ -32,7 +32,7 @@ func TestTracingE2E(t *testing.T) {
 	}
 	mustExec(t, db, `DROP TABLE IF EXISTS markers`)
 	mustExec(t, db, `CREATE TABLE markers (id BIGSERIAL PRIMARY KEY, ran_at TIMESTAMPTZ)`)
-	mustExec(t, db, `DROP TABLE IF EXISTS session_events, sessions, agents CASCADE`)
+	mustExec(t, db, `DROP TABLE IF EXISTS online_eval_results, session_transcripts, session_events, sessions, agents CASCADE`)
 	mustExec(t, db, `DROP SCHEMA IF EXISTS dbos CASCADE`)
 
 	// In-test OTLP/HTTP receiver: count POSTs to /v1/traces.
@@ -60,7 +60,7 @@ func TestTracingE2E(t *testing.T) {
 
 	cfgPath := filepath.Join(tmp, "runtime.yaml")
 	if err := os.WriteFile(cfgPath, []byte(
-		"agents:\n  - {id: tracer, name: Tracer, model: test/scripted, listen_addr: 127.0.0.1:8412}\n"), 0o644); err != nil {
+		"agents:\n  - {id: tracer, name: Tracer, model: test/scripted, listen_addr: 127.0.0.1:8412, registration_generation: test-generation-tracer}\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
