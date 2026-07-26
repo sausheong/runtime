@@ -247,6 +247,12 @@ make test-integration
 make helm-lint
 ```
 
+`make test-integration` is destructive: it DROPs and recreates the runtime
+tables in the database it resolves to (`RUNTIME_TEST_PG_DSN`, else
+`RUNTIME_PG_DSN`, else the local `runtime` database). Set
+`RUNTIME_TEST_PG_DSN` to a scratch database if your local one holds anything
+worth keeping.
+
 `make security-scan` checks every imported Go package and performs reachable
 symbol scans on all six shipped commands. CI also runs race detection on
 concurrency-heavy packages, Python-shim tests, Helm rendering, shell checks,

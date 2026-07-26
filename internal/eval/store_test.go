@@ -6,7 +6,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"os"
+	"github.com/sausheong/runtime/internal/pgtest"
 	"strings"
 	"testing"
 	"time"
@@ -15,12 +15,9 @@ import (
 	runtimestore "github.com/sausheong/runtime/internal/store"
 )
 
-func testDSN() string {
-	if v := os.Getenv("RUNTIME_TEST_PG_DSN"); v != "" {
-		return v
-	}
-	return "postgres://runtime:runtime@localhost:5432/runtime?sslmode=disable"
-}
+// testDSN resolves from RUNTIME_TEST_PG_DSN / RUNTIME_PG_DSN. These tests DROP
+// tables, so the override must be real. See internal/pgtest.
+func testDSN() string { return pgtest.DSN() }
 
 // freshStore opens the DB, drops + recreates the eval tables via NewStore, and
 // returns a Store. t.Cleanup drops the tables so sibling tests start clean.

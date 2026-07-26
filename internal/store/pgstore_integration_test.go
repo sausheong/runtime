@@ -7,12 +7,14 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"github.com/sausheong/runtime/internal/pgtest"
 	"testing"
 	"time"
 )
 
-// Matches the DSN convention used by the integration tests in test/.
-const pgTestDSN = "postgres://runtime:runtime@localhost:5432/runtime?sslmode=disable"
+// pgTestDSN resolves from RUNTIME_TEST_PG_DSN / RUNTIME_PG_DSN; these tests DROP
+// tables, so the override must be real. See internal/pgtest.
+var pgTestDSN = pgtest.DSN()
 
 func newPGTestStore(t *testing.T) Store {
 	t.Helper()

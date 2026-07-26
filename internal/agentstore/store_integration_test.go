@@ -5,19 +5,16 @@ package agentstore
 import (
 	"context"
 	"database/sql"
-	"os"
+	"github.com/sausheong/runtime/internal/pgtest"
 	"testing"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
 	runtimestore "github.com/sausheong/runtime/internal/store"
 )
 
-func agentStoreTestDSN() string {
-	if dsn := os.Getenv("RUNTIME_PG_DSN"); dsn != "" {
-		return dsn
-	}
-	return "postgres://runtime:runtime@localhost:5432/runtime?sslmode=disable"
-}
+// agentStoreTestDSN resolves from RUNTIME_TEST_PG_DSN / RUNTIME_PG_DSN. These tests DROP
+// tables, so the override must be real. See internal/pgtest.
+func agentStoreTestDSN() string { return pgtest.DSN() }
 
 func TestRegistrationGenerationMigrationBackfillsLegacyRows(t *testing.T) {
 	ctx := context.Background()

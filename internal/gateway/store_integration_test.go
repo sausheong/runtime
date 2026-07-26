@@ -5,18 +5,15 @@ package gateway
 import (
 	"context"
 	"database/sql"
-	"os"
+	"github.com/sausheong/runtime/internal/pgtest"
 	"testing"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
-func gatewayStoreTestDSN() string {
-	if dsn := os.Getenv("RUNTIME_PG_DSN"); dsn != "" {
-		return dsn
-	}
-	return "postgres://runtime:runtime@localhost:5432/runtime?sslmode=disable"
-}
+// gatewayStoreTestDSN resolves from RUNTIME_TEST_PG_DSN / RUNTIME_PG_DSN. These tests DROP
+// tables, so the override must be real. See internal/pgtest.
+func gatewayStoreTestDSN() string { return pgtest.DSN() }
 
 func TestUpstreamStoreRepairsMissingTenantForeignKeyAndRejectsOrphans(t *testing.T) {
 	ctx := context.Background()

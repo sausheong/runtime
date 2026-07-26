@@ -19,7 +19,18 @@ make helm-lint
 bash deploy/charts/runtime/test.sh
 ```
 
-Integration tests require PostgreSQL with pgvector. Changes to deployment
+Integration tests require PostgreSQL with pgvector. **They are destructive:
+they DROP and recreate the runtime tables in whichever database they resolve
+to.** That database is `RUNTIME_TEST_PG_DSN`, else `RUNTIME_PG_DSN`, else
+`postgres://runtime:runtime@localhost:5432/runtime`. Point
+`RUNTIME_TEST_PG_DSN` at a scratch database if anything in your local one
+matters:
+
+```bash
+RUNTIME_TEST_PG_DSN="postgres://runtime:runtime@localhost:5432/runtime_test?sslmode=disable" \
+  make test-integration
+```
+ Changes to deployment
 templates must also pass the relevant Compose or Helm render checks. Changes to
 public behaviour must update the owning topic guide and
 [documentation-map.md](documentation-map.md).

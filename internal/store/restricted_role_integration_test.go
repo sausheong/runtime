@@ -5,6 +5,7 @@ package store_test
 import (
 	"context"
 	"database/sql"
+	"github.com/sausheong/runtime/internal/pgtest"
 	"net/url"
 	"os"
 	"testing"
@@ -14,7 +15,9 @@ import (
 	"github.com/sausheong/runtime/internal/store"
 )
 
-const ownerTestDSN = "postgres://runtime:runtime@localhost:5432/runtime?sslmode=disable"
+// ownerTestDSN resolves from RUNTIME_TEST_PG_DSN / RUNTIME_PG_DSN; these tests DROP
+// tables, so the override must be real. See internal/pgtest.
+var ownerTestDSN = pgtest.DSN()
 
 func TestRestrictedAgentRoleCannotReadOtherTenantOrIdentityTables(t *testing.T) {
 	agentDSN := os.Getenv("RUNTIME_AGENT_PG_DSN")

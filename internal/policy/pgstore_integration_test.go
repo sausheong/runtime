@@ -5,12 +5,15 @@ package policy
 import (
 	"context"
 	"database/sql"
+	"github.com/sausheong/runtime/internal/pgtest"
 	"testing"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
-const pgTestDSN = "postgres://runtime:runtime@localhost:5432/runtime?sslmode=disable"
+// pgTestDSN resolves from RUNTIME_TEST_PG_DSN / RUNTIME_PG_DSN; these tests DROP
+// tables, so the override must be real. See internal/pgtest.
+var pgTestDSN = pgtest.DSN()
 
 func TestPGStoreConformance(t *testing.T) {
 	ctx := context.Background()

@@ -6,6 +6,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"github.com/sausheong/runtime/internal/pgtest"
 	"sync"
 	"testing"
 	"time"
@@ -14,7 +15,9 @@ import (
 	hmem "github.com/sausheong/harness/tool/memory"
 )
 
-const dsn = "postgres://runtime:runtime@localhost:5432/runtime?sslmode=disable"
+// dsn resolves from RUNTIME_TEST_PG_DSN / RUNTIME_PG_DSN; these tests DROP
+// tables, so the override must be real. See internal/pgtest.
+var dsn = pgtest.DSN()
 
 // freshStore opens the DB, drops + recreates memory_events, and returns a Store
 // pinned to tenant. t.Cleanup drops the table so sibling tests don't see it.

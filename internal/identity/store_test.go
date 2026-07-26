@@ -5,12 +5,15 @@ package identity
 import (
 	"context"
 	"database/sql"
+	"github.com/sausheong/runtime/internal/pgtest"
 	"testing"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
-const dsn = "postgres://runtime:runtime@localhost:5432/runtime?sslmode=disable"
+// dsn resolves from RUNTIME_TEST_PG_DSN / RUNTIME_PG_DSN; these tests DROP
+// tables, so the override must be real. See internal/pgtest.
+var dsn = pgtest.DSN()
 
 func freshStore(t *testing.T) (*Store, *sql.DB) {
 	t.Helper()
