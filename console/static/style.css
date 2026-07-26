@@ -153,6 +153,12 @@ a:hover { text-decoration: underline; }
 }
 .card > h2:first-child { margin-top: 0; }
 .card-desc { color: var(--muted); font-size: var(--fs-sm); margin: -.5rem 0 1rem; max-width: 68ch; }
+/* A panel containing a wide table scrolls ITSELF rather than the document.
+   Only agent.html wrapped its tables in .table-wrap; the other 17 tables across
+   six templates did not, so a six-column eval-run table pushed the whole page
+   sideways on a phone. Putting the guard on the container fixes every table at
+   once instead of asking seventeen call sites to remember. */
+.card:has(> table) { overflow-x: auto; }
 
 /* ---- Tables ---- */
 table { border-collapse: collapse; width: 100%; }
