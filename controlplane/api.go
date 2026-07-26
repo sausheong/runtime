@@ -133,6 +133,8 @@ func NewAPI(reg *Registry, m *obs.ControlMetrics, st store.Store, subjectForward
 			}
 			out[i] = st
 		})
+		// make() above never yields nil, so this only documents the contract:
+		// the body is a JSON array even when no agent is visible, never null.
 		if out == nil {
 			out = []agentStatus{}
 		}

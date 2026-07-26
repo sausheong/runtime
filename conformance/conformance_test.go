@@ -54,11 +54,12 @@ func TestRun_RejectsIncompleteSessionShape(t *testing.T) {
 	}
 }
 
-// TestRun_RejectsOversizedMeta proves the harness bounds allocation: a /meta
-// body one byte past the ceiling is rejected rather than buffered whole.
-func TestRun_RejectsOversizedMeta(t *testing.T) {
+// TestCheckMeta_RejectsOversized proves the harness bounds allocation: a /meta
+// body one byte past the ceiling is rejected rather than buffered whole. The
+// payload is valid JSON, so only the byte ceiling can reject it — a malformed
+// body would fail for the wrong reason and make this test vacuous.
+func TestCheckMeta_RejectsOversized(t *testing.T) {
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(200) })
 	mux.HandleFunc("GET /meta", func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte(`{"agent_id":"a","contract_version":"v1","pad":"` +
 			strings.Repeat("x", maxConformanceResponseBytes) + `"}`))
@@ -77,7 +78,9 @@ func TestRun_RejectsOversizedMeta(t *testing.T) {
 
 type recorder struct {
 	fails int
-	last  string
+	// last holds only the most recent failure. Sufficient for tests that drive
+	// a single check; a test that runs the whole suite would need a slice.
+	last string
 }
 
 func (r *recorder) Errorf(format string, args ...any) {
