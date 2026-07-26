@@ -84,6 +84,13 @@ var ErrIngestionDetached = errors.New("memory ingestion ignored cancellation; wo
 // outlived the drain deadline cannot call into a handle its owner is about to
 // close. Callers must check it immediately before each store call and return
 // early when it is false — never hold lifecycleMu across the store call itself.
+//
+// Residual window: a worker that passes this gate and is then preempted can
+// still be inside one store call when Close latches. That is intrinsic to a
+// gate — holding the mutex across the call would deadlock Close — and it
+// narrows the exposure from unbounded to a single in-flight call. Closing that
+// last gap would need a killable process boundary, which the design
+// deliberately rejected for an in-process *sql.DB shared by goroutines.
 func (g *KG) mayTouchStore() bool {
 	g.lifecycleMu.Lock()
 	defer g.lifecycleMu.Unlock()
