@@ -13,7 +13,7 @@ name: runtime-secured
 
 services:
   caddy:
-    image: caddy:2.11.3
+    image: caddy:2.11.3@sha256:ec18ee54aab3315c22e25f3b2babda73ff8007d39b13b3bd1bfffa2f0444c7d9
     restart: unless-stopped
     depends_on:
       - runtimed
@@ -30,7 +30,10 @@ services:
       - "443:443"
 
   postgres:
-    image: postgres:16
+    # Digest-pinned: `16` is a major-only tag, so the database minor/patch would
+    # otherwise change silently under a deployment the release contract calls
+    # reproducible. Refresh the digest as a reviewed dependency update.
+    image: postgres:16@sha256:33f923b05f64ca54ac4401c01126a6b92afe839a0aa0a52bc5aeb5cc958e5f20
     restart: unless-stopped
     environment:
       POSTGRES_USER: runtime

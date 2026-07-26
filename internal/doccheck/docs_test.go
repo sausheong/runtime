@@ -53,6 +53,21 @@ var publicationCommands = []string{
 	"gh release create",
 }
 
+// scannedImages is the complete inventory of images both workflows build and
+// scan. Every one of them needs BOTH a blocking --only-fixed gate and an
+// unfiltered report, because --only-fixed is an ignore filter: findings with no
+// fix, a wont-fix, or an unknown fix state are absent from the gate's output
+// entirely and are only visible in the unfiltered report.
+var scannedImages = []string{
+	"runtime",
+	"runtime-sandbox",
+	"runtime-browser",
+	"runtime-embedder",
+	"nutrition-openai",
+	"hello-claude",
+	"food-label-advisor",
+}
+
 var racePackages = []string{
 	"./internal/eval",
 	"./internal/browser",
@@ -123,6 +138,94 @@ func validateReleasePublicationGates(data []byte) error {
 					return fmt.Errorf("race gate at step %d omits %s", i, pkg)
 				}
 			}
+		}
+	}
+	return nil
+}
+
+// isUnfilteredReportStep reports whether a step runs grype in report mode:
+// machine-readable output, and none of the fix-state ignore filters that make
+// the blocking gate actionable but incomplete.
+func isUnfilteredReportStep(step workflowStep) bool {
+	if !stepRuns(step, "grype ") || !stepRuns(step, "-o json") {
+		return false
+	}
+	for _, filter := range []string{"--only-fixed", "--only-notfixed", "--ignore-wontfix"} {
+		if stepRuns(step, filter) {
+			return false
+		}
+	}
+	return true
+}
+
+// validateVulnerabilityReporting asserts that every scanned image is covered by
+// BOTH a blocking --only-fixed gate and an unfiltered report, and that the
+// report is produced before anything is published.
+func validateVulnerabilityReporting(data []byte, jobName, tag string) error {
+	var workflow workflowDocument
+	if err := yaml.Unmarshal(data, &workflow); err != nil {
+		return fmt.Errorf("parse workflow: %w", err)
+	}
+	job, ok := workflow.Jobs[jobName]
+	if !ok {
+		return fmt.Errorf("workflow has no %s job", jobName)
+	}
+
+	firstPublication := len(job.Steps)
+	for i, step := range job.Steps {
+		for _, command := range publicationCommands {
+			if stepRuns(step, command) {
+				firstPublication = i
+				break
+			}
+		}
+		if firstPublication == i {
+			break
+		}
+	}
+
+	reportStep, gateIndex := -1, -1
+	for i, step := range job.Steps {
+		if step.ContinueOnError {
+			continue
+		}
+		if isUnfilteredReportStep(step) && reportStep < 0 {
+			reportStep = i
+		}
+		if stepRuns(step, "--only-fixed") && gateIndex < 0 {
+			gateIndex = i
+		}
+	}
+	if gateIndex < 0 {
+		return fmt.Errorf("%s job has no blocking --only-fixed vulnerability gate", jobName)
+	}
+	if reportStep < 0 {
+		return fmt.Errorf("%s job never produces an unfiltered vulnerability report; "+
+			"--only-fixed is an ignore filter, so no-fix findings would be invisible", jobName)
+	}
+	if reportStep < gateIndex {
+		return fmt.Errorf("%s job runs the unfiltered report at step %d before the blocking gate at "+
+			"step %d; a real failure must stop the run first", jobName, reportStep, gateIndex)
+	}
+	if reportStep >= firstPublication {
+		return fmt.Errorf("%s job produces the unfiltered report at step %d, at or after the first "+
+			"publication at step %d", jobName, reportStep, firstPublication)
+	}
+
+	for _, image := range scannedImages {
+		gate := fmt.Sprintf("grype %s:%s --fail-on high --only-fixed", image, tag)
+		blocking := false
+		for _, step := range job.Steps[:firstPublication] {
+			if !step.ContinueOnError && stepRuns(step, gate) {
+				blocking = true
+				break
+			}
+		}
+		if !blocking {
+			return fmt.Errorf("%s job lacks the blocking gate %q", jobName, gate)
+		}
+		if !stepRuns(job.Steps[reportStep], image) {
+			return fmt.Errorf("%s job's unfiltered report omits image %q", jobName, image)
 		}
 	}
 	return nil
@@ -290,6 +393,17 @@ func TestReleaseWorkflowIsValidAndPinned(t *testing.T) {
 	if err := validateReleasePublicationGates(data); err != nil {
 		t.Error(err)
 	}
+	if err := validateVulnerabilityReporting(data, "publish", "release-validation"); err != nil {
+		t.Error(err)
+	}
+	// The unfiltered reports are risk evidence for operators, so they must be
+	// attached to the release the same way the SBOMs are.
+	for _, image := range scannedImages {
+		asset := "dist/" + image + "-vulnerabilities.json"
+		if !strings.Contains(string(data), asset) {
+			t.Errorf("release does not attach the complete vulnerability report %q", asset)
+		}
+	}
 	for _, required := range []string{
 		"${{ github.ref_name }}",
 		"--build-arg VERSION=",
@@ -323,6 +437,118 @@ func TestReleaseWorkflowIsValidAndPinned(t *testing.T) {
 	}
 	if !strings.Contains(string(ciData), "grype runtime:ci --fail-on high --only-fixed") {
 		t.Error("CI does not enforce the actionable high-severity image gate")
+	}
+	if err := validateVulnerabilityReporting(ciData, "container", "ci"); err != nil {
+		t.Error(err)
+	}
+}
+
+// TestGrypeExceptionsCarryReviewMetadata enforces the RELEASING.md exception
+// policy. The review fields are YAML comments, not mapping keys, because grype
+// v0.116.0 accepts unknown keys inside an ignore rule but silently drops them:
+// a structured `owner:` would parse and then vanish from the effective config.
+func TestGrypeExceptionsCarryReviewMetadata(t *testing.T) {
+	root := repositoryRoot(t)
+	data, err := os.ReadFile(filepath.Join(root, ".grype.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(data)
+
+	var config struct {
+		Ignore []struct {
+			Vulnerability string `yaml:"vulnerability"`
+			Package       struct {
+				Name string `yaml:"name"`
+			} `yaml:"package"`
+			Reason string `yaml:"reason"`
+		} `yaml:"ignore"`
+	}
+	if err := yaml.Unmarshal(data, &config); err != nil {
+		t.Fatalf(".grype.yaml does not parse: %v", err)
+	}
+	if len(config.Ignore) == 0 {
+		return // no exceptions is the ideal state
+	}
+	for i, rule := range config.Ignore {
+		if rule.Vulnerability == "" {
+			t.Errorf("ignore rule %d does not name an advisory", i)
+		}
+		if rule.Package.Name == "" {
+			t.Errorf("ignore rule %d (%s) is not scoped to a package", i, rule.Vulnerability)
+		}
+		if strings.TrimSpace(rule.Reason) == "" {
+			t.Errorf("ignore rule %d (%s) records no reason", i, rule.Vulnerability)
+		}
+	}
+	for _, field := range []string{"owner:", "rationale:", "removal-trigger:", "review-by:"} {
+		if want, got := len(config.Ignore), strings.Count(text, "# "+field); got < want {
+			t.Errorf(".grype.yaml has %d ignore rules but only %d %q review comments",
+				want, got, field)
+		}
+	}
+	reviewBy := regexp.MustCompile(`#\s*review-by:\s*(\d{4}-\d{2}-\d{2})`)
+	if got := reviewBy.FindAllStringSubmatch(text, -1); len(got) < len(config.Ignore) {
+		t.Errorf(".grype.yaml review-by dates are not all ISO-8601: %v", got)
+	}
+}
+
+// TestThirdPartyDeploymentImagesArePinned asserts that third-party images in
+// deployment paths the release contract calls reproducible are digest-pinned.
+// A major-only tag such as pgvector's `pg16` otherwise lets the database
+// minor/patch change silently underneath a pinned release.
+func TestThirdPartyDeploymentImagesArePinned(t *testing.T) {
+	root := repositoryRoot(t)
+	// Images built by this repository are referenced by tag or by variable on
+	// purpose; only third-party references need a digest here.
+	ownImage := regexp.MustCompile(`^(runtime|runtime-[a-z]+):|^\$\{`)
+	imageLine := regexp.MustCompile(`(?m)^\s*image:\s*(\S+)\s*$`)
+
+	for _, path := range []string{
+		"deploy/docker-compose.yml",
+		"deploy/docker-compose.full.yml",
+		"deploy/docker-compose.obs.yml",
+		"deploy/compose/docker-compose.yml",
+		"deploy/gcp/control-plane/docker-compose.yml",
+		"deploy/gcp/agent-go/docker-compose.yml",
+		"deploy/secured/docker-compose.yml",
+		".github/workflows/ci.yml",
+		".github/workflows/release.yml",
+	} {
+		data, err := os.ReadFile(filepath.Join(root, path))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, match := range imageLine.FindAllStringSubmatch(string(data), -1) {
+			ref := strings.Trim(match[1], `"'`)
+			if ownImage.MatchString(ref) || strings.Contains(ref, "{{") {
+				continue
+			}
+			if !strings.Contains(ref, "@sha256:") {
+				t.Errorf("%s: third-party image %q is not digest-pinned", path, ref)
+			}
+		}
+	}
+
+	// The vendored Bitnami subchart is upstream content that `make helm-deps`
+	// re-fetches, so it is pinned from the parent chart's values instead.
+	values, err := os.ReadFile(filepath.Join(root, "deploy/charts/runtime/values.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	postgresql := struct {
+		Postgresql struct {
+			Image struct {
+				Digest string `yaml:"digest"`
+			} `yaml:"image"`
+		} `yaml:"postgresql"`
+	}{}
+	if err := yaml.Unmarshal(values, &postgresql); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(postgresql.Postgresql.Image.Digest, "sha256:") {
+		t.Errorf("chart does not digest-pin the bundled PostgreSQL subchart image: %q",
+			postgresql.Postgresql.Image.Digest)
 	}
 }
 
@@ -422,6 +648,54 @@ func TestReleaseWorkflowGateValidatorRejectsMutations(t *testing.T) {
 	for name, fixture := range tests {
 		t.Run(name, func(t *testing.T) {
 			if err := validateReleasePublicationGates([]byte(fixture)); err == nil {
+				t.Fatal("mutated workflow was accepted")
+			}
+		})
+	}
+}
+
+func TestVulnerabilityReportValidatorRejectsMutations(t *testing.T) {
+	gate := func(image string) string {
+		return fmt.Sprintf("\n      - run: %q",
+			fmt.Sprintf("grype %s:release-validation --fail-on high --only-fixed", image))
+	}
+	report := "\n      - run: |"
+	for _, image := range scannedImages {
+		report += fmt.Sprintf("\n          grype %s:release-validation -o json > dist/%s-vulnerabilities.json || true",
+			image, image)
+	}
+	publish := "\n      - run: \"gh release create v1\""
+
+	gates := ""
+	for _, image := range scannedImages {
+		gates += gate(image)
+	}
+	valid := "jobs:\n  publish:\n    steps:" + gates + report + publish
+	if err := validateVulnerabilityReporting([]byte(valid), "publish", "release-validation"); err != nil {
+		t.Fatalf("valid fixture rejected: %v", err)
+	}
+
+	tests := map[string]string{
+		"no unfiltered report at all": strings.Replace(valid, report, "", 1),
+		"report filtered by --only-fixed": strings.Replace(valid, report,
+			strings.ReplaceAll(report, "-o json", "-o json --only-fixed"), 1),
+		"report filtered by --ignore-wontfix": strings.Replace(valid, report,
+			strings.ReplaceAll(report, "-o json", "-o json --ignore-wontfix"), 1),
+		"report omits one image": strings.Replace(valid,
+			fmt.Sprintf("\n          grype hello-claude:release-validation -o json > dist/hello-claude-vulnerabilities.json || true"),
+			"", 1),
+		"blocking gate dropped for one image": strings.Replace(valid, gate("runtime-browser"), "", 1),
+		"gate downgraded to report only": strings.Replace(valid, gate("runtime-browser"),
+			"\n      - run: \"grype runtime-browser:release-validation\"", 1),
+		"report after publication": strings.Replace(
+			strings.Replace(valid, report, "", 1), publish, publish+report, 1),
+		"report before the blocking gate": "jobs:\n  publish:\n    steps:" + report + gates + publish,
+		"report is continue-on-error": strings.Replace(valid, report,
+			report+"\n        continue-on-error: true", 1),
+	}
+	for name, fixture := range tests {
+		t.Run(name, func(t *testing.T) {
+			if err := validateVulnerabilityReporting([]byte(fixture), "publish", "release-validation"); err == nil {
 				t.Fatal("mutated workflow was accepted")
 			}
 		})

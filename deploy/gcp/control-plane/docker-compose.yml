@@ -16,7 +16,10 @@ name: runtime-cp
 
 services:
   postgres:
-    image: postgres:16
+    # Digest-pinned: `16` is a major-only tag, so the database minor/patch would
+    # otherwise change silently under a deployment the release contract calls
+    # reproducible. Refresh the digest as a reviewed dependency update.
+    image: postgres:16@sha256:33f923b05f64ca54ac4401c01126a6b92afe839a0aa0a52bc5aeb5cc958e5f20
     environment:
       POSTGRES_USER: runtime
       POSTGRES_PASSWORD: runtime
@@ -82,7 +85,7 @@ services:
       - "9091"
 
   prometheus:
-    image: prom/prometheus:v3.12.0
+    image: prom/prometheus:v3.12.0@sha256:69f5241418838263316593f7274a304b095c40bcf22e57272865da91bd60a8ac
     command:
       - "--config.file=/etc/prometheus/prometheus.yml"
       - "--storage.tsdb.path=/prometheus"
@@ -103,7 +106,7 @@ services:
   # config as the air-gap stack; uncomment a receiver in obs/alertmanager.yml to
   # wire real notifications. IAP-only (not published to the internet).
   alertmanager:
-    image: prom/alertmanager:v0.32.1
+    image: prom/alertmanager:v0.32.1@sha256:51a825c2a40acc3e338fdd00d622e01ec090f72be2b3ea46be0839cd47a4d286
     command:
       - "--config.file=/etc/alertmanager/alertmanager.yml"
       - "--storage.path=/alertmanager"
@@ -116,7 +119,7 @@ services:
       - "host.docker.internal:host-gateway"
 
   grafana:
-    image: grafana/grafana:13.1.0
+    image: grafana/grafana:13.1.0@sha256:121a7a9ece6dc10b969f1f96eed64b4f07dfac0d0b8abc070f7cb83bbde86f63
     environment:
       GF_AUTH_ANONYMOUS_ENABLED: "false"
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?set GRAFANA_ADMIN_PASSWORD in .env}
@@ -130,7 +133,7 @@ services:
       - prometheus
 
   otel-collector:
-    image: otel/opentelemetry-collector-contrib:0.153.0
+    image: otel/opentelemetry-collector-contrib:0.153.0@sha256:93aad750175cbf1a973ae1c5886c3371f4d800f61be25cdd26870b8441ffe9fa
     command: ["--config=/etc/otel/collector-config.yaml"]
     volumes:
       - ./obs/collector-config.yaml:/etc/otel/collector-config.yaml:ro
@@ -140,7 +143,7 @@ services:
       - jaeger
 
   jaeger:
-    image: jaegertracing/jaeger:2.18.0
+    image: jaegertracing/jaeger:2.18.0@sha256:d2cbd047e44b50c11454820f84fd5f34c24a435e5301cf94fe026bf055db80b3
     command: ["--config=/etc/jaeger/config.yaml"]
     volumes:
       - ./obs/jaeger-config.yaml:/etc/jaeger/config.yaml:ro
@@ -154,7 +157,7 @@ services:
   # 80/443); runtimed:8080 + the dashboards stay IAP-only. Safe because runtime
   # identity is ON (see runtimed above) — every proxied request is authenticated.
   caddy:
-    image: caddy:2.11.3
+    image: caddy:2.11.3@sha256:ec18ee54aab3315c22e25f3b2babda73ff8007d39b13b3bd1bfffa2f0444c7d9
     restart: unless-stopped
     depends_on:
       - runtimed

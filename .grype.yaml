@@ -1,5 +1,28 @@
+# Repository vulnerability exceptions.
+#
+# Every rule below must name exactly one advisory, scope itself to the specific
+# package it excuses, and carry the four review fields shown here. The fields
+# are YAML comments rather than mapping keys on purpose: grype v0.116.0 accepts
+# a config containing unknown keys but silently discards them, so structured
+# `owner:`/`review-by:` entries would parse without ever appearing in the
+# effective configuration (verified with `grype -c .grype.yaml config --load`).
+# Comments keep the metadata reviewable and machine-checkable in-tree without
+# pretending grype enforces it.
+#
+# This file only suppresses matches in the reports. It does not relax the
+# blocking gate's severity threshold. See RELEASING.md, "Vulnerability gate and
+# exception policy".
+
 ignore:
+  # owner: runtime maintainers (repository CODEOWNERS)
+  # rationale: CPython has not released a stable patched branch. Runtime
+  #   services do not pass untrusted data to html.parser.HTMLParser, and the
+  #   general-purpose sandbox is separately CPU-, memory-, and lifetime-bounded.
+  # removal-trigger: a stable patched Python base image is published
+  # review-by: 2026-10-01
   - vulnerability: CVE-2026-15308
+    package:
+      name: python
     reason: >-
       CPython has not released a stable patched branch. Runtime services do
       not pass untrusted data to html.parser.HTMLParser; the general-purpose

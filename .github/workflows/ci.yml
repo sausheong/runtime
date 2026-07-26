@@ -43,7 +43,10 @@ jobs:
     runs-on: ubuntu-latest
     services:
       postgres:
-        image: pgvector/pgvector:pg16
+        # Digest-pinned: `pg16` is a major-only tag, so the PostgreSQL the
+        # integration suite runs against would otherwise change minor/patch
+        # silently. Keep this digest in step with deploy/compose/docker-compose.yml.
+        image: pgvector/pgvector:pg16@sha256:1d533553fefe4f12e5d80c7b80622ba0c382abb5758856f52983d8789179f0fb
         env:
           POSTGRES_USER: runtime
           POSTGRES_PASSWORD: runtime
@@ -63,7 +66,10 @@ jobs:
           cache: true
       - name: Enable pgvector
         run: |
-          container_id=$(docker ps --filter ancestor=pgvector/pgvector:pg16 --format '{{.ID}}' | head -1)
+          # Match on the digest, not the tag: pulling `repo:tag@digest` leaves the
+          # local image untagged, so an `ancestor=pgvector/pgvector:pg16` filter
+          # matches nothing and the `test -n` below would fail closed.
+          container_id=$(docker ps --filter ancestor=pgvector/pgvector@sha256:1d533553fefe4f12e5d80c7b80622ba0c382abb5758856f52983d8789179f0fb --format '{{.ID}}' | head -1)
           test -n "$container_id"
           docker exec "$container_id" psql -U runtime -d runtime -c 'CREATE EXTENSION IF NOT EXISTS vector'
           docker exec "$container_id" psql -U runtime -d runtime -c \
@@ -130,6 +136,21 @@ jobs:
           grype nutrition-openai:ci --fail-on high --only-fixed
           grype hello-claude:ci --fail-on high --only-fixed
           grype food-label-advisor:ci --fail-on high --only-fixed
+      - name: Generate complete vulnerability reports
+        # Diagnostic, never a gate. The preceding "--fail-on high --only-fixed"
+        # step is what fails the build; this one runs unfiltered so that no-fix,
+        # wont-fix, and unknown-fix findings -- which --only-fixed discards as
+        # an ignore filter -- are surfaced in the job log for review.
+        # The "|| true" is deliberate: a report must not fail CI.
+        run: |
+          mkdir -p vuln-reports
+          for img in runtime runtime-sandbox runtime-browser runtime-embedder \
+                     nutrition-openai hello-claude food-label-advisor; do
+            grype "$img:ci" -o json > "vuln-reports/$img-vulnerabilities.json" || true
+            echo "::group::$img unfiltered vulnerability summary"
+            grype "$img:ci" -o table || true
+            echo "::endgroup::"
+          done
       - run: docker compose -f deploy/docker-compose.full.yml config --quiet
       - run: docker compose -f deploy/compose/docker-compose.yml config --quiet
         env:
