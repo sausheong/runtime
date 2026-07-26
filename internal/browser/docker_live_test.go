@@ -326,32 +326,6 @@ func TestLiveInternalNetworkEgressTopology(t *testing.T) {
 		"hygiene, not by this network boundary.")
 }
 
-// startIdleContainer runs a browser-image container that just sleeps, attached
-// to exactly one network, so liveExec can probe its routing.
-func startIdleContainer(t *testing.T, cli *client.Client, networkName string) string {
-	t.Helper()
-	ctx := context.Background()
-	created, err := cli.ContainerCreate(ctx, client.ContainerCreateOptions{
-		Config: &container.Config{
-			Image:      "runtime-browser:latest",
-			Entrypoint: []string{"sleep"},
-			Cmd:        []string{"300"},
-			Labels:     map[string]string{browserLabel + ".livetest": "1"},
-		},
-		HostConfig: &container.HostConfig{NetworkMode: container.NetworkMode(networkName)},
-	})
-	if err != nil {
-		t.Fatalf("create probe container on %s: %v", networkName, err)
-	}
-	t.Cleanup(func() {
-		_, _ = cli.ContainerRemove(context.Background(), created.ID, client.ContainerRemoveOptions{Force: true})
-	})
-	if _, err := cli.ContainerStart(ctx, created.ID, client.ContainerStartOptions{}); err != nil {
-		t.Fatalf("start probe container on %s: %v", networkName, err)
-	}
-	return created.ID
-}
-
 // startRelay starts a socat forwarder attached to BOTH the default bridge (so
 // it can reach the host-run proxy via the host-gateway mapping) and the
 // internal network, and returns its address on the internal network.
