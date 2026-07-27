@@ -650,27 +650,107 @@ pre.policy-text {
 .token-form { display: flex; gap: .5rem; flex-wrap: wrap; }
 .token-form input { min-width: 220px; padding: .6rem .7rem; }
 
-/* Pillars ----
-   Was six identical shadowed tiles in a 3x2 grid: the "icon + heading + text,
-   repeated endlessly" card grid, and a banned pattern. These six items are a
-   LIST of what the platform provides, so they are set as a list — hairline
-   rules, no boxes, name and description on one line at width. Reads faster and
-   stops competing with the hero. */
-.pillars { margin-top: 2.5rem; border-top: 1px solid var(--border); padding-top: 2rem; }
-.pillars-head {
+/* Landing content sections ----
+   The page below the hero is reference material: what the platform is, what it
+   does, what it needs, and what it costs you to run. Sections are separated by
+   a rule and generous space rather than being boxed — a stack of bordered
+   panels would read as the SaaS feature grid, and these are passages of prose
+   and lists, not tiles.
+
+   Section rhythm deliberately differs from the console's .card rhythm: this is
+   a document to read once, not a surface to scan repeatedly. */
+.landing-section {
+  margin-top: 3rem;
+  border-top: 1px solid var(--border);
+  padding-top: 2rem;
+}
+.section-head {
   font-size: var(--fs-xs);
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: .09em;
   color: var(--muted-strong);
-  margin: 0 0 1.25rem;
+  margin: 0 0 1.5rem;
 }
-.pillar-grid {
+/* Prose caps at 68ch per DESIGN.md; these columns are already narrower. */
+.prose {
+  font-size: var(--fs-body);
+  line-height: 1.7;
+  color: var(--text);
+  margin: 0 0 1rem;
+  max-width: 66ch;
+}
+.prose:last-child { margin-bottom: 0; }
+
+/* Two-column split for "X, and also not-X" pairings. Not a card pair: no
+   border, no fill — the gap does the separating. */
+.split { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1.5rem 3.5rem; }
+.split-col > :last-child { margin-bottom: 0; }
+.split-head {
+  font-size: var(--fs-sm);
+  font-weight: 620;
+  letter-spacing: -.01em;
+  color: var(--text);
+  margin: 0 0 .75rem;
+}
+
+/* A list that reads as a list. No bullet glyphs (they add visual noise at this
+   density) but real <li> semantics, so a screen reader still announces the
+   count and position. The hanging indent keeps wrapped lines aligned. */
+.plain-list { list-style: none; margin: 0; padding: 0; }
+.plain-list li {
+  font-size: var(--fs-sm);
+  line-height: 1.6;
+  color: var(--muted-strong);
+  padding: .4rem 0 .4rem 1rem;
+  position: relative;
+  max-width: 60ch;
+}
+.plain-list li::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: .95em;
+  width: 4px;
+  height: 1px;
+  background: var(--border-strong);
+}
+
+/* Capability list. A <dl> because that is what it is: term, then definition.
+   Two columns of definition-list entries rather than eight identical cards —
+   the banned "icon + heading + text, repeated" grid. The name sits in its own
+   gutter at width so the eye can run down the terms alone and stop at the one
+   it wants, which is how a reference is actually read. */
+.cap-list {
+  margin: 0;
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 0 3rem;
+  gap: 0 3.5rem;
 }
-.pillar {
+.cap { padding: 1.1rem 0; border-bottom: 1px solid var(--border); }
+.cap-name {
+  font-size: var(--fs-body);
+  font-weight: 620;
+  letter-spacing: -.012em;
+  color: var(--text);
+  margin: 0 0 .35rem;
+}
+.cap-body {
+  margin: 0;
+  font-size: var(--fs-sm);
+  line-height: 1.62;
+  color: var(--muted-strong);
+  /* Measured at 83-94ch in the single-column band before this cap: the grid
+     bounds the line only while there are two columns, and DESIGN.md's 68ch
+     limit is a property of the text, not of the layout that happens to hold
+     it. */
+  max-width: 62ch;
+}
+
+/* Integration paths: three short rows. Name in a fixed gutter, hairline rule
+   between, no boxes — the same treatment the capability terms get. */
+.path-list { margin-top: 1.25rem; }
+.path {
   display: grid;
   grid-template-columns: 9rem 1fr;
   gap: 1rem;
@@ -678,8 +758,17 @@ pre.policy-text {
   padding: .8rem 0;
   border-bottom: 1px solid var(--border);
 }
-.pillar-name { font-weight: 620; letter-spacing: -.01em; font-size: var(--fs-sm); }
-.pillar-desc { font-size: var(--fs-sm); color: var(--muted-strong); line-height: 1.55; }
+.path-name { font-weight: 620; letter-spacing: -.01em; font-size: var(--fs-sm); }
+/* 1fr in a full-width row runs to 98ch at 1440px. Same reason as .cap-body. */
+.path-desc { font-size: var(--fs-sm); color: var(--muted-strong); line-height: 1.55; max-width: 68ch; }
+.path-desc code {
+  font-family: var(--mono);
+  font-size: .95em;
+  background: var(--surface-sunk);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: .05em .35em;
+}
 
 .landing-foot {
   color: var(--muted);
@@ -693,17 +782,19 @@ pre.policy-text {
   * { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; scroll-behavior: auto !important; }
 }
 
-/* Two-up pillar list needs a single column before the 640px phone breakpoint:
-   a 9rem name gutter beside a description does not survive a tablet width. */
+/* The landing page's two-up grids collapse before the 640px phone breakpoint:
+   two columns of running prose at ~30ch each is a newspaper, not a reference. */
 @media (max-width: 860px) {
-  .pillar-grid { grid-template-columns: 1fr; gap: 0; }
+  .cap-list { grid-template-columns: 1fr; gap: 0; }
+  .split { grid-template-columns: 1fr; gap: 2rem; }
 }
 
 @media (max-width: 640px) {
   .hero-title { font-size: 1.9rem; max-width: none; }
   .hero { padding: 3rem 0 2.5rem; }
-  /* Name stacks above description once the gutter no longer fits. */
-  .pillar { grid-template-columns: 1fr; gap: .2rem; }
+  /* Name stacks above description once the 9rem gutter no longer fits. */
+  .path { grid-template-columns: 1fr; gap: .2rem; }
+  .landing-section { margin-top: 2.25rem; padding-top: 1.5rem; }
   /* Stat tiles: two-up grid so they wrap evenly instead of leaving an orphan. */
   .row .stat { flex: 1 1 calc(50% - .75rem); min-width: 0; }
   .container { padding: 1.25rem 1rem 3rem; }

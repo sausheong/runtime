@@ -168,8 +168,17 @@ func TestConsole_LandingAtRoot(t *testing.T) {
 		t.Fatalf("landing at /: code=%d want 200", rec.Code)
 	}
 	body := rec.Body.String()
-	if !strings.Contains(body, "Sign in with Google") || !strings.Contains(body, "six pillars") {
-		t.Fatalf("expected landing hero + Google button at /")
+	if !strings.Contains(body, "Sign in with Google") {
+		t.Error("landing at /: missing the Google sign-in button")
+	}
+	// The body below the hero is the point of the page: it is the only surface
+	// that describes the platform to someone who has not signed in. Anchor on
+	// the section headings rather than a phrase, so rewording the prose does not
+	// fail the test but deleting a section does.
+	for _, want := range []string{"Capabilities", "Bring your own agent", "Operating it", "Status"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("landing at /: missing the %q section", want)
+		}
 	}
 }
 

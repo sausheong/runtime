@@ -5,8 +5,16 @@ Context for design work on the runtime console. Written 2026-07-26.
 **register: product**
 
 The console is an authenticated operator surface, not a marketing site. Design
-serves the task. There is no landing page to win, no funnel, no signup: by the
-time anyone sees this UI they have already self-hosted the thing.
+serves the task. There is no funnel and no signup: by the time anyone sees this
+UI they have already self-hosted the thing.
+
+One page is the exception. `/` and `/ui/login` are served to someone who is not
+authenticated, and that page is closer to brand register. It is still not
+marketing: the reader is an operator who has just deployed this, or a colleague
+they sent the URL to, so it is written as reference — what the platform is, what
+it does, what it needs, and what it costs to run. It states the pre-release
+status and the absence of a licence rather than burying them, because a reader
+who discovers those after deploying will not trust anything else on the page.
 
 ## What runtime is
 

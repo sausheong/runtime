@@ -1,10 +1,11 @@
 <!doctype html><html lang="en"><head><meta charset="utf-8"><title>Runtime — Self-hosted agent control plane</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="Runtime is a self-hosted control plane for durable AI agents: sessions, identity, memory, a tool gateway, sandboxes, evaluations, and observability, inside your own perimeter.">
 <link rel="stylesheet" href="/ui/static/style.css"></head><body>
 <a class="skip-link" href="#main">Skip to content</a>
 <header class="topbar">
   <a class="brand" href="/"><span class="logo">R</span> Runtime</a>
-  <nav>
+  <nav aria-label="Main">
     {{if .GoogleEnabled}}
     <a class="navbtn navbtn-accent" href="{{.GoogleURL}}">Sign in &rarr;</a>
     {{else}}
@@ -42,16 +43,165 @@
     </div>
   </section>
 
-  <section class="pillars">
-    <h2 class="pillars-head">One platform, six pillars</h2>
-    <div class="pillar-grid">
-      <div class="pillar"><span class="pillar-name">Runtime</span><span class="pillar-desc">Spawn, pool, and route agent replicas.</span></div>
-      <div class="pillar"><span class="pillar-name">Gateway</span><span class="pillar-desc">Expose REST &amp; OpenAPI upstreams as tools.</span></div>
-      <div class="pillar"><span class="pillar-name">Memory</span><span class="pillar-desc">Durable, recallable agent memory.</span></div>
-      <div class="pillar"><span class="pillar-name">Identity</span><span class="pillar-desc">Tenants, roles, and per-request auth.</span></div>
-      <div class="pillar"><span class="pillar-name">Sandboxes</span><span class="pillar-desc">Isolated code &amp; browser execution.</span></div>
-      <div class="pillar"><span class="pillar-name">Observability</span><span class="pillar-desc">Metrics, traces, and activity feeds.</span></div>
+  {{/* What the platform is, stated as a boundary rather than a benefit list.
+       "What it does NOT do" is the fact an infrastructure reader wants earliest
+       and is the one a marketing page always omits; putting it directly beside
+       the capability list is what makes the capability list believable. */}}
+  <section class="landing-section" id="what">
+    <h2 class="section-head">What Runtime is</h2>
+    <div class="split">
+      <div class="split-col">
+        <p class="prose">Runtime is the execution and operations layer between your users, your
+          agent code, model providers, tools, and infrastructure. It turns an agent program
+          into an operable service: durable sessions, process supervision, routing,
+          authentication, and telemetry.</p>
+        <p class="prose">Its smallest useful deployment is one process and Postgres. The same
+          binaries run on a laptop, a single production host, or Kubernetes, with no managed
+          cloud agent service in the path.</p>
+      </div>
+      <div class="split-col">
+        <h3 class="split-head">Runtime does not</h3>
+        <ul class="plain-list">
+          <li>Provide a model. You bring the provider and the credentials.</li>
+          <li>Prescribe an agent framework. Native Go, Python SDKs, or any process
+            that implements the HTTP/SSE contract.</li>
+          <li>Own your agent's prompt, domain tools, or product UI.</li>
+        </ul>
+      </div>
     </div>
+  </section>
+
+  {{/* The six pillars, each expanded from a one-line label into the two or three
+       facts an operator evaluates it on. Set as a definition list, not a card
+       grid: these are entries in a reference, and the reader scans the names. */}}
+  <section class="landing-section" id="capabilities">
+    <h2 class="section-head">Capabilities</h2>
+    <dl class="cap-list">
+      <div class="cap">
+        <dt class="cap-name">Durable runtime</dt>
+        <dd class="cap-body">Completed turns are checkpointed in Postgres, so a restarted
+          agent resumes where it stopped rather than replaying the session. Sessions expose a
+          real lifecycle, and SSE events are persisted before delivery and replayable from any
+          sequence number. Operators cap turns, tokens, turn duration, and session duration.</dd>
+      </div>
+      <div class="cap">
+        <dt class="cap-name">Agent hosting</dt>
+        <dd class="cap-body">Local processes are supervised and restarted with capped backoff.
+          Agents run as fixed replica pools or autoscale between bounds; a session stays pinned
+          to the replica that can safely resume it, and scale-down drains before stopping.
+          Remote agents attach over HTTP and can be registered or removed without a restart.</dd>
+      </div>
+      <div class="cap">
+        <dt class="cap-name">Identity and secrets</dt>
+        <dd class="cap-body">OIDC login for people, service keys for machines, and three
+          tenant roles. Tenancy is enforced at the control-plane edge, so cross-tenant
+          resources answer 404 rather than revealing themselves. Tenant credentials are stored
+          as AES-256-GCM ciphertext, never returned by the API, and injected only at process
+          start.</dd>
+      </div>
+      <div class="cap">
+        <dt class="cap-name">Memory</dt>
+        <dd class="cap-body">Tenant-scoped durable memory in Postgres with pgvector: explicit
+          save and recall tools, semantic retrieval before a turn, and background extraction of
+          durable facts from finished conversations. Recall is best-effort by design, so an
+          embedding failure degrades retrieval instead of failing the user's turn.</dd>
+      </div>
+      <div class="cap">
+        <dt class="cap-name">Tool gateway</dt>
+        <dd class="cap-body">One MCP endpoint federating stdio servers, remote MCP servers,
+          and REST APIs described by OpenAPI. Tools are namespaced per upstream, filtered by
+          tenant, and authorized per call. Search mode keeps a large catalog callable without
+          putting every schema in the model context.</dd>
+      </div>
+      <div class="cap">
+        <dt class="cap-name">Sandboxes</dt>
+        <dd class="cap-body">Per-session Python, shell, and browser execution in containers
+          with a read-only root filesystem, resource limits, and no network by default. Browser
+          egress is constrained by hostname policy below the application layer. State survives
+          across calls within a session without exposing the agent host.</dd>
+      </div>
+      <div class="cap">
+        <dt class="cap-name">Evaluations</dt>
+        <dd class="cap-body">Golden sets scored by rule or judge, plus online sampling of live
+          transcripts with failure classification. Runs are leased in Postgres and resume
+          without rerunning completed cases. Credential-shaped fields are filtered before
+          persistence, on a best-effort basis.</dd>
+      </div>
+      <div class="cap">
+        <dt class="cap-name">Observability</dt>
+        <dd class="cap-body">One Prometheus endpoint for the whole fleet on a separate
+          management listener, a provisioned Grafana dashboard, OpenTelemetry traces over OTLP,
+          and request IDs correlating logs to traces. Metric labels exclude session and user
+          identifiers; message text never reaches a span.</dd>
+      </div>
+    </dl>
+  </section>
+
+  {{/* Integration paths. Three rows, because "can I use this from my language"
+       is the question that decides whether the rest of the page matters. */}}
+  <section class="landing-section" id="integrate">
+    <h2 class="section-head">Bring your own agent</h2>
+    <p class="prose">Runtime integrates agents through a small HTTP and SSE contract. A
+      reusable conformance suite runs that contract against a live agent, so compatibility is
+      an executable CI gate rather than a claim.</p>
+    <div class="path-list">
+      <div class="path">
+        <span class="path-name">Native Go</span>
+        <span class="path-desc">Link <code>agentruntime</code>, supply a spec, provider, and
+          tools. Full durable turn recovery.</span>
+      </div>
+      <div class="path">
+        <span class="path-name">Python</span>
+        <span class="path-desc">Use the contract shim around the OpenAI Agents SDK, Claude
+          Agent SDK, or another framework.</span>
+      </div>
+      <div class="path">
+        <span class="path-name">Any language</span>
+        <span class="path-desc">Implement the contract directly and pass the same conformance
+          suite.</span>
+      </div>
+    </div>
+  </section>
+
+  {{/* Operating reality. An operator who reads only one section should read this
+       one: what it costs to run and where the trust boundaries actually sit.
+       Stated plainly because a reader who discovers these after deploying will
+       trust nothing else on the page. */}}
+  <section class="landing-section" id="operating">
+    <h2 class="section-head">Operating it</h2>
+    <div class="split">
+      <div class="split-col">
+        <h3 class="split-head">What it needs</h3>
+        <ul class="plain-list">
+          <li>Postgres, with pgvector when memory is enabled.</li>
+          <li>Docker with Compose v2 for the turnkey single-host stack.</li>
+          <li>No outbound internet: assets ship in the binary, and the bundled
+            stack includes an embedder for air-gapped recall.</li>
+        </ul>
+      </div>
+      <div class="split-col">
+        <h3 class="split-head">Know before you deploy</h3>
+        <ul class="plain-list">
+          <li>Durability is per completed turn. A side effect can repeat if the
+            process dies mid-turn, so make such tools idempotent.</li>
+          <li>Sandbox containers use the Docker socket, which is root-equivalent
+            on the host. The turnkey stack assumes a trusted node.</li>
+          <li>Terminate TLS at the edge. Open mode is for local development only.</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  {{/* Status, last and unmissable. Pre-release with no licence is the single
+       most consequential fact for anyone deciding to depend on this, and it is
+       exactly what a landing page is tempted to bury. */}}
+  <section class="landing-section" id="status">
+    <h2 class="section-head">Status</h2>
+    <p class="prose">Runtime is pre-release software. The latest tagged release is
+      <span class="mono">v0.2.0</span>, and the default branch carries unreleased changes.</p>
+    <p class="prose">The repository does not yet include a licence. The source is available to
+      read, but no reuse or redistribution rights are granted until one is added, so Runtime
+      should not be described as open source.</p>
   </section>
 </main>
 

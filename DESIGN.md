@@ -190,6 +190,35 @@ The partial takes the current section key. Child pages (an agent, a session, an
 eval run) pass `""` and mark nothing: `aria-current="page"` on a link that leads
 somewhere else tells a screen-reader user they are on a page they are not on.
 
+### The landing page
+
+The only unauthenticated surface, and the only one closer to brand register. It
+is a reference document, not a pitch: what Runtime is, what it deliberately does
+not do, its capabilities, how to integrate an agent, what running it requires,
+and its pre-release status.
+
+Three rules govern it, all learned by measuring:
+
+**Sections are separated by a rule and space, never boxed.** A stack of
+bordered panels is the SaaS feature grid. The eight capabilities are a `<dl>`
+with hairline rules — a reference is read by scanning the terms and stopping at
+one, which a card grid actively prevents. Eight identical bordered tiles would
+also be the banned "icon + heading + text, repeated" pattern.
+
+**Every text block carries its own `max-width`.** A grid column bounds a line
+only while the grid has more than one column. `.cap-body` measured 83–94ch once
+the two-column grid collapsed at 860px, and `.path-desc` measured 98ch at 1440px
+inside a `1fr` track. The 68ch limit is a property of the text, not of the
+layout that happens to hold it.
+
+**The unflattering facts are stated, not buried.** Pre-release, no licence, a
+side effect can repeat mid-turn, the Docker socket is root-equivalent. These sit
+in "Operating it" and "Status" rather than being omitted, and
+`console/landing_test.go` fails the build if the licence or pre-release
+disclosure disappears, if the version drifts from the one README.md declares, or
+if any external subresource appears (the deployment is air-gapped, and a font
+CDN added here renders fine on a laptop and breaks in production).
+
 ### Form controls
 
 Select them with `:not()`, never an allowlist. The rule used to enumerate
