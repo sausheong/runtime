@@ -15,20 +15,44 @@
 <main class="container" id="main">
   <div class="page-head">
     <h1>Agents</h1>
-    <p class="subtitle">Agents registered on this control plane.</p>
+    <p class="subtitle">Agents registered on this control plane, and whether they are reachable.</p>
   </div>
+
+  {{/* The first thing an operator wants from this page is "is anything down".
+       It used to answer only "what exists": id, name, model. Health and session
+       counts were computed one click away on Observability and simply not shown
+       on the page people actually land on. */}}
+  {{if .Agents}}
+  <div class="status-strip">
+    {{if eq .Fleet.HealthyAgents .Fleet.TotalAgents}}<span class="status-health"><span class="dot dot-ok"></span>All reachable</span>
+    {{else}}<span class="status-health is-error"><span class="dot dot-off"></span>{{.Fleet.SubHealthy}} unreachable</span>{{end}}
+    <span class="status-sep"></span>
+    <span class="status-item"><b>{{.Fleet.HealthyAgents}}/{{.Fleet.TotalAgents}}</b> agents up</span>
+    <span class="status-item"><b>{{comma .Fleet.ActiveSessions}}</b> active sessions</span>
+  </div>
+  {{end}}
+
   <div class="card">
     <table>
-      <thead><tr><th>ID</th><th>Name</th><th>Model</th></tr></thead>
+      <thead><tr><th scope="col">ID</th><th scope="col">Name</th><th scope="col">Model</th><th scope="col">Replicas</th><th scope="col">Sessions</th></tr></thead>
       <tbody>
-      {{range .Agents}}
+      {{range .Fleet.Agents}}
         <tr>
           <td><a href="/ui/agents/{{.ID}}" class="mono">{{.ID}}</a></td>
           <td>{{.Name}}</td>
           <td><span class="badge badge-muted mono">{{.Model}}</span></td>
+          {{/* Word, not colour alone: "Unreachable" was previously available
+               only as a title attribute, i.e. unavailable on touch and to most
+               screen readers, leaving an 8px dot as the sole carrier. */}}
+          <td>{{if gt .Healthy 0}}<span class="dot dot-ok"></span>{{.Healthy}}/{{.Replicas}} up
+              {{else}}<span class="dot dot-off"></span><span class="is-error">0/{{.Replicas}} unreachable</span>{{end}}</td>
+          <td>
+            <span class="badge badge-muted">{{comma .Sessions.Running}} running</span>
+            {{if gt .Sessions.Error 0}}<span class="badge badge-danger">{{comma .Sessions.Error}} errored</span>{{end}}
+          </td>
         </tr>
       {{else}}
-        <tr><td colspan="3" class="empty">
+        <tr><td colspan="5" class="empty">
           <strong>No agents registered.</strong><br>
           Agents come from the control plane's config file, or are attached at
           runtime with <code>runtimectl admin agent add --id &lt;id&gt; --url &lt;url&gt;</code>.

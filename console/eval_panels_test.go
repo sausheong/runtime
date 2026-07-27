@@ -94,9 +94,10 @@ func TestEvalSets_AddRejectsMalformedJSON(t *testing.T) {
 	r := adminReq("POST", "/ui/onboarding/eval-sets", form)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, r)
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("malformed cases: want 400 got %d", w.Code)
-	}
+	// An author error returns to the page carrying an error flash rather than a
+	// bare 400: this form is a textarea of hand-written JSON, and a text/plain
+	// error page discards everything the operator typed.
+	assertErrorFlash(t, w, "must be a valid JSON array")
 	if sets, _ := es.ListSets(context.Background(), "t1"); len(sets) != 0 {
 		t.Fatalf("malformed-cases set must not persist: %+v", sets)
 	}
@@ -105,14 +106,12 @@ func TestEvalSets_AddRejectsMalformedJSON(t *testing.T) {
 func TestEvalSets_AddRejectsInvalidSet(t *testing.T) {
 	h, es := consoleWithEval(t)
 	token := issuedCSRF(t, h)
-	// Valid JSON but empty case list ⇒ ValidateSet fails ⇒ 400.
+	// Valid JSON but empty case list ⇒ ValidateSet fails ⇒ error flash.
 	form := url.Values{"csrf_token": {token}, "name": {"greetings"}, "cases": {"[]"}}
 	r := adminReq("POST", "/ui/onboarding/eval-sets", form)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, r)
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("invalid set: want 400 got %d", w.Code)
-	}
+	assertErrorFlash(t, w, "not saved")
 	if sets, _ := es.ListSets(context.Background(), "t1"); len(sets) != 0 {
 		t.Fatalf("invalid set must not persist: %+v", sets)
 	}
@@ -246,9 +245,7 @@ func TestEvalPolicies_AddRejectsMalformedJSON(t *testing.T) {
 	r := adminReq("POST", "/ui/onboarding/eval-policies", form)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, r)
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("malformed criteria: want 400 got %d", w.Code)
-	}
+	assertErrorFlash(t, w, "must be a valid JSON array")
 	if pols, _ := ps.ListPolicies(context.Background(), "t1"); len(pols) != 0 {
 		t.Fatalf("malformed-criteria policy must not persist: %+v", pols)
 	}
@@ -257,15 +254,13 @@ func TestEvalPolicies_AddRejectsMalformedJSON(t *testing.T) {
 func TestEvalPolicies_AddRejectsBadRate(t *testing.T) {
 	h, ps := consoleWithEvalPolicies(t)
 	token := issuedCSRF(t, h)
-	// Non-numeric rate ⇒ strconv.Atoi fails ⇒ 400.
+	// Non-numeric rate ⇒ strconv.Atoi fails ⇒ error flash.
 	form := url.Values{"csrf_token": {token}, "agent": {"support"}, "rate": {"abc"},
 		"criteria": {`[{"name":"polite","scorer":"judge","rubric":"Is the reply polite?"}]`}}
 	r := adminReq("POST", "/ui/onboarding/eval-policies", form)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, r)
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("bad rate: want 400 got %d", w.Code)
-	}
+	assertErrorFlash(t, w, "0 to 100")
 	if pols, _ := ps.ListPolicies(context.Background(), "t1"); len(pols) != 0 {
 		t.Fatalf("bad-rate policy must not persist: %+v", pols)
 	}
@@ -274,15 +269,13 @@ func TestEvalPolicies_AddRejectsBadRate(t *testing.T) {
 func TestEvalPolicies_AddRejectsInvalidPolicy(t *testing.T) {
 	h, ps := consoleWithEvalPolicies(t)
 	token := issuedCSRF(t, h)
-	// Valid JSON, numeric rate, but rate 101 ⇒ ValidatePolicy fails ⇒ 400.
+	// Valid JSON, numeric rate, but rate 101 ⇒ ValidatePolicy fails ⇒ error flash.
 	form := url.Values{"csrf_token": {token}, "agent": {"support"}, "rate": {"101"},
 		"criteria": {`[{"name":"polite","scorer":"judge","rubric":"Is the reply polite?"}]`}}
 	r := adminReq("POST", "/ui/onboarding/eval-policies", form)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, r)
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("invalid policy (rate 101): want 400 got %d", w.Code)
-	}
+	assertErrorFlash(t, w, "not saved")
 	if pols, _ := ps.ListPolicies(context.Background(), "t1"); len(pols) != 0 {
 		t.Fatalf("invalid policy must not persist: %+v", pols)
 	}

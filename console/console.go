@@ -240,7 +240,18 @@ func Handler(reg *controlplane.Registry, st store.Store, oidc OIDCConfig, onb *O
 	})
 
 	mux.HandleFunc("GET /ui", func(w http.ResponseWriter, r *http.Request) {
-		render(w, "overview.html", map[string]any{"Agents": visibleAgents(r, reg)})
+		// The agents list is the page an operator lands on after signing in, and
+		// the scene this console is designed around is "check whether the agents
+		// are up before going back to what I was doing" (PRODUCT.md). It used to
+		// render id / name / model only — every fact needed to answer that
+		// question lived one click away on Observability. Same fan-out the
+		// observability page already performs (concurrent, bounded, per-agent
+		// health + session tallies), so the cost is a page's worth of probes.
+		agents := visibleAgents(r, reg)
+		render(w, "overview.html", map[string]any{
+			"Agents": agents,
+			"Fleet":  buildFleetObs(r.Context(), reg, aclient, httpProbe, agents),
+		})
 	})
 
 	mux.HandleFunc("GET /ui/observability", func(w http.ResponseWriter, r *http.Request) {
@@ -386,10 +397,20 @@ func Handler(reg *controlplane.Registry, st store.Store, oidc OIDCConfig, onb *O
 				newKey = k
 				flash = ""
 			}
+			// Severity marker set by flashRedirect / flashError. Strip it before
+			// display: it is an internal marker, not part of the message. An
+			// unprefixed value is a legacy cookie written before this split and
+			// defaults to the success presentation.
+			flashIsError := false
+			if m, ok := strings.CutPrefix(flash, flashErrPrefix); ok {
+				flash, flashIsError = m, true
+			} else if m, ok := strings.CutPrefix(flash, flashOKPrefix); ok {
+				flash = m
+			}
 			render(w, "onboarding.html", map[string]any{
 				"CSRF": csrf.issue(sessionValue(r)), "Tenant": p.TenantID,
 				"Upstreams": ups, "Secrets": secs, "Keys": keys, "Users": users,
-				"Flash": flash, "NewKey": newKey,
+				"Flash": flash, "FlashIsError": flashIsError, "NewKey": newKey,
 				"SecretsEnabled": onb.Secrets != nil,
 				"Agents":         agents, "AgentsEnabled": onb.Agents != nil && onb.AgentMgr != nil,
 				"Policies": policies, "PoliciesEnabled": onb.Policies != nil,
@@ -426,7 +447,7 @@ func Handler(reg *controlplane.Registry, st store.Store, oidc OIDCConfig, onb *O
 				http.Error(w, "mint failed", http.StatusInternalServerError)
 				return
 			}
-			flashRedirect(w, r, "key:"+plaintext)
+			flashRaw(w, r, "key:"+plaintext)
 		}))
 
 		mux.HandleFunc("POST /ui/onboarding/keys/{id}/delete", guard(func(p identity.Principal, w http.ResponseWriter, r *http.Request) {
@@ -588,7 +609,7 @@ func Handler(reg *controlplane.Registry, st store.Store, oidc OIDCConfig, onb *O
 				if err := controlplane.RegisterPolicyShared(r.Context(), onb.Policies, p.TenantID, name, r.FormValue("cedar_text")); err != nil {
 					// Parser/validation errors are the author's to fix: show the
 					// message on the page rather than a bare 400.
-					flashRedirect(w, r, "Policy rejected: "+err.Error())
+					flashError(w, r, "Policy rejected: "+err.Error())
 					return
 				}
 				flashRedirect(w, r, "Policy "+name+" saved. It now gates gateway tool calls in this tenant.")
@@ -641,12 +662,16 @@ func Handler(reg *controlplane.Registry, st store.Store, oidc OIDCConfig, onb *O
 			mux.HandleFunc("POST /ui/onboarding/eval-sets", guard(func(p identity.Principal, w http.ResponseWriter, r *http.Request) {
 				name := r.FormValue("name")
 				var cases []eval.Case
+				// Author errors come back on the page, not as a bare 400. This form
+				// is a textarea holding hand-written JSON: an unstyled text/plain
+				// error page discards the browser's form state, so a misplaced
+				// comma cost the operator everything they had typed.
 				if err := json.Unmarshal([]byte(r.FormValue("cases")), &cases); err != nil {
-					http.Error(w, "cases must be a valid JSON array", http.StatusBadRequest)
+					flashError(w, r, "Eval set not saved: cases must be a valid JSON array ("+err.Error()+").")
 					return
 				}
 				if err := eval.ValidateSet(name, cases); err != nil {
-					http.Error(w, err.Error(), http.StatusBadRequest)
+					flashError(w, r, "Eval set not saved: "+err.Error())
 					return
 				}
 				if err := onb.EvalStore.PutSet(r.Context(), eval.Set{Tenant: p.TenantID, Name: name, Cases: cases}); err != nil {
@@ -674,19 +699,22 @@ func Handler(reg *controlplane.Registry, st store.Store, oidc OIDCConfig, onb *O
 		if onb.EvalPolicies != nil {
 			mux.HandleFunc("POST /ui/onboarding/eval-policies", guard(func(p identity.Principal, w http.ResponseWriter, r *http.Request) {
 				agent := r.FormValue("agent")
+				// As with eval sets: these are author errors in a hand-typed form,
+				// so they belong on the page rather than on a text/plain 400 that
+				// throws away the criteria the operator just wrote.
 				rate, err := strconv.Atoi(r.FormValue("rate"))
 				if err != nil {
-					http.Error(w, "rate must be 0-100", http.StatusBadRequest)
+					flashError(w, r, "Online eval policy not saved: rate must be a whole number from 0 to 100.")
 					return
 				}
 				var criteria []eval.Criterion
 				if err := json.Unmarshal([]byte(r.FormValue("criteria")), &criteria); err != nil {
-					http.Error(w, "criteria must be a valid JSON array", http.StatusBadRequest)
+					flashError(w, r, "Online eval policy not saved: criteria must be a valid JSON array ("+err.Error()+").")
 					return
 				}
 				pol := eval.Policy{Tenant: p.TenantID, AgentID: agent, SampleRate: rate, Criteria: criteria}
 				if err := eval.ValidatePolicy(pol); err != nil {
-					http.Error(w, err.Error(), http.StatusBadRequest)
+					flashError(w, r, "Online eval policy not saved: "+err.Error())
 					return
 				}
 				if err := onb.EvalPolicies.PutPolicy(r.Context(), pol); err != nil {
@@ -880,11 +908,42 @@ func sessionValue(r *http.Request) string {
 	return ""
 }
 
+// Severity markers on the flash cookie. The cookie previously carried a bare
+// message and .flash is styled with the success tokens, so a failure such as
+// "Policy rejected: <parser error>" was announced to the operator in green —
+// the visual language of success — while .flash-error sat unreachable in the
+// stylesheet. These follow the "key:" convention already used for a minted key.
+//
+// Anything without a recognised prefix is treated as a success: flash cookies
+// live for 30 seconds, so one written just before a deploy can still arrive
+// here afterwards, and it must render as a message rather than as a raw marker.
+const (
+	flashOKPrefix  = "ok:"
+	flashErrPrefix = "err:"
+)
+
 // flashRedirect performs POST-redirect-GET to the onboarding page with a one-time
-// message in a short-lived cookie (not persisted server-side; cleared on display).
+// success message in a short-lived cookie (not persisted server-side; cleared on
+// display). Use flashError for anything the operator needs to fix.
 func flashRedirect(w http.ResponseWriter, r *http.Request, msg string) {
+	setFlash(w, r, flashOKPrefix+msg)
+}
+
+// flashError is flashRedirect for a failed action: same POST-redirect-GET, but
+// the page renders it in the error style instead of the success one.
+func flashError(w http.ResponseWriter, r *http.Request, msg string) {
+	setFlash(w, r, flashErrPrefix+msg)
+}
+
+// flashRaw writes a flash whose prefix the caller controls (the one-time key
+// reveal, which the template treats as a third presentation).
+func flashRaw(w http.ResponseWriter, r *http.Request, raw string) {
+	setFlash(w, r, raw)
+}
+
+func setFlash(w http.ResponseWriter, r *http.Request, raw string) {
 	http.SetCookie(w, &http.Cookie{
-		Name: "rt_flash", Value: base64.RawURLEncoding.EncodeToString([]byte(msg)),
+		Name: "rt_flash", Value: base64.RawURLEncoding.EncodeToString([]byte(raw)),
 		Path: "/ui/onboarding", MaxAge: 30, HttpOnly: true,
 		Secure: sessionCookieSecure(), SameSite: http.SameSiteLaxMode,
 	})

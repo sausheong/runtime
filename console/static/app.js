@@ -81,9 +81,48 @@ async function loadSessions() {
   }
 }
 
+// The transcript had exactly one appearance for three different situations:
+// connecting, connected-but-silent, and stream-dead all rendered as the same
+// empty dark slab, because onerror closed the connection without saying so. An
+// operator opens this page specifically to find out what an agent did, so "no
+// events yet" and "you are no longer receiving events" must not look alike.
+//
+// The state line sits ABOVE the <pre> rather than inside it: text written into
+// the transcript would be indistinguishable from a log line the agent emitted.
 function streamSession() {
   const out = document.getElementById('events');
+  const state = document.getElementById('stream-state');
+  let received = 0;
+
+  const setState = (text, kind) => {
+    if (!state) return;
+    state.textContent = text;
+    state.className = 'stream-state' + (kind ? ' is-' + kind : '');
+  };
+
+  setState('Connecting to the session stream…');
+
   const es = new EventSource(`/agents/${AGENT}/sessions/${SID}/stream?since=0`, {withCredentials: true});
-  es.onmessage = e => { out.textContent += e.data + "\n"; };
-  es.onerror = () => { es.close(); };
+
+  es.onopen = () => {
+    // Open with nothing replayed yet is the ambiguous case the old code could
+    // not express: the session exists, we are attached, there is just no output.
+    setState(received ? `Live — ${received} events` : 'Connected. No events recorded for this session yet.', 'live');
+  };
+
+  es.onmessage = e => {
+    out.textContent += e.data + "\n";
+    received++;
+    setState(`Live — ${received} event${received === 1 ? '' : 's'}`, 'live');
+  };
+
+  es.onerror = () => {
+    es.close();
+    // Distinguish "never connected" from "was connected and dropped": the first
+    // is usually a wrong session id or an agent that is down, the second means
+    // the transcript above is real but has stopped updating.
+    setState(received
+      ? `Stream disconnected after ${received} events. Refresh to reconnect.`
+      : 'Could not connect to the session stream. The agent may be unreachable. Refresh to retry.', 'error');
+  };
 }

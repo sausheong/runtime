@@ -1,48 +1,84 @@
 /* Runtime console — self-contained styles (no external fonts/CDN; air-gap safe).
    Design system: see DESIGN.md at the repository root. Product register,
-   light + warm theme, Restrained colour (tinted neutrals + one accent). */
+   light theme with a faint cool cast, Restrained colour (near-neutral
+   tinted surfaces + one accent). */
 :root {
-  /* Neutrals. Warm-tinted (hue ~80-85) rather than pure grey: no #fff, no #000.
-     A neutral with a trace of chroma reads as paper; a pure one reads as a
-     framework default. Chroma stays under .01 so nothing looks coloured. */
-  --bg: oklch(0.972 0.006 85);
-  --surface: oklch(0.995 0.003 85);
-  --surface-sunk: oklch(0.955 0.008 85);   /* table heads, toolbars, insets */
-  --border: oklch(0.905 0.008 80);
-  --border-strong: oklch(0.835 0.010 80);
-  --text: oklch(0.245 0.012 70);
-  /* L=0.530, not 0.555: --muted must clear 4.5:1 on the DARKEST surface it can
-     land on, not the lightest. At 0.555 it passed on --surface (4.69:1) but
-     failed on --bg (4.39:1) and --surface-sunk (4.18:1) — and .subtitle sits in
-     .page-head, i.e. directly on --bg. Now 4.88 / 5.21 / 4.64:1 respectively. */
-  --muted: oklch(0.530 0.012 70);
+  /* Neutrals. Near-neutral with a faint cool cast (hue 258, chroma .002-.013).
+     No #fff, no #000: a trace of chroma reads as a considered surface, a pure
+     one reads as a framework default.
+
+     Why cool and not the previous warm cream (hue 85): a warm off-white is the
+     current reflex "tasteful" AI surface — the detector flags it by name, and
+     on a screen sitting beside a terminal and a ticket tracker it reads softer
+     than the work deserves. Cool at this chroma is not Tailwind slate either
+     (that runs .012-.02 and is visibly blue); it is close enough to neutral
+     that the eye reads "paper, correctly lit" rather than "tinted". All the
+     personality is spent in one place, the accent. */
+  --bg: oklch(0.975 0.003 258);
+  --surface: oklch(0.995 0.002 258);
+  --surface-sunk: oklch(0.960 0.005 258);   /* table heads, toolbars, insets */
+
+  /* TWO border roles, and the distinction is a WCAG requirement, not taste.
+     --border is decoration: panel edges, table rules, separators. Nothing about
+     the interface is lost if it is faint, so 1.35:1 is fine (1.4.11 exempts
+     purely decorative boundaries).
+     --border-strong is the boundary of an INTERACTIVE control — the only thing
+     marking where a text field begins, on a fill identical to the panel behind
+     it. That is a user-interface component boundary under WCAG 1.4.11 and needs
+     3.0:1. The old value measured 1.64:1 against its own fill, i.e. the design
+     system was less accessible than the unstyled browser default it replaced.
+     0.628 is the lightest value that clears 3.0 on the darkest surface a
+     control can sit on (3.14 / 3.31 / 3.51 on sunk / bg / surface). */
+  --border: oklch(0.898 0.006 258);
+  --border-strong: oklch(0.628 0.013 258);
+
+  --text: oklch(0.230 0.011 258);
+  /* --muted must clear 4.5:1 on the DARKEST surface it can land on, not the
+     lightest: .subtitle sits in .page-head, i.e. directly on --bg. Measured
+     4.94 / 5.11 / 5.42:1 on sunk / bg / surface. */
+  --muted: oklch(0.518 0.011 258);
   /* Darker muted for small text (labels, badges, table headers) where --muted
-     is legible but leaves too little margin at 12px. */
-  --muted-strong: oklch(0.445 0.014 70);
+     is legible but leaves too little margin at 12px. 7.28:1 worst case. */
+  --muted-strong: oklch(0.428 0.013 258);
 
   /* Accent: plum. Chosen by elimination — red/green/amber are spoken for by
      danger/success/warning, and blue/violet is the category reflex this console
-     previously fell into (indigo #4f46e5). Deep plum on warm paper is distinct
-     from every semantic hue, so a link can never be misread as a state. */
-  --accent: oklch(0.45 0.14 335);
-  --accent-hover: oklch(0.375 0.14 335);
-  --accent-soft: oklch(0.955 0.022 335);
+     previously fell into (indigo #4f46e5). Plum is distinct from every semantic
+     hue, so a link can never be misread as a state.
+     Deepened from L=0.45 to L=0.40 and chroma 0.14 to 0.115: the brighter plum
+     read closer to magenta. Darker and less saturated is the
+     more serious register, and it lifts white-on-accent from 7.9 to 9.8:1. */
+  --accent: oklch(0.400 0.115 328);
+  --accent-hover: oklch(0.328 0.104 328);
+  --accent-soft: oklch(0.962 0.017 328);
+  --accent-border: oklch(0.720 0.075 328);
 
-  --success: oklch(0.52 0.12 155);
-  --success-bg: oklch(0.965 0.025 155);
-  --success-border: oklch(0.865 0.055 155);
-  --success-text: oklch(0.40 0.09 155);
-  --warning: oklch(0.62 0.13 75);
-  --danger: oklch(0.505 0.165 27);
-  --danger-soft: oklch(0.965 0.018 27);
-  --danger-border: oklch(0.865 0.055 27);
+  --success: oklch(0.500 0.105 158);
+  --success-bg: oklch(0.970 0.019 158);
+  --success-border: oklch(0.735 0.070 158);
+  --success-text: oklch(0.385 0.080 158);
+  --warning: oklch(0.600 0.120 75);
+  --warning-text: oklch(0.428 0.088 75);
+  --warning-bg: oklch(0.967 0.026 75);
+  --warning-border: oklch(0.735 0.080 75);
+  --danger: oklch(0.478 0.150 27);
+  --danger-soft: oklch(0.969 0.015 27);
+  /* Badge outline: reinforcement only, since the badge's own text names the
+     state, so the decorative exemption applies. */
+  --danger-border: oklch(0.720 0.090 27);
+  /* The Remove/Rotate button's edge IS the control boundary, so it needs the
+     same 3.0:1 as --border-strong. Measured 3.33:1 against a panel. */
+  --danger-control: oklch(0.650 0.095 27);
 
-  --row-hover: oklch(0.968 0.010 335);  /* faintest accent wash on hover */
+  /* Neutral hover wash. Was a plum tint: accent means "actionable", and every
+     row in a table is not. A tonal step keeps hover feedback without the
+     interface flushing pink as the pointer crosses it. */
+  --row-hover: oklch(0.968 0.004 258);
 
   /* Exactly one shadow, used only where something genuinely floats (the login
      panel over an empty field). Elevation elsewhere is a hairline border: a
      drop shadow under every panel is the SaaS-card tell. */
-  --shadow: 0 1px 2px oklch(0.245 0.012 70 / .05), 0 2px 8px oklch(0.245 0.012 70 / .06);
+  --shadow: 0 1px 2px oklch(0.230 0.011 258 / .05), 0 2px 8px oklch(0.230 0.011 258 / .06);
 
   --radius: 8px;
   --radius-sm: 6px;
@@ -162,10 +198,26 @@ body {
 .page-head { margin: 0 0 2rem; }
 h1 { font-size: var(--fs-h1); font-weight: 640; margin: 0 0 .35rem; letter-spacing: -.022em; }
 h2 { font-size: var(--fs-h2); font-weight: 620; margin: 0 0 .85rem; letter-spacing: -.012em; }
+/* Was unstyled: the browser default computed to 17.55px/700, a size belonging to
+   no token and sitting between --fs-h2 (18px) and --fs-body (15px). Two live
+   instances, both subheads inside the Credentials panel. */
+h3 { font-size: var(--fs-body); font-weight: 640; margin: 0 0 .5rem; letter-spacing: -.008em; }
 .subtitle { color: var(--muted); font-size: var(--fs-sm); margin: 0; max-width: 68ch; }
 .breadcrumb { font-size: var(--fs-sm); margin: 0 0 1rem; }
-.breadcrumb a { color: var(--muted); text-decoration: none; }
-.breadcrumb a:hover { color: var(--accent); }
+/* inline-block + padding-block so the link is a 24px-tall target rather than a
+   16px line of text (WCAG 2.5.8). On agent, session, and eval-run pages this is
+   the only in-page back navigation, so it was the smallest target on the page
+   and the one a lost user reaches for first. The negative inline margin keeps
+   the text optically aligned with the page head despite the new padding. */
+.breadcrumb a {
+  display: inline-block;
+  padding: .25rem .3rem;
+  margin-inline: -.3rem;
+  border-radius: var(--radius-sm);
+  color: var(--muted);
+  text-decoration: none;
+}
+.breadcrumb a:hover { color: var(--accent); background: var(--accent-soft); text-decoration: none; }
 
 a { color: var(--accent); text-decoration: none; }
 a:hover { text-decoration: underline; }
@@ -178,11 +230,23 @@ a:hover { text-decoration: underline; }
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 1.25rem 1.5rem;
-  margin-bottom: 1rem;
+  padding: 1.4rem 1.6rem;
+  /* 1.75rem, up from 1rem. At the old spacing nine consecutive panels on the
+     onboarding page read as one continuous ruled sheet: the gap between two
+     panels (16px) was smaller than the padding inside one (20px), so the
+     hairline borders looked like row rules rather than boundaries. The gap now
+     exceeds the internal padding, which is what makes a panel read as a
+     discrete object. */
+  margin-bottom: 1.75rem;
 }
+.card:last-child { margin-bottom: 0; }
 .card > h2:first-child { margin-top: 0; }
-.card-desc { color: var(--muted); font-size: var(--fs-sm); margin: -.5rem 0 1rem; max-width: 68ch; }
+/* Pulls the description up under its heading. Scoped to the h2-precedes case:
+   as a bare margin it also applied when .card-desc came FIRST in a panel (the
+   Credentials section leads with a button), where -.5rem dragged the text 8px
+   up UNDER that button and the two overlapped. */
+.card-desc { color: var(--muted); font-size: var(--fs-sm); margin: 0 0 1rem; max-width: 68ch; }
+h2 + .card-desc { margin-top: -.5rem; }
 /* A panel containing a wide table scrolls ITSELF rather than the document.
    Only agent.html wrapped its tables in .table-wrap; the other 17 tables across
    six templates did not, so a six-column eval-run table pushed the whole page
@@ -212,6 +276,13 @@ tbody tr:last-child td { border-bottom: none; }
 tbody tr:hover { background: var(--row-hover); }
 td.actions { text-align: right; width: 1%; white-space: nowrap; }
 .mono { font-family: var(--mono); font-size: var(--fs-sm); }
+/* .mono sets a font-size, and as a class it outranks the `h1` element selector.
+   agent.html's <h1 class="mono"> therefore computed to 13.6px — SMALLER than the
+   15px body text, and exactly the size of its own subtitle. The console's
+   most-visited detail page had no title in the visual hierarchy. Restore the
+   heading sizes and keep only the family. */
+h1.mono { font-size: var(--fs-h1); }
+h2.mono { font-size: var(--fs-h2); }
 
 /* ---- Badges ----
    Enumerated state only (role, health, model) — never decoration. Each carries
@@ -226,14 +297,14 @@ td.actions { text-align: right; width: 1%; white-space: nowrap; }
   line-height: 1.45;
   border: 1px solid transparent;
 }
-.badge-role { background: var(--accent-soft); color: var(--accent); border-color: oklch(0.885 0.045 335); }
+.badge-role { background: var(--accent-soft); color: var(--accent); border-color: var(--accent-border); }
 .badge-ok { background: var(--success-bg); color: var(--success-text); border-color: var(--success-border); }
 .badge-muted { background: var(--surface-sunk); color: var(--muted-strong); border-color: var(--border); }
 .badge-danger { background: var(--danger-soft); color: var(--danger); border-color: var(--danger-border); }
 /* Degraded / in-between state. --warning existed as a token but nothing used
    it, so "unknown" and "degraded" had to borrow ok or danger — both wrong.
    PRODUCT.md calls those first-class states; this is the badge for them. */
-.badge-warn { background: oklch(0.965 0.03 75); color: oklch(0.44 0.10 75); border-color: oklch(0.86 0.07 75); }
+.badge-warn { background: var(--warning-bg); color: var(--warning-text); border-color: var(--warning-border); }
 .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: .4rem; vertical-align: middle; }
 /* Not color alone: ok is a filled dot, off is a hollow ring (WCAG 1.4.1). */
 .dot-ok { background: var(--success); }
@@ -260,9 +331,24 @@ td.actions { text-align: right; width: 1%; white-space: nowrap; }
 .inline-form label { display: flex; flex-direction: column; gap: .25rem; }
 
 /* ---- Forms ---- */
-form .row { gap: .6rem; align-items: center; }
+/* flex-end, not center: once a control carries a visible label above it, a
+   centred row floats the bare button halfway up the field it submits. Aligning
+   on the baseline of the controls keeps buttons level with the inputs. */
+form .row { gap: .6rem; align-items: flex-end; }
 label { font-size: var(--fs-sm); font-weight: 500; color: var(--text); }
-input[type=text], input[type=password], input:not([type]), select {
+/* A label that wraps its control stacks: text, then field. */
+form .row > label { display: flex; flex-direction: column; gap: .25rem; }
+/* Inverted selector, deliberately. The previous rule ENUMERATED the types it
+   styled (text, password, untyped, select) and so silently missed `textarea`
+   and `input[type=number]`: five of the thirty-nine controls on the onboarding
+   page rendered as raw browser widgets (0px radius, 2px inset system border,
+   13.3px Arial, 1px padding) directly beside styled siblings — and they were
+   the Cedar-policy and JSON-cases fields, the highest-stakes inputs in the
+   console. An allowlist fails open every time someone adds an input type;
+   `:not()` fails closed. hidden/submit/checkbox/radio are excluded because they
+   are not text-entry surfaces. */
+input:not([type=hidden]):not([type=submit]):not([type=button]):not([type=checkbox]):not([type=radio]),
+select, textarea {
   font: inherit;
   padding: .5rem .65rem;
   border: 1px solid var(--border-strong);
@@ -272,12 +358,35 @@ input[type=text], input[type=password], input:not([type]), select {
   min-width: 0;
   transition: border-color .15s ease, box-shadow .15s ease;
 }
-input::placeholder { color: var(--muted); }
-input:focus, select:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+/* Monospace for the fields that hold code, not prose: Cedar policies and JSON
+   arrays are read character-by-character, and proportional digits/brackets make
+   a misplaced brace genuinely hard to spot. */
+textarea { font-family: var(--mono); font-size: var(--fs-sm); line-height: 1.55; resize: vertical; }
+input::placeholder, textarea::placeholder { color: var(--muted); }
+input:focus, select:focus, textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
 input:disabled, select:disabled, textarea:disabled {
   background: var(--surface-sunk);
   color: var(--muted);
   cursor: not-allowed;
+}
+/* A required field should be identifiable before submission, not after a server
+   round-trip rejects it: eleven fields carried `required` with no visual mark.
+
+   The marker hangs off the label TEXT (<span class="req">), not off the <label>
+   element. These labels wrap their control, so a ::after on the label lands
+   after the input and renders as a stray asterisk floating below the field.
+
+   Assistive tech gets the requirement from the control's own `required`
+   attribute, so the asterisk is purely a visual affordance. */
+.req::after {
+  content: "*";
+  color: var(--danger);
+  font-weight: 700;
+  margin-left: .15rem;
 }
 
 /* Keyboard focus for everything else: links, buttons, nav. Inputs keep their
@@ -290,7 +399,18 @@ a:focus-visible, button:focus-visible, .btn:focus-visible, .navbtn:focus-visible
   border-radius: 4px;
 }
 fieldset { border: 1px solid var(--border); border-radius: var(--radius); padding: .9rem 1.1rem; margin: .9rem 0; }
-legend { font-size: var(--fs-xs); font-weight: 600; text-transform: uppercase; letter-spacing: .045em; color: var(--muted-strong); padding: 0 .4rem; }
+/* Sentence case, not uppercase. A <legend> here is not a one-word label: the
+   longest reads "Transport — fill exactly one of the two below" (45 characters),
+   which is an instruction, and 45 characters of 12px all-caps is measurably
+   slower to read because uppercase removes the ascender/descender word shapes we
+   recognise. Uppercase stays on thead th and .stat-label, which are genuinely
+   short labels (max 11 characters measured). */
+legend {
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--muted-strong);
+  padding: 0 .4rem;
+}
 
 button, .btn {
   font: inherit;
@@ -336,8 +456,10 @@ button.ghost:hover { background: var(--surface-sunk); color: var(--text); border
 button.danger {
   background: transparent;
   color: var(--danger);
-  border-color: var(--danger-border);
-  padding: .35rem .7rem;
+  border-color: var(--danger-control);
+  /* .35rem gave a 26px-tall control. Interactive targets should clear 24px
+     (WCAG 2.5.8) with margin, not sit on the line. */
+  padding: .4rem .75rem;
   font-size: var(--fs-sm);
 }
 button.danger:hover { background: var(--danger-soft); border-color: var(--danger); }
@@ -393,11 +515,13 @@ button.danger:hover { background: var(--danger-soft); border-color: var(--danger
 /* ---- Stream / pre ----
    The one dark surface in a light UI, and deliberately so: a transcript is
    verbatim machine output, and the tonal break says "this is not chrome, this
-   is the log". Warm-tinted like every other neutral so it reads as part of the
-   system rather than a pasted-in slate block. */
+   is the log". Carries the same hue as every other neutral (258) so it reads as
+   part of the system rather than a pasted-in slate block; it was left on the
+   old warm hue 70 when the palette moved and the mismatch showed. Ink measures
+   12.37:1 on this ground. */
 pre {
-  background: oklch(0.245 0.014 70);
-  color: oklch(0.895 0.008 85);
+  background: oklch(0.235 0.012 258);
+  color: oklch(0.900 0.006 258);
   padding: 1rem 1.1rem;
   border-radius: var(--radius);
   white-space: pre-wrap;
@@ -499,7 +623,7 @@ pre.policy-text {
    #fff / #3c4043 / #f8f9fa values are Google's, not ours, and are the one place
    in this stylesheet exempt from the tinted-neutral rule: a sign-in button that
    deviates from the published spec is a trust signal in the wrong direction.
-   The shadow is ours, so it uses the warm system token. */
+   The shadow is ours, so it uses the system token. */
 .btn-google {
   display: inline-flex;
   align-items: center;
@@ -518,7 +642,7 @@ pre.policy-text {
 .btn-google:hover {
   background: #f8f9fa;
   text-decoration: none;
-  box-shadow: 0 1px 3px oklch(0.245 0.012 70 / .10), 0 3px 10px oklch(0.245 0.012 70 / .10);
+  box-shadow: 0 1px 3px oklch(0.230 0.011 258 / .10), 0 3px 10px oklch(0.230 0.011 258 / .10);
 }
 .btn-google .g-logo { flex: none; }
 
@@ -597,7 +721,11 @@ pre.policy-text {
    scan a row of figures down a common edge, which is what these are for. */
 .stat {
   flex: 1;
-  min-width: 110px;
+  /* 140px, up from 110px. A 7-digit token count ("4,821,903") measures 107px at
+     1.4rem tabular, so it overflowed a 94px content box by 13px and spilled into
+     the neighbouring tile. Token counts on a busy agent are ALWAYS 7+ digits, so
+     this was a guaranteed break, not an edge case. */
+  min-width: 140px;
   padding: .75rem .9rem;
   background: var(--surface-sunk);
   border: 1px solid var(--border);
@@ -617,6 +745,10 @@ pre.policy-text {
   color: var(--text);
   font-variant-numeric: tabular-nums;
   line-height: 1.2;
+  /* Belt and braces with the min-width above: if a figure still exceeds its
+     tile at some viewport, it wraps inside its own box rather than spilling
+     across the neighbour's border. */
+  overflow-wrap: anywhere;
 }
 /* Spacing between label and figure comes from the container's `gap`, not a
    margin. Under column-reverse a margin-top lands on the physical TOP of the
@@ -651,7 +783,96 @@ pre.policy-text {
 .status-strip .status-item { color: var(--muted-strong); }
 .status-strip .status-item b { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
 .status-strip .status-item.is-error b { color: var(--danger); }
+/* A health summary that is itself the bad news (e.g. "2 unreachable"). */
+.status-strip .status-health.is-error { color: var(--danger); }
+/* Table-cell variant: the word carries the state, so it must not rely on the
+   dot's colour alone. */
+td .is-error { color: var(--danger); font-weight: 500; }
 
 /* ---- Table overflow guard (long mono IDs on narrow screens) ---- */
 .table-wrap { overflow-x: auto; }
 td .mono, .mono { overflow-wrap: anywhere; }
+
+/* ---- Section index (onboarding) ----
+   The onboarding page is ~5,100px across nine sections with no in-page
+   navigation: the skip link lands a keyboard user at #main, i.e. the top of the
+   same 5,100px, and reaching "Online eval policies" was an unassisted 4,500px
+   scroll on every visit. Nine text links, no JS, no sticky positioning (a
+   sticky bar steals vertical space on the laptop screens this is read on). */
+.section-index {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .4rem .5rem;
+  margin: 0 0 1.75rem;
+  padding: .85rem 1rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.section-index-head {
+  width: 100%;
+  margin: 0 0 .2rem;
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: .045em;
+  color: var(--muted-strong);
+}
+.section-index a {
+  font-size: var(--fs-sm);
+  color: var(--muted-strong);
+  padding: .3rem .55rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  text-decoration: none;
+}
+.section-index a:hover {
+  color: var(--accent);
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+  text-decoration: none;
+}
+/* An anchored panel must not land flush against the viewport edge, and the
+   :target flash confirms which section the jump actually reached. */
+section[id] { scroll-margin-top: 1rem; }
+
+/* ---- Danger zone ----
+   A destructive maintenance action set apart from the constructive controls
+   above it: a sunk strip with a rule on top, the consequence spelled out beside
+   the button rather than only inside a confirm() dialog. Not a coloured panel —
+   a red box would shout on every page load; this stays quiet until read. */
+.danger-zone {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: .75rem 1.5rem;
+  margin-top: 1.75rem;
+  padding-top: 1.1rem;
+  border-top: 1px solid var(--border);
+}
+.danger-zone strong { font-size: var(--fs-sm); font-weight: 620; }
+.danger-zone-desc {
+  margin: .15rem 0 0;
+  font-size: var(--fs-sm);
+  color: var(--muted);
+  max-width: 60ch;
+}
+.danger-zone form { margin: 0; flex: none; }
+
+/* ---- Stream states (session.html) ----
+   The event <pre> previously rendered as an unlabelled 942x96px dark slab in
+   all three states: connecting, connected-but-empty, and stream-dead were
+   pixel-identical, because es.onerror closed the connection silently. These
+   render the state as text ABOVE the transcript rather than inside it, so a
+   status line is never confused with a log line. */
+.stream-state {
+  display: flex;
+  align-items: center;
+  gap: .5rem;
+  font-size: var(--fs-sm);
+  color: var(--muted);
+  margin: 0 0 .6rem;
+}
+.stream-state.is-error { color: var(--danger); font-weight: 500; }
+.stream-state.is-live { color: var(--success-text); }

@@ -29,6 +29,7 @@ type FleetObs struct {
 	Agents         []AgentObs
 	TotalAgents    int
 	HealthyAgents  int
+	SubHealthy     int // agents with no reachable replica (TotalAgents - HealthyAgents)
 	ActiveSessions int
 	Upstreams      []gateway.UpstreamStatus
 }
@@ -198,5 +199,9 @@ func buildFleetObs(ctx context.Context, reg *controlplane.Registry, client agent
 		}
 		f.ActiveSessions += a.Sessions.Created + a.Sessions.Running
 	}
+	// Precomputed rather than derived in the template: html/template has no
+	// arithmetic, and the overview's status strip needs the count of agents with
+	// no reachable replica to state the problem in its own words.
+	f.SubHealthy = f.TotalAgents - f.HealthyAgents
 	return f
 }

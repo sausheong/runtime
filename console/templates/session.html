@@ -8,6 +8,7 @@
     <a href="/ui">Agents</a>
     <a href="/ui/observability">Observability</a>
     <a href="/ui/onboarding">Onboarding</a>
+    <a href="/ui/select-tenant">Switch tenant</a>
     <form method="post" action="/ui/logout"><button type="submit" class="navbtn">Sign out</button></form>
   </nav>
 </header>
@@ -20,7 +21,10 @@
   <div class="card">
     <h2>Event stream</h2>
     <p class="card-desc">Live events for this session, replayed from the start.</p>
-    <pre id="events"></pre>
+    <!-- aria-live so a screen-reader user is told the stream connected, stalled,
+         or died; the transcript itself is too chatty to announce. -->
+    <p class="stream-state" id="stream-state" role="status" aria-live="polite">Connecting to the session stream&hellip;</p>
+    <pre id="events" aria-label="Session event transcript" tabindex="0"></pre>
   </div>
 </main>
 <script>const AGENT="{{.AgentID}}", SID="{{.SessionID}}";</script>

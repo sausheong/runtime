@@ -20,7 +20,9 @@
     <p class="subtitle">Manage access and tools for tenant <span class="badge badge-role">{{.Tenant}}</span></p>
   </div>
 
-  {{if .Flash}}<p class="flash">{{.Flash}}</p>{{end}}
+  {{/* role=status announces the outcome to a screen reader, which otherwise
+       gets no notification at all that a POST succeeded or failed. */}}
+  {{if .Flash}}<p class="flash{{if .FlashIsError}} flash-error{{end}}" role="status">{{if .FlashIsError}}<strong>Failed:</strong> {{end}}{{.Flash}}</p>{{end}}
   {{if .NewKey}}
   <div class="key-reveal">
     <p class="key-reveal-head">New key created. Copy it now, it will not be shown again.</p>
@@ -28,8 +30,26 @@
   </div>
   {{end}}
 
+  {{/* This page runs to roughly nine screens and previously had no in-page
+       navigation at all: the skip link lands at #main, i.e. the top of the same
+       page, so reaching the last section was an unassisted 4,500px scroll every
+       visit. Each entry is gated on the same flag as its section, so the index
+       can never advertise a panel that did not render. */}}
+  <nav class="section-index" aria-label="Sections on this page">
+    <p class="section-index-head" id="section-index-head">Jump to</p>
+    <a href="#users">Users</a>
+    <a href="#agent-keys">Agent keys</a>
+    {{if .AgentsEnabled}}<a href="#managed-agents">Managed agents</a>{{end}}
+    {{if .SecretsEnabled}}<a href="#credentials">Credentials</a>{{end}}
+    <a href="#upstreams">Upstreams</a>
+    {{if .PoliciesEnabled}}<a href="#policies">Policies</a>{{end}}
+    {{if .QuotasEnabled}}<a href="#quotas">Quotas</a>{{end}}
+    {{if .EvalSetsEnabled}}<a href="#eval-sets">Eval sets</a>{{end}}
+    {{if .EvalPoliciesEnabled}}<a href="#eval-policies">Online eval policies</a>{{end}}
+  </nav>
+
   <!-- ===== Users ===== -->
-  <section class="card">
+  <section class="card" id="users">
     <h2>Users</h2>
     <p class="card-desc">People who can sign in to this tenant, and their role.</p>
     <table>
@@ -42,22 +62,24 @@
           <input type="hidden" name="csrf_token" value="{{$.CSRF}}"><button type="submit" class="danger">Remove</button>
         </form></td>
       </tr>{{else}}
-        <tr><td colspan="3" class="empty">No users yet.</td></tr>
+        <tr><td colspan="3" class="empty"><strong>No users yet.</strong><br>Add a subject below to let someone sign in to this tenant.</td></tr>
       {{end}}
       </tbody>
     </table>
     <form method="post" action="/ui/onboarding/users">
       <input type="hidden" name="csrf_token" value="{{.CSRF}}">
       <div class="row" style="margin-top:1rem">
-        <input name="subject" placeholder="user subject (OIDC sub or email)" required style="flex:1" aria-label="user subject (OIDC sub or email)">
-        <select name="role" aria-label="Role"><option>viewer</option><option>operator</option><option>admin</option></select>
+        <label style="flex:1"><span class="req">User subject</span>
+          <input name="subject" placeholder="OIDC sub or email" required style="width:100%"></label>
+        <label>Role
+          <select name="role"><option>viewer</option><option>operator</option><option>admin</option></select></label>
         <button type="submit">Add or update user</button>
       </div>
     </form>
   </section>
 
   <!-- ===== Agent keys ===== -->
-  <section class="card">
+  <section class="card" id="agent-keys">
     <h2>Agent keys</h2>
     <p class="card-desc">Service keys for machines and agents. The full key is shown once, on creation.</p>
     <table>
@@ -73,15 +95,17 @@
           </form>
         </td>
       </tr>{{else}}
-        <tr><td colspan="4" class="empty">No keys yet.</td></tr>
+        <tr><td colspan="4" class="empty"><strong>No keys yet.</strong><br>Mint one below for a machine or CI job. Humans should sign in instead.</td></tr>
       {{end}}
       </tbody>
     </table>
     <form method="post" action="/ui/onboarding/keys">
       <input type="hidden" name="csrf_token" value="{{.CSRF}}">
       <div class="row" style="margin-top:1rem">
-        <input name="label" placeholder="label (e.g. ci-runner)" style="flex:1" aria-label="label (e.g. ci-runner)">
-        <select name="role" aria-label="Role"><option>viewer</option><option>operator</option><option>admin</option></select>
+        <label style="flex:1">Label
+          <input name="label" placeholder="e.g. ci-runner" style="width:100%"></label>
+        <label>Role
+          <select name="role"><option>viewer</option><option>operator</option><option>admin</option></select></label>
         <button type="submit">Mint key</button>
       </div>
     </form>
@@ -89,7 +113,7 @@
 
   {{if .AgentsEnabled}}
   <!-- ===== Managed agents ===== -->
-  <section class="card">
+  <section class="card" id="managed-agents">
     <h2>Managed agents</h2>
     <p class="card-desc">Remote agents the control plane attaches to (a URL it dials). Disable drops an agent from routing without removing it; Re-attach re-checks its health now. The agent's own process is started/stopped on its host.</p>
     <table>
@@ -113,19 +137,23 @@
           </form>
         </td>
       </tr>{{else}}
-        <tr><td colspan="4" class="empty">No managed agents.</td></tr>
+        <tr><td colspan="4" class="empty"><strong>No managed agents.</strong><br>Register an agent the control plane should dial, or declare it in the operator config file.</td></tr>
       {{end}}
       </tbody>
     </table>
     <form method="post" action="/ui/onboarding/agents">
       <input type="hidden" name="csrf_token" value="{{.CSRF}}">
       <div class="row" style="margin-top:1rem">
-        <input name="id" placeholder="agent id (e.g. hello-claude)" style="flex:1" aria-label="agent id (e.g. hello-claude)">
-        <input name="name" placeholder="display name" style="flex:1" aria-label="display name">
+        <label style="flex:1">Agent id
+          <input name="id" placeholder="e.g. hello-claude" style="width:100%"></label>
+        <label style="flex:1">Display name
+          <input name="name" placeholder="e.g. Support triage" style="width:100%"></label>
       </div>
       <div class="row" style="margin-top:.5rem">
-        <input name="url" placeholder="http://10.0.0.4:8080" style="flex:2" aria-label="Agent URL">
-        <input name="model" placeholder="model (display)" style="flex:1" aria-label="model (display)">
+        <label style="flex:2">URL the control plane dials
+          <input name="url" placeholder="http://10.0.0.4:8080" style="width:100%"></label>
+        <label style="flex:1">Model (display only)
+          <input name="model" placeholder="e.g. claude-sonnet-5" style="width:100%"></label>
         <button type="submit">Register agent</button>
       </div>
     </form>
@@ -134,18 +162,14 @@
 
   {{if .SecretsEnabled}}
   <!-- ===== Credentials ===== -->
-  <section class="card">
+  <section class="card" id="credentials">
     <h2>Credentials</h2>
-    <form method="post" action="/ui/onboarding/secrets/rotate" onsubmit="return confirm('Rotate the keyring? All secrets are re-sealed; this cannot be undone.')">
-      <input type="hidden" name="csrf_token" value="{{.CSRF}}">
-      <button type="submit">Rotate keyring</button>
-    </form>
     <p class="card-desc">Per-tenant secrets brokered into upstream requests. Values are never displayed.</p>
     <table>
       <thead><tr><th>Name</th><th>Type</th></tr></thead>
       <tbody>
       {{range .Secrets}}<tr><td class="mono">{{.Name}}</td><td>{{if .Type}}{{.Type}}{{else}}static{{end}}</td></tr>{{else}}
-        <tr><td colspan="2" class="empty">No credentials set.</td></tr>
+        <tr><td colspan="2" class="empty"><strong>No credentials set.</strong><br>Add one below, then reference it by name when registering an upstream.</td></tr>
       {{end}}
       </tbody>
     </table>
@@ -153,8 +177,10 @@
       <input type="hidden" name="csrf_token" value="{{.CSRF}}">
       <input type="hidden" name="type" value="static">
       <div class="row" style="margin-top:1rem">
-        <input name="name" placeholder="ORDERS_API_KEY" style="flex:1" aria-label="Name">
-        <input name="value" placeholder="value" type="password" style="flex:1" aria-label="value">
+        <label style="flex:1">Name
+          <input name="name" placeholder="ORDERS_API_KEY" style="width:100%"></label>
+        <label style="flex:1">Value
+          <input name="value" placeholder="never displayed after saving" type="password" autocomplete="off" style="width:100%"></label>
         <button type="submit">Set credential</button>
       </div>
     </form>
@@ -169,7 +195,7 @@
       </div>
       <div class="row" style="margin-top:.5rem">
         <input name="client_id" placeholder="client id" style="flex:1" aria-label="client id">
-        <input name="client_secret" placeholder="client secret" type="password" style="flex:1" aria-label="client secret">
+        <input name="client_secret" placeholder="client secret" type="password" autocomplete="off" style="flex:1" aria-label="client secret">
       </div>
       <div class="row" style="margin-top:.5rem">
         <input name="scopes" placeholder="scope1, scope2" style="flex:1" aria-label="scope1, scope2">
@@ -188,7 +214,7 @@
       </div>
       <div class="row" style="margin-top:.5rem">
         <input name="client_id" placeholder="client id" style="flex:1" aria-label="client id">
-        <input name="client_secret" placeholder="client secret" type="password" style="flex:1" aria-label="client secret">
+        <input name="client_secret" placeholder="client secret" type="password" autocomplete="off" style="flex:1" aria-label="client secret">
       </div>
       <div class="row" style="margin-top:.5rem">
         <input name="scopes" placeholder="scope1, scope2" style="flex:1" aria-label="scope1, scope2">
@@ -200,11 +226,27 @@
         <button type="submit">Set OBO credential</button>
       </div>
     </form>
+    <!-- Rotation is a maintenance operation on everything above, so it belongs
+         at the END of the section, not as its opening move. It previously sat
+         above the section description (overlapping it by 8px) and was styled as
+         a standard primary button: pixel-identical to "Mint key" and "Set
+         credential". It is the one irreversible action in the console, so it
+         now carries the same destructive vocabulary as every Remove button. -->
+    <div class="danger-zone">
+      <div>
+        <strong>Rotate keyring</strong>
+        <p class="danger-zone-desc">Re-seals every secret above with the current key. Cannot be undone, and any process holding an old sealed value must be restarted.</p>
+      </div>
+      <form method="post" action="/ui/onboarding/secrets/rotate" onsubmit="return confirm('Rotate the keyring for {{.Tenant}}? All secrets are re-sealed with the current key. This cannot be undone.')">
+        <input type="hidden" name="csrf_token" value="{{.CSRF}}">
+        <button type="submit" class="danger">Rotate keyring</button>
+      </form>
+    </div>
   </section>
   {{end}}
 
   <!-- ===== Upstreams ===== -->
-  <section class="card">
+  <section class="card" id="upstreams">
     <h2>Gateway upstreams</h2>
     <p class="card-desc">External tool sources federated into the gateway (HTTP/MCP or OpenAPI/REST).</p>
     <table>
@@ -217,15 +259,15 @@
           <input type="hidden" name="csrf_token" value="{{$.CSRF}}"><button type="submit" class="danger">Remove</button>
         </form></td>
       </tr>{{else}}
-        <tr><td colspan="3" class="empty">No upstreams registered.</td></tr>
+        <tr><td colspan="3" class="empty"><strong>No upstreams registered.</strong><br>Agents in this tenant have no federated tools until you add one below.</td></tr>
       {{end}}
       </tbody>
     </table>
     <form method="post" action="/ui/onboarding/upstreams" style="margin-top:1rem">
       <input type="hidden" name="csrf_token" value="{{.CSRF}}">
-      <p><input name="name" placeholder="upstream name (e.g. orders)" required style="width:100%" aria-label="upstream name (e.g. orders)"></p>
+      <p><label><span class="req">Upstream name</span><br><input name="name" placeholder="e.g. orders" required style="width:100%"></label></p>
       <fieldset>
-        <legend>Transport — fill exactly one of the two below</legend>
+        <legend>Transport (fill exactly one of the two below)</legend>
         <p><label>HTTP (Streamable MCP) URL<br>
           <input name="url" placeholder="http://host/mcp" style="width:100%" aria-label="Agent URL"></label></p>
         <p><label>OR OpenAPI spec (REST adapter)<br>
@@ -243,7 +285,7 @@
 
   {{if .PoliciesEnabled}}
   <!-- ===== Policies ===== -->
-  <section class="card">
+  <section class="card" id="policies">
     <h2>Gateway policies</h2>
     <p class="card-desc">Cedar rules that deterministically allow or forbid tool calls in this tenant. A matching <code>forbid</code> denies the call regardless of the LLM.</p>
     <table>
@@ -256,15 +298,15 @@
           <input type="hidden" name="csrf_token" value="{{$.CSRF}}"><button type="submit" class="danger">Remove</button>
         </form></td>
       </tr>{{else}}
-        <tr><td colspan="3" class="empty">No policies — all tool calls are permitted (permit by default).</td></tr>
+        <tr><td colspan="3" class="empty">No policies: all tool calls are permitted (permit by default).</td></tr>
       {{end}}
       </tbody>
     </table>
     <form method="post" action="/ui/onboarding/policies" style="margin-top:1rem">
       <input type="hidden" name="csrf_token" value="{{.CSRF}}">
-      <p><input name="name" placeholder="policy name (e.g. no-destructive-sql)" required style="width:100%" aria-label="policy name (e.g. no-destructive-sql)"></p>
-      <p><label>Cedar policy (exactly one statement)<br>
-        <textarea name="cedar_text" rows="4" style="width:100%;font-family:monospace" placeholder='forbid (principal, action == Gateway::Action::"call_tool", resource) when &#123; resource.server == "sandbox" &#125;;' required aria-label="Cedar text"></textarea></label></p>
+      <p><label><span class="req">Policy name</span><br><input name="name" placeholder="e.g. no-destructive-sql" required style="width:100%"></label></p>
+      <p><label><span class="req">Cedar policy (exactly one statement)</span><br>
+        <textarea name="cedar_text" rows="4" style="width:100%" placeholder='forbid (principal, action == Gateway::Action::"call_tool", resource) when &#123; resource.server == "sandbox" &#125;;' required aria-label="Cedar text"></textarea></label></p>
       <button type="submit">Add policy</button>
     </form>
   </section>
@@ -272,7 +314,7 @@
 
   {{if .QuotasEnabled}}
   <!-- ===== Quotas ===== -->
-  <section class="card">
+  <section class="card" id="quotas">
     <h2>Gateway quotas</h2>
     <p class="card-desc">Per-upstream request rate limits for this tenant (requests/min; 0 = block). Applies to gateway tool calls routed to each upstream.</p>
     <table>
@@ -285,14 +327,14 @@
           <input type="hidden" name="csrf_token" value="{{$.CSRF}}"><input type="hidden" name="upstream" value="{{.Upstream}}"><button type="submit" class="danger">Remove</button>
         </form></td>
       </tr>{{else}}
-        <tr><td colspan="3" class="empty">No quotas — all upstreams unlimited for this tenant.</td></tr>
+        <tr><td colspan="3" class="empty">No quotas: all upstreams are unlimited for this tenant.</td></tr>
       {{end}}
       </tbody>
     </table>
     <form method="post" action="/ui/onboarding/quotas" style="margin-top:1rem">
       <input type="hidden" name="csrf_token" value="{{.CSRF}}">
-      <p><input name="upstream" placeholder="upstream id (e.g. srv1)" required style="width:100%" aria-label="upstream id (e.g. srv1)"></p>
-      <p><label>Rate/min<br><input name="rate" type="number" min="0" placeholder="requests per minute" required style="width:100%" aria-label="requests per minute"></label></p>
+      <p><label><span class="req">Upstream id</span><br><input name="upstream" placeholder="e.g. srv1" required style="width:100%"></label></p>
+      <p><label><span class="req">Rate/min</span><br><input name="rate" type="number" min="0" placeholder="requests per minute" required style="width:100%" aria-label="requests per minute"></label></p>
       <button type="submit">Save quota</button>
     </form>
   </section>
@@ -300,7 +342,7 @@
 
   {{if .EvalSetsEnabled}}
   <!-- ===== Eval sets ===== -->
-  <section class="card">
+  <section class="card" id="eval-sets">
     <h2>Eval sets</h2>
     <p class="card-desc">Named golden sets of cases (input + scorer + expected/rubric) run against an agent to measure quality. Paste cases as a JSON array; validated at save.</p>
     <table>
@@ -313,15 +355,15 @@
           <input type="hidden" name="csrf_token" value="{{$.CSRF}}"><button type="submit" class="danger">Remove</button>
         </form></td>
       </tr>{{else}}
-        <tr><td colspan="3" class="empty">No eval sets yet.</td></tr>
+        <tr><td colspan="3" class="empty"><strong>No eval sets yet.</strong><br>Add a golden set below, then launch it against an agent from Observability.</td></tr>
       {{end}}
       </tbody>
     </table>
     <form method="post" action="/ui/onboarding/eval-sets" style="margin-top:1rem">
       <input type="hidden" name="csrf_token" value="{{.CSRF}}">
-      <p><input name="name" placeholder="set name (e.g. greetings)" required style="width:100%" aria-label="set name (e.g. greetings)"></p>
-      <p><label>Cases (JSON array)<br>
-        <textarea name="cases" rows="8" style="width:100%;font-family:monospace" placeholder='[{"input":"hi","scorer":"contains","expected":"hello"},&#10; {"input":"2+2?","scorer":"exact","expected":"4"}]' required aria-label="Cases"></textarea></label></p>
+      <p><label><span class="req">Set name</span><br><input name="name" placeholder="e.g. greetings" required style="width:100%"></label></p>
+      <p><label><span class="req">Cases (JSON array)</span><br>
+        <textarea name="cases" rows="8" style="width:100%" placeholder='[{"input":"hi","scorer":"contains","expected":"hello"},&#10; {"input":"2+2?","scorer":"exact","expected":"4"}]' required aria-label="Cases"></textarea></label></p>
       <button type="submit">Add eval set</button>
     </form>
   </section>
@@ -329,7 +371,7 @@
 
   {{if .EvalPoliciesEnabled}}
   <!-- ===== Online eval policies ===== -->
-  <section class="card">
+  <section class="card" id="eval-policies">
     <h2>Online eval policies</h2>
     <p class="card-desc">Per-agent online-sampling policies: score a percentage of finished sessions against a set of criteria (judge/contains/regex). Paste criteria as a JSON array; validated at save.</p>
     <table>
@@ -343,17 +385,17 @@
           <input type="hidden" name="csrf_token" value="{{$.CSRF}}"><button type="submit" class="danger">Remove</button>
         </form></td>
       </tr>{{else}}
-        <tr><td colspan="4" class="empty">No online eval policies yet.</td></tr>
+        <tr><td colspan="4" class="empty"><strong>No online eval policies yet.</strong><br>Finished sessions are not being scored. Add a policy below to sample them.</td></tr>
       {{end}}
       </tbody>
     </table>
     <form method="post" action="/ui/onboarding/eval-policies" style="margin-top:1rem">
       <input type="hidden" name="csrf_token" value="{{.CSRF}}">
-      <p><input name="agent" placeholder="agent id (e.g. support)" required style="width:100%" aria-label="agent id (e.g. support)"></p>
-      <p><label>Sample rate (%)<br>
+      <p><label><span class="req">Agent id</span><br><input name="agent" placeholder="e.g. support" required style="width:100%"></label></p>
+      <p><label><span class="req">Sample rate (%)</span><br>
         <input type="number" name="rate" min="0" max="100" value="10" required aria-label="Rate"></label></p>
-      <p><label>Criteria (JSON array)<br>
-        <textarea name="criteria" rows="8" style="width:100%;font-family:monospace" placeholder='[{"name":"polite","scorer":"judge","rubric":"Is the reply polite?"}]' required aria-label="Criteria"></textarea></label></p>
+      <p><label><span class="req">Criteria (JSON array)</span><br>
+        <textarea name="criteria" rows="8" style="width:100%" placeholder='[{"name":"polite","scorer":"judge","rubric":"Is the reply polite?"}]' required aria-label="Criteria"></textarea></label></p>
       <button type="submit">Add online eval policy</button>
     </form>
   </section>

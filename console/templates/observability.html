@@ -8,6 +8,7 @@
     <a href="/ui">Agents</a>
     <a href="/ui/observability" aria-current="page">Observability</a>
     <a href="/ui/onboarding">Onboarding</a>
+    <a href="/ui/select-tenant">Switch tenant</a>
     <form method="post" action="/ui/logout"><button type="submit" class="navbtn">Sign out</button></form>
   </nav>
 </header>
@@ -40,7 +41,7 @@
           {{if gt .Sessions.Error 0}}<span class="badge badge-danger">{{.Sessions.Error}} errored</span>{{end}}
         </td>
       </tr>{{else}}
-        <tr><td colspan="3" class="empty">No agents in this tenant.</td></tr>
+        <tr><td colspan="3" class="empty"><strong>No agents in this tenant.</strong><br>Register one on the Onboarding page, or declare it in the operator config file.</td></tr>
       {{end}}
       </tbody>
     </table>
@@ -71,12 +72,12 @@
       <input type="hidden" name="csrf_token" value="{{.CSRF}}">
       <label>Golden set
         <select name="set" required aria-label="Set">
-          {{range .EvalSets}}<option value="{{.Name}}">{{.Name}} ({{len .Cases}} cases)</option>{{else}}<option value="" disabled>No sets — add one in Onboarding</option>{{end}}
+          {{range .EvalSets}}<option value="{{.Name}}">{{.Name}} ({{len .Cases}} cases)</option>{{else}}<option value="" disabled>No sets; add one in Onboarding</option>{{end}}
         </select>
       </label>
       <label>Agent
         <select name="agent" required aria-label="Agent">
-          {{range .Agents}}<option value="{{.ID}}">{{.ID}}{{if .Name}} — {{.Name}}{{end}}</option>{{else}}<option value="" disabled>No visible agents</option>{{end}}
+          {{range .Agents}}<option value="{{.ID}}">{{.ID}}{{if .Name}} ({{.Name}}){{end}}</option>{{else}}<option value="" disabled>No visible agents</option>{{end}}
         </select>
       </label>
       <button type="submit">Launch run</button>
@@ -97,7 +98,7 @@
         <td>{{if eq .Status "completed"}}{{.Passed}}/{{.Total}}{{else}}—{{end}}</td>
         <td class="subtitle">{{.CreatedAt.Format "2006-01-02 15:04"}}</td>
       </tr>{{else}}
-        <tr><td colspan="6" class="empty">No runs yet — launch one above.</td></tr>
+        <tr><td colspan="6" class="empty">No runs yet. Launch one above.</td></tr>
       {{end}}
       </tbody>
     </table>
@@ -118,7 +119,7 @@
         <td class="subtitle">{{.Actor}}</td>
         <td class="subtitle">{{.CreatedAt.Format "2006-01-02 15:04"}}</td>
       </tr>{{else}}
-        <tr><td colspan="6" class="empty">No online-eval results yet.</td></tr>
+        <tr><td colspan="6" class="empty"><strong>No online-eval results yet.</strong><br>Results appear once a session finishes and an online eval policy samples it.</td></tr>
       {{end}}
       </tbody>
     </table>
@@ -134,7 +135,7 @@
         <td class="mono">{{$agent}}</td>
         <td>{{range $cat, $n := $cats}}<span class="badge badge-danger">{{$cat}}: {{$n}}</span> {{end}}</td>
       </tr>{{else}}
-        <tr><td colspan="2" class="empty">No classified failures recorded.</td></tr>
+        <tr><td colspan="2" class="empty"><strong>No classified failures recorded.</strong><br>Nothing has failed terminally, or no failure has been categorised yet.</td></tr>
       {{end}}
       </tbody>
     </table>

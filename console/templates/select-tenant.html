@@ -1,5 +1,5 @@
 {{define "select-tenant.html"}}<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><title>Choose a tenant — Runtime</title>
+<html lang="en"><head><meta charset="utf-8"><title>Runtime — Choose a tenant</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="stylesheet" href="/ui/static/style.css"></head>
 <body>
@@ -17,7 +17,12 @@
 <main class="container" id="main">
   <div class="page-head">
     <h1>Choose a tenant</h1>
-    <p class="subtitle">Your account has access to more than one tenant. Pick which to work in.</p>
+    {{/* The subtitle has to agree with the table. Stated unconditionally, it
+         claimed "access to more than one tenant" directly above a table reading
+         "No tenant memberships" — the page contradicted itself in the exact
+         situation where the operator most needs to know what to do. */}}
+    {{if .Memberships}}<p class="subtitle">Your account has access to more than one tenant. Pick which to work in.</p>
+    {{else}}<p class="subtitle">Your account is not a member of any tenant yet.</p>{{end}}
   </div>
   <section class="card">
     <table>
@@ -32,7 +37,11 @@
           <button type="submit" class="play" aria-label="Work in {{.TenantID}}" title="Work in {{.TenantID}}">&#9654;</button>
         </form></td>
       </tr>{{else}}
-        <tr><td colspan="3" class="empty">No tenant memberships.</td></tr>
+        <tr><td colspan="3" class="empty">
+          <strong>No tenant memberships.</strong><br>
+          A tenant admin adds you on their Onboarding page, or an operator runs
+          <code>runtimectl admin user add --tenant &lt;id&gt; --subject &lt;you&gt; --role viewer</code>.
+        </td></tr>
       {{end}}
       </tbody>
     </table>
