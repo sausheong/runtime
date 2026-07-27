@@ -171,6 +171,25 @@ disabled. Focus is a 2px accent outline at 2px offset, never suppressed.
   on the same flags as the sections so it cannot advertise a panel that did not
   render.
 
+### The top bar
+
+One definition, `templates/_topbar.html`, included by every signed-in page.
+It was previously copy-pasted into seven templates and drifted: Observability,
+agent, session, and eval-run had gone stale without "Switch tenant", so the menu
+gained and lost an item as you navigated, and the page whose entire job is
+switching tenants was the one hardest to reach from the others. A menu that
+changes shape under you costs the recognition that makes a nav usable at all.
+
+Duplicated markup is the mechanism, so the duplication is what got deleted
+rather than re-synchronised. `console/nav_test.go` holds the line from both
+sides: it compares the bar's rendered links across all seven pages through the
+real handler, and it fails any template that hand-rolls `<header class="topbar">`
+instead of including the partial.
+
+The partial takes the current section key. Child pages (an agent, a session, an
+eval run) pass `""` and mark nothing: `aria-current="page"` on a link that leads
+somewhere else tells a screen-reader user they are on a page they are not on.
+
 ### Form controls
 
 Select them with `:not()`, never an allowlist. The rule used to enumerate

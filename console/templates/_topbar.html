@@ -1,0 +1,24 @@
+{{/*
+  The signed-in top bar. One definition, included by every authenticated page.
+
+  It used to be copy-pasted into seven templates, and it drifted: the
+  Observability, agent, session, and eval-run pages were missing "Switch
+  tenant", so the menu changed under you as you navigated. Duplicated markup is
+  how that happens, so the duplication is what got removed. A page cannot now
+  disagree with the others about what the menu contains.
+
+  The argument is the current section key, used only to mark aria-current.
+  Pages that are children of a section (an agent, a session, an eval run) pass
+  "" — they are not the destination any nav link points at, and
+  aria-current="page" would be a lie on a page the link does not lead to.
+*/}}
+{{define "topbar"}}<header class="topbar">
+  <a class="brand" href="/ui"><span class="logo">R</span> Runtime</a>
+  <nav aria-label="Main">
+    <a href="/ui"{{if eq . "agents"}} aria-current="page"{{end}}>Agents</a>
+    <a href="/ui/observability"{{if eq . "observability"}} aria-current="page"{{end}}>Observability</a>
+    <a href="/ui/onboarding"{{if eq . "onboarding"}} aria-current="page"{{end}}>Onboarding</a>
+    <a href="/ui/select-tenant"{{if eq . "tenants"}} aria-current="page"{{end}}>Switch tenant</a>
+    <form method="post" action="/ui/logout"><button type="submit" class="navbtn">Sign out</button></form>
+  </nav>
+</header>{{end}}

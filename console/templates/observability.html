@@ -2,16 +2,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="stylesheet" href="/ui/static/style.css"></head><body>
 <a class="skip-link" href="#main">Skip to content</a>
-<header class="topbar">
-  <a class="brand" href="/ui"><span class="logo">R</span> Runtime</a>
-  <nav>
-    <a href="/ui">Agents</a>
-    <a href="/ui/observability" aria-current="page">Observability</a>
-    <a href="/ui/onboarding">Onboarding</a>
-    <a href="/ui/select-tenant">Switch tenant</a>
-    <form method="post" action="/ui/logout"><button type="submit" class="navbtn">Sign out</button></form>
-  </nav>
-</header>
+{{template "topbar" "observability"}}
 <main class="container" id="main">
   <div class="page-head">
     <h1>Observability</h1>
