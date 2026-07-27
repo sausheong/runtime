@@ -1,211 +1,139 @@
 <!doctype html><html lang="en"><head><meta charset="utf-8"><title>Runtime — Self-hosted agent control plane</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="description" content="Runtime is a self-hosted control plane for durable AI agents: sessions, identity, memory, a tool gateway, sandboxes, evaluations, and observability, inside your own perimeter.">
-<link rel="stylesheet" href="/ui/static/style.css"></head><body>
+<meta name="description" content="Runtime is a self-hosted control plane for durable AI agents. Your models, your tools, your data, your infrastructure.">
+<link rel="stylesheet" href="/ui/static/style.css"></head><body class="on-landing">
 <a class="skip-link" href="#main">Skip to content</a>
-<header class="topbar">
+
+{{/* The top bar goes dark over the drenched hero. It is the same bar, restyled
+     by the .on-landing body class rather than rebuilt, so the signed-in nav
+     partial and this page cannot drift apart. */}}
+<header class="topbar topbar-invert">
   <a class="brand" href="/"><span class="logo">R</span> Runtime</a>
   <nav aria-label="Main">
     {{if .GoogleEnabled}}
-    <a class="navbtn navbtn-accent" href="{{.GoogleURL}}">Sign in &rarr;</a>
+    <a class="navbtn navbtn-onDark" href="{{.GoogleURL}}">Sign in &rarr;</a>
     {{else}}
-    <a class="navbtn navbtn-accent" href="/ui/login">Sign in &rarr;</a>
+    <a class="navbtn navbtn-onDark" href="/ui/login">Sign in &rarr;</a>
     {{end}}
   </nav>
 </header>
 
-<main class="landing" id="main">
-  <section class="hero">
-    <span class="eyebrow">On-prem agent runtime</span>
-    <h1 class="hero-title">Run AI agents on your own infrastructure.</h1>
-    <p class="hero-sub">A self-hosted control plane for deploying, gating, and observing
-      LLM agents: identity, tools, memory, and sandboxes, all behind your own perimeter.</p>
+<main id="main">
+  {{/* Drenched hero. The console is Restrained by rule; this one surface is
+       Committed, because it is the only place the product gets to have a voice
+       rather than get out of the way. Reference: Vercel's black-field
+       monochrome, rotated onto the plum the product already owns. */}}
+  <section class="lp-hero">
+    <div class="lp-hero-inner">
+      <h1 class="lp-title">Your agents.<br>Your infrastructure.</h1>
+      <p class="lp-lede">A self-hosted control plane for AI agents. Nothing leaves your
+        network: not the prompts, not the transcripts, not the keys.</p>
+      <div class="lp-actions">
+        {{if .GoogleEnabled}}
+        <a class="btn-google" href="{{.GoogleURL}}">
+          <svg class="g-logo" viewBox="0 0 18 18" width="18" height="18" aria-hidden="true">
+            <path fill="#4285F4" d="M17.64 9.2c0-.64-.06-1.25-.16-1.84H9v3.48h4.84a4.14 4.14 0 0 1-1.8 2.72v2.26h2.92c1.71-1.57 2.68-3.89 2.68-6.62z"/>
+            <path fill="#34A853" d="M9 18c2.43 0 4.47-.8 5.96-2.18l-2.92-2.26c-.81.54-1.84.86-3.04.86-2.34 0-4.32-1.58-5.03-3.71H.96v2.33A9 9 0 0 0 9 18z"/>
+            <path fill="#FBBC05" d="M3.97 10.71a5.41 5.41 0 0 1 0-3.42V4.96H.96a9 9 0 0 0 0 8.08l3.01-2.33z"/>
+            <path fill="#EA4335" d="M9 3.58c1.32 0 2.5.45 3.44 1.35l2.58-2.59C13.46.89 11.43 0 9 0A9 9 0 0 0 .96 4.96l3.01 2.33C4.68 5.16 6.66 3.58 9 3.58z"/>
+          </svg>
+          <span>Sign in with Google</span>
+        </a>
+        {{else}}
+        <form class="token-form token-form-onDark" method="post" action="/ui/login">
+          <input name="token" type="password" placeholder="Service key" autocomplete="off" aria-label="Service key or identity token">
+          <button type="submit">Sign in</button>
+        </form>
+        {{end}}
+      </div>
+    </div>
 
-    <div class="hero-cta">
-      {{if .GoogleEnabled}}
-      <a class="btn-google" href="{{.GoogleURL}}">
-        <svg class="g-logo" viewBox="0 0 18 18" width="18" height="18" aria-hidden="true">
-          <path fill="#4285F4" d="M17.64 9.2c0-.64-.06-1.25-.16-1.84H9v3.48h4.84a4.14 4.14 0 0 1-1.8 2.72v2.26h2.92c1.71-1.57 2.68-3.89 2.68-6.62z"/>
-          <path fill="#34A853" d="M9 18c2.43 0 4.47-.8 5.96-2.18l-2.92-2.26c-.81.54-1.84.86-3.04.86-2.34 0-4.32-1.58-5.03-3.71H.96v2.33A9 9 0 0 0 9 18z"/>
-          <path fill="#FBBC05" d="M3.97 10.71a5.41 5.41 0 0 1 0-3.42V4.96H.96a9 9 0 0 0 0 8.08l3.01-2.33z"/>
-          <path fill="#EA4335" d="M9 3.58c1.32 0 2.5.45 3.44 1.35l2.58-2.59C13.46.89 11.43 0 9 0A9 9 0 0 0 .96 4.96l3.01 2.33C4.68 5.16 6.66 3.58 9 3.58z"/>
-        </svg>
-        <span>Sign in with Google</span>
-      </a>
-      <p class="cta-hint">Access is granted by your tenant administrator.</p>
-      {{else}}
-      <form class="token-form" method="post" action="/ui/login">
-        <input name="token" type="password" placeholder="API token" autocomplete="off" aria-label="API token">
-        <button type="submit">Continue</button>
-      </form>
-      <p class="cta-hint">Paste a service key or identity token.</p>
-      {{end}}
+    {{/* Imagery, drawn rather than photographed: the deployment has no route to
+         the internet, so a stock photo is not an option and a coloured block
+         would be worse than nothing. This is the actual topology — one control
+         plane, three agents, your perimeter around all of it — which is the one
+         picture that answers "what is this" faster than the paragraph does. */}}
+    <div class="lp-figure" role="img" aria-label="Diagram: clients enter one control plane, which routes to three agent processes and a Postgres store, all inside a boundary marked your network.">
+      <svg viewBox="0 0 420 300" class="lp-svg" aria-hidden="true" focusable="false">
+        <defs>
+          <marker id="a" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto">
+            <path d="M0 0 L7 3.5 L0 7 z" fill="currentColor" opacity=".55"/>
+          </marker>
+        </defs>
+        <!-- perimeter -->
+        <rect x="8" y="34" width="404" height="258" rx="14" class="lp-perim"/>
+        <text x="24" y="56" class="lp-svg-label">YOUR NETWORK</text>
+        <!-- client -->
+        <text x="210" y="18" class="lp-svg-cap" text-anchor="middle">clients &amp; operators</text>
+        <path d="M210 24 V74" class="lp-wire" marker-end="url(#a)"/>
+        <!-- control plane -->
+        <rect x="86" y="76" width="248" height="46" rx="9" class="lp-node lp-node-key"/>
+        <text x="210" y="104" class="lp-svg-node" text-anchor="middle">control plane</text>
+        <!-- fan-out -->
+        <path d="M210 122 V142 H104 V166" class="lp-wire" marker-end="url(#a)"/>
+        <path d="M210 122 V166" class="lp-wire" marker-end="url(#a)"/>
+        <path d="M210 122 V142 H316 V166" class="lp-wire" marker-end="url(#a)"/>
+        <!-- agents -->
+        <rect x="56" y="168" width="96" height="40" rx="8" class="lp-node"/>
+        <text x="104" y="192" class="lp-svg-node" text-anchor="middle">agent</text>
+        <rect x="162" y="168" width="96" height="40" rx="8" class="lp-node"/>
+        <text x="210" y="192" class="lp-svg-node" text-anchor="middle">agent</text>
+        <rect x="268" y="168" width="96" height="40" rx="8" class="lp-node"/>
+        <text x="316" y="192" class="lp-svg-node" text-anchor="middle">agent</text>
+        <!-- store -->
+        <path d="M104 208 V228 H210 V246" class="lp-wire"/>
+        <path d="M210 208 V246" class="lp-wire" marker-end="url(#a)"/>
+        <path d="M316 208 V228 H210 V246" class="lp-wire"/>
+        <rect x="122" y="248" width="176" height="34" rx="8" class="lp-node"/>
+        <text x="210" y="269" class="lp-svg-node" text-anchor="middle">sessions &middot; memory &middot; identity</text>
+      </svg>
     </div>
   </section>
 
-  {{/* What the platform is, stated as a boundary rather than a benefit list.
-       "What it does NOT do" is the fact an infrastructure reader wants earliest
-       and is the one a marketing page always omits; putting it directly beside
-       the capability list is what makes the capability list believable. */}}
-  <section class="landing-section" id="what">
-    <h2 class="section-head">What Runtime is</h2>
-    <div class="split">
-      <div class="split-col">
-        <p class="prose">Runtime is the execution and operations layer between your users, your
-          agent code, model providers, tools, and infrastructure. It turns an agent program
-          into an operable service: durable sessions, process supervision, routing,
-          authentication, and telemetry.</p>
-        <p class="prose">Its smallest useful deployment is one process and Postgres. The same
-          binaries run on a laptop, a single production host, or Kubernetes, with no managed
-          cloud agent service in the path.</p>
-      </div>
-      <div class="split-col">
-        <h3 class="split-head">Runtime does not</h3>
-        <ul class="plain-list">
-          <li>Provide a model. You bring the provider and the credentials.</li>
-          <li>Prescribe an agent framework. Native Go, Python SDKs, or any process
-            that implements the HTTP/SSE contract.</li>
-          <li>Own your agent's prompt, domain tools, or product UI.</li>
-        </ul>
-      </div>
-    </div>
+  {{/* One claim per line, six lines. The previous version spent a paragraph on
+       each of eight pillars; that is documentation, and the docs already do it
+       better. */}}
+  <section class="lp-band" aria-labelledby="does">
+    <h2 id="does" class="lp-h2">Everything an agent needs to be a service.</h2>
+    <ul class="lp-claims">
+      <li><b>Durable sessions.</b> Turns are checkpointed. A restart resumes, it does not replay.</li>
+      <li><b>Identity built in.</b> OIDC, service keys, tenants, roles, encrypted secrets.</li>
+      <li><b>Memory that lasts.</b> Durable facts and semantic recall in your own Postgres.</li>
+      <li><b>One tool gateway.</b> MCP servers and REST APIs, namespaced and authorized per call.</li>
+      <li><b>Real sandboxes.</b> Code and browser execution in locked-down containers.</li>
+      <li><b>Operations included.</b> Metrics, traces, evals, a CLI, and this console.</li>
+    </ul>
   </section>
 
-  {{/* The six pillars, each expanded from a one-line label into the two or three
-       facts an operator evaluates it on. Set as a definition list, not a card
-       grid: these are entries in a reference, and the reader scans the names. */}}
-  <section class="landing-section" id="capabilities">
-    <h2 class="section-head">Capabilities</h2>
-    <dl class="cap-list">
-      <div class="cap">
-        <dt class="cap-name">Durable runtime</dt>
-        <dd class="cap-body">Completed turns are checkpointed in Postgres, so a restarted
-          agent resumes where it stopped rather than replaying the session. Sessions expose a
-          real lifecycle, and SSE events are persisted before delivery and replayable from any
-          sequence number. Operators cap turns, tokens, turn duration, and session duration.</dd>
-      </div>
-      <div class="cap">
-        <dt class="cap-name">Agent hosting</dt>
-        <dd class="cap-body">Local processes are supervised and restarted with capped backoff.
-          Agents run as fixed replica pools or autoscale between bounds; a session stays pinned
-          to the replica that can safely resume it, and scale-down drains before stopping.
-          Remote agents attach over HTTP and can be registered or removed without a restart.</dd>
-      </div>
-      <div class="cap">
-        <dt class="cap-name">Identity and secrets</dt>
-        <dd class="cap-body">OIDC login for people, service keys for machines, and three
-          tenant roles. Tenancy is enforced at the control-plane edge, so cross-tenant
-          resources answer 404 rather than revealing themselves. Tenant credentials are stored
-          as AES-256-GCM ciphertext, never returned by the API, and injected only at process
-          start.</dd>
-      </div>
-      <div class="cap">
-        <dt class="cap-name">Memory</dt>
-        <dd class="cap-body">Tenant-scoped durable memory in Postgres with pgvector: explicit
-          save and recall tools, semantic retrieval before a turn, and background extraction of
-          durable facts from finished conversations. Recall is best-effort by design, so an
-          embedding failure degrades retrieval instead of failing the user's turn.</dd>
-      </div>
-      <div class="cap">
-        <dt class="cap-name">Tool gateway</dt>
-        <dd class="cap-body">One MCP endpoint federating stdio servers, remote MCP servers,
-          and REST APIs described by OpenAPI. Tools are namespaced per upstream, filtered by
-          tenant, and authorized per call. Search mode keeps a large catalog callable without
-          putting every schema in the model context.</dd>
-      </div>
-      <div class="cap">
-        <dt class="cap-name">Sandboxes</dt>
-        <dd class="cap-body">Per-session Python, shell, and browser execution in containers
-          with a read-only root filesystem, resource limits, and no network by default. Browser
-          egress is constrained by hostname policy below the application layer. State survives
-          across calls within a session without exposing the agent host.</dd>
-      </div>
-      <div class="cap">
-        <dt class="cap-name">Evaluations</dt>
-        <dd class="cap-body">Golden sets scored by rule or judge, plus online sampling of live
-          transcripts with failure classification. Runs are leased in Postgres and resume
-          without rerunning completed cases. Credential-shaped fields are filtered before
-          persistence, on a best-effort basis.</dd>
-      </div>
-      <div class="cap">
-        <dt class="cap-name">Observability</dt>
-        <dd class="cap-body">One Prometheus endpoint for the whole fleet on a separate
-          management listener, a provisioned Grafana dashboard, OpenTelemetry traces over OTLP,
-          and request IDs correlating logs to traces. Metric labels exclude session and user
-          identifiers; message text never reaches a span.</dd>
-      </div>
-    </dl>
+  {{/* The differentiator, given a fold of its own. This is the reason someone
+       chooses this over a managed agent cloud, so it gets the emphasis rather
+       than being one bullet among eight. */}}
+  <section class="lp-quote">
+    <p class="lp-quote-text">No managed cloud in the path. No egress. No vendor
+      holding your transcripts.</p>
+    <p class="lp-quote-sub">Runs on a laptop, one production host, or Kubernetes. Air-gapped
+      deployments are the point, not an afterthought.</p>
   </section>
 
-  {{/* Integration paths. Three rows, because "can I use this from my language"
-       is the question that decides whether the rest of the page matters. */}}
-  <section class="landing-section" id="integrate">
-    <h2 class="section-head">Bring your own agent</h2>
-    <p class="prose">Runtime integrates agents through a small HTTP and SSE contract. A
-      reusable conformance suite runs that contract against a live agent, so compatibility is
-      an executable CI gate rather than a claim.</p>
-    <div class="path-list">
-      <div class="path">
-        <span class="path-name">Native Go</span>
-        <span class="path-desc">Link <code>agentruntime</code>, supply a spec, provider, and
-          tools. Full durable turn recovery.</span>
-      </div>
-      <div class="path">
-        <span class="path-name">Python</span>
-        <span class="path-desc">Use the contract shim around the OpenAI Agents SDK, Claude
-          Agent SDK, or another framework.</span>
-      </div>
-      <div class="path">
-        <span class="path-name">Any language</span>
-        <span class="path-desc">Implement the contract directly and pass the same conformance
-          suite.</span>
-      </div>
-    </div>
-  </section>
-
-  {{/* Operating reality. An operator who reads only one section should read this
-       one: what it costs to run and where the trust boundaries actually sit.
-       Stated plainly because a reader who discovers these after deploying will
-       trust nothing else on the page. */}}
-  <section class="landing-section" id="operating">
-    <h2 class="section-head">Operating it</h2>
-    <div class="split">
-      <div class="split-col">
-        <h3 class="split-head">What it needs</h3>
-        <ul class="plain-list">
-          <li>Postgres, with pgvector when memory is enabled.</li>
-          <li>Docker with Compose v2 for the turnkey single-host stack.</li>
-          <li>No outbound internet: assets ship in the binary, and the bundled
-            stack includes an embedder for air-gapped recall.</li>
-        </ul>
-      </div>
-      <div class="split-col">
-        <h3 class="split-head">Know before you deploy</h3>
-        <ul class="plain-list">
-          <li>Durability is per completed turn. A side effect can repeat if the
-            process dies mid-turn, so make such tools idempotent.</li>
-          <li>Sandbox containers use the Docker socket, which is root-equivalent
-            on the host. The turnkey stack assumes a trusted node.</li>
-          <li>Terminate TLS at the edge. Open mode is for local development only.</li>
-        </ul>
-      </div>
-    </div>
-  </section>
-
-  {{/* Status, last and unmissable. Pre-release with no licence is the single
-       most consequential fact for anyone deciding to depend on this, and it is
-       exactly what a landing page is tempted to bury. */}}
-  <section class="landing-section" id="status">
-    <h2 class="section-head">Status</h2>
-    <p class="prose">Runtime is pre-release software. The latest tagged release is
-      <span class="mono">v0.2.0</span>, and the default branch carries unreleased changes.</p>
-    <p class="prose">The repository does not yet include a licence. The source is available to
-      read, but no reuse or redistribution rights are granted until one is added, so Runtime
-      should not be described as open source.</p>
+  <section class="lp-band lp-band-tight" aria-labelledby="agents">
+    <h2 id="agents" class="lp-h2">Bring the agent you already have.</h2>
+    <p class="lp-body">Go, Python, or any language that can speak HTTP. A conformance suite
+      proves compatibility in CI, so "supported" is something you run, not something we
+      claim.</p>
+    <p class="lp-links">
+      <a href="/ui/login">Sign in to the console</a>
+    </p>
   </section>
 </main>
 
-<footer class="landing-foot">
-  <span>Runtime, the self-hosted agent control plane</span>
+{{/* Pre-release and unlicensed, stated plainly rather than buried. A visitor who
+     finds this out after deploying trusts nothing else on the page. It is small
+     because it is a footnote, not because it is being hidden. */}}
+<footer class="lp-foot">
+  <p><b>Runtime is pre-release software.</b> The latest tagged release is
+    <span class="mono">v0.2.0</span>, and the default branch carries unreleased changes.</p>
+  <p>The repository does not yet include a licence: the source is available to read, but no
+    reuse or redistribution rights are granted until one is added, so Runtime should not be
+    described as open source.</p>
 </footer>
 </body></html>

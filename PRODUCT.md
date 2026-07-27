@@ -8,20 +8,26 @@ The console is an authenticated operator surface, not a marketing site. Design
 serves the task. There is no funnel and no signup: by the time anyone sees this
 UI they have already self-hosted the thing.
 
-One page is the exception. `/` and `/ui/login` are served to someone who is not
-authenticated, and that page is closer to brand register. It is still not
-marketing: the reader is an operator who has just deployed this, or a colleague
-they sent the URL to, so it is written as reference — what the platform is, what
-it does, what it needs, and what it costs to run. It states the pre-release
-status and the absence of a licence rather than burying them, because a reader
-who discovers those after deploying will not trust anything else on the page.
+One page is the exception, and it is a genuine **brand** surface: `/` and
+`/ui/login` are served to someone who is not authenticated. Its job is to
+persuade, so it gets a drenched hero, display type, and one idea per fold. It is
+short on purpose — a visitor decides in one screen, and the documentation is one
+click away for everyone who wants the detail. See DESIGN.md for what governs it.
+
+The one thing it does not get to do is overstate. Pre-release status and the
+absence of a licence are on the page, because a reader who finds those out after
+deploying will not trust anything else on it.
 
 ## What runtime is
 
-An on-prem, self-hostable platform for running durable LLM agents. The
-open-source equivalent of AWS Bedrock AgentCore, for organisations that cannot
+An on-prem, self-hostable platform for running durable LLM agents. A
+self-hostable equivalent of AWS Bedrock AgentCore, for organisations that cannot
 or will not send their agents' data to a managed cloud. Six pillars: agent
 runtime (spine), identity, memory, a tool gateway, sandboxes, observability.
+
+Not "open source": the repository has no licence yet, so that phrase is wrong
+until one is added (runtime.md says so outright). It is a claim worth getting
+right in the one file that seeds every future design decision.
 
 The console is the human window onto a control plane that is otherwise driven
 by `runtimectl` and a REST API. It is deliberately not the primary interface.

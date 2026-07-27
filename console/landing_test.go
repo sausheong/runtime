@@ -34,7 +34,10 @@ func landingBody(t *testing.T) string {
 // A page that drops either is not merely off-brand, it is wrong in a way that
 // could lead someone to depend on this. Assert both survive.
 func TestLanding_DisclosesPreReleaseAndLicence(t *testing.T) {
-	body := landingBody(t)
+	// Collapse runs of whitespace: the copy is wrapped for readability in the
+	// template, so a phrase can straddle a newline. Matching raw HTML made this
+	// test fail on a reflow that changed nothing a reader sees.
+	body := strings.Join(strings.Fields(landingBody(t)), " ")
 	for _, want := range []string{"pre-release", "does not yet include a licence"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("landing page no longer discloses %q; this is a factual claim, not copy", want)
@@ -88,5 +91,68 @@ func TestLanding_NoExternalSubresources(t *testing.T) {
 	// @import and url() inside any inline style would bypass the check above.
 	if strings.Contains(body, "@import") {
 		t.Error("landing page uses @import; stylesheets must be served from the binary")
+	}
+}
+
+// The hero is a drenched dark field, and every rule that makes text legible on
+// it is an override of a light-theme rule from the shared console stylesheet.
+// That is a cascade fight, and the first attempt lost it silently: `.navbtn
+// -onDark` (0,1,0) was outranked by the base `.topbar nav a` (0,1,1), so the
+// sign-in label kept its light-theme colour and measured 2.23:1 on plum. It
+// looked plausible in a screenshot; only measuring caught it.
+//
+// A Go test cannot compute the cascade, but it can assert the shape of the fix:
+// each on-dark override must be scoped under .topbar-invert so it outranks the
+// base rule. Rewriting one back to a bare class fails here.
+func TestLanding_OnDarkOverridesOutrankTheBaseTopbar(t *testing.T) {
+	css, err := assets.ReadFile("static/style.css")
+	if err != nil {
+		t.Fatalf("read stylesheet: %v", err)
+	}
+	src := string(css)
+	// Every selector block mentioning navbtn-onDark must also carry the
+	// .topbar-invert scope, in the same selector.
+	for _, line := range strings.Split(src, "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.Contains(line, ".navbtn-onDark") || !strings.HasSuffix(line, "{") {
+			continue
+		}
+		if !strings.Contains(line, ".topbar-invert") {
+			t.Errorf("selector %q is not scoped under .topbar-invert, so the base "+
+				"`.topbar nav a` rule (0,1,1) outranks it and the label reverts to the "+
+				"light-theme colour on the dark hero", line)
+		}
+	}
+	// And the class must actually be used, or the assertion above is vacuous.
+	if !strings.Contains(src, ".topbar-invert nav .navbtn-onDark") {
+		t.Error("no scoped .navbtn-onDark rule found; the on-dark sign-in button is unstyled")
+	}
+}
+
+// The drenched field belongs to the landing page alone. It is applied by a body
+// class, and the console's own pages must never pick it up: a plum operator
+// console would be a spectacular regression from one stray selector.
+func TestLanding_DrenchedStylingIsScopedToTheLandingBody(t *testing.T) {
+	css, err := assets.ReadFile("static/style.css")
+	if err != nil {
+		t.Fatalf("read stylesheet: %v", err)
+	}
+	for _, line := range strings.Split(string(css), "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasSuffix(line, "{") || !strings.Contains(line, "--lp-ink") {
+			continue
+		}
+		t.Errorf("unexpected selector %q referencing the landing ink", line)
+	}
+	// The only page that sets the landing body class is the landing template.
+	for _, f := range []string{"overview.html", "observability.html", "onboarding.html",
+		"agent.html", "session.html", "eval-run.html", "select-tenant.html"} {
+		b, err := assets.ReadFile("templates/" + f)
+		if err != nil {
+			t.Fatalf("read %s: %v", f, err)
+		}
+		if strings.Contains(string(b), "on-landing") || strings.Contains(string(b), "topbar-invert") {
+			t.Errorf("templates/%s uses landing-only styling; the drenched hero is for / alone", f)
+		}
 	}
 }

@@ -80,6 +80,25 @@
      drop shadow under every panel is the SaaS-card tell. */
   --shadow: 0 1px 2px oklch(0.230 0.011 258 / .05), 0 2px 8px oklch(0.230 0.011 258 / .06);
 
+  /* Landing-page-only tokens. The console is Restrained; the one public page is
+     Committed, and a drenched field needs an ink and an on-ink ramp that no
+     other surface here uses. Namespaced --lp- so they cannot leak into the
+     operator UI by autocomplete.
+
+     --lp-ink is the accent driven very dark (L 0.400 -> 0.205): a deep plum
+     field rather than a black one, so the brand colour is doing the drenching
+     instead of a neutral. White on it measures 15.5:1.
+     The on-ink ramp is alpha over that field, so every step stays in the same
+     hue without three more hardcoded colours. */
+  --lp-ink: oklch(0.205 0.058 328);
+  --lp-on-ink: oklch(0.995 0.002 258);
+  --lp-on-ink-dim: oklch(0.995 0.002 258 / .78);
+  --lp-on-ink-faint: oklch(0.995 0.002 258 / .52);
+  --lp-hairline-strong: oklch(0.995 0.002 258 / .42);
+  /* Accent text on --accent-soft. --accent itself measures 9.0:1 there and is
+     fine; this is a touch deeper for display sizes on the tint. */
+  --accent-ink: oklch(0.345 0.105 328);
+
   --radius: 8px;
   --radius-sm: 6px;
 
@@ -580,221 +599,261 @@ pre.policy-text {
 }
 .navbtn-accent:hover { background: var(--accent-hover) !important; color: var(--surface) !important; text-decoration: none; }
 
-/* ---- Landing page ----
-   The one surface here that is closer to brand register: it is what an operator
-   sees before authenticating. Left-aligned rather than centre-stacked — the
-   centred eyebrow/title/sub/CTA column is the SaaS hero template, and this page
-   is addressing someone who already self-hosted the product, not a prospect. */
-.landing { max-width: 1040px; margin: 0 auto; padding: 0 1.5rem 4rem; }
-.hero {
-  padding: 4.5rem 0 3rem;
-  max-width: 46rem;
+/* ---- Landing page (brand register) ----
+   The console is Restrained by rule: tinted neutrals, one accent under 10%,
+   colour reserved for meaning. This one surface is deliberately the opposite.
+   It is the only page a visitor sees before authenticating, and a page whose
+   job is to communicate rather than to get out of the way has to have a voice.
+
+   Strategy: Committed. A drenched plum field carries the hero, the type is
+   twice the size it is anywhere else in the product, and the imagery is a
+   drawn diagram rather than a photograph — the deployment this product exists
+   for has no route to the internet, so stock photography is not available and
+   a coloured placeholder block would be worse than none.
+
+   What this deliberately is NOT: the previous version of this page was ruled
+   separators, monochrome restraint, and a small uppercase tracked label above
+   every section. That is the editorial-typographic lane, which by now is the
+   default "tasteful" AI brand surface. One kicker can be voice; repeating it
+   as section grammar is scaffolding. There is now exactly one uppercase label
+   on the page, inside the diagram, where it labels a boundary.
+
+   Type is scale and weight only. Air-gap forbids a webfont, so voice has to
+   come from a 4.4x range between the display and body sizes rather than from
+   a display family. */
+
+/* The drenched field bleeds full width; the topbar sits on it and inverts. */
+body.on-landing { background: var(--lp-ink); }
+.topbar-invert {
+  background: transparent;
+  border-bottom: none;
+  position: relative;
+  z-index: 2;
 }
-/* A quiet label, not a pill: the accent-filled capsule reads as marketing
-   chrome and spends accent on decoration. */
-.eyebrow {
-  display: block;
-  font-size: var(--fs-xs);
+.topbar-invert .brand { color: var(--lp-on-ink); }
+/* The logo tile is accent-on-white in the console. On plum, accent-on-accent
+   would vanish, so it inverts to a light tile with the field showing through. */
+.topbar-invert .brand .logo {
+  background: var(--lp-on-ink);
+  color: var(--lp-ink);
+}
+/* Scoped under .topbar-invert nav to match the specificity of the base
+   `.topbar nav a` rule (0,1,1). Written as a plain `.navbtn-onDark` (0,1,0) it
+   LOST the cascade silently: the label kept the light-theme --muted and
+   measured 2.23:1 on the plum field, which is what the eye reported and the
+   contrast probe confirmed. Specificity, not !important. */
+.topbar-invert nav .navbtn-onDark {
+  background: transparent;
+  color: var(--lp-on-ink);
+  border: 1px solid var(--lp-hairline-strong);
   font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: .09em;
-  color: var(--muted-strong);
-  margin-bottom: 1rem;
 }
-.hero-title {
-  font-size: 2.5rem;
-  line-height: 1.08;
+.topbar-invert nav .navbtn-onDark:hover {
+  background: var(--lp-on-ink);
+  color: var(--lp-ink);
+  text-decoration: none;
+}
+
+.lp-hero {
+  background: var(--lp-ink);
+  color: var(--lp-on-ink);
+  /* Asymmetric: copy left, diagram right, and NOT a 50/50 split. A centred
+     stack of eyebrow-title-sub-button is the template this page is avoiding. */
+  display: grid;
+  grid-template-columns: minmax(0, 1.05fr) minmax(0, .95fr);
+  gap: clamp(2rem, 5vw, 5rem);
+  align-items: center;
+  padding: clamp(3rem, 8vw, 6.5rem) clamp(1.25rem, 5vw, 4rem) clamp(3.5rem, 8vw, 6rem);
+  margin-top: -57px;          /* pull the field up behind the transparent bar */
+  padding-top: calc(clamp(3rem, 8vw, 6.5rem) + 57px);
+}
+.lp-hero-inner { max-width: 34rem; }
+
+/* The one typographic risk the page takes. clamp() from 2.4rem to 4.6rem is a
+   ~4.4x step over body text; the console's own h1 is 1.5rem. Tight tracking at
+   this size stops the two lines reading as separate thoughts. */
+.lp-title {
+  font-size: clamp(2.4rem, 6.2vw, 4.6rem);
+  line-height: 1.02;
+  font-weight: 700;
+  letter-spacing: -.038em;
+  margin: 0 0 1.5rem;
+  color: var(--lp-on-ink);
+}
+.lp-lede {
+  font-size: clamp(1.0625rem, 1.6vw, 1.25rem);
+  line-height: 1.6;
+  color: var(--lp-on-ink-dim);
+  margin: 0 0 2.25rem;
+  max-width: 46ch;
+}
+.lp-actions { display: flex; flex-wrap: wrap; gap: .75rem; align-items: center; }
+
+/* Diagram. Hairlines and one filled node, so it reads as a drawing rather than
+   a chart: the control plane is the only solid shape because it is the only
+   thing this product actually is. */
+.lp-figure { justify-self: center; width: 100%; max-width: 30rem; }
+.lp-svg { width: 100%; height: auto; display: block; color: var(--lp-on-ink); }
+.lp-perim {
+  fill: none;
+  stroke: var(--lp-hairline-strong);
+  stroke-width: 1;
+  stroke-dasharray: 3 4;
+}
+.lp-node { fill: none; stroke: var(--lp-hairline-strong); stroke-width: 1; }
+.lp-node-key { fill: var(--lp-on-ink); stroke: none; }
+.lp-wire { fill: none; stroke: var(--lp-hairline-strong); stroke-width: 1; }
+.lp-svg-label {
+  font-family: var(--mono);
+  font-size: 9px;
+  letter-spacing: .14em;
+  fill: var(--lp-on-ink-faint);
+}
+.lp-svg-cap { font-size: 11px; fill: var(--lp-on-ink-dim); }
+.lp-svg-node { font-size: 12px; font-weight: 600; fill: var(--lp-on-ink); }
+.lp-node-key + .lp-svg-node { fill: var(--lp-ink); }
+
+/* Below the fold returns to the product's own light surface. Art direction per
+   section is a brand permission: the hero is the pitch, this is the substance,
+   and they are allowed to look different. */
+.lp-band {
+  background: var(--surface);
+  padding: clamp(3rem, 7vw, 5rem) clamp(1.25rem, 5vw, 4rem);
+}
+.lp-band-tight { padding-top: clamp(2rem, 4vw, 3rem); }
+.lp-h2 {
+  font-size: clamp(1.5rem, 3vw, 2.15rem);
+  line-height: 1.15;
   font-weight: 680;
-  letter-spacing: -.032em;
-  margin: 0 0 1rem;
-  max-width: 18ch;
+  letter-spacing: -.028em;
+  margin: 0 0 2rem;
+  max-width: 22ch;
+  color: var(--text);
 }
-.hero-sub {
-  font-size: 1.0625rem;
+.lp-body {
+  font-size: var(--fs-body);
+  line-height: 1.7;
+  color: var(--muted-strong);
+  margin: 0 0 1.25rem;
+  max-width: 60ch;
+}
+
+/* Six claims, one line each. auto-fit rather than a fixed column count so the
+   list reflows without a breakpoint. No boxes, no icons: bold lead-in carries
+   the scan, and an icon above each would be the template tell. */
+.lp-claims {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(19rem, 1fr));
+  gap: 1.5rem 3.5rem;
+}
+.lp-claims li {
+  font-size: var(--fs-body);
+  line-height: 1.6;
+  color: var(--muted-strong);
+  max-width: 44ch;
+  padding-top: 1rem;
+  border-top: 1px solid var(--border);
+}
+.lp-claims b { color: var(--text); font-weight: 640; display: block; margin-bottom: .15rem; }
+
+/* The differentiator gets its own fold, set at display size on the accent-soft
+   tint. This is the sentence the whole page exists to deliver. */
+.lp-quote {
+  background: var(--accent-soft);
+  padding: clamp(3rem, 7vw, 5.5rem) clamp(1.25rem, 5vw, 4rem);
+  border-top: 1px solid var(--accent-border);
+  border-bottom: 1px solid var(--accent-border);
+}
+.lp-quote-text {
+  font-size: clamp(1.5rem, 3.4vw, 2.4rem);
+  line-height: 1.2;
+  font-weight: 660;
+  letter-spacing: -.03em;
+  color: var(--accent-ink);
+  margin: 0 0 1rem;
+  max-width: 24ch;
+}
+.lp-quote-sub {
+  font-size: var(--fs-body);
   line-height: 1.65;
   color: var(--muted-strong);
-  margin: 0 0 2rem;
-  max-width: 62ch;
+  margin: 0;
+  max-width: 54ch;
 }
-.hero-cta { display: flex; flex-direction: column; align-items: flex-start; gap: .8rem; }
-.cta-hint { color: var(--muted); font-size: var(--fs-sm); margin: 0; }
+
+.lp-links { margin: 0; font-size: var(--fs-body); }
+.lp-links a { font-weight: 600; }
 
 /* Google button — Google brand guidance: white surface, neutral border. The
    #fff / #3c4043 / #f8f9fa values are Google's, not ours, and are the one place
    in this stylesheet exempt from the tinted-neutral rule: a sign-in button that
-   deviates from the published spec is a trust signal in the wrong direction.
-   The shadow is ours, so it uses the system token. */
+   deviates from the published spec is a trust signal in the wrong direction. */
 .btn-google {
   display: inline-flex;
   align-items: center;
   gap: .7rem;
   background: #fff;
   color: #3c4043;
-  border: 1px solid var(--border-strong);
+  border: 1px solid transparent;
   border-radius: var(--radius);
-  padding: .7rem 1.4rem;
+  padding: .8rem 1.5rem;
   font-size: var(--fs-body);
   font-weight: 600;
   text-decoration: none;
-  box-shadow: var(--shadow);
-  transition: background .15s ease, box-shadow .15s ease;
+  transition: background .15s ease;
 }
-.btn-google:hover {
-  background: #f8f9fa;
-  text-decoration: none;
-  box-shadow: 0 1px 3px oklch(0.230 0.011 258 / .10), 0 3px 10px oklch(0.230 0.011 258 / .10);
-}
+.btn-google:hover { background: #f8f9fa; text-decoration: none; }
 .btn-google .g-logo { flex: none; }
 
-/* Token fallback form (shown only when OIDC is off) */
+/* Token fallback form (shown only when OIDC is off). */
 .token-form { display: flex; gap: .5rem; flex-wrap: wrap; }
 .token-form input { min-width: 220px; padding: .6rem .7rem; }
-
-/* Landing content sections ----
-   The page below the hero is reference material: what the platform is, what it
-   does, what it needs, and what it costs you to run. Sections are separated by
-   a rule and generous space rather than being boxed — a stack of bordered
-   panels would read as the SaaS feature grid, and these are passages of prose
-   and lists, not tiles.
-
-   Section rhythm deliberately differs from the console's .card rhythm: this is
-   a document to read once, not a surface to scan repeatedly. */
-.landing-section {
-  margin-top: 3rem;
-  border-top: 1px solid var(--border);
-  padding-top: 2rem;
+.token-form-onDark input {
+  background: var(--lp-on-ink);
+  border: 1px solid transparent;
+  color: var(--text);
 }
-.section-head {
-  font-size: var(--fs-xs);
+.token-form-onDark button {
+  background: var(--lp-on-ink);
+  color: var(--lp-ink);
+  border: 1px solid var(--lp-on-ink);
   font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: .09em;
+}
+.token-form-onDark button:hover { background: var(--lp-on-ink-dim); border-color: var(--lp-on-ink-dim); }
+
+/* The unflattering facts. A footnote by size, not by omission. */
+.lp-foot {
+  background: var(--bg);
+  border-top: 1px solid var(--border);
+  padding: 2.5rem clamp(1.25rem, 5vw, 4rem) 3.5rem;
+}
+.lp-foot p {
   color: var(--muted-strong);
-  margin: 0 0 1.5rem;
-}
-/* Prose caps at 68ch per DESIGN.md; these columns are already narrower. */
-.prose {
-  font-size: var(--fs-body);
-  line-height: 1.7;
-  color: var(--text);
-  margin: 0 0 1rem;
-  max-width: 66ch;
-}
-.prose:last-child { margin-bottom: 0; }
-
-/* Two-column split for "X, and also not-X" pairings. Not a card pair: no
-   border, no fill — the gap does the separating. */
-.split { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1.5rem 3.5rem; }
-.split-col > :last-child { margin-bottom: 0; }
-.split-head {
-  font-size: var(--fs-sm);
-  font-weight: 620;
-  letter-spacing: -.01em;
-  color: var(--text);
-  margin: 0 0 .75rem;
-}
-
-/* A list that reads as a list. No bullet glyphs (they add visual noise at this
-   density) but real <li> semantics, so a screen reader still announces the
-   count and position. The hanging indent keeps wrapped lines aligned. */
-.plain-list { list-style: none; margin: 0; padding: 0; }
-.plain-list li {
   font-size: var(--fs-sm);
   line-height: 1.6;
-  color: var(--muted-strong);
-  padding: .4rem 0 .4rem 1rem;
-  position: relative;
-  max-width: 60ch;
+  margin: 0 0 .6rem;
+  max-width: 68ch;
 }
-.plain-list li::before {
-  content: "";
-  position: absolute;
-  left: 0;
-  top: .95em;
-  width: 4px;
-  height: 1px;
-  background: var(--border-strong);
-}
+.lp-foot p:last-child { margin-bottom: 0; }
+.lp-foot b { color: var(--text); font-weight: 620; }
 
-/* Capability list. A <dl> because that is what it is: term, then definition.
-   Two columns of definition-list entries rather than eight identical cards —
-   the banned "icon + heading + text, repeated" grid. The name sits in its own
-   gutter at width so the eye can run down the terms alone and stop at the one
-   it wants, which is how a reference is actually read. */
-.cap-list {
-  margin: 0;
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 0 3.5rem;
-}
-.cap { padding: 1.1rem 0; border-bottom: 1px solid var(--border); }
-.cap-name {
-  font-size: var(--fs-body);
-  font-weight: 620;
-  letter-spacing: -.012em;
-  color: var(--text);
-  margin: 0 0 .35rem;
-}
-.cap-body {
-  margin: 0;
-  font-size: var(--fs-sm);
-  line-height: 1.62;
-  color: var(--muted-strong);
-  /* Measured at 83-94ch in the single-column band before this cap: the grid
-     bounds the line only while there are two columns, and DESIGN.md's 68ch
-     limit is a property of the text, not of the layout that happens to hold
-     it. */
-  max-width: 62ch;
-}
-
-/* Integration paths: three short rows. Name in a fixed gutter, hairline rule
-   between, no boxes — the same treatment the capability terms get. */
-.path-list { margin-top: 1.25rem; }
-.path {
-  display: grid;
-  grid-template-columns: 9rem 1fr;
-  gap: 1rem;
-  align-items: baseline;
-  padding: .8rem 0;
-  border-bottom: 1px solid var(--border);
-}
-.path-name { font-weight: 620; letter-spacing: -.01em; font-size: var(--fs-sm); }
-/* 1fr in a full-width row runs to 98ch at 1440px. Same reason as .cap-body. */
-.path-desc { font-size: var(--fs-sm); color: var(--muted-strong); line-height: 1.55; max-width: 68ch; }
-.path-desc code {
-  font-family: var(--mono);
-  font-size: .95em;
-  background: var(--surface-sunk);
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  padding: .05em .35em;
-}
-
-.landing-foot {
-  color: var(--muted);
-  font-size: var(--fs-sm);
-  padding: 2rem 0 3rem;
-  border-top: 1px solid var(--border);
-  margin-top: 2rem;
+/* The hero's two columns cannot both survive a tablet. Diagram first would put
+   a decoration above the headline, so the copy stays first and the figure
+   follows it. */
+@media (max-width: 900px) {
+  .lp-hero { grid-template-columns: 1fr; gap: 2.5rem; }
+  .lp-hero-inner { max-width: 40rem; }
+  .lp-figure { justify-self: start; max-width: 26rem; }
 }
 
 @media (prefers-reduced-motion: reduce) {
   * { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; scroll-behavior: auto !important; }
 }
 
-/* The landing page's two-up grids collapse before the 640px phone breakpoint:
-   two columns of running prose at ~30ch each is a newspaper, not a reference. */
-@media (max-width: 860px) {
-  .cap-list { grid-template-columns: 1fr; gap: 0; }
-  .split { grid-template-columns: 1fr; gap: 2rem; }
-}
-
 @media (max-width: 640px) {
-  .hero-title { font-size: 1.9rem; max-width: none; }
-  .hero { padding: 3rem 0 2.5rem; }
-  /* Name stacks above description once the 9rem gutter no longer fits. */
-  .path { grid-template-columns: 1fr; gap: .2rem; }
-  .landing-section { margin-top: 2.25rem; padding-top: 1.5rem; }
   /* Stat tiles: two-up grid so they wrap evenly instead of leaving an orphan. */
   .row .stat { flex: 1 1 calc(50% - .75rem); min-width: 0; }
   .container { padding: 1.25rem 1rem 3rem; }

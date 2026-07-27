@@ -171,13 +171,12 @@ func TestConsole_LandingAtRoot(t *testing.T) {
 	if !strings.Contains(body, "Sign in with Google") {
 		t.Error("landing at /: missing the Google sign-in button")
 	}
-	// The body below the hero is the point of the page: it is the only surface
-	// that describes the platform to someone who has not signed in. Anchor on
-	// the section headings rather than a phrase, so rewording the prose does not
-	// fail the test but deleting a section does.
-	for _, want := range []string{"Capabilities", "Bring your own agent", "Operating it", "Status"} {
+	// The page is a marketing surface, so its copy is expected to change. Anchor
+	// on structure instead: a headline, the claim list, and the disclosure
+	// footer. Rewording is free; losing a whole region is not.
+	for _, want := range []string{`class="lp-title"`, `class="lp-claims"`, `class="lp-foot"`} {
 		if !strings.Contains(body, want) {
-			t.Errorf("landing at /: missing the %q section", want)
+			t.Errorf("landing at /: missing %s", want)
 		}
 	}
 }

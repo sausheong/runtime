@@ -192,32 +192,56 @@ somewhere else tells a screen-reader user they are on a page they are not on.
 
 ### The landing page
 
-The only unauthenticated surface, and the only one closer to brand register. It
-is a reference document, not a pitch: what Runtime is, what it deliberately does
-not do, its capabilities, how to integrate an agent, what running it requires,
-and its pre-release status.
+The only unauthenticated surface, and the only one in **brand register**. The
+rest of this document describes a tool that should get out of the way; this page
+has the opposite job, so it is allowed to break the house rules. It is the one
+place the product gets a voice.
 
-Three rules govern it, all learned by measuring:
+**Colour strategy is Committed, not Restrained.** A drenched plum field carries
+the hero — `--lp-ink`, the accent driven to L 0.205, so the brand hue does the
+drenching rather than a neutral. Reference point: Vercel's black-field monochrome
+rotated onto the colour the product already owns. Tokens are namespaced `--lp-*`
+so they cannot leak into the operator UI, and the field is applied by a body
+class that only this template sets.
 
-**Sections are separated by a rule and space, never boxed.** A stack of
-bordered panels is the SaaS feature grid. The eight capabilities are a `<dl>`
-with hairline rules — a reference is read by scanning the terms and stopping at
-one, which a card grid actively prevents. Eight identical bordered tiles would
-also be the banned "icon + heading + text, repeated" pattern.
+**Type is scale and weight only.** Air-gap forbids a webfont, so a display family
+is not available and voice has to come from range instead: the rendered ladder is
+73.6 / 38.4 / 34.4 / 20 / 18 / 15px, a 1.92 top ratio against the console's own
+1.5rem h1. Display headings run 1.02–1.2 line-height, which a generic checker
+flags as tight leading; that rule is for body text, and every body style here is
+1.6–1.7.
 
-**Every text block carries its own `max-width`.** A grid column bounds a line
-only while the grid has more than one column. `.cap-body` measured 83–94ch once
-the two-column grid collapsed at 860px, and `.path-desc` measured 98ch at 1440px
-inside a `1fr` track. The 68ch limit is a property of the text, not of the
-layout that happens to hold it.
+**Imagery is drawn, not photographed.** The brand register requires imagery and
+treats a coloured block in its place as a bug. Stock photography is unavailable
+(no route to the internet), so the hero carries an inline SVG of the actual
+topology. It is also the honest choice: the diagram answers "what is this" faster
+than the paragraph it replaced.
 
-**The unflattering facts are stated, not buried.** Pre-release, no licence, a
-side effect can repeat mid-turn, the Docker socket is root-equivalent. These sit
-in "Operating it" and "Status" rather than being omitted, and
-`console/landing_test.go` fails the build if the licence or pre-release
-disclosure disappears, if the version drifts from the one README.md declares, or
-if any external subresource appears (the deployment is air-gapped, and a font
-CDN added here renders fine on a laptop and breaks in production).
+Two failure modes this page is written against, both of which it previously had:
+
+**Too much information.** The first version put eight capability paragraphs, an
+integration table, and a requirements list on the page. That is documentation,
+and the docs do it better. Six one-line claims replaced it.
+
+**The editorial-typographic reflex.** Ruled separators, monochrome restraint, and
+a small uppercase tracked label above every section. That is now the default
+"tasteful" AI brand surface, and a repeated kicker in particular is scaffolding
+rather than voice. There is exactly one uppercase label left, inside the diagram,
+labelling a boundary.
+
+**On-dark overrides must outrank the base topbar rule.** Every rule making text
+legible on the plum field fights a light-theme rule from the shared stylesheet.
+Written as a bare `.navbtn-onDark` (0,1,0) it lost to `.topbar nav a` (0,1,1)
+silently: the sign-in label kept its light-theme colour and measured **2.23:1**
+on plum. Scope on-dark rules under `.topbar-invert`; do not reach for
+`!important`.
+
+**The unflattering facts are stated, not buried.** Pre-release and no licence sit
+in the footer — small because they are a footnote, not because they are hidden.
+`console/landing_test.go` fails the build if either disclosure disappears, if the
+version drifts from the one README.md declares, if any external subresource
+appears, if an on-dark override loses its scope, or if the drenched styling
+escapes onto a console page.
 
 ### Form controls
 
