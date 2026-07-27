@@ -1,15 +1,14 @@
-# Deploying foreign-SDK agents (OpenAI Agents SDK, Claude Agent SDK)
+# Deploying SDK and custom agents
 
-Runtime natively hosts **Go** agents (link the `agentruntime` SDK and it binds
-the agent contract for you). But the platform only cares about *one* interface —
-the **agent contract**, a small set of HTTP/SSE endpoints. Any process that
-speaks it is supervised, routed, health-gated, and restarted like a native
-agent.
+Runtime natively hosts Go agents through the `agentruntime` SDK, but the
+platform only requires a small HTTP/SSE contract. Any process that implements
+that contract can be supervised, routed, health-checked, and restarted like a
+native agent.
 
-This guide shows how to host an agent written with a **Python** framework — the
+This guide shows how to host an agent written with a Python framework, using the
 [OpenAI Agents SDK](https://openai.github.io/openai-agents-python/) or the
-[Claude Agent SDK](https://docs.claude.com/en/api/agent-sdk/python) — using the
-reusable Python contract library, then ship it to production on GCP.
+[Claude Agent SDK](https://docs.claude.com/en/api/agent-sdk/python), with the
+reusable Python contract library, then deploy it on GCP.
 
 Two complete worked agents ship in the repo and are the templates to copy:
 

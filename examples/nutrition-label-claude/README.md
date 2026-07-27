@@ -7,7 +7,7 @@ and hosted on the runtime platform through the Python contract shim
 (`../../contrib/shims/python`, the reusable `runtime_contract` library).
 
 It demonstrates the **thin-adapter** model: hosting a second, maximally
-different foreign SDK requires **zero shim changes** — `runtime_contract` is
+different agent SDK requires **zero shim changes** — `runtime_contract` is
 consumed unchanged as the same editable path dependency the OpenAI example uses.
 Everything Claude-specific lives in this directory: `adapter.py` (139 lines,
 100 of code), plus the SDK-free domain port (`agent.py`), the five MCP tools

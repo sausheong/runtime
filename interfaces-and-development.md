@@ -1,8 +1,7 @@
 # Interfaces and development
 
-This guide collects the command-line, HTTP, agent-contract, native SDK,
-durability, testing, and repository-layout material that was formerly embedded
-in the root README.
+Use this guide to work with the command-line and HTTP interfaces, implement the
+agent contract, build a native Go agent, and verify an integration.
 
 ## `runtimectl`
 

@@ -1,4 +1,4 @@
-# `runtime_contract` — the Python contract library for hosting foreign-SDK agents
+# `runtime_contract`: host Python SDK agents on Runtime
 
 Runtime normally hosts **Go** agents: you link the `agentruntime` SDK and it
 binds the HTTP/SSE agent contract for you. This directory is the **Python
@@ -190,7 +190,7 @@ completed events remain intact).
 the native runtime's `RUNTIME_AGENT_LIMITS` payload. Bound turn duration,
 session duration, turns, or tokens in the SDK, adapter, container, or process
 supervisor. `limit_exceeded` remains a valid terminal contract status for a
-foreign implementation that adds those controls.
+custom implementation that adds those controls.
 
 ## A note on trust
 

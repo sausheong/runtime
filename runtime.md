@@ -1,12 +1,23 @@
-# Runtime: Self-Hosted Infrastructure for Durable AI Agents
+# Runtime overview
 
-## 1. Executive Summary and Architectural Model
+Runtime is a self-hosted platform for running and operating durable AI agents.
+This overview explains what the platform owns, how its components fit together,
+and where its security and reliability boundaries lie.
 
-### What is Runtime?
+## Architecture and product model
 
-Runtime is a source-available, on-prem platform for hosting and operating LLM agents. It provides the infrastructure around an agent—the durable execution loop, process supervision, identity, memory, tool access, isolation, observability, and operator surfaces—so application teams can concentrate on the agent's instructions, models, and domain tools. The repository does not yet contain a licence file, so it should not be described as open source until one is added.
+### What Runtime is
 
-It is designed as a self-hosted counterpart to services such as AWS Bedrock AgentCore. Runtime keeps the control plane, agent processes, session history, credentials, and operational telemetry under your control. Its smallest useful deployment is a single Runtime process plus Postgres; its turnkey deployment adds identity, memory, gateway services, sandboxes, metrics, and tracing with Docker Compose.
+Runtime provides the infrastructure around an agent: durable execution,
+process supervision, identity, memory, tool access, isolation, observability,
+and operator interfaces. Application teams remain responsible for the agent's
+instructions, models, domain tools, and user experience. The repository does
+not yet contain a licence, so Runtime should not be described as open source.
+
+Runtime keeps the control plane, agent processes, session history, credentials,
+and operational telemetry under your control. Its smallest useful deployment
+is one Runtime process with Postgres. The turnkey Docker Compose deployment
+adds identity, memory, gateway services, sandboxes, metrics, and tracing.
 
 Runtime is not an LLM and it does not prescribe one agent framework. It is the execution and operations layer between users, agent code, model providers, tools, and infrastructure.
 
@@ -32,7 +43,7 @@ Users, applications, and operators
    events · memory · identity      Python · shell · tools
 ```
 
-### The core value proposition
+### What Runtime provides
 
 Runtime turns an agent program into an operable service:
 
@@ -46,7 +57,7 @@ Runtime turns an agent program into an operable service:
 - **Operations included.** Health checks, restart supervision, metrics, request correlation, traces, a CLI, and a web console are part of the platform.
 - **Self-hosted.** Runtime can run on a laptop, a single production host, Kubernetes, or a distributed set of agent hosts without requiring a managed cloud agent service.
 
-### What Runtime does—and does not do
+### Division of responsibility
 
 Runtime owns the lifecycle around agents. Your agent still owns its domain behavior.
 
@@ -59,9 +70,9 @@ Runtime owns the lifecycle around agents. Your agent still owns its domain behav
 | Shared memory, gateway, code, and browser facilities | Application-specific safety and evaluation criteria |
 | Metrics, tracing, logging, CLI, console, and conformance | Product UI or end-user experience, if required |
 
-## 2. Platform Architecture and Major Capabilities
+## Platform architecture and capabilities
 
-### 2.1 Durable Agent Runtime
+### Durable agent runtime
 
 The durable runtime is the platform's execution spine. A session is represented by a DBOS workflow, and each agent turn is executed as a checkpointed DBOS step.
 
@@ -109,7 +120,7 @@ The Python shim also does not enforce Runtime's native lifecycle
 limits; SDK agents should configure equivalent limits in their framework or
 process supervisor.
 
-### 2.2 Multi-Agent Hosting, Pools, and Autoscaling
+### Multi-agent hosting, pools, and autoscaling
 
 `runtimed` loads an agent registry and either starts local agent processes or attaches to remote ones. Every agent is addressed through `/agents/{id}/...`, giving clients one stable control-plane URL regardless of where an agent runs.
 
@@ -125,7 +136,7 @@ For replica pools:
 
 Runtime also supports remote agents. The control plane health-checks and proxies to them but leaves their OS or container lifecycle to the remote host, Docker, or Kubernetes. Remote agents can be registered, enabled, disabled, reattached, and removed dynamically without restarting the control plane.
 
-### 2.3 Identity, Tenancy, and Secret Brokering
+### Identity, tenancy, and secret brokering
 
 Identity is enforced at the control-plane edge so hosted agents do not each need to implement authentication and tenant filtering.
 
@@ -149,7 +160,7 @@ Provider and upstream credentials can be stored per tenant. Runtime encrypts the
 
 This lets each tenant bring its own model or API credentials without changing the agent's normal `os.Getenv`-style configuration.
 
-### 2.4 Durable Memory and Semantic Recall
+### Durable memory and semantic recall
 
 An agent can opt into a tenant-scoped memory store backed by Postgres. Memory is shared by the tenant's enabled agents and isolated from every other tenant.
 
@@ -167,7 +178,7 @@ records. Operators may opt into separate fact, summary, and episode retention
 periods; live-memory expiry is disabled by default. Per-agent memory pools,
 compaction, and broader session synthesis remain outside the current contract.
 
-### 2.5 MCP and REST Tool Gateway
+### MCP and REST tool gateway
 
 Runtime exposes a central Streamable HTTP MCP endpoint at `/gateway/mcp`. It can federate:
 
@@ -188,7 +199,7 @@ selected addresses again immediately before each connection to resist DNS
 rebinding. File-configured upstreams are operator-trusted and may intentionally
 use private infrastructure.
 
-### 2.6 Isolated Code and Browser Sandboxes
+### Isolated code and browser sandboxes
 
 The gateway can expose two stateful, per-session execution environments:
 
@@ -199,7 +210,7 @@ Both environments are tenant-scoped and session-owned. State can survive across 
 
 The single-host implementation uses the Docker socket to create these containers. Access to the Docker socket is root-equivalent on the host, so the turnkey stack is intended for a trusted node. Stronger isolation can be added with gVisor where available; untrusted multi-user deployments should assess the host boundary carefully.
 
-### 2.7 Evaluations
+### Evaluations
 
 Runtime stores golden datasets, runs rule or judge scorers, captures online
 transcripts, classifies failures, and exposes aggregate results. At
@@ -227,7 +238,7 @@ See the [evaluations guide](evals.md) for golden-set and policy JSON formats,
 CLI workflows, online sampling, failure classification, metrics, and console
 paths.
 
-### 2.8 Observability and Operations
+### Observability and operations
 
 Runtime exposes one Prometheus endpoint for the entire fleet on a separate management listener (`RUNTIME_METRICS_ADDR`, loopback by default). The public control-plane listener does not mount `/metrics`. The control plane merges its own metrics with metrics scraped from agents and enforces the registered agent label so an agent cannot impersonate another series.
 
@@ -246,7 +257,7 @@ The observability stack includes:
 
 Metric labels deliberately exclude session and user identifiers to avoid unbounded cardinality and accidental disclosure. Tenant IS a label on fleet, usage, and cost series — that attribution is the point of them — so the management listener carries per-tenant data and is bound to loopback and a restricted NetworkPolicy accordingly. Message text and tool arguments are not attached to traces.
 
-### 2.9 Contract-First, Polyglot Agent Hosting
+### Contract-first, polyglot agent hosting
 
 Runtime integrates agents through a small HTTP and SSE contract:
 
@@ -294,9 +305,9 @@ There are three integration paths:
 - **Python SDKs:** use the framework-agnostic `runtime_contract` FastAPI package and implement a small adapter around the OpenAI Agents SDK, Claude Agent SDK, or another Python framework.
 - **Any language:** implement the contract directly and pass the same conformance suite.
 
-## 3. What Runtime Can Do for You
+## What Runtime can do for you
 
-### 3.1 Turn a Local Agent into a Managed Service
+### Turn a local agent into a managed service
 
 An agent author can move from a local process to a managed endpoint without building a bespoke control plane. Runtime supplies session APIs, SSE streaming, replay, health checks, routing, supervision, and deployment conventions.
 
@@ -318,7 +329,7 @@ err := agentruntime.Serve(ctx, agentruntime.Config{
 
 The operator supplies Postgres, identity, bind addresses, secrets, and gateway settings. The agent supplies its model behavior and tools.
 
-### 3.2 Operate Several Teams or Use Cases on One Platform
+### Operate several teams or use cases on one platform
 
 A single Runtime installation can host support, research, data, operations, and specialist agents while preserving separate tenants and credentials. Teams share infrastructure and gateway integrations without sharing access to each other's agents or memory.
 
@@ -331,21 +342,21 @@ Typical uses include:
 - Data or coding assistants that need isolated Python, shell, or browser execution.
 - Mixed-framework fleets being migrated toward a common operational contract.
 
-### 3.3 Survive Disconnects and Ordinary Process Failures
+### Survive disconnects and ordinary process failures
 
 Clients do not need to hold one fragile connection for the lifetime of an agent run. They can create a session, stream events, disconnect, inspect status later, and reconnect from the last event sequence. Native agents also recover completed turns after process restart.
 
-### 3.4 Centralize Security and Tool Governance
+### Centralise security and tool governance
 
 Runtime makes identity, secret handling, tenant visibility, and tool authorization platform responsibilities. This prevents every agent team from building a different authentication layer or embedding credentials in YAML and source code.
 
-### 3.5 Start Small and Change the Deployment Topology Later
+### Start small and change the deployment topology later
 
 The same contract supports local subprocesses, custom commands, remote containers, and Kubernetes agent pods. A team can begin with one host and later separate agent workloads from the control plane without changing client-facing routes.
 
-## 4. Developer and Operator Workflow
+## Developer and operator workflow
 
-### 4.1 Bring Up the Turnkey Stack
+### Bring up the turnkey stack
 
 Prerequisites are Docker with Compose v2 and a clone of this repository.
 
@@ -367,7 +378,7 @@ Primary surfaces:
 | Prometheus | `http://localhost:9090` |
 | Jaeger | `http://localhost:16686` |
 
-### 4.2 Register Agents Declaratively
+### Register agents declaratively
 
 Local file-configured agents live in `runtime.yaml`:
 
@@ -396,7 +407,7 @@ Runtime validates required fields, unique IDs and addresses, derived replica por
 
 File-configured local agents are loaded at startup. Remote agents may also be managed dynamically through the admin surfaces.
 
-### 4.3 Invoke and Inspect Agents
+### Invoke and inspect agents
 
 `runtimectl` targets `RUNTIME_CTL_URL` and sends the bearer credential in `RUNTIME_TOKEN` when configured.
 
@@ -410,7 +421,7 @@ runtimectl conformance --agent support
 
 The web console at `/ui` provides a tenant-filtered fleet overview, agent session lists, live SSE session views, managed remote-agent controls, and tenant onboarding for keys and gateway upstreams. It is intentionally an operator surface rather than a general end-user chat application.
 
-### 4.4 Onboard a Tenant
+### Onboard a tenant
 
 The bootstrap flow is:
 
@@ -424,7 +435,7 @@ runtimectl admin key create --tenant acme --role operator --label agent-key
 
 A tenant administrator can then add users and keys, store provider credentials, and register gateway upstreams for that tenant. Service-key secrets are displayed only once and stored as bcrypt hashes.
 
-### 4.5 Add a Foreign-SDK Agent
+### Add an SDK or custom agent
 
 The Python shim reduces the integration to an adapter and entrypoint:
 
@@ -454,33 +465,33 @@ agents:
 
 Run `runtimectl conformance --agent python-agent` before treating the adapter as production-ready.
 
-## 5. Deployment Models
+## Deployment models
 
-### 5.1 Single Host
+### Single host
 
 The simplest production topology runs `runtimed` under systemd, Docker, or another process manager and points it at a reliable Postgres instance. Runtime supervises the local agents beneath that one control-plane process.
 
 Postgres is the durability and availability floor. If it is unavailable, new sessions and durable turns cannot proceed. Use an HA Postgres service when the platform itself must be highly available.
 
-### 5.2 Turnkey Docker Compose
+### Turnkey Docker Compose
 
 `deploy/compose/` is the complete single-host deployment and the recommended evaluation path. It includes all six implemented platform pillars and the supporting observability services. The host Docker socket is mounted for sandbox creation, so use this topology only on a trusted node.
 
-### 5.3 Kubernetes and Helm
+### Kubernetes and Helm
 
 The Helm chart supports a secure-by-default control-plane deployment and optional per-agent pod scheduling. Agent StatefulSets attach to Runtime as remote pools while retaining the same external API.
 
 The chart runs containers as non-root, drops capabilities, uses a read-only root filesystem, and supports bundled or external Postgres. Consult `deploy/charts/runtime/README.md` for the current topology and values reference.
 
-### 5.4 Distributed Remote Agents
+### Distributed remote agents
 
 An agent may run on another VM or container host and expose the Runtime contract over HTTP or HTTPS. The control plane attaches through `url:` configuration or dynamic registration. Optional bearer authentication protects the agent endpoint.
 
 Runtime can route, health-check, enable, disable, and reattach these agents. Starting and stopping their actual remote processes remains the responsibility of the host orchestrator.
 
-## 6. Security and Reliability Model
+## Security and reliability model
 
-### 6.1 Security Checklist
+### Security checklist
 
 - Enable OIDC or service-key identity outside local development.
 - Terminate TLS before the control plane and remote agent endpoints.
@@ -496,7 +507,7 @@ Runtime can route, health-check, enable, disable, and reattach these agents. Sta
 - Make side-effecting tools idempotent.
 - Use independent database backups; Runtime durability is not a substitute for Postgres backup and recovery.
 
-### 6.2 Reliability Characteristics
+### Reliability characteristics
 
 - Agent failure is contained to that agent or replica.
 - Supervisors restart failed local processes with bounded backoff.
@@ -505,7 +516,7 @@ Runtime can route, health-check, enable, disable, and reattach these agents. Sta
 - Graceful shutdown cancels supervisors and allows agents to drain through DBOS shutdown.
 - Gateway and embedding failures are handled according to the feature: critical configuration fails fast, while best-effort recall and ingestion degrade without failing the user turn.
 
-## 7. Feature Matrix and Current Scope
+## Feature matrix and current scope
 
 The platform provides a durable execution spine and six surrounding pillars — identity, memory, gateway, sandboxes, observability, and turnkey operations. The matrix below lists what each area provides and its known limitations.
 
@@ -522,9 +533,11 @@ The platform provides a durable execution spine and six surrounding pillars — 
 | Polyglot | Go SDK, Python contract shim, OpenAI and Claude examples | In-flight shim recovery, TypeScript shim, more framework adapters |
 | Deployment | Single host, Compose, Helm, remote agents, per-agent pods | Kubernetes operator/CRDs and mTLS |
 
-Runtime does not implement every AWS AgentCore feature; in particular, it does not provide an equivalent for AgentCore Payments. Its focus is the self-hosted execution spine and six surrounding pillars: identity, memory, gateway, sandboxes, observability, and turnkey operations.
+Runtime focuses on a self-hosted execution spine with identity, memory, tool
+gateway, sandbox, observability, and deployment capabilities. It does not aim
+to replace every managed-cloud service around an agent application.
 
-## 8. Choosing Runtime
+## Choosing Runtime
 
 Runtime is a strong fit when you need:
 
@@ -539,7 +552,7 @@ Runtime is a strong fit when you need:
 
 It may not be the right fit when you need a fully managed service with no infrastructure ownership, hard multi-region control-plane availability out of the box, arbitrary custom authorization policy, or a turnkey end-user chat product. Runtime is infrastructure for agent systems; it is not the finished product interface those systems present to users.
 
-## 9. Reference Map
+## Reference map
 
 | Need | Start here |
 |---|---|
@@ -555,7 +568,6 @@ It may not be the right fit when you need a fully managed service with no infras
 | Build or attach Go, Python, or generic agents | [`deploying-sdk-agents.md`](deploying-sdk-agents.md) |
 | Deploy with Helm | [`deploy/charts/runtime/README.md`](deploy/charts/runtime/README.md) |
 | Explore working agents | [`examples/`](examples/) |
-| Audit where former README material moved | [`documentation-map.md`](documentation-map.md) |
 | Validate an implementation | `runtimectl conformance --agent <id>` |
 
 Runtime's design can be summarized in one sentence:

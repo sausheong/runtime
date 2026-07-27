@@ -1,8 +1,8 @@
-# Secured Overlay — Cloud-Agnostic TLS + Identity ON
+# Secured single-host deployment
 
-A self-contained way to run the runtime control plane with **HTTPS** and
-**access control**, depending on nothing cloud-specific. It works the same on
-GCP, another cloud, or a bare-metal / on-prem host (air-gap included).
+This deployment adds HTTPS and access control to a single-host Runtime
+installation without depending on a specific cloud provider. It works on GCP,
+another public cloud, an on-premises server, or an air-gapped machine.
 
 ```
 client ──HTTPS──► Caddy ──http──► runtimed:8080  (console /ui + API /)

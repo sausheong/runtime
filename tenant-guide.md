@@ -1,7 +1,9 @@
-# Tenant guide — onboard and run agents
+# Tenant guide
 
-For a tenant-admin. Assumes the operator has the stack up
-([Quickstart](quickstart.md)) and you can log in to http://localhost:8080/ui.
+Use this guide to onboard a tenant, configure its access to tools, and invoke an
+agent. It assumes an operator has already started the platform with the
+[quickstart](quickstart.md) and you can log in at
+<http://localhost:8080/ui>.
 
 ## Onboard a tenant (console UI)
 
@@ -155,7 +157,7 @@ for it (harmless to include); the **bootstrap superuser** is tenantless and
 *must* name a tenant. The raw-HTTP equivalent is a `POST /admin/keys` with body
 `{"role":"operator","label":"ci-runner","tenant":"<your-tenant>"}`.
 
-## The six pillars, exercised
+## Verify the platform end to end
 
 The platform ships `deploy/compose/v1-proof.sh`, which exercises every pillar
 deterministically (no LLM key needed).

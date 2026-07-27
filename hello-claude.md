@@ -1,8 +1,9 @@
-# Build a "hello-claude" agent with the Claude Agent SDK and deploy it to runtime.sausheong.com
+# Build and deploy a Claude SDK agent
 
-A step-by-step guide to writing the smallest useful [Claude Agent SDK](https://docs.claude.com/en/api/agent-sdk/python)
-agent — a plain conversational assistant, no tools — and hosting it on the
-runtime platform at `https://runtime.sausheong.com`.
+This guide builds the smallest useful [Claude Agent
+SDK](https://docs.claude.com/en/api/agent-sdk/python) agent, a conversational
+assistant with no tools, and deploys it to the Runtime installation at
+`https://runtime.sausheong.com`.
 
 The agent itself is two short files. Everything else (sessions, the HTTP/SSE
 contract, supervision) is provided by the platform's **Python contract shim**

@@ -1,13 +1,12 @@
-# Operator guide — Runtime turnkey self-host
+# Operator guide
 
-For the person who runs the platform. Assumes you brought it up via the
-[Quickstart](quickstart.md).
+This guide is for the person responsible for a Runtime deployment. It assumes
+you started the single-host stack with the [quickstart](quickstart.md).
 
-Detailed references are split by concern: [configuration](configuration.md),
+Use the topic guides for detailed [configuration](configuration.md),
 [identity, secrets, and memory](identity-and-memory.md), [gateway and
-sandboxes](gateway-and-sandboxes.md), [observability](observability.md), and
-[evaluations](evals.md). The [documentation map](documentation-map.md) records
-where material from the former long README now lives.
+sandbox](gateway-and-sandboxes.md), [observability](observability.md), and
+[evaluation](evals.md) reference.
 
 ## Log in to the console
 

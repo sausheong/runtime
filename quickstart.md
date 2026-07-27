@@ -1,6 +1,7 @@
-# Quickstart — Runtime turnkey self-host
+# Quickstart: run Runtime on one host
 
-Bring up the whole platform (all six pillars) on one host with Docker.
+Use Docker Compose to run the complete Runtime stack on one host. This is the
+fastest way to evaluate the platform locally.
 
 ## Prerequisites
 
@@ -23,7 +24,7 @@ cd runtime
 make compose-init                            # generates bootstrap, secrets, and Grafana credentials
 cd deploy/compose
 docker compose --profile build-only build    # builds runtimed, embedder, AND sandbox/browser images
-docker compose up                            # starts all six pillars
+docker compose up                            # starts the complete stack
 ```
 
 > The sandbox and browser images sit behind a `build-only` compose profile, so
@@ -54,6 +55,7 @@ into Grafana as `admin` using `GRAFANA_ADMIN_PASSWORD` from
 Runtime's `:9091` management metrics listener are Compose-internal and are not
 published to the host.
 
-Next: read the **[Operator guide](operator-guide.md)** to log in and set safe
-defaults, then the **[Tenant guide](tenant-guide.md)** to onboard a tenant and
-run agents. For the architectural tour, see **[What Runtime is](runtime.md)**.
+Next, use the [operator guide](operator-guide.md) to log in and set safe
+defaults. Then follow the [tenant guide](tenant-guide.md) to onboard a tenant
+and run an agent. For the architectural tour, read the [Runtime
+overview](runtime.md).

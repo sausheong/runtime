@@ -49,7 +49,7 @@ Local-agent fields:
 |---|---|
 | `listen_addr` | Base host and port; pool replica `i` uses base port + `i` |
 | `kind` | Bundled Go agent builder; omitted means `testagent` |
-| `command` | Argument array for a custom or foreign-SDK process instead of `agentd` |
+| `command` | Argument array for a custom or non-Go process instead of `agentd` |
 | `workdir` | Working directory for `command` |
 | `memory` | Attach tenant-scoped durable memory |
 | `gateway` | `false`, `true`/`full`, or `search` |

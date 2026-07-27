@@ -26,7 +26,7 @@ agents because the evaluator uses the common `POST /sessions` and SSE
 `GET /sessions/{id}/stream` contract.
 
 Online policy injection and failure classification are implemented by the
-native `agentd` runtime. A foreign-SDK or independently operated remote agent
+native `agentd` runtime. An SDK-based or independently operated remote agent
 must implement equivalent capture and scoring if it needs that path.
 
 For each `(session, criterion)`, the first successfully persisted online result
@@ -327,5 +327,5 @@ write or transition.
   accounting; within a process, durable first-write scoring and classification
   transitions are replay-safe.
 
-See also the [Runtime overview](runtime.md), [operator guide](operator-guide.md),
-and [roadmap](ROADMAP.md).
+See also the [Runtime overview](runtime.md) and [operator
+guide](operator-guide.md).
