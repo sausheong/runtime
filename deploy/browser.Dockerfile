@@ -1,7 +1,7 @@
 # The bundled browser image for Sandboxes M2 (cmd/browserd).
 # Build: make browser-image
 # Override at runtime with RUNTIME_BROWSER_IMAGE.
-FROM debian:bookworm-slim@sha256:7b140f374b289a7c2befc338f42ebe6441b7ea838a042bbd5acbfca6ec875818
+FROM debian:bookworm-slim@sha256:abd67ffcfa541b485a3dff59865ab629aa048a6c613e639d36e7456b0b229241
 
 # Chromium + fonts for headless rendering; socat bridges the published CDP
 # port to Chromium's loopback-only DevTools socket (Chromium ignores
