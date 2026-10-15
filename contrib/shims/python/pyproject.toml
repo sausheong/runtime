@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Framework-agnostic HTTP/SSE agent-contract server for hosting foreign-SDK agents under sausheong/runtime"
 requires-python = ">=3.12"
 dependencies = [
-    "fastapi>=0.115",
+    "fastapi>=0.140.0",
     "uvicorn>=0.30",
     "prometheus-client>=0.20",
 ]
