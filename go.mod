@@ -6,7 +6,7 @@ require (
 	github.com/cedar-policy/cedar-go v1.8.0
 	github.com/chromedp/cdproto v0.0.0-20250724212937-08a3db8b4327
 	github.com/chromedp/chromedp v0.14.2
-	github.com/coreos/go-oidc/v3 v3.18.0
+	github.com/coreos/go-oidc/v3 v3.20.0
 	github.com/dbos-inc/dbos-transact-golang v0.16.0
 	github.com/getkin/kin-openapi v0.144.0
 	github.com/google/uuid v1.6.0
